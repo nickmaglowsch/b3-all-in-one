@@ -1,0 +1,12 @@
+name: MomSharpe / IVVB11 / CDI (40/40/20)
+description: >-
+  Growth-tilted variant of the thirds blend: 40% MomSharpe (top-decile
+  risk-adjusted 12m momentum), 40% IVVB11 (S&P 500 in BRL), 20% CDI.
+  Quarterly rebalance; each sleeve's weight parks in CDI until it is live.
+kind: fixed_weight
+rebalance: QE
+park_in_cdi_until_live: true
+sleeves:
+  - {strategy: MomSharpe, weight: 0.40}
+  - {ticker: IVVB11.SA,   weight: 0.40}
+  - {asset: CDI,          weight: 0.20}

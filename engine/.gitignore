@@ -1,0 +1,23 @@
+# Automatically created by ruff.
+/data/**.sqlite
+*.sqlite
+/data/*
+.devcontainer/.env
+.claude-worktrees/
+.DS_Store
+.streamlit/
+results/
+.claude/settings.local.json
+tasks/
+.claude/auth.local.md
+b3_pipeline_rs/target/
+research/feature_store/
+__pycache__/
+.cache/
+*.log
+*.sqlite-shm
+*.sqlite-wal
+backtests/output/
+backtests/*.png
+backtests/*.csv
+research/output/

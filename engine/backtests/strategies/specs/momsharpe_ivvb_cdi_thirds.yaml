@@ -1,0 +1,15 @@
+name: MomSharpe / IVVB11 / CDI (thirds)
+description: >-
+  Equal thirds, quarterly-rebalanced: 1/3 MomSharpe (top-decile risk-adjusted
+  12m momentum on the liquid B3 universe), 1/3 IVVB11 (S&P 500 in BRL, Yahoo),
+  1/3 CDI (cash at the local real rate). The momentum sleeve is the return
+  engine, IVVB11 adds USD/global equity, CDI anchors and damps the momentum
+  sleeve's drawdowns. Before a sleeve is live (IVVB11 pre-2014, MomSharpe
+  during its 12m warmup) its weight sits in CDI.
+kind: fixed_weight
+rebalance: QE
+park_in_cdi_until_live: true
+sleeves:
+  - {strategy: MomSharpe, weight: 0.3333333333333333}
+  - {ticker: IVVB11.SA,   weight: 0.3333333333333333}
+  - {asset: CDI,          weight: 0.3333333333333333}

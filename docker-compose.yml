@@ -1,0 +1,67 @@
+# Local development stack. Mirrors the prod VPS shared-infra pattern
+# (infra_postgres/infra_redis/caddy) but self-contained — no deploys from here.
+services:
+  postgres:
+    image: imresamu/postgis:16-3.5
+    container_name: b3_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
+      POSTGRES_DB: b3
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: b3_redis
+    # prod redis is allkeys-lru cache-only; same here — jobs live in Postgres
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: b3_api
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    profiles: ["app"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: b3_worker
+    command: ["python", "-m", "platform_app.worker"]
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["app"]
+
+volumes:
+  postgres_data:

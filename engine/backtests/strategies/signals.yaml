@@ -1,0 +1,42 @@
+# Named signals as DATA (interpreted by backtests/core/signal_dsl.py).
+# Each entry: an `expr` over shared_data frames + a default `lookback`.
+# Convention: higher = better (selection always takes the top). Reference one
+# from a strategy spec with `signal: {factor: <name>, lookback: N}`, or inline
+# an `expr:` directly in the spec. Add a new factor by adding a line here — no
+# Python. See docs/config_strategies.md for the primitive catalogue.
+
+momentum:
+  expr: "roll_sum(shift(log_ret, 1), lookback)"
+  lookback: 12
+
+low_vol:
+  expr: "-roll_std(ret, lookback)"
+  lookback: 12
+
+sharpe_mom:
+  expr: "roll_sum(shift(log_ret, 1), lookback) / roll_std(shift(ret, 1), lookback)"
+  lookback: 12
+
+blended_vol:
+  expr: "-(0.5 * vol_60d + 0.5 * vol_20d)"
+
+# Mean reversion (biggest losers) restricted to names whose recent daily win
+# rate sits in a neutral band around its own 60d average — a stock trending hard
+# in either direction is not a reversion candidate. The win-rate frames are
+# daily, so at_rebalance() pulls them onto the monthly grid. Repeated because
+# the DSL has no local bindings; both copies are the same expression.
+win_rate_mean_rev:
+  expr: >-
+    where(
+      where(-roll_sum(ret, lookback), has_glitch == 0),
+      (at_rebalance(roll_mean(pct_change(adj_close) > 0, win_rate_window)
+        / (roll_mean(roll_mean(pct_change(adj_close) > 0, win_rate_window), 60) + 1e-8))
+       >= win_rate_low_threshold)
+      & (at_rebalance(roll_mean(pct_change(adj_close) > 0, win_rate_window)
+        / (roll_mean(roll_mean(pct_change(adj_close) > 0, win_rate_window), 60) + 1e-8))
+         <= win_rate_high_threshold)
+    )
+  lookback: 1
+  win_rate_window: 20
+  win_rate_low_threshold: 0.75
+  win_rate_high_threshold: 1.25

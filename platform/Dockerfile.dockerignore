@@ -1,9 +1,22 @@
-# Build context is the repo root; only platform/ is needed. Patterns are
-# relative to the context root. BuildKit uses this file (adjacent to the
-# Dockerfile) in preference to a root .dockerignore.
+# Build context is the repo root. Patterns are relative to the context root.
+# BuildKit uses this file (adjacent to the Dockerfile) in preference to a root
+# .dockerignore. Everything is excluded, then only what the image needs is added back.
 *
+
+# platform app
 !platform
 platform/.venv
 platform/**/__pycache__
 platform/.pytest_cache
 platform/.ruff_cache
+platform/uploads
+
+# taxcore: bake in ONLY the code + dep manifests. b3_imports/, data/, reports/,
+# tests/ hold REAL personal financial data — they must NEVER enter the image.
+!taxcore
+taxcore/*
+!taxcore/scripts
+!taxcore/methodologies
+!taxcore/pyproject.toml
+!taxcore/uv.lock
+taxcore/**/__pycache__

@@ -17,8 +17,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-# platform/platform_app/b3run.py -> b3-all-in-one/taxcore
-TAXCORE = Path(__file__).resolve().parents[2] / "taxcore"
+from platform_app.config import settings
+
+# Host default: platform/platform_app/b3run.py -> b3-all-in-one/taxcore.
+# Container/override: settings.taxcore_dir (TAXCORE_DIR env) -> /opt/taxcore.
+_DEFAULT_TAXCORE = Path(__file__).resolve().parents[2] / "taxcore"
+TAXCORE = Path(settings.taxcore_dir) if settings.taxcore_dir else _DEFAULT_TAXCORE
 PARSER_VERSION = "taxcore.load_b3"
 
 # Blocks any non-local network connect inside the subprocess (proves the scripts stay
@@ -38,6 +42,8 @@ socket.socket.connect = _blocked
 
 def _taxcore_python() -> list[str]:
     """The interpreter that has taxcore's deps (pandas, openpyxl)."""
+    if settings.taxcore_python:
+        return [settings.taxcore_python]
     venv = TAXCORE / ".venv" / "bin" / "python"
     if venv.exists():
         return [str(venv)]

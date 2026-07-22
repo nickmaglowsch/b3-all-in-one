@@ -35,6 +35,10 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
       REDIS_URL: redis://redis:6379/0
+      UPLOADS_DIR: /data/uploads
+      RUN_MIGRATIONS: "1"   # api runs `alembic upgrade head` before uvicorn (entrypoint)
+    volumes:
+      - uploads_data:/data/uploads   # shared with worker so saved files are visible to jobs
     ports:
       - "8000:8000"
     depends_on:
@@ -58,6 +62,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
       REDIS_URL: redis://redis:6379/0
+      UPLOADS_DIR: /data/uploads
+    volumes:
+      - uploads_data:/data/uploads   # same volume as api: reads files the api saved
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,3 +72,4 @@ services:
 
 volumes:
   postgres_data:
+  uploads_data:

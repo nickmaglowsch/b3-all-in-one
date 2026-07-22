@@ -22,6 +22,36 @@ IRPF report) used as golden-test fixtures with the owner's consent. This repo mu
 
 ```
 cp .env.example .env
-docker compose up -d postgres redis     # infra only
-docker compose --profile app up -d      # + api & worker (once platform/ exists)
+docker compose up -d postgres redis        # infra only
+docker compose --profile app up --build -d # + api & worker (self-contained images)
 ```
+
+The images bake in taxcore's code (`scripts/`, `methodologies/`) and its deps in a
+separate venv at `/opt/taxcore`, so the import → portfolio → IRPF loop runs entirely
+inside the containers — no host `../taxcore` checkout needed. taxcore's **data**
+(`b3_imports/`, `data/`, `reports/`, `tests/`) is deliberately kept out of the image.
+
+On boot the **api** runs `alembic upgrade head` before uvicorn (via the entrypoint,
+gated on `RUN_MIGRATIONS=1`); the **worker** applies its own procrastinate schema.
+Uploaded files land on a shared `uploads_data` volume mounted into both services at
+`/data/uploads`, so files the api saves are visible to the worker's import jobs.
+
+### End-to-end smoke
+
+```
+./scripts/docker_smoke.sh          # clean up --build, import 3 real extracts,
+                                   # assert positions + IRPF, then tear down (keeps volumes)
+./scripts/docker_smoke.sh --keep   # same, but leave the stack running
+```
+
+### Env vars (see `.env.example`)
+
+| Var | Default (host) | In-image |
+|---|---|---|
+| `UPLOADS_DIR` | `./uploads` | `/data/uploads` (shared volume) |
+| `TAXCORE_DIR` | *(empty → `../taxcore`)* | `/opt/taxcore` |
+| `TAXCORE_PYTHON` | *(empty → `taxcore/.venv`)* | `/opt/taxcore/.venv/bin/python` |
+| `RUN_MIGRATIONS` | *(unset)* | `1` on the api only |
+
+Leaving `TAXCORE_DIR`/`TAXCORE_PYTHON` unset keeps host runs (and `platform/tests`)
+working against a local `taxcore/` checkout exactly as before.

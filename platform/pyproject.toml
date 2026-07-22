@@ -5,6 +5,7 @@ description = "b3-all-in-one platform API (auth, tenants, jobs)"
 requires-python = "==3.12.*"
 dependencies = [
     "fastapi",
+    "python-multipart",
     "uvicorn[standard]",
     "sqlalchemy[asyncio]>=2.0",
     "asyncpg",

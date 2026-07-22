@@ -32,6 +32,17 @@ async def _test_db():
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Procrastinate ships its own tables; the worker applies them in prod. Tests never
+    # run the worker but POST /imports defers a job, so apply the schema here.
+    from platform_app.tasks import app as pro_app
+
+    async with pro_app.open_async():
+        row = await pro_app.connector.execute_query_one_async(
+            "SELECT to_regclass('procrastinate_jobs') AS reg"
+        )
+        if row["reg"] is None:
+            await pro_app.schema_manager.apply_schema_async()
     yield
     await engine.dispose()
     await _admin(f"DROP DATABASE IF EXISTS {TEST_DB} WITH (FORCE)")

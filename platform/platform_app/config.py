@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://postgres:devpassword@localhost:5432/b3"
     redis_url: str = "redis://localhost:6379/0"
+    uploads_dir: str = "./uploads"
     secret_key: str = "dev-secret-change-me"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"

@@ -1,0 +1,9 @@
+# Build context is the repo root; only platform/ is needed. Patterns are
+# relative to the context root. BuildKit uses this file (adjacent to the
+# Dockerfile) in preference to a root .dockerignore.
+*
+!platform
+platform/.venv
+platform/**/__pycache__
+platform/.pytest_cache
+platform/.ruff_cache

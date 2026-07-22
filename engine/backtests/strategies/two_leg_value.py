@@ -41,10 +41,9 @@ populated fundamentals_pit. Reuses the SP-B3 liquidity / market-cap machinery.
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pandas as pd
 
+from b3_pipeline import storage
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -200,8 +199,8 @@ def load_fundamentals_full(db_path: str) -> pd.DataFrame:
         FROM fundamentals_pit
         WHERE ticker IS NOT NULL
     """
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(sql, conn)
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn)
     df["period_end"] = pd.to_datetime(df["period_end"])
     df["filing_date"] = pd.to_datetime(df["filing_date"])
     return df

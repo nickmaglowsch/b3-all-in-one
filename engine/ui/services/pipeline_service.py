@@ -25,10 +25,11 @@ def get_db_stats() -> dict:
     Return database summary statistics.
     Raises FileNotFoundError if the database does not exist.
     """
-    if not DB_PATH.exists():
+    from b3_pipeline import storage
+    if not storage.using_postgres() and not DB_PATH.exists():
         raise FileNotFoundError(f"Database not found at {DB_PATH}")
 
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = storage.get_connection()
     try:
         from b3_pipeline.storage import get_summary_stats
         stats = get_summary_stats(conn)
@@ -117,12 +118,18 @@ def get_table_sample(table_name: str, limit: int = 100) -> Optional[pd.DataFrame
     """
     if table_name not in _ALLOWED_TABLES:
         return None
-    if not DB_PATH.exists():
+    from b3_pipeline import storage
+    pg = storage.using_postgres()
+    if not pg and not DB_PATH.exists():
         return None
     conn = None
     try:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
-        df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT {int(limit)}", conn)
+        if pg:
+            conn = storage.get_connection()
+            df = storage.read_sql(f"SELECT * FROM {table_name} LIMIT {int(limit)}", conn)
+        else:
+            conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+            df = pd.read_sql_query(f"SELECT * FROM {table_name} LIMIT {int(limit)}", conn)
         return df
     except Exception:
         return None

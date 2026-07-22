@@ -13,3 +13,4 @@ pyarrow>=14.0.0
 pytest>=7.0
 pyyaml>=6.0
 maturin>=1.4        # CLI used by `make dev-rust` / `make build-rust`
+psycopg[binary]>=3.1  # Postgres driver; only used when ENGINE_DATABASE_URL is postgresql://

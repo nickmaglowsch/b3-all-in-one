@@ -127,15 +127,15 @@ def build_dy_12m(db_path, tickers: list[str]) -> dict[str, pd.Series]:
     DY uses split-adjusted per-share dividends (value * split_adj_close/close on
     the event date) summed over 12 months, divided by month-end split_adj_close.
     """
-    import sqlite3
+    from b3_pipeline import storage
 
-    with sqlite3.connect(str(db_path)) as conn:
-        px = pd.read_sql_query(
+    with storage.get_connection(db_path) as conn:
+        px = storage.read_sql(
             "SELECT ticker, date, close, split_adj_close, isin_code FROM prices "
             f"WHERE ticker IN ({','.join('?' * len(tickers))})",
             conn, params=tickers, parse_dates=["date"],
         )
-        divs = pd.read_sql_query(
+        divs = storage.read_sql(
             "SELECT isin_code, event_date, value FROM corporate_actions "
             "WHERE event_type IN ('CASH_DIVIDEND','JCP')",
             conn, params=[], parse_dates=["event_date"],

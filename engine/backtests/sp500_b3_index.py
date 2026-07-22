@@ -18,11 +18,11 @@ Usage (after the pipeline has populated the DB):
 from __future__ import annotations
 
 import os
-import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
+from b3_pipeline import storage
 from backtests.core.data import load_b3_data, download_benchmark, download_cdi_daily
 from backtests.core.metrics import build_metrics, display_metrics_table, cumret
 from backtests.core.plotting import PALETTE, fmt_ax
@@ -55,7 +55,10 @@ OUT_PNG = _HERE / "sp500_b3_backtest.png"
 OUT_CSV = _HERE / "output" / "sp500_b3_holdings.csv"
 
 
-def _resolve_db_path() -> Path:
+def _resolve_db_path():
+    # Postgres mode: the resolver ignores any path, so hand the DSN straight through.
+    if storage.using_postgres():
+        return os.environ["ENGINE_DATABASE_URL"]
     candidates = [
         _HERE.parent / "b3_market_data.sqlite",  # repo root (pipeline default)
         _HERE / "b3_market_data.sqlite",         # legacy backtests/ location
@@ -74,12 +77,12 @@ def _fail_not_ready(reason: str):
     )
 
 
-def _check_db_ready(db_path: Path):
-    with sqlite3.connect(db_path) as conn:
+def _check_db_ready(db_path):
+    with storage.get_connection(db_path) as conn:
         cur = conn.cursor()
         try:
             n_prices = cur.execute("SELECT COUNT(*) FROM prices").fetchone()[0]
-        except sqlite3.OperationalError:
+        except Exception:
             _fail_not_ready("prices table missing")
         if n_prices == 0:
             _fail_not_ready("prices table empty")
@@ -87,7 +90,7 @@ def _check_db_ready(db_path: Path):
             n_ttm = cur.execute(
                 "SELECT COUNT(*) FROM fundamentals_pit WHERE net_income_ttm IS NOT NULL"
             ).fetchone()[0]
-        except sqlite3.OperationalError:
+        except Exception:
             _fail_not_ready("fundamentals_pit table (or net_income_ttm column) missing")
         if n_ttm == 0:
             _fail_not_ready("fundamentals_pit has no net_income_ttm data")

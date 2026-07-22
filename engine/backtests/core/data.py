@@ -5,7 +5,6 @@ Core utilities for backtesting with B3 data.
 import glob
 import hashlib
 import os
-import sqlite3
 import time
 from pathlib import Path
 
@@ -13,6 +12,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 from datetime import datetime
+
+from b3_pipeline import storage
 
 
 # ── Disk+memory cache for external market series (benchmarks, CDI) ────────────
@@ -88,8 +89,8 @@ def load_sector_pit(fca_dir, db_path) -> pd.DataFrame:
         return pd.DataFrame(columns=["ticker", "ref_date", "sector"])
     sectors = pd.concat(frames, ignore_index=True)
 
-    with sqlite3.connect(str(db_path)) as conn:
-        cmap = pd.read_sql_query(
+    with storage.get_connection(db_path) as conn:
+        cmap = storage.read_sql(
             "SELECT DISTINCT cnpj, ticker FROM company_tickers_pit", conn
         )
     out = sectors.merge(cmap, on="cnpj", how="inner")
@@ -209,8 +210,8 @@ def load_active_tickers(db_path: str, as_of_date: str) -> set:
           AND (delisting_date IS NULL OR delisting_date >= ?)
     """
     try:
-        with sqlite3.connect(db_path) as conn:
-            df = pd.read_sql_query(sql, conn, params=[as_of_date])
+        with storage.get_connection(db_path) as conn:
+            df = storage.read_sql(sql, conn, params=[as_of_date])
         return set(df["ticker"].dropna().tolist())
     except Exception:
         return set()
@@ -220,8 +221,8 @@ def _get_all_known_roots(db_path: str) -> set:
     """Return all ticker roots present in cvm_companies (with or without delisting_date)."""
     sql = "SELECT DISTINCT ticker FROM cvm_companies WHERE ticker IS NOT NULL"
     try:
-        with sqlite3.connect(db_path) as conn:
-            df = pd.read_sql_query(sql, conn)
+        with storage.get_connection(db_path) as conn:
+            df = storage.read_sql(sql, conn)
         return set(df["ticker"].dropna().tolist())
     except Exception:
         return set()
@@ -285,8 +286,8 @@ def load_b3_data(
         )
     """
 
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(query, conn, params=[start, end])
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(query, conn, params=[start, end])
 
     df["date"] = pd.to_datetime(df["date"])
 
@@ -379,8 +380,8 @@ def load_b3_hlc_data(
         )
     """
 
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(query, conn, params=[start, end])
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(query, conn, params=[start, end])
 
     df["date"] = pd.to_datetime(df["date"])
     # DB `volume` is already in reais (parser handles VOLTOT's implied decimals)
@@ -496,8 +497,8 @@ _FUNDAMENTALS_MONTHLY_METRICS = set(_FUNDAMENTALS_METRICS)
 
 def _get_rebalance_dates(db_path: str, start: str, end: str, freq: str) -> pd.DatetimeIndex:
     """Build the rebalance date grid by sampling the prices table."""
-    with sqlite3.connect(db_path) as conn:
-        dates_df = pd.read_sql_query(
+    with storage.get_connection(db_path) as conn:
+        dates_df = storage.read_sql(
             "SELECT DISTINCT date FROM prices WHERE date >= ? AND date <= ? ORDER BY date",
             conn,
             params=[start, end],
@@ -555,8 +556,8 @@ def load_fundamentals_pit(
         ORDER BY f.ticker, f.filing_date, f.filing_version
     """
 
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(sql, conn, params={"end": end})
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn, params={"end": end})
 
     if df.empty:
         rebal_dates = _get_rebalance_dates(db_path, start, end, freq)
@@ -698,8 +699,8 @@ def load_fundamentals_monthly(
         ORDER BY month_end, ticker
     """
 
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(sql, conn, params=[start, end])
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn, params=[start, end])
 
     if df.empty:
         return pd.DataFrame(dtype=float)

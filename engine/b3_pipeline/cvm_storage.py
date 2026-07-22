@@ -12,6 +12,8 @@ from typing import Optional
 
 import pandas as pd
 
+from . import storage
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,7 +42,7 @@ def upsert_cvm_company(
             b3_trading_name = excluded.b3_trading_name,
             updated_at = CURRENT_TIMESTAMP
     """
-    conn.execute(sql, (cnpj, ticker, ticker_root, company_name, cvm_code, b3_trading_name))
+    storage.execute(conn, sql, (cnpj, ticker, ticker_root, company_name, cvm_code, b3_trading_name))
     conn.commit()
     logger.debug(f"Upserted cvm_company: cnpj={cnpj} ticker={ticker}")
 
@@ -62,7 +64,7 @@ def bulk_upsert_companies_index(conn: sqlite3.Connection, companies: list) -> in
             company_name = COALESCE(cvm_companies.company_name, excluded.company_name),
             updated_at  = CURRENT_TIMESTAMP
     """
-    conn.executemany(sql, companies)
+    storage.executemany(conn, sql, companies)
     conn.commit()
     return len(companies)
 
@@ -79,7 +81,8 @@ def update_ticker_by_cvm_code(
     if cvm_code.isdigit():
         cvm_code = cvm_code.zfill(6)
     ticker_root = ticker[:4] if ticker else None
-    result = conn.execute(
+    result = storage.execute(
+        conn,
         """
         UPDATE cvm_companies
         SET ticker = ?, ticker_root = ?, b3_trading_name = ?, updated_at = CURRENT_TIMESTAMP
@@ -128,13 +131,18 @@ def upsert_company_tickers_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> in
     if df is None or df.empty:
         return 0
     sql = """
-        INSERT OR REPLACE INTO company_tickers_pit
+        INSERT INTO company_tickers_pit
             (cnpj, ticker, ticker_root, market, start_date, end_date, source)
         VALUES (:cnpj, :ticker, :ticker_root, :market, :start_date, :end_date, :source)
+        ON CONFLICT (cnpj, ticker, start_date) DO UPDATE SET
+            ticker_root = excluded.ticker_root,
+            market = excluded.market,
+            end_date = excluded.end_date,
+            source = excluded.source
     """
-    # Normalise NaN -> None for SQLite
-    records = df.astype(object).where(pd.notna(df), None).to_dict("records")
-    conn.executemany(sql, records)
+    # Normalise NaN -> None for SQL NULL (both backends)
+    records = storage.df_records(df)
+    storage.executemany(conn, sql, records)
     conn.commit()
     logger.info(f"Upserted {len(records):,} company_tickers_pit rows")
     return len(records)
@@ -194,11 +202,21 @@ def upsert_cvm_filing(
     filing_id, so it is a new row rather than an update.
     """
     sql = """
-        INSERT OR REPLACE INTO cvm_filings
+        INSERT INTO cvm_filings
             (filing_id, cnpj, doc_type, period_end, filing_date, filing_version, fiscal_year, quarter, source_file)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (filing_id) DO UPDATE SET
+            cnpj = excluded.cnpj,
+            doc_type = excluded.doc_type,
+            period_end = excluded.period_end,
+            filing_date = excluded.filing_date,
+            filing_version = excluded.filing_version,
+            fiscal_year = excluded.fiscal_year,
+            quarter = excluded.quarter,
+            source_file = excluded.source_file
     """
-    conn.execute(
+    storage.execute(
+        conn,
         sql,
         (filing_id, cnpj, doc_type, period_end, filing_date, filing_version, fiscal_year, quarter, source_file),
     )
@@ -217,7 +235,7 @@ def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         return 0
 
     sql = """
-        INSERT OR REPLACE INTO fundamentals_pit (
+        INSERT INTO fundamentals_pit (
             filing_id, cnpj, ticker, period_end, filing_date, filing_version,
             doc_type, fiscal_year, quarter,
             revenue, net_income, ebitda, total_assets, equity, net_debt,
@@ -228,6 +246,25 @@ def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             :revenue, :net_income, :ebitda, :total_assets, :equity, :net_debt,
             :shares_outstanding, :shares_on, :shares_pn, :net_income_ttm
         )
+        ON CONFLICT (filing_id) DO UPDATE SET
+            cnpj = excluded.cnpj,
+            ticker = excluded.ticker,
+            period_end = excluded.period_end,
+            filing_date = excluded.filing_date,
+            filing_version = excluded.filing_version,
+            doc_type = excluded.doc_type,
+            fiscal_year = excluded.fiscal_year,
+            quarter = excluded.quarter,
+            revenue = excluded.revenue,
+            net_income = excluded.net_income,
+            ebitda = excluded.ebitda,
+            total_assets = excluded.total_assets,
+            equity = excluded.equity,
+            net_debt = excluded.net_debt,
+            shares_outstanding = excluded.shares_outstanding,
+            shares_on = excluded.shares_on,
+            shares_pn = excluded.shares_pn,
+            net_income_ttm = excluded.net_income_ttm
     """
 
     # Fill optional columns not present in df with None
@@ -241,8 +278,8 @@ def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             df = df.copy()
             df[col] = None
 
-    records = df.to_dict("records")
-    conn.executemany(sql, records)
+    records = storage.df_records(df)
+    storage.executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} fundamentals_pit rows")
@@ -277,7 +314,7 @@ def upsert_cad_company_dates(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             "listing_date": rec.get("listing_date") or None,
             "delisting_date": rec.get("delisting_date") or None,
         })
-    conn.executemany(sql, records)
+    storage.executemany(conn, sql, records)
     conn.commit()
     logger.info(f"Upserted {len(records):,} CAD company date rows")
     return len(records)
@@ -369,10 +406,16 @@ def populate_company_isin_map(conn: sqlite3.Connection) -> int:
     if not records:
         return 0
 
-    cursor.executemany("""
-        INSERT OR REPLACE INTO company_isin_map
+    storage.executemany(conn, """
+        INSERT INTO company_isin_map
             (cnpj, isin_code, ticker, share_class, is_primary, first_seen, last_seen)
         VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (cnpj, isin_code) DO UPDATE SET
+            ticker = excluded.ticker,
+            share_class = excluded.share_class,
+            is_primary = excluded.is_primary,
+            first_seen = excluded.first_seen,
+            last_seen = excluded.last_seen
     """, records)
     conn.commit()
     count = len(records)
@@ -398,7 +441,7 @@ def upsert_fundamentals_monthly(conn: sqlite3.Connection, df: pd.DataFrame) -> i
         return 0
 
     sql = """
-        INSERT OR REPLACE INTO fundamentals_monthly (
+        INSERT INTO fundamentals_monthly (
             month_end, ticker,
             revenue, net_income, ebitda, total_assets, equity, net_debt,
             shares_outstanding, net_income_ttm
@@ -407,6 +450,15 @@ def upsert_fundamentals_monthly(conn: sqlite3.Connection, df: pd.DataFrame) -> i
             :revenue, :net_income, :ebitda, :total_assets, :equity, :net_debt,
             :shares_outstanding, :net_income_ttm
         )
+        ON CONFLICT (month_end, ticker) DO UPDATE SET
+            revenue = excluded.revenue,
+            net_income = excluded.net_income,
+            ebitda = excluded.ebitda,
+            total_assets = excluded.total_assets,
+            equity = excluded.equity,
+            net_debt = excluded.net_debt,
+            shares_outstanding = excluded.shares_outstanding,
+            net_income_ttm = excluded.net_income_ttm
     """
 
     # Fill optional columns not present in df with None
@@ -419,8 +471,8 @@ def upsert_fundamentals_monthly(conn: sqlite3.Connection, df: pd.DataFrame) -> i
             df = df.copy()
             df[col] = None
 
-    records = df.to_dict("records")
-    conn.executemany(sql, records)
+    records = storage.df_records(df)
+    storage.executemany(conn, sql, records)
     conn.commit()
 
     n = len(records)

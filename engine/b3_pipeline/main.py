@@ -272,10 +272,9 @@ def _run_update_cnpj_map() -> None:
 
     Delegates to cvm_main._fetch_ticker_mappings() so the logic is not duplicated.
     """
-    import sqlite3
     from . import cvm_main as _cvm_main
     logger.info("Updating CNPJ → ticker map from B3 API...")
-    with sqlite3.connect(config.DB_PATH) as conn:
+    with storage.get_connection() as conn:
         storage.init_db(conn)
         tickers = storage.get_all_tickers(conn)
         if not tickers:

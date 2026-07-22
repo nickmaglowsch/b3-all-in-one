@@ -1,9 +1,13 @@
 """
-SQLite storage operations for B3 market data.
+Storage operations for B3 market data (SQLite by default, Postgres via
+ENGINE_DATABASE_URL). See PORTING.md for the dialect map.
 """
 
 import logging
+import os
+import re
 import sqlite3
+import warnings
 from datetime import date, datetime
 from pathlib import Path
 from typing import List, Optional
@@ -13,6 +17,100 @@ import pandas as pd
 from . import config
 
 logger = logging.getLogger(__name__)
+
+
+# ── Dialect resolver + helpers ─────────────────────────────────────────────────
+# ENGINE_DATABASE_URL selects the backend. Unset (or a sqlite path/URL) keeps the
+# historical SQLite behaviour byte-for-byte; a postgresql:// DSN routes every
+# connection through psycopg (v3).
+
+_PG_PREFIXES = ("postgresql://", "postgres://")
+
+
+def _is_pg_url(s) -> bool:
+    return isinstance(s, str) and s.startswith(_PG_PREFIXES)
+
+
+def using_postgres() -> bool:
+    """True when ENGINE_DATABASE_URL points at Postgres (the global switch)."""
+    return _is_pg_url(os.environ.get("ENGINE_DATABASE_URL"))
+
+
+def _sqlite_path(url: str):
+    """Strip a sqlite:// prefix if present; otherwise treat the value as a path."""
+    for pre in ("sqlite:///", "sqlite://"):
+        if url.startswith(pre):
+            return url[len(pre):]
+    return url
+
+
+def _connect_postgres(dsn: str):
+    import psycopg  # lazy: only imported in Postgres mode
+    return psycopg.connect(dsn)
+
+
+def is_postgres(conn) -> bool:
+    """True when conn is a Postgres (psycopg) connection rather than sqlite3."""
+    return not isinstance(conn, sqlite3.Connection)
+
+
+def _xlate(conn, sql: str) -> str:
+    """Translate sqlite ?/:name placeholders to psycopg pyformat when needed."""
+    if not is_postgres(conn):
+        return sql
+    sql = re.sub(r"(?<!:):([a-zA-Z_]\w*)", r"%(\1)s", sql)  # :name -> %(name)s
+    return sql.replace("?", "%s")                            # ?     -> %s
+
+
+def read_sql(sql: str, conn, params=None, **kwargs) -> pd.DataFrame:
+    """pd.read_sql_query with dialect-aware placeholders (both backends).
+
+    Extra kwargs (e.g. parse_dates) are forwarded to pandas.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # pandas warns on non-sqlite DBAPI conns
+        return pd.read_sql_query(_xlate(conn, sql), conn, params=params, **kwargs)
+
+
+def execute(conn, sql: str, params=None):
+    """Execute one statement, translating placeholders. Returns the cursor."""
+    cur = conn.cursor()
+    if params is None:
+        cur.execute(_xlate(conn, sql))
+    else:
+        cur.execute(_xlate(conn, sql), params)
+    return cur
+
+
+def executemany(conn, sql: str, rows) -> int:
+    """Batch execute; sqlite3/psycopg only expose executemany on the cursor."""
+    cur = conn.cursor()
+    cur.executemany(_xlate(conn, sql), rows)
+    return len(rows)
+
+
+def _pg_ddl(sql: str) -> str:
+    """Rewrite the SQLite CREATE statements to valid Postgres DDL.
+
+    - REAL -> DOUBLE PRECISION (SQLite REAL is 8-byte; PG REAL is only 4-byte)
+    - INTEGER -> BIGINT (SQLite INTEGER holds 8-byte ints)
+    - drop FOREIGN KEY clauses: SQLite leaves them unenforced by default, so
+      dropping them keeps behaviour identical while avoiding PG's enforcement.
+    """
+    sql = re.sub(
+        r",(\s*--[^\n]*)*\s*FOREIGN KEY\s*\([^)]*\)\s*REFERENCES\s+\w+\s*\([^)]*\)",
+        "",
+        sql,
+    )
+    sql = re.sub(r"\bREAL\b", "DOUBLE PRECISION", sql)
+    sql = re.sub(r"\bINTEGER\b", "BIGINT", sql)
+    return sql
+
+
+def df_records(df: pd.DataFrame) -> list:
+    """dict records with NaN/NaT normalised to None (SQL NULL) for both backends."""
+    clean = df.astype(object).where(pd.notna(df), None)
+    return clean.to_dict("records")
 
 
 SCHEMA_PRICES = """
@@ -225,8 +323,23 @@ INDEX_FUNDAMENTALS_PIT_FILING_DATE = "CREATE INDEX IF NOT EXISTS idx_fundamental
 INDEX_FUNDAMENTALS_PIT_PERIOD = "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_period ON fundamentals_pit(period_end);"
 
 
-def get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
-    """Get a SQLite database connection."""
+def get_connection(db_path: Optional[Path] = None):
+    """Return a DB connection, resolving the backend from ENGINE_DATABASE_URL.
+
+    Precedence (the default keeps today's SQLite behaviour exactly):
+      1. ENGINE_DATABASE_URL=postgresql://...  -> Postgres (global switch)
+      2. db_path is a postgresql:// DSN         -> Postgres
+      3. db_path given                          -> SQLite at that path (unchanged)
+      4. ENGINE_DATABASE_URL is a sqlite path   -> SQLite there
+      5. neither                                -> SQLite at config.DB_PATH
+    """
+    env = os.environ.get("ENGINE_DATABASE_URL")
+    if _is_pg_url(env):
+        return _connect_postgres(env)
+    if _is_pg_url(db_path):
+        return _connect_postgres(str(db_path))
+    if db_path is None and env:
+        db_path = _sqlite_path(env)
     if db_path is None:
         db_path = config.DB_PATH
 
@@ -282,40 +395,52 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
             cursor.execute("DROP TABLE IF EXISTS fetch_failures")
 
     logger.info("Creating database schema...")
-    cursor.execute(SCHEMA_PRICES)
-    cursor.execute(SCHEMA_CORPORATE_ACTIONS)
-    cursor.execute(SCHEMA_STOCK_ACTIONS)
-    cursor.execute(SCHEMA_DETECTED_SPLITS)
-    cursor.execute(SCHEMA_SKIPPED_EVENTS)
-    cursor.execute(SCHEMA_FETCH_FAILURES)
-    cursor.execute(INDEX_PRICES_DATE)
-    cursor.execute(INDEX_PRICES_TICKER)
-    cursor.execute(INDEX_PRICES_ISIN)
-    # CVM fundamentals tables (added after existing tables — do not reorder above)
-    cursor.execute(SCHEMA_CVM_COMPANIES)
-    cursor.execute(SCHEMA_CVM_FILINGS)
-    cursor.execute(SCHEMA_FUNDAMENTALS_PIT)
-    cursor.execute(SCHEMA_COMPANY_ISIN_MAP)
-    cursor.execute(SCHEMA_COMPANY_TICKERS_PIT)
-    cursor.execute(INDEX_COMPANY_TICKERS_PIT_ROOT)
-    cursor.execute(INDEX_CVM_COMPANIES_TICKER)
-    cursor.execute(INDEX_CVM_FILINGS_CNPJ)
-    cursor.execute(INDEX_CVM_FILINGS_PERIOD)
-    cursor.execute(INDEX_FUNDAMENTALS_PIT_CNPJ)
-    cursor.execute(INDEX_FUNDAMENTALS_PIT_TICKER)
-    cursor.execute(INDEX_FUNDAMENTALS_PIT_FILING_DATE)
-    cursor.execute(INDEX_FUNDAMENTALS_PIT_PERIOD)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_CNPJ)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_ISIN)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_TICKER)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_PRIMARY)
-    # fundamentals_monthly snapshot table (added after CVM tables)
-    cursor.execute(SCHEMA_FUNDAMENTALS_MONTHLY)
-    cursor.execute(INDEX_FUNDAMENTALS_MONTHLY_TICKER)
-    cursor.execute(INDEX_FUNDAMENTALS_MONTHLY_MONTH_END)
+    pg = is_postgres(conn)
+    # Order matches the historical create sequence exactly. INDEX_CVM_COMPANIES_
+    # TICKER_ROOT is intentionally NOT here: on an old SQLite file its column is
+    # only added by _migrate_schema below, so the index has to come after that.
+    ddl_statements = [
+        SCHEMA_PRICES,
+        SCHEMA_CORPORATE_ACTIONS,
+        SCHEMA_STOCK_ACTIONS,
+        SCHEMA_DETECTED_SPLITS,
+        SCHEMA_SKIPPED_EVENTS,
+        SCHEMA_FETCH_FAILURES,
+        INDEX_PRICES_DATE,
+        INDEX_PRICES_TICKER,
+        INDEX_PRICES_ISIN,
+        SCHEMA_CVM_COMPANIES,
+        SCHEMA_CVM_FILINGS,
+        SCHEMA_FUNDAMENTALS_PIT,
+        SCHEMA_COMPANY_ISIN_MAP,
+        SCHEMA_COMPANY_TICKERS_PIT,
+        INDEX_COMPANY_TICKERS_PIT_ROOT,
+        INDEX_CVM_COMPANIES_TICKER,
+        INDEX_CVM_FILINGS_CNPJ,
+        INDEX_CVM_FILINGS_PERIOD,
+        INDEX_FUNDAMENTALS_PIT_CNPJ,
+        INDEX_FUNDAMENTALS_PIT_TICKER,
+        INDEX_FUNDAMENTALS_PIT_FILING_DATE,
+        INDEX_FUNDAMENTALS_PIT_PERIOD,
+        INDEX_COMPANY_ISIN_MAP_CNPJ,
+        INDEX_COMPANY_ISIN_MAP_ISIN,
+        INDEX_COMPANY_ISIN_MAP_TICKER,
+        INDEX_COMPANY_ISIN_MAP_PRIMARY,
+        SCHEMA_FUNDAMENTALS_MONTHLY,
+        INDEX_FUNDAMENTALS_MONTHLY_TICKER,
+        INDEX_FUNDAMENTALS_MONTHLY_MONTH_END,
+    ]
+    for stmt in ddl_statements:
+        cursor.execute(_pg_ddl(stmt) if pg else stmt)
 
-    # Migrate existing databases: add new columns if they don't exist
-    _migrate_schema(conn)
+    if pg:
+        # Postgres skips the SQLite-only migration below; SCHEMA_CVM_COMPANIES
+        # already created ticker_root, so this index is safe to add here.
+        cursor.execute(_pg_ddl(INDEX_CVM_COMPANIES_TICKER_ROOT))
+    else:
+        # Migrate existing SQLite databases (add columns to pre-existing files).
+        # PRAGMA/ALTER used here don't exist in Postgres.
+        _migrate_schema(conn)
 
     conn.commit()
     logger.info("Database schema initialized")
@@ -407,8 +532,6 @@ def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         logger.warning("No price records to upsert")
         return 0
 
-    cursor = conn.cursor()
-
     sql = """
         INSERT INTO prices (ticker, isin_code, date, open, high, low, close, volume, quotation_factor)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -454,7 +577,7 @@ def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["ticker", "isin_code", "date", "open", "high", "low", "close", "volume", "quotation_factor"]
     records = df[cols].values.tolist()
 
-    cursor.executemany(sql, records)
+    executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} price records")
@@ -467,11 +590,13 @@ def upsert_corporate_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         logger.warning("No corporate action records to upsert")
         return 0
 
-    cursor = conn.cursor()
-
     sql = """
-        INSERT OR REPLACE INTO corporate_actions (isin_code, event_date, event_type, value, factor, source)
+        INSERT INTO corporate_actions (isin_code, event_date, event_type, value, factor, source)
         VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(isin_code, event_date, event_type) DO UPDATE SET
+            value = excluded.value,
+            factor = excluded.factor,
+            source = excluded.source
     """
 
     df = df.copy()
@@ -488,7 +613,7 @@ def upsert_corporate_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["isin_code", "event_date", "event_type", "value", "factor", "source"]
     records = df[cols].values.tolist()
 
-    cursor.executemany(sql, records)
+    executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} corporate action records")
@@ -501,11 +626,12 @@ def upsert_detected_splits(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         logger.warning("No detected split records to upsert")
         return 0
 
-    cursor = conn.cursor()
-
     sql = """
-        INSERT OR REPLACE INTO detected_splits (isin_code, ex_date, split_factor, description)
+        INSERT INTO detected_splits (isin_code, ex_date, split_factor, description)
         VALUES (?, ?, ?, ?)
+        ON CONFLICT(isin_code, ex_date) DO UPDATE SET
+            split_factor = excluded.split_factor,
+            description = excluded.description
     """
 
     df = df.copy()
@@ -516,7 +642,7 @@ def upsert_detected_splits(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["isin_code", "ex_date", "split_factor", "description"]
     records = df[cols].values.tolist()
 
-    cursor.executemany(sql, records)
+    executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} detected split records")
@@ -529,11 +655,12 @@ def upsert_stock_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         logger.warning("No stock action records to upsert")
         return 0
 
-    cursor = conn.cursor()
-
     sql = """
-        INSERT OR REPLACE INTO stock_actions (isin_code, ex_date, action_type, factor, source)
+        INSERT INTO stock_actions (isin_code, ex_date, action_type, factor, source)
         VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(isin_code, ex_date, action_type) DO UPDATE SET
+            factor = excluded.factor,
+            source = excluded.source
     """
 
     df = df.copy()
@@ -546,7 +673,7 @@ def upsert_stock_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["isin_code", "ex_date", "action_type", "factor", "source"]
     records = df[cols].values.tolist()
 
-    cursor.executemany(sql, records)
+    executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} stock action records")
@@ -580,10 +707,8 @@ def update_adjusted_columns(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
 
-    cursor = conn.cursor()
-
     sql = """
-        UPDATE prices 
+        UPDATE prices
         SET split_adj_open = ?,
             split_adj_high = ?,
             split_adj_low = ?,
@@ -608,7 +733,7 @@ def update_adjusted_columns(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["split_adj_open", "split_adj_high", "split_adj_low", "split_adj_close", "adj_close", "volume", "ticker", "isin_code", "date"]
     records = df[cols].values.tolist()
 
-    cursor.executemany(sql, records)
+    executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Updated adjusted columns for {len(records):,} records")
@@ -651,7 +776,7 @@ def get_all_prices(conn: sqlite3.Connection) -> pd.DataFrame:
         FROM prices
         ORDER BY isin_code, date
     """
-    return pd.read_sql_query(query, conn)
+    return read_sql(query, conn)
 
 
 def get_all_corporate_actions(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -661,7 +786,7 @@ def get_all_corporate_actions(conn: sqlite3.Connection) -> pd.DataFrame:
         FROM corporate_actions
         ORDER BY isin_code, event_date
     """
-    return pd.read_sql_query(query, conn)
+    return read_sql(query, conn)
 
 
 def get_all_stock_actions(conn: sqlite3.Connection) -> pd.DataFrame:
@@ -671,7 +796,7 @@ def get_all_stock_actions(conn: sqlite3.Connection) -> pd.DataFrame:
         FROM stock_actions
         ORDER BY isin_code, ex_date
     """
-    return pd.read_sql_query(query, conn)
+    return read_sql(query, conn)
 
 
 def upsert_skipped_events(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
@@ -679,11 +804,13 @@ def upsert_skipped_events(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
 
-    cursor = conn.cursor()
-
     sql = """
-        INSERT OR REPLACE INTO skipped_events (isin_code, event_date, label, factor, source, reason)
+        INSERT INTO skipped_events (isin_code, event_date, label, factor, source, reason)
         VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(isin_code, event_date, label) DO UPDATE SET
+            factor = excluded.factor,
+            source = excluded.source,
+            reason = excluded.reason
     """
 
     df = df.copy()
@@ -700,7 +827,7 @@ def upsert_skipped_events(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["isin_code", "event_date", "label", "factor", "source", "reason"]
     records = df[cols].values.tolist()
 
-    cursor.executemany(sql, records)
+    executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} skipped event records")
@@ -714,7 +841,6 @@ def record_fetch_failure(
     error_message: str,
 ) -> None:
     """Record an API fetch failure, incrementing retry_count if already exists."""
-    cursor = conn.cursor()
     sql = """
         INSERT INTO fetch_failures (company_code, endpoint, error_message, retry_count, resolved)
         VALUES (?, ?, ?, 0, 0)
@@ -724,7 +850,7 @@ def record_fetch_failure(
             retry_count = fetch_failures.retry_count + 1,
             resolved = 0
     """
-    cursor.execute(sql, (company_code, endpoint, error_message))
+    execute(conn, sql, (company_code, endpoint, error_message))
     conn.commit()
 
 
@@ -732,8 +858,8 @@ def resolve_fetch_failure(
     conn: sqlite3.Connection, company_code: str, endpoint: str
 ) -> None:
     """Mark a fetch failure as resolved."""
-    cursor = conn.cursor()
-    cursor.execute(
+    execute(
+        conn,
         "UPDATE fetch_failures SET resolved = 1 WHERE company_code = ? AND endpoint = ?",
         (company_code, endpoint),
     )

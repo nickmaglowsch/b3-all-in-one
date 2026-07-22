@@ -34,10 +34,9 @@ testable without the database (see tests/test_sp500_b3.py).
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pandas as pd
 
+from b3_pipeline import storage
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -413,12 +412,12 @@ def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
         FROM fundamentals_pit
         WHERE ticker IS NOT NULL
     """
-    with sqlite3.connect(db_path) as conn:
+    with storage.get_connection(db_path) as conn:
         try:
-            df = pd.read_sql_query(sql, conn)
+            df = storage.read_sql(sql, conn)
         except Exception:
             # DB predates the shares_on/shares_pn migration
-            df = pd.read_sql_query(
+            df = storage.read_sql(
                 sql.replace(", shares_on, shares_pn", ""), conn
             )
             df["shares_on"] = float("nan")
@@ -442,8 +441,8 @@ def load_stock_actions(db_path: str) -> pd.DataFrame:
               WHERE isin_code != 'UNKNOWN') p
           ON p.isin_code = s.isin_code
     """
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(sql, conn)
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn)
     df["ex_date"] = pd.to_datetime(df["ex_date"])
     return df
 

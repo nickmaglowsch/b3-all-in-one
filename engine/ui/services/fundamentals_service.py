@@ -25,10 +25,11 @@ def get_fundamentals_stats() -> dict:
     Returns a dict with keys: total_cvm_companies, total_cvm_filings, total_fundamentals_pit.
     Raises FileNotFoundError if the database does not exist.
     """
-    if not DB_PATH.exists():
+    from b3_pipeline import storage
+    if not storage.using_postgres() and not DB_PATH.exists():
         raise FileNotFoundError(f"Database not found at {DB_PATH}")
 
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = storage.get_connection()
     try:
         from b3_pipeline.cvm_storage import get_fundamentals_stats as _get_stats
         stats = _get_stats(conn)

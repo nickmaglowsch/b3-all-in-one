@@ -266,9 +266,8 @@ def test_run_update_cnpj_map_delegates_to_fetch_ticker_mappings(mem_conn):
     )
     mem_conn.commit()
 
-    # Patch sqlite3.connect to return our in-memory connection so no file I/O occurs
-    import sqlite3 as _sqlite3
-
+    # Patch the connection resolver to hand back our in-memory connection so no
+    # file I/O occurs (main._run_update_cnpj_map now routes through the resolver).
     class _FakeCtx:
         def __enter__(self):
             return mem_conn
@@ -277,7 +276,7 @@ def test_run_update_cnpj_map_delegates_to_fetch_ticker_mappings(mem_conn):
 
     with patch("b3_pipeline.main.storage.init_db"), \
          patch("b3_pipeline.cvm_main._fetch_ticker_mappings", return_value=3) as mock_fetch, \
-         patch("sqlite3.connect", return_value=_FakeCtx()):
+         patch("b3_pipeline.main.storage.get_connection", return_value=_FakeCtx()):
         b3_main._run_update_cnpj_map()
 
     mock_fetch.assert_called_once_with(mem_conn)

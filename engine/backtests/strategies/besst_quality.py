@@ -32,11 +32,10 @@ ponytail: two data gaps vs the official methodology, both documented here:
 """
 from __future__ import annotations
 
-import sqlite3
-
 import numpy as np
 import pandas as pd
 
+from b3_pipeline import storage
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -104,8 +103,8 @@ def load_dividends(db_path: str) -> dict[str, np.ndarray]:
           ON p.isin_code = ca.isin_code
         WHERE ca.event_type IN ('CASH_DIVIDEND', 'JCP')
     """
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(sql, conn)
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn)
     df["root"] = df["ticker"].str[:4]
     df["event_date"] = pd.to_datetime(df["event_date"])
     out: dict[str, np.ndarray] = {}

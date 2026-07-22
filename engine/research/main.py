@@ -24,6 +24,7 @@ import numpy as np
 # Add project root to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from b3_pipeline import storage
 from research import config
 from research.data_loader import load_all_data, print_data_summary
 from research.features import build_feature_matrix, FEATURE_NAMES
@@ -214,6 +215,11 @@ def generate_report(all_results: dict, full_df, feature_names: list) -> str:
     return report_text
 
 
+def _db_label() -> str:
+    """Human-readable backend for the banner (PG DSN in Postgres mode, else file)."""
+    return os.environ["ENGINE_DATABASE_URL"] if storage.using_postgres() else str(config.DB_PATH)
+
+
 def main():
     """Run the full feature importance discovery pipeline."""
     pipeline_start = time.time()
@@ -224,9 +230,16 @@ def main():
     print("=" * 70)
     print(f"  Started at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  Date range: {config.START_DATE} to {config.END_DATE}")
-    print(f"  Database:   {config.DB_PATH}")
+    print(f"  Database:   {_db_label()}")
     print(f"  Output:     {config.OUTPUT_DIR}")
     print()
+
+    # Fail fast on a missing SQLite file. In Postgres mode the resolver owns the
+    # connection (config.DB_PATH is ignored), so the file guard is meaningless.
+    if not storage.using_postgres() and not config.DB_PATH.exists():
+        print(f"ERROR: Database not found at {config.DB_PATH}")
+        print("Run the B3 pipeline first: python -m b3_pipeline.main")
+        sys.exit(1)
 
     # -- Step 1: Load data -----------------------------------------------
     print("-" * 70)

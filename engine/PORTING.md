@@ -1,4 +1,10 @@
-# Storage port: SQLite → Postgres (wave 1)
+# Storage port: SQLite → Postgres
+
+**Status:** wave 1 (backend resolver + dialect) done; wave 2 (test-suite health,
+PG additive migration, research/audit backend-awareness, PG ingestion smoke) done.
+See "Wave 2" at the bottom for the latest pass.
+
+# Wave 1: backend resolver + dialect
 
 Ports the `engine/` storage layer to run on either SQLite (unchanged default) or
 Postgres 16, selected at runtime by the `ENGINE_DATABASE_URL` env var. Covers
@@ -83,25 +89,35 @@ the SQLite equivalent. All 4 tests pass on Postgres 16.
 Run: `ENGINE_DATABASE_URL=postgresql://postgres:devpassword@localhost:5432/b3 \
 pytest tests/test_postgres_storage.py -v`
 
-The 61-file regression suite stays green in default (SQLite) mode — see the
-report for baseline vs final (the pre-existing failures are pandas-3.0.3 /
-bundled-SQLite artifacts, not from this port).
+The regression suite is fully green in default (SQLite) mode:
+**470 passed, 20 skipped, 0 failed, 0 errors** (pandas 3.0.3). The two
+pre-existing artifacts were test-only and are fixed in wave 2 (see below) — no
+engine output semantics changed.
 
 ## What still assumes SQLite (honest list)
 
 1. **`scripts/audit_db.py`** — standalone diagnostic CLI; uses
-   `sqlite3.connect` + `conn.row_factory = sqlite3.Row`. Not ported (dev tool,
-   off the critical path). SQLite-only until someone needs it against PG.
+   `sqlite3.connect` + `conn.row_factory = sqlite3.Row`. Still SQLite-only for
+   the actual auditing (dev tool, off the critical path). Wave 2 added a hard
+   guard: it now exits 2 with an "sqlite-only diagnostic" message when
+   `ENGINE_DATABASE_URL` is a `postgres://`/`postgresql://` DSN instead of
+   silently opening the SQLite file.
 2. **`b3_pipeline/storage.py::_migrate_schema`** — SQLite-only (PRAGMA
-   `table_info` + `ALTER TABLE ADD COLUMN`). Postgres always starts from the full
-   `CREATE`, so there is **no incremental-migration path for Postgres yet** — a
-   schema change means recreating tables. A real PG migration story is wave-2
-   work.
-3. **`research/main.py`** — prints `config.DB_PATH` and guards on
-   `DB_PATH.exists()`, which is false in Postgres mode. `research/data_loader.py`
-   itself is fine (routes through `data.py`). The `.exists()` guard needs a
-   `storage.using_postgres()` check.
-4. **The existing 61 tests** deliberately use `sqlite3.connect(":memory:")` /
+   `table_info` + `ALTER TABLE ADD COLUMN`). Wave 2 added `_migrate_schema_pg`
+   (native `ALTER TABLE … ADD COLUMN IF NOT EXISTS`), run from `init_db` after
+   the PG `CREATE`. It mirrors the SQLite additive columns
+   (`quotation_factor`, `cvm_companies.{listing_date,delisting_date,ticker_root}`
+   + `ticker_root` backfill/index, `{fundamentals_pit,fundamentals_monthly}`
+   `.net_income_ttm`, `fundamentals_pit.{shares_on,shares_pn}`). It is a no-op on
+   a fresh PG DB (the full CREATE already has every column) and idempotent. Still
+   additive-only — column *renames/drops/type changes* have no migration path on
+   either backend.
+3. **`research/main.py`** — wave 2 made it backend-aware: the banner prints the
+   PG DSN in Postgres mode (not the SQLite `config.DB_PATH`), and the
+   missing-DB guard (`config.DB_PATH.exists()`) is skipped when
+   `storage.using_postgres()` (the resolver owns the connection in PG mode).
+   `research/data_loader.py` was already fine (routes through `data.py`).
+4. **The existing tests** deliberately use `sqlite3.connect(":memory:")` /
    temp files directly — they are the SQLite regression net and are meant to run
    in default mode; not a coupling to remove.
 5. **Default DB_PATH constants** (`config.py`, `research/config.py`,
@@ -111,14 +127,40 @@ bundled-SQLite artifacts, not from this port).
    the resolver overrides them when `ENGINE_DATABASE_URL` is Postgres — but they
    remain SQLite-flavoured literals.
 
+## Wave 2 (test health, PG migration, backend-awareness, ingestion smoke)
+
+- **SQLite suite fully green** (was 1 failed / 4 errors, both test-only artifacts):
+  - `tests/test_load_b3_data_pivot.py` asserted `datetime64[ns]`; pandas 3 pivots
+    a `DatetimeIndex` to `[us]`/`[s]` (same instants). Made the assertion
+    resolution-agnostic (`pd.api.types.is_datetime64_any_dtype`). No engine
+    semantics changed — only the index *resolution*, which every consumer
+    already normalises via `pd.to_datetime`.
+  - `tests/test_shared_data_fundamentals.py` embedded the underscore literal
+    `10_000_000_000.0` inside a raw SQL string; the bundled SQLite tokenizer
+    (< 3.46) rejects `_` digit separators. Rewrote it to `10000000000.0`
+    (the other underscore literals are Python params, which are fine).
+- **`_migrate_schema_pg`** — see honest-list item 2.
+- **`research/main.py` / `scripts/audit_db.py`** — see honest-list items 1 & 3.
+- **Postgres ingestion smoke** (`engine_smoke` DB, real B3/BCB network):
+  `python -m b3_pipeline.main --year 2025 --skip-corporate-actions` (the
+  per-company B3 corporate-actions crawl is rate-limited and has no per-ticker
+  flag, so it was skipped). Result: `prices` 83,722 rows / 432 tickers /
+  2025-01-02→2025-12-30, `stock_actions` 27, `detected_splits` 27 (splits found
+  from the price series), other tables 0. `adj_close` fully populated (0 NULL);
+  PETR4 loads via `backtests.core.data.load_b3_data` as 250 trading days
+  (36.77 → 30.82). `download_cdi_daily` returns the BCB SGS-12 series
+  (~0.000483/day ≈ 13% annualised). Re-running the ingestion is idempotent —
+  identical counts, 0 duplicate `(ticker, date)` rows.
+
 ## Next wave
 
-- Give Postgres a real migration story (a `schema_migrations` table or idempotent
-  `ALTER`s) so `_migrate_schema`'s intent isn't SQLite-only.
 - Connection pooling for Postgres: `get_connection` opens a fresh `psycopg`
   connection each call — fine for the CLI/ingest pattern, but the API/worker
   layer will want a pool (`psycopg_pool`).
-- Port `scripts/audit_db.py` and fix `research/main.py`'s `.exists()` guard if
-  those need to run against Postgres.
+- Non-additive PG migrations (renames / type changes) still have no path — add a
+  `schema_migrations` table only if/when a destructive change is actually needed.
+- `b3_pipeline/main.py`'s final banner still prints `config.DB_PATH` (the SQLite
+  fallback path) even in PG mode — cosmetic; the data is written to PG correctly.
+  Same backend-awareness fix as `research/main.py` if it matters.
 - Checklist items 3–6 (yfinance benchmark replacement, worker task wrapping,
-  engine extensions for the portfolio loop) are out of this wave's scope.
+  engine extensions for the portfolio loop) are out of scope.

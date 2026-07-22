@@ -434,9 +434,8 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
         cursor.execute(_pg_ddl(stmt) if pg else stmt)
 
     if pg:
-        # Postgres skips the SQLite-only migration below; SCHEMA_CVM_COMPANIES
-        # already created ticker_root, so this index is safe to add here.
-        cursor.execute(_pg_ddl(INDEX_CVM_COMPANIES_TICKER_ROOT))
+        # Postgres additive migrations (mirrors _migrate_schema, native IF NOT EXISTS).
+        _migrate_schema_pg(conn)
     else:
         # Migrate existing SQLite databases (add columns to pre-existing files).
         # PRAGMA/ALTER used here don't exist in Postgres.
@@ -444,6 +443,37 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
 
     conn.commit()
     logger.info("Database schema initialized")
+
+
+def _migrate_schema_pg(conn) -> None:
+    """Postgres equivalent of _migrate_schema: additive, idempotent column adds.
+
+    A fresh PG database already has every column (the full CREATE above ran
+    through _pg_ddl), so this is a no-op there. It only bites a PG database
+    created from an older engine schema — the same case _migrate_schema covers on
+    SQLite. Uses PG's native ADD COLUMN IF NOT EXISTS, no information_schema
+    probing, no migration framework. Types match the _pg_ddl-translated CREATE
+    (REAL -> DOUBLE PRECISION, INTEGER -> BIGINT).
+    """
+    cursor = conn.cursor()
+    additive = [
+        "ALTER TABLE prices ADD COLUMN IF NOT EXISTS quotation_factor BIGINT DEFAULT 1",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS listing_date DATE",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS delisting_date DATE",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS ticker_root TEXT",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_monthly ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_on DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_pn DOUBLE PRECISION",
+    ]
+    for stmt in additive:
+        cursor.execute(stmt)
+    cursor.execute(INDEX_CVM_COMPANIES_TICKER_ROOT)
+    # Backfill ticker_root like the SQLite path (idempotent: only fills NULLs).
+    cursor.execute(
+        "UPDATE cvm_companies SET ticker_root = SUBSTR(ticker, 1, 4)"
+        " WHERE ticker IS NOT NULL AND ticker_root IS NULL"
+    )
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:

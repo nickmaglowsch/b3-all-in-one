@@ -72,10 +72,11 @@ class TestLoadB3DataPivot:
 
         adj_close, close_px, fin_vol = load_b3_data(db_path, "2020-01-01", "2020-01-31")
 
-        # Index should contain the two dates as datetime64[ns]
+        # Index should contain the two dates as datetime64 (resolution-agnostic:
+        # pandas 3 pivots to [us]/[s]; the instants are identical)
         assert pd.Timestamp("2020-01-02") in adj_close.index
         assert pd.Timestamp("2020-01-03") in adj_close.index
-        assert adj_close.index.dtype == "datetime64[ns]"
+        assert pd.api.types.is_datetime64_any_dtype(adj_close.index)
 
         # Columns should contain both tickers
         assert "PETR3" in adj_close.columns

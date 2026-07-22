@@ -55,7 +55,7 @@ def tmp_db(tmp_path):
           (filing_id, cnpj, ticker, period_end, filing_date, filing_version, doc_type,
            revenue, net_income, equity, shares_outstanding)
         VALUES ('f1', '33000167000101', 'PETR3', '2022-12-31', '2023-01-01', 1, 'DFP',
-                1000.0, 100.0, 500.0, 10_000_000_000.0)
+                1000.0, 100.0, 500.0, 10000000000.0)
     """)
 
     # Insert fundamentals_monthly rows

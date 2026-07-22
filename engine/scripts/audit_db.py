@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 from datetime import date, datetime, timedelta
@@ -459,6 +460,16 @@ def main() -> None:
         help="Path to SQLite database",
     )
     args = parser.parse_args()
+
+    # ponytail: sqlite-only diagnostic; mirrors storage._PG_PREFIXES without
+    # importing storage (keeps this script free of the pandas/psycopg chain).
+    if os.environ.get("ENGINE_DATABASE_URL", "").startswith(("postgresql://", "postgres://")):
+        print(
+            f"{RED}audit_db.py is a sqlite-only diagnostic — it cannot audit a "
+            f"Postgres database (ENGINE_DATABASE_URL is set to postgres).{RESET}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     db_path = Path(args.db)
     if not db_path.exists():

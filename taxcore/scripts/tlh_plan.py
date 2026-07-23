@@ -19,10 +19,18 @@ Usage:
   python -m scripts.tlh_plan
   python -m scripts.tlh_plan --exclude PETR4,VALE3
   python -m scripts.tlh_plan --no-save        # skip writing the report file
+
+Non-interactive (for the platform to call):
+  python -m scripts.tlh_plan --sells "PETR4:459,VALE3:100" --json
+  python -m scripts.tlh_plan --sell PETR4:459 --sell VALE3:100   # repeatable
+  # --json emits the plan as JSON to stdout (instead of the markdown) and
+  # never writes a report file. With no --sells, --json just reports the
+  # current situation (carry/mtd per bucket) with no plan.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 from datetime import date
@@ -178,6 +186,78 @@ def prompt_sells(pm_now: dict) -> list[tuple[str, float]]:
         sells.append((ticker, qty))
         print(f"  ✓ {ticker} {qty:g} adicionado.")
     return sells
+
+
+def parse_sells(spec: list[str], pm_now: dict) -> list[tuple[str, float]]:
+    """Non-interactive sells from ``TICKER:QTY`` tokens (CSV or repeated).
+
+    Same validation as prompt_sells (ticker must be held, qty <= held) but a
+    trust boundary for platform input, so any bad token raises instead of
+    warn-and-skip.
+    """
+    sells: list[tuple[str, float]] = []
+    for chunk in spec:
+        for item in chunk.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if ":" not in item:
+                raise ValueError(f"formato inválido '{item}' — use TICKER:QTDE")
+            tk, _, q = item.partition(":")
+            ticker = tk.strip().upper()
+            try:
+                qty = float(q.strip())
+            except ValueError:
+                raise ValueError(f"quantidade inválida em '{item}'")
+            if ticker not in pm_now:
+                raise ValueError(f"{ticker} não está em positions.csv")
+            if qty <= 0:
+                raise ValueError(f"{ticker}: quantidade deve ser > 0")
+            held, _ = pm_now[ticker]
+            if qty > held + 1e-6:
+                raise ValueError(
+                    f"{ticker}: só há {held:g} cotas, não dá para vender {qty:g}")
+            sells.append((ticker, qty))
+    return sells
+
+
+def build_result(sells_realized: list[dict], carry: dict, mtd: dict,
+                 plan_acoes: list[dict], plan_fii: list[dict],
+                 decision: dict) -> dict:
+    """Machine-readable plan (the --json payload). Mirrors render_report's
+    numbers: per-bucket status/carry/isenção, harvest sells, T+1 rebuys."""
+    plans = {"AÇÃO": plan_acoes, "FII": plan_fii}
+    buckets = {}
+    for cls, d in decision.items():
+        plan = plans.get(cls, [])
+        buckets[cls] = {
+            "status": d["status"],
+            "gross_after": d["gross_after"],
+            "pnl_after": d["pnl_after"],
+            "carry_used": d["carry_used"],
+            "target_loss": d["target_loss"],
+            "final_gross": d["final_gross"],
+            "final_pnl": d["final_pnl"],
+            "ir": d["ir"],
+            "harvest": [{"ticker": p["ticker"], "qty": p["qty"],
+                         "price": p["price"], "realized_loss": p["realized_loss"],
+                         "partial": p["partial"]} for p in plan],
+            "rebuys": [{"ticker": p["ticker"], "qty": p["qty"]} for p in plan],
+        }
+    return {
+        "month": date.today().strftime("%m/%Y"),
+        "generated": date.today().isoformat(),
+        "isencao_limit": ISENCAO_LIMIT,
+        "rates": {"AÇÃO": ACOES_RATE, "FII": FII_RATE},
+        "situation": {cls: {"gross_mtd": mtd[cls]["gross"],
+                            "pnl_mtd": mtd[cls]["pnl"], "carry": carry[cls]}
+                      for cls in ("AÇÃO", "FII")},
+        "sells": [{"ticker": s["ticker"], "qty": s["qty"],
+                   "avg_cost": s["avg_cost"], "price": s["price"],
+                   "sell_value": s["sell_value"], "pnl": s["pnl"],
+                   "cls": s["cls"]} for s in sells_realized],
+        "buckets": buckets,
+    }
 
 
 def realize(sells: list[tuple[str, float]], pm_now: dict,
@@ -379,8 +459,16 @@ def main(argv: list[str]) -> int:
                    help="Tickers a NÃO sugerir como losers (CSV).")
     p.add_argument("--no-save", action="store_true",
                    help="Não escreve o relatório em reports/.")
+    p.add_argument("--sells", default="",
+                   help="Vendas não-interativas: 'TICKER:QTDE,TICKER:QTDE'.")
+    p.add_argument("--sell", action="append", default=[], metavar="TICKER:QTDE",
+                   help="Uma venda (repetível). Alternativa a --sells.")
+    p.add_argument("--json", action="store_true",
+                   help="Emite o plano como JSON no stdout (em vez do markdown; "
+                        "nunca salva o relatório).")
     args = p.parse_args(argv[1:])
     exclude = {t.strip().upper() for t in args.exclude.split(",") if t.strip()}
+    sells_spec = ([args.sells] if args.sells else []) + args.sell
 
     if not POSITIONS.exists():
         print("Nenhuma posição. Rode load_b3 antes.", file=sys.stderr)
@@ -394,21 +482,33 @@ def main(argv: list[str]) -> int:
         print("⚠ Sem cotações disponíveis. Rode fetch_fundamentus.py.", file=sys.stderr)
         return 1
 
-    print(f"\n=== TLH plan — {date.today().isoformat()} ===\n")
-    print(f"Mês: {date.today().strftime('%m/%Y')}\n")
-    print(f"Situação MTD:")
-    for cls in ("AÇÃO", "FII"):
-        print(f"  {cls}: gross R$ {mtd[cls]['gross']:>14,.2f} | "
-              f"PnL R$ {mtd[cls]['pnl']:>+12,.2f} | "
-              f"carry R$ {carry[cls]:>12,.2f}")
+    if not args.json:
+        print(f"\n=== TLH plan — {date.today().isoformat()} ===\n")
+        print(f"Mês: {date.today().strftime('%m/%Y')}\n")
+        print(f"Situação MTD:")
+        for cls in ("AÇÃO", "FII"):
+            print(f"  {cls}: gross R$ {mtd[cls]['gross']:>14,.2f} | "
+                  f"PnL R$ {mtd[cls]['pnl']:>+12,.2f} | "
+                  f"carry R$ {carry[cls]:>12,.2f}")
 
-    sells = prompt_sells(pm_now)
-    if not sells:
+    # Sells source: explicit flags (non-interactive) > --json (situation only) >
+    # interactive prompt (unchanged default).
+    if sells_spec:
+        try:
+            sells = parse_sells(sells_spec, pm_now)
+        except ValueError as e:
+            print(f"⚠ Venda inválida: {e}", file=sys.stderr)
+            return 2
+    elif args.json:
+        sells = []  # never block on stdin in machine mode
+    else:
+        sells = prompt_sells(pm_now)
+    if not sells and not args.json:
         print("\nNenhuma venda informada. Saindo.")
         return 0
 
     sells_realized = realize(sells, pm_now, prices)
-    if not sells_realized:
+    if sells and not sells_realized:
         return 1
 
     # --- Decide per bucket ---
@@ -500,6 +600,12 @@ def main(argv: list[str]) -> int:
             plan_acoes = plan
         else:
             plan_fii = plan
+
+    if args.json:
+        result = build_result(sells_realized, carry, mtd,
+                              plan_acoes, plan_fii, decision)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0
 
     report = render_report(sells_realized, carry, mtd,
                            plan_acoes, plan_fii, decision)

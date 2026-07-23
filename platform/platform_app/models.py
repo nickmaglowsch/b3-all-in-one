@@ -18,6 +18,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -163,6 +164,46 @@ class PortfolioSleeve(Base):
     target_pct: Mapped[float] = mapped_column(Numeric, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class AssetClassOverride(Base):
+    # spec/05 Feature 3: mark a held ticker as cash/CDI-equivalent (e.g. LFTB11).
+    # Such a ticker's market value counts toward the tenant's cash sleeve instead
+    # of showing up as an equity drift/sell. treatment is 'cash_cdi' for now.
+    __tablename__ = "asset_class_overrides"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "ticker", name="uq_asset_override_tenant_ticker"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    ticker: Mapped[str] = mapped_column(Text, nullable=False)
+    treatment: Mapped[str] = mapped_column(Text, nullable=False)  # 'cash_cdi'
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class RebalanceSettings(Base):
+    # spec/05 Feature 4: per-tenant rebalance behavior. One row per tenant
+    # (tenant_id is the PK), upserted on PUT. Defaults reproduce today's behavior.
+    __tablename__ = "rebalance_settings"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("user.id"), primary_key=True
+    )
+    buy_only_laggards: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    sell_only_for_harvest: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    cadence: Mapped[str] = mapped_column(
+        Text, nullable=False, default="ME", server_default=text("'ME'")
+    )  # ME | QE | W-FRI
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
 

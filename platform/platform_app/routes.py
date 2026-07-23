@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import json
+import math
 import shutil
 import tempfile
 import uuid
@@ -24,7 +25,8 @@ from platform_app import b3run, enginerun, tasks
 from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import (
-    BacktestRun, CashEvent, CostBasisOverride, Import, PortfolioSleeve, Position, Trade,
+    AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
+    PortfolioSleeve, Position, RebalanceSettings, Trade,
 )
 from platform_app.tenancy import get_current_tenant
 
@@ -244,7 +246,7 @@ async def put_sleeves(
 # advise_weights per strategy sleeve is deterministic for a given day's data, so
 # cache the JSON per (strategy, date). ponytail: process-lifetime dict keyed by
 # the calendar day — same lifecycle as _STRATEGIES_CACHE.
-_SLEEVE_WEIGHTS_CACHE: dict[tuple[str, str], dict] = {}
+_SLEEVE_WEIGHTS_CACHE: dict[tuple[str, str, str], dict] = {}
 
 
 def _needs_funds_msg(strategies: list[str]) -> str:
@@ -279,12 +281,66 @@ async def _advise(**kwargs) -> dict:
         raise HTTPException(500, f"advise_weights failed: {e}")
 
 
+async def _advise_strategy(strategy: str, freq: str) -> dict:
+    """Advise a strategy's target weights at the given rebalance cadence (freq).
+    freq='ME' is the default path — identical to today. A non-default cadence is
+    threaded as ``--params rebalance_freq`` through the engine script (enginerun's
+    advise_weights wrapper exposes no params passthrough); reuses run_script + its
+    exit-code-3 / last-JSON parsing, no new engine code."""
+    if freq == "ME":
+        return await _advise(strategy=strategy)
+
+    def _run() -> dict:
+        proc = enginerun.run_script(
+            "advise_weights.py",
+            [strategy, "--params", json.dumps({"rebalance_freq": freq})],
+        )
+        if proc.returncode == enginerun.NEEDS_FUNDAMENTALS_EXIT:
+            raise enginerun._needs_fundamentals(proc.stderr, strategy)
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
+        return enginerun._last_json(proc.stdout)
+
+    try:
+        return await asyncio.to_thread(_run)
+    except enginerun.EngineNeedsFundamentals:
+        raise
+    except RuntimeError as e:
+        raise HTTPException(500, f"advise_weights failed: {e}")
+
+
+# ── Per-tenant portfolio settings (spec/05 Features 3 & 4) ────────────────────
+# Read-only accessors for the settings owned by routes_portfolio_settings.py.
+
+async def _cash_cdi_tickers(session: AsyncSession, tid: uuid.UUID) -> set[str]:
+    """Tickers the tenant marked cash/CDI-equivalent — treated as cash, not equity."""
+    rows = (await session.scalars(
+        select(AssetClassOverride.ticker).where(
+            AssetClassOverride.tenant_id == tid,
+            AssetClassOverride.treatment == "cash_cdi",
+        )
+    )).all()
+    return {t.upper() for t in rows}
+
+
+async def _rebalance_settings(session: AsyncSession, tid: uuid.UUID) -> dict:
+    """buy_only_laggards / sell_only_for_harvest / cadence. Absent row → defaults
+    that reproduce today's rebalance behavior exactly."""
+    row = await session.get(RebalanceSettings, tid)
+    if row is None:
+        return {"buy_only_laggards": False, "sell_only_for_harvest": False, "cadence": "ME"}
+    return {"buy_only_laggards": bool(row.buy_only_laggards),
+            "sell_only_for_harvest": bool(row.sell_only_for_harvest),
+            "cadence": row.cadence}
+
+
 async def _combined_target(
-    session: AsyncSession, tid: uuid.UUID
+    session: AsyncSession, tid: uuid.UUID, freq: str = "ME"
 ) -> tuple[dict[str, float], float]:
     """Blend the tenant's sleeves into (combined_weights, cash_weight_target):
     combined[t] = Σ sleeve_pct/100 × sleeve_weights[t]; CASH_CDI pct becomes the
-    cash weight. 409 when no sleeves are configured."""
+    cash weight. 409 when no sleeves are configured. `freq` is the rebalance
+    cadence passed to each strategy sleeve (default 'ME' = today's behavior)."""
     sleeves = (await session.scalars(
         select(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid)
     )).all()
@@ -300,11 +356,11 @@ async def _combined_target(
         if s.strategy_ref == "CASH_CDI":
             cash_weight += pct
             continue
-        key = (s.strategy_ref, today)
+        key = (s.strategy_ref, today, freq)
         adv = _SLEEVE_WEIGHTS_CACHE.get(key)
         if adv is None:
             try:
-                adv = await _advise(strategy=s.strategy_ref)
+                adv = await _advise_strategy(s.strategy_ref, freq)
             except enginerun.EngineNeedsFundamentals as e:
                 missing.append(e.strategy or s.strategy_ref)
                 continue
@@ -335,12 +391,17 @@ async def get_target(
     _user, tid = tenant
     combined, cash_weight = await _combined_target(session, tid)
     positions = await _positions_json(session, tid)
+    cash_cdi = await _cash_cdi_tickers(session, tid)
 
     priced = await _advise(weights=combined, positions=positions, nav_cash=0.0)
     trades = priced.get("trades") or {}
     nav = float(trades.get("nav", 0.0))
     valued = trades.get("positions_valued") or {}
-    current = {t: v / nav for t, v in valued.items()} if nav > 0 else {}
+    # Feature 3: a cash/CDI-marked holding counts as cash — drop it from the equity
+    # current weights/drift so it isn't shown as a big "sell everything" row; its
+    # value stays in NAV, so it surfaces in the residual cash weight below.
+    current = {t: v / nav for t, v in valued.items()
+               if t.upper() not in cash_cdi} if nav > 0 else {}
 
     drift = []
     for t in sorted(set(combined) | set(current)):
@@ -349,11 +410,15 @@ async def get_target(
         drift.append({"ticker": t, "target_w": tw, "current_w": cw,
                       "drift_w": tw - cw, "drift_brl": (tw - cw) * nav})
 
+    # Residual (non-equity) weight = actual uninvested cash + any cash/CDI holdings.
+    cash_weight_current = max(0.0, 1.0 - sum(current.values())) if nav > 0 else 0.0
+
     return {
         "as_of": priced["as_of"],
         "combined_weights": combined,
         "current_weights": current,
         "cash_weight_target": cash_weight,
+        "cash_weight_current": cash_weight_current,
         "drift": drift,
         "nav": nav,
     }
@@ -384,6 +449,27 @@ def _freeze_target(
     return target
 
 
+def _cap_buys(buys: list[dict], budget: float) -> list[dict]:
+    """Greedy top-up: deploy `budget` BRL into buys, biggest gap first, trimming the
+    last one to whole shares. Used by buy_only_laggards so the plan only spends the
+    cash actually available (new_cash + harvest proceeds), never phantom trim proceeds."""
+    kept: list[dict] = []
+    for b in sorted(buys, key=lambda x: -float(x.get("est_brl", 0.0))):
+        if budget <= 0:
+            break
+        brl = float(b.get("est_brl", 0.0))
+        price = float(b.get("est_price", 0.0))
+        if brl <= budget:
+            kept.append(b)
+            budget -= brl
+        elif price > 0:
+            qty = math.floor(budget / price)
+            if qty > 0:
+                kept.append({**b, "qty": qty, "est_brl": qty * price})
+                budget -= qty * price
+    return kept
+
+
 @portfolio_router.post("/rebalance-plans")
 async def create_rebalance_plan(
     body: RebalanceRequest,
@@ -391,31 +477,70 @@ async def create_rebalance_plan(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Advisor v0 (single-shot, this month): combined target → integer trade list →
-    tax overlay via the TLH machinery. Advisory only; nothing executes."""
+    tax overlay via the TLH machinery. Advisory only; nothing executes.
+
+    Per-tenant settings (spec/05 Features 3 & 4; defaults = today's behavior):
+      · cash/CDI holdings are pinned as cash (not sold, not an equity trim);
+      · buy_only_laggards → no trim sells, deploy cash only into underweight names;
+      · sell_only_for_harvest → keep only sells that realize a loss;
+      · cadence → the rebalance freq passed to the combined target."""
     _user, tid = tenant
-    combined, cash_weight = await _combined_target(session, tid)
+    settings_ = await _rebalance_settings(session, tid)
+    cadence = settings_["cadence"]
+    buy_only = settings_["buy_only_laggards"]
+    harvest_only = settings_["sell_only_for_harvest"]
+
+    combined, cash_weight = await _combined_target(session, tid, freq=cadence)
     positions = await _positions_json(session, tid)
     held = set(positions)
+    cash_cdi = await _cash_cdi_tickers(session, tid)
+    cash_cdi_held = {t for t in held if t.upper() in cash_cdi}
     # v0: pins and excludes collapse to one "freeze" set — both mean "don't trade
     # this ticker, keep its current position" (per-ticker keep-in-place).
     frozen = {t.upper() for t in (body.exclude + body.pins)}
 
     target = combined
-    if frozen:
-        # One valuation pass (no new_cash) to learn current values, so frozen holdings
-        # can be pinned at their current weight before renormalizing the rest.
+    if frozen or cash_cdi_held:
+        # One valuation pass (no new_cash) to learn current values, so frozen and
+        # cash/CDI holdings can be pinned at their current weight.
         val = await _advise(weights=combined, positions=positions, nav_cash=0.0)
         vtrades = val.get("trades") or {}
         valued = {k.upper(): v for k, v in (vtrades.get("positions_valued") or {}).items()}
         final_nav = float(vtrades.get("nav", 0.0)) + body.new_cash
-        target = _freeze_target(combined, cash_weight, frozen, valued, final_nav)
+        target = _freeze_target(combined, cash_weight, frozen, valued, final_nav) \
+            if frozen else dict(combined)
+        # Feature 3: pin cash/CDI holdings at their current weight. Unlike a pinned
+        # equity, their weight comes out of the cash sleeve (equity budget stays put),
+        # so they fulfil the CASH_CDI target instead of being sold as an equity trim.
+        for t in cash_cdi_held:
+            tu = t.upper()
+            w = valued.get(tu, 0.0) / final_nav if final_nav > 0 else 0.0
+            if w > 0:
+                target[tu] = w
 
     priced = await _advise(weights=target, positions=positions, nav_cash=body.new_cash)
     trades = priced.get("trades") or {"sells": [], "buys": [], "nav": 0.0}
-    # Belt-and-suspenders: frozen tickers never appear in a trade (guards rounding).
-    sells = [s for s in trades.get("sells", []) if s["ticker"].upper() not in frozen]
-    buys = [b for b in trades.get("buys", []) if b["ticker"].upper() not in frozen]
+    # Belt-and-suspenders: frozen / cash-CDI tickers never appear in a trade.
+    skip = frozen | {t.upper() for t in cash_cdi_held}
+    sells = [s for s in trades.get("sells", []) if s["ticker"].upper() not in skip]
+    buys = [b for b in trades.get("buys", []) if b["ticker"].upper() not in skip]
     nav = float(trades.get("nav", 0.0))
+
+    # Feature 4 — sell behavior. Loss determination is preço-médio (est_price vs avg_cost),
+    # the same basis the TLH overlay uses; the overlay then runs on the resulting sells.
+    avg_cost = {t.upper(): float(p["avg_cost"]) for t, p in positions.items()}
+    if harvest_only:
+        # Never trim a gain: keep only sells that realize a tax-deductible loss.
+        sells = [s for s in sells
+                 if float(s.get("est_price", 0.0)) < avg_cost.get(s["ticker"].upper(), 0.0)]
+    elif buy_only:
+        sells = []  # pure top-up: no trims (loss harvest lives under sell_only_for_harvest)
+
+    # Feature 4 — buy behavior. buy_only_laggards deploys only new_cash + surviving
+    # sell proceeds into the underweight names advise already picked.
+    if buy_only:
+        budget = float(body.new_cash) + sum(float(s.get("est_brl", 0.0)) for s in sells)
+        buys = _cap_buys(buys, budget)
 
     # Tax overlay: run the plan's sells (only tickers actually held) through tlh_plan.
     tax = await _run_tlh_plan(
@@ -433,6 +558,8 @@ async def create_rebalance_plan(
         "as_of": priced["as_of"],
         "nav": nav,
         "new_cash": body.new_cash,
+        "cadence": cadence,
+        "settings": settings_,
         "trades": {"sells": sells, "buys": buys},
         "tax": tax,
         "notes": notes,

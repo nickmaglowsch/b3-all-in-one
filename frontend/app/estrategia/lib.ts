@@ -46,6 +46,73 @@ export function usePositions() {
   });
 }
 
+// ── portfolio settings: asset-as-CDI + rebalance behavior (spec/05 F3 & F4) ──
+
+export interface AssetOverride {
+  ticker: string;
+  treatment: string; // 'cash_cdi'
+}
+
+export interface RebalanceSettings {
+  buy_only_laggards: boolean;
+  sell_only_for_harvest: boolean;
+  cadence: string; // ME | QE | W-FRI
+}
+
+export const DEFAULT_REBALANCE: RebalanceSettings = {
+  buy_only_laggards: false,
+  sell_only_for_harvest: false,
+  cadence: "ME",
+};
+
+// mensal / trimestral / semanal — the engine's freq codes.
+export const CADENCE_OPTIONS: { value: string; label: string }[] = [
+  { value: "ME", label: "Mensal" },
+  { value: "QE", label: "Trimestral" },
+  { value: "W-FRI", label: "Semanal" },
+];
+
+export function useAssetOverrides() {
+  return useQuery({
+    queryKey: ["asset-overrides"],
+    queryFn: () => api<AssetOverride[]>("/portfolio/settings/asset-overrides"),
+  });
+}
+
+export function useSaveAssetOverrides() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: AssetOverride[]) =>
+      api<AssetOverride[]>("/portfolio/settings/asset-overrides", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["asset-overrides"] });
+      qc.invalidateQueries({ queryKey: ["target"] }); // drift/cash reflect the change
+    },
+  });
+}
+
+export function useRebalanceSettings() {
+  return useQuery({
+    queryKey: ["rebalance-settings"],
+    queryFn: () => api<RebalanceSettings>("/portfolio/settings/rebalance"),
+  });
+}
+
+export function useSaveRebalanceSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: RebalanceSettings) =>
+      api<RebalanceSettings>("/portfolio/settings/rebalance", {
+        method: "PUT",
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["rebalance-settings"] }),
+  });
+}
+
 // ── rebalance plan (untyped in lib/types — modeled here) ─────────────────────
 
 export interface TradeLine {

@@ -5,8 +5,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import copy
+
 from backtests.core.metrics import value_to_ret
-from backtests.core.simulation import run_simulation, _apply_returns, _execute_rebalance
+from backtests.core.simulation import (
+    run_simulation, _apply_returns, _execute_rebalance, compute_trades,
+)
 
 IDX = pd.date_range("2020-01-31", periods=5, freq="ME")
 COLS = ["A", "B"]
@@ -73,6 +77,74 @@ def test_apply_returns_allows_large_genuine_gains():
     pos = {"A": {"cost_basis": 10.0, "current_value": 10.0}}
     _apply_returns(pos, pd.Series({"A": 2.0}))  # +200% must not be clipped
     assert pos["A"]["current_value"] == pytest.approx(30.0)
+
+
+# ── compute_trades: the pure rebalance diff (extracted from _execute_rebalance) ─
+
+
+def test_compute_trades_long_rebalance():
+    # A overweight -> sell down; B not held -> buy up to target.
+    pos = {"A": {"cost_basis": 100.0, "current_value": 100.0}}
+    sells, buys = compute_trades(pos, pd.Series({"A": 0.5, "B": 0.5}), 100.0)
+    assert sells == pytest.approx({"A": 50.0})
+    assert buys == pytest.approx({"B": 50.0})
+
+
+def test_compute_trades_new_short_is_negative_buy_not_sell():
+    # target_w < 0 on an unheld ticker: negative capital deployment, never a
+    # taxed sell (you can't sell what you don't own).
+    sells, buys = compute_trades({}, pd.Series({"S": -0.3}), 100.0)
+    assert sells == {}
+    assert buys == pytest.approx({"S": -30.0})
+
+
+def test_compute_trades_cover_short_is_a_sell():
+    # Currently short, diff > 0 (buying back toward 0) is routed to sells so the
+    # tax engine fires on the covered P&L.
+    pos = {"S": {"cost_basis": -100.0, "current_value": -80.0}}
+    sells, buys = compute_trades(pos, pd.Series({"S": 0.0}), 100.0)
+    assert sells == pytest.approx({"S": 80.0})   # diff = 0 - (-80)
+    assert buys == {}
+
+
+def test_compute_trades_increase_existing_short_is_a_sell():
+    # Deepening an existing short (diff < 0, already held) is NOT a new short, so
+    # it goes to sells (mirrors the original inline special-casing).
+    pos = {"S": {"cost_basis": -100.0, "current_value": -100.0}}
+    sells, buys = compute_trades(pos, pd.Series({"S": -1.5}), 100.0)
+    assert sells == pytest.approx({"S": 50.0})   # abs(-150 - (-100))
+    assert buys == {}
+
+
+def test_compute_trades_nan_target_and_subcent_threshold():
+    # NaN target -> 0 (sell the whole position); sub-1-cent diffs are ignored.
+    pos = {"A": {"cost_basis": 100.0, "current_value": 100.0},
+           "C": {"cost_basis": 50.0, "current_value": 50.0}}
+    sells, buys = compute_trades(pos, pd.Series({"A": float("nan"), "C": 0.5}), 100.0)
+    assert sells == pytest.approx({"A": 100.0})   # C already exactly on target
+    assert buys == {}
+
+
+def test_compute_trades_is_pure():
+    pos = {"A": {"cost_basis": 100.0, "current_value": 100.0}}
+    before = copy.deepcopy(pos)
+    compute_trades(pos, pd.Series({"A": 0.5, "B": 0.5}), 100.0)
+    assert pos == before   # no mutation
+
+
+def test_compute_trades_turnover_matches_execute_rebalance():
+    # Locks the extraction: turnover derived from the returned dicts equals the
+    # turnover _execute_rebalance reports (it now calls compute_trades internally).
+    pos = {"A": {"cost_basis": 100.0, "current_value": 120.0},
+           "B": {"cost_basis": 40.0, "current_value": 30.0}}
+    tw = pd.Series({"A": 0.5, "B": 0.3, "C": 0.2})
+    nav = 150.0
+    sells, buys = compute_trades(pos, tw, nav)
+    turnover_cash = sum(sells.values()) + sum(abs(v) for v in buys.values())
+    *_, turnover_pct = _execute_rebalance(
+        copy.deepcopy(pos), tw, nav, slippage=0.0, tax_rate=0.0, loss_carryforward=0.0
+    )
+    assert turnover_pct * max(nav, 1.0) == pytest.approx(turnover_cash)
 
 
 # ── Periodic buy-ins (aportes) ────────────────────────────────────────────────

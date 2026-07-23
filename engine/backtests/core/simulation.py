@@ -116,6 +116,74 @@ def _compute_tax(
     return tax, loss_carryforward
 
 
+def compute_trades(
+    positions: dict,
+    target_weights: pd.Series,
+    nav: float,
+) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Pure rebalance diff: BRL to sell and buy per ticker to hit target weights.
+
+    Args:
+        positions: current ledger, {ticker: {"cost_basis", "current_value"}}.
+        target_weights: target weight per ticker for this rebalance row.
+        nav: portfolio value to rebalance to (may include a pending buy-in).
+
+    Returns:
+        (sells, buys) in BRL.
+          sells[t] = cash to raise by selling a long OR covering a short — the
+                     amount that must go through the tax engine.
+          buys[t]  = cash to deploy into a long, OR (negative) capital to open /
+                     extend a short (never taxed: opening a position realizes no
+                     gain).
+
+    Special-casing mirrors _execute_rebalance's original inline loop exactly, so
+    swapping the loop for this call is a no-op:
+      • diff < 0 on a brand-new short (target_w < 0, not currently held) is a
+        negative *buy*, not a sell — you can't sell what you don't own.
+      • diff > 0 while currently short is a *sell*, because covering a short
+        realizes P&L that must be taxed.
+    Pure: no mutation of `positions`. Set-iteration order is irrelevant — the
+    outputs are per-ticker dict entries, no cross-ticker accumulation here.
+    """
+    sells: Dict[str, float] = {}  # {ticker: cash_to_raise}
+    buys: Dict[str, float] = {}   # {ticker: cash_to_deploy}
+
+    target_tickers = set(target_weights[target_weights != 0].index)
+    current_tickers = set(positions.keys())
+    all_tickers = target_tickers | current_tickers
+
+    for t in all_tickers:
+        current_val = positions.get(t, {}).get("current_value", 0.0)
+        target_w = target_weights.get(t, 0.0)
+        if pd.isna(target_w):
+            target_w = 0.0
+
+        target_val = nav * target_w
+        diff = target_val - current_val
+
+        # If diff is negative, we want less exposure than we currently have.
+        # This means either SELLING a long position, or SHORTING MORE (increasing a negative position).
+        if diff < -0.01:
+            # If we are initiating a new short, it goes straight to buys/deploy logic
+            # (we don't "sell" an asset we don't own to calculate taxes, we just allocate negative capital)
+            if t not in positions and target_w < 0:
+                buys[t] = diff  # This will be negative capital deployment
+            else:
+                sells[t] = abs(diff)
+
+        # If diff is positive, we want more exposure than we currently have.
+        # This means either BUYING more of a long position, or COVERING a short position.
+        elif diff > 0.01:
+            # If we are covering a short back towards 0, that is technically a "sale" (closing an active position)
+            # which needs to be run through the tax engine!
+            if t in positions and positions[t]["current_value"] < 0:
+                sells[t] = diff  # To trigger tax on the covered portion
+            else:
+                buys[t] = diff
+
+    return sells, buys
+
+
 def _execute_rebalance(
     positions: dict,
     target_weights: pd.Series,
@@ -131,52 +199,13 @@ def _execute_rebalance(
     Execute a strict rebalance to match target weights.
     Returns (tax_paid, new_loss_carryforward, cash_drag, turnover)
     """
-    # 1. Identify current weights and determine buys/sells
-    sells = {}  # {ticker: cash_to_raise}
-    buys = {}  # {ticker: cash_to_deploy}
+    # 1. Identify current weights and determine buys/sells (pure diff)
+    sells, buys = compute_trades(positions, target_weights, portfolio_nav)
 
-    target_tickers = set(target_weights[target_weights != 0].index)
-    current_tickers = set(positions.keys())
-    all_tickers = target_tickers | current_tickers
-
-    turnover_cash = 0.0
-
-    for t in all_tickers:
-        current_val = positions.get(t, {}).get("current_value", 0.0)
-        target_w = target_weights.get(t, 0.0)
-        if pd.isna(target_w):
-            target_w = 0.0
-
-        target_val = portfolio_nav * target_w
-
-        diff = target_val - current_val
-
-        # If diff is negative, we want less exposure than we currently have.
-        # This means either SELLING a long position, or SHORTING MORE (increasing a negative position).
-        if diff < -0.01:
-            sell_amount = abs(diff)
-            # If we are initiating a new short, it goes straight to buys/deploy logic
-            # (we don't "sell" an asset we don't own to calculate taxes, we just allocate negative capital)
-            if t not in positions and target_w < 0:
-                buys[t] = diff  # This will be negative capital deployment
-                turnover_cash += sell_amount
-            else:
-                sells[t] = sell_amount
-                turnover_cash += sell_amount
-
-        # If diff is positive, we want more exposure than we currently have.
-        # This means either BUYING more of a long position, or COVERING a short position.
-        elif diff > 0.01:
-            buy_amount = diff
-
-            # If we are covering a short back towards 0, that is technically a "sale" (closing an active position)
-            # which needs to be run through the tax engine!
-            if t in positions and positions[t]["current_value"] < 0:
-                sells[t] = buy_amount  # To trigger tax on the covered portion
-                turnover_cash += buy_amount
-            else:
-                buys[t] = buy_amount
-                turnover_cash += buy_amount
+    # Turnover is the gross BRL traded: every sell is positive, every buy value is
+    # positive for a long and negative for an opened short — abs() folds both.
+    # (Same total as the original in-loop accumulation; a pure sum, order-invariant.)
+    turnover_cash = sum(sells.values()) + sum(abs(v) for v in buys.values())
 
     # 2. Calculate Tax on Sales
     # If total sell proceeds <= exemption threshold, skip tax entirely.

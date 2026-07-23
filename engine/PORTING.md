@@ -162,5 +162,18 @@ engine output semantics changed.
 - `b3_pipeline/main.py`'s final banner still prints `config.DB_PATH` (the SQLite
   fallback path) even in PG mode — cosmetic; the data is written to PG correctly.
   Same backend-awareness fix as `research/main.py` if it matters.
-- Checklist items 3–6 (yfinance benchmark replacement, worker task wrapping,
-  engine extensions for the portfolio loop) are out of scope.
+- Portfolio-loop engine work (spec `05-strategy-linked-portfolio.md`, "Engine
+  work"): **items 1–2 done in wave 5** —
+  - `compute_trades(positions, target_weights, nav) -> (sells, buys)` extracted
+    from `_execute_rebalance`'s inline diff loop (`simulation.py`), pure and
+    zero-behavior-change; `_execute_rebalance` now calls it.
+  - advise-only path `scripts/advise_weights.py`: `build_shared_data(end=today)`
+    → `generate_signals` → `dedup_target_weights` → last live row, printed as
+    one-line JSON (same subprocess/last-line contract as `run_backtest_json.py`,
+    `ENGINE_BENCH_OFFLINE` honoured). `--positions`/`--nav-cash` add an
+    integer-share trade list (no tax logic — that lives platform-side).
+  Remaining (next wave): item 3 dated cash-flow `contribution` Series (what-if
+  replay), item 4 seeded initial `pt_pos`/`at_pos`/`loss_carryforward`, item 5
+  asset-class tax model (per-class rates/carry + monthly ações isenção).
+- Checklist items 3–6 of the storage port (yfinance benchmark replacement,
+  worker task wrapping) remain out of scope for the storage work.

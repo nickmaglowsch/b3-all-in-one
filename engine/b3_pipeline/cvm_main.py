@@ -292,8 +292,12 @@ def compute_net_income_ttm(conn: sqlite3.Connection) -> int:
             updates.append((float(r.net_income) + prior_annual - prior_ytd, r.filing_id))
 
     if updates:
-        conn.executemany(
-            "UPDATE fundamentals_pit SET net_income_ttm = ? WHERE filing_id = ?", updates
+        # storage.executemany routes to the right backend (psycopg's Connection has
+        # no .executemany; sqlite3's does) and translates the ? placeholders.
+        storage.executemany(
+            conn,
+            "UPDATE fundamentals_pit SET net_income_ttm = ? WHERE filing_id = ?",
+            updates,
         )
     conn.commit()
     logger.info(f"Computed net_income_ttm for {len(updates):,} fundamentals_pit rows")

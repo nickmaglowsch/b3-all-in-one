@@ -130,6 +130,19 @@ def upsert_company_tickers_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> in
     """
     if df is None or df.empty:
         return 0
+    # (cnpj, ticker, start_date) is the PK. FCA occasionally omits start_date;
+    # SQLite tolerates NULLs in a non-INTEGER PK column, Postgres (correctly)
+    # rejects them. Drop incomplete-key rows on both backends — a ticker mapping
+    # with no start date can't be point-in-time keyed anyway.
+    before = len(df)
+    df = df.dropna(subset=["cnpj", "ticker", "start_date"])
+    dropped = before - len(df)
+    if dropped:
+        logger.warning(
+            f"company_tickers_pit: dropped {dropped} FCA row(s) with null key columns"
+        )
+    if df.empty:
+        return 0
     sql = """
         INSERT INTO company_tickers_pit
             (cnpj, ticker, ticker_root, market, start_date, end_date, source)
@@ -215,10 +228,18 @@ def upsert_cvm_filing(
             quarter = excluded.quarter,
             source_file = excluded.source_file
     """
+    # Integer-domain columns arrive from pandas as floats carrying NaN for missing
+    # values. SQLite stores NaN silently; Postgres rejects a float NaN bound to a
+    # BIGINT ("bigint out of range"). Normalise NaN -> NULL and float -> int.
+    def _int_or_none(v):
+        return None if v is None or pd.isna(v) else int(v)
+
     storage.execute(
         conn,
         sql,
-        (filing_id, cnpj, doc_type, period_end, filing_date, filing_version, fiscal_year, quarter, source_file),
+        (filing_id, cnpj, doc_type, period_end, filing_date,
+         _int_or_none(filing_version), _int_or_none(fiscal_year),
+         _int_or_none(quarter), source_file),
     )
     conn.commit()
     logger.debug(f"Upserted cvm_filing: filing_id={filing_id}")

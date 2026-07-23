@@ -22,15 +22,13 @@ COPY taxcore/scripts ./scripts
 COPY taxcore/methodologies ./methodologies
 
 # --- engine: backtest bench CODE + its own venv (/opt/engine/.venv), deps from
-# requirements.txt. NO b3_pipeline_rs (Rust is ingestion-only; backtests read the
-# DB and fall back to the Python pivot), NO tests, NO ui — see the dockerignore.
-# libgomp1: runtime lib for scipy/sklearn wheels pulled by requirements.txt.
+# requirements-bench.txt (slim set — the backtest path needs no research/ui deps).
+# NO b3_pipeline_rs (Rust is ingestion-only; backtests read the DB and fall back
+# to the Python pivot), NO tests, NO ui — see the dockerignore.
 WORKDIR /opt/engine
-RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-COPY engine/requirements.txt ./
+COPY engine/requirements-bench.txt ./
 RUN uv venv .venv --python 3.12 \
-    && uv pip install --python .venv -r requirements.txt
+    && uv pip install --python .venv -r requirements-bench.txt
 COPY engine/b3_pipeline ./b3_pipeline
 COPY engine/backtests ./backtests
 COPY engine/scripts ./scripts

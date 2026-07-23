@@ -29,7 +29,7 @@ engine/*
 !engine/b3_pipeline
 !engine/backtests
 !engine/scripts
-!engine/requirements.txt
+!engine/requirements-bench.txt
 engine/b3_pipeline_rs
 engine/b3_pipeline/**/__pycache__
 engine/backtests/**/__pycache__

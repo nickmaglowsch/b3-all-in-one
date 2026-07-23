@@ -1,0 +1,13 @@
+# Slim dependency set for the HOSTED backtest bench image (/opt/engine/.venv).
+# The backtest path (list_strategies / run_backtest_json → shared_data + simulation)
+# imports only these — verified by importtime trace; no strategy module pulls the
+# heavy research/ui deps (matplotlib, scikit-learn, xgboost, scipy, streamlit,
+# plotly, maturin, pytest). Full local dev still uses requirements.txt.
+requests>=2.28.0
+pandas>=2.0.0
+numpy>=1.24.0
+yfinance>=0.2.0
+python-dateutil>=2.8.0
+pyarrow>=14.0.0
+pyyaml>=6.0
+psycopg[binary]>=3.1

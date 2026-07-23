@@ -104,3 +104,25 @@ buy/sell to rebalance — tax-optimally. All prices come from the engine market 
 
 Leaving `TAXCORE_DIR`/`TAXCORE_PYTHON`/`ENGINE_DIR`/`ENGINE_PYTHON` unset keeps host
 runs (and `platform/tests`) working against local `taxcore/`/`engine/` checkouts.
+
+## Frontend (local)
+
+Next.js (App Router) + TypeScript + Tailwind in `frontend/`. Talks to the API at
+`NEXT_PUBLIC_API_URL` (default `http://localhost:8000`); CORS already allows
+`http://localhost:3000`.
+
+```
+docker compose --profile app up -d   # 1. bring the API up (http://localhost:8000)
+./scripts/dev_seed.sh                # 2. seed a dev tenant (imports + sleeves + a backtest)
+npm --prefix frontend install        #    first run only
+npm --prefix frontend run dev        # 3. dev server on http://localhost:3000
+```
+
+**Login:** open `http://localhost:3000`, click **Entrar (dev)** — this hits
+`POST /auth/dev-login`, stores the JWT in `localStorage`, and every request is sent with
+`Bearer` auth. The sidebar footer shows API health, market-data freshness, the logged-in
+email, and a **sair** (logout) action. Google OAuth comes later.
+
+`scripts/dev_seed.sh` is idempotent (imports full-replace the portfolio) and prints a
+backtest summary at the end. `npm --prefix frontend run build` runs a clean production
+build.

@@ -20,8 +20,18 @@ STRATEGY = "MomSharpe"
 
 
 async def _seed_book(tenant_id: uuid.UUID) -> None:
+    from sqlalchemy import delete
+
     from platform_app.db import async_session_maker
-    from platform_app.models import Position, Trade
+    from platform_app.models import CashEvent, Position, Trade
+
+    # Start from a clean book so total_invested is deterministic even when an
+    # earlier test (e.g. the e2e golden import) already populated this dev tenant.
+    # Safe because this file runs last alphabetically — nothing depends on it after.
+    async with async_session_maker() as session:
+        for model in (Trade, Position, CashEvent):
+            await session.execute(delete(model).where(model.tenant_id == tenant_id))
+        await session.commit()
 
     # (date, side, ticker, qty, price, amount, signed_qty)
     trades = [

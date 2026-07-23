@@ -99,3 +99,31 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
     assert r.status_code == 200, r.text
     assert r.json()["year"] == 2025
     assert _normalize_irpf(r.json()["markdown"]) == _normalize_irpf(GOLDEN_IRPF.read_text())
+
+
+async def test_tlh_plans_after_import(client):
+    """Runs after the import test above (same module, same session DB) so the dev
+    tenant already has its 45 positions + trades. Prices come from the vendored
+    taxcore/data snapshots (platform-market-prices-later)."""
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # No sells → just the current situation, both tax buckets keyed.
+    r = await client.post("/tlh/plans", json={"sells": []}, headers=headers)
+    assert r.status_code == 200, r.text
+    plan = r.json()
+    assert set(plan["situation"]) == {"AÇÃO", "FII"}
+    assert plan["buckets"] == {}  # nothing proposed, no plan
+
+    # A real profit-taking sell of a held, priced ticker → its bucket shows up.
+    r = await client.post(
+        "/tlh/plans", json={"sells": [{"ticker": "PETR4", "qty": 100}]}, headers=headers)
+    assert r.status_code == 200, r.text
+    plan = r.json()
+    assert plan["buckets"], "expected the AÇÃO bucket for a PETR4 sell"
+    assert any(s["ticker"] == "PETR4" for s in plan["sells"])
+
+    # Absurd qty (far above holdings) → validation error mapped to 422.
+    r = await client.post(
+        "/tlh/plans", json={"sells": [{"ticker": "PETR4", "qty": 10_000_000}]}, headers=headers)
+    assert r.status_code == 422, r.text

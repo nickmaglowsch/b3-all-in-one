@@ -13,8 +13,10 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -144,6 +146,23 @@ class BacktestRun(Base):
     )
     finished_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+
+class PortfolioSleeve(Base):
+    # spec/05 Feature 3: fixed-percentage strategy sleeves. The whole set is
+    # replaced atomically per tenant on PUT; percentages sum to 100.
+    __tablename__ = "portfolio_sleeves"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "strategy_ref", name="uq_sleeves_tenant_strategy"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    strategy_ref: Mapped[str] = mapped_column(Text, nullable=False)  # spec name | 'CASH_CDI'
+    target_pct: Mapped[float] = mapped_column(Numeric, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )
 
 

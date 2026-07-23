@@ -12,6 +12,7 @@ from platform_app.routes import (
     market_router,
     portfolio_router,
     strategies_router,
+    tlh_router,
 )
 from platform_app.schemas import UserCreate, UserRead
 from platform_app.tenancy import get_current_tenant
@@ -55,6 +56,7 @@ app.include_router(
 app.include_router(imports_router)
 app.include_router(portfolio_router)
 app.include_router(irpf_router)
+app.include_router(tlh_router)
 app.include_router(strategies_router)
 app.include_router(backtests_router)
 app.include_router(market_router)

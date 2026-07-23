@@ -16,20 +16,21 @@ from pathlib import Path
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import b3run, enginerun, tasks
 from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import (
-    BacktestRun, CashEvent, CostBasisOverride, Import, Position, Trade,
+    BacktestRun, CashEvent, CostBasisOverride, Import, PortfolioSleeve, Position, Trade,
 )
 from platform_app.tenancy import get_current_tenant
 
 imports_router = APIRouter(prefix="/imports", tags=["imports"])
 portfolio_router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 irpf_router = APIRouter(prefix="/irpf", tags=["irpf"])
+tlh_router = APIRouter(prefix="/tlh", tags=["tlh"])
 strategies_router = APIRouter(prefix="/strategies", tags=["backtests"])
 backtests_router = APIRouter(prefix="/backtests", tags=["backtests"])
 market_router = APIRouter(prefix="/market", tags=["market"])
@@ -174,6 +175,55 @@ async def get_income(
     ]
 
 
+# ── Portfolio sleeves (spec/05 Feature 3) ─────────────────────────────────────
+
+class SleeveIn(BaseModel):
+    strategy_ref: str
+    target_pct: float
+
+
+@portfolio_router.get("/sleeves")
+async def get_sleeves(
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    _user, tid = tenant
+    rows = (await session.scalars(
+        select(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid)
+        .order_by(PortfolioSleeve.strategy_ref)
+    )).all()
+    return [{"strategy_ref": s.strategy_ref, "target_pct": float(s.target_pct)} for s in rows]
+
+
+@portfolio_router.put("/sleeves")
+async def put_sleeves(
+    body: list[SleeveIn],
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    """Replace the whole sleeve set atomically. Validates percentages sum to 100
+    (±0.01) and every strategy_ref is 'CASH_CDI' or a real gallery spec."""
+    _user, tid = tenant
+    refs = [s.strategy_ref for s in body]
+    if len(set(refs)) != len(refs):
+        raise HTTPException(422, "duplicate strategy_ref in sleeve set")
+    total = sum(s.target_pct for s in body)
+    if abs(total - 100.0) > 0.01:
+        raise HTTPException(422, f"sleeve percentages must sum to 100 (got {total:g})")
+    # CASH_CDI is the risk-free sleeve; anything else must be a real gallery spec.
+    known = {s["name"] for s in await list_strategies()} | {"CASH_CDI"}
+    for ref in refs:
+        if ref not in known:
+            raise HTTPException(422, f"unknown strategy_ref: {ref}")
+
+    await session.execute(delete(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid))
+    for s in body:
+        session.add(PortfolioSleeve(
+            tenant_id=tid, strategy_ref=s.strategy_ref, target_pct=s.target_pct))
+    await session.commit()
+    return [{"strategy_ref": s.strategy_ref, "target_pct": s.target_pct} for s in body]
+
+
 class IrpfRequest(BaseModel):
     year: int = 2025
 
@@ -185,6 +235,7 @@ _TRADE_HEADER = ["date", "side", "market", "maturity", "broker", "ticker",
 _EVENT_HEADER = ["date", "ticker", "event_type", "event_category", "is_amortization",
                  "qty", "price", "amount", "broker", "__source_file"]
 _OVERRIDE_HEADER = ["date", "ticker", "kind", "qty", "price", "amount", "note"]
+_POSITION_HEADER = ["ticker", "qty", "avg_cost", "total_cost", "market"]
 
 
 @irpf_router.post("/reports")
@@ -229,6 +280,82 @@ async def irpf_report(
         if proc.returncode != 0:
             raise HTTPException(500, f"irpf_2026 failed: {(proc.stderr or proc.stdout)[-2000:]}")
         return {"year": body.year, "markdown": proc.stdout}
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
+
+
+# ── Tax-loss harvesting ───────────────────────────────────────────────────────
+
+class TlhSell(BaseModel):
+    ticker: str
+    qty: float
+
+
+class TlhRequest(BaseModel):
+    sells: list[TlhSell] = []
+    exclude: list[str] | None = None
+
+
+def _copy_latest_snapshot(src: Path, dst: Path) -> None:
+    """Copy the most-recent CSV from `src` into `dst` — mirrors _common.latest_csv
+    (sorted glob, last wins), the only file price_lookup actually reads per dir."""
+    csvs = sorted(src.glob("*.csv"))
+    if csvs:
+        dst.mkdir(parents=True, exist_ok=True)
+        shutil.copy(csvs[-1], dst / csvs[-1].name)
+
+
+@tlh_router.post("/plans")
+async def tlh_plan(
+    body: TlhRequest,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    trades = (await session.scalars(
+        select(Trade).where(Trade.tenant_id == tid).order_by(Trade.id)
+    )).all()
+    events = (await session.scalars(
+        select(CashEvent).where(CashEvent.tenant_id == tid).order_by(CashEvent.id)
+    )).all()
+    positions = (await session.scalars(
+        select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
+    )).all()
+
+    ws = Path(tempfile.mkdtemp(prefix="b3tlh-"))
+    try:
+        b3run.seed_workspace(ws)
+        # tlh_plan reads: data/trades.csv + data/cash_events.csv (build_timeline),
+        # data/positions.csv (canonical holdings), and the latest price snapshot in
+        # each of data/{snapshots,fii_snapshots,external_prices} (via _common.price_lookup).
+        # It does NOT read cost_basis_overrides. cash_events header must mirror the
+        # canonical CSV (source_file -> __source_file) like the IRPF route.
+        b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, [
+            [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
+             t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades])
+        b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, [
+            [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
+             e.qty, e.price, e.amount, e.broker, e.source_file] for e in events])
+        b3run.write_csv(ws / "data" / "positions.csv", _POSITION_HEADER, [
+            [p.ticker, p.qty, p.avg_cost, p.total_cost, p.market] for p in positions])
+        # ponytail: use the vendored taxcore/data snapshots as the price source — the
+        # tenant has no market prices of their own yet. platform-market-prices-later.
+        for name in ("snapshots", "fii_snapshots", "external_prices"):
+            _copy_latest_snapshot(b3run.TAXCORE / "data" / name, ws / "data" / name)
+
+        args = ["scripts.tlh_plan", "--json"]
+        sells_spec = ",".join(f"{s.ticker}:{s.qty}" for s in body.sells)
+        if sells_spec:
+            args += ["--sells", sells_spec]
+        if body.exclude:
+            args += ["--exclude", ",".join(body.exclude)]
+
+        proc = await asyncio.to_thread(b3run.run_module, ws, args)
+        if proc.returncode == 2:  # validation error (bad/oversized sell)
+            raise HTTPException(422, (proc.stderr or proc.stdout).strip()[-2000:])
+        if proc.returncode != 0:
+            raise HTTPException(500, f"tlh_plan failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        return json.loads(proc.stdout)
     finally:
         shutil.rmtree(ws, ignore_errors=True)
 

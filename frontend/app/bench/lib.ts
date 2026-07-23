@@ -4,7 +4,12 @@
 // "Ann. Return (%)": 8.9) are already percent *numbers*, not fractions —
 // formatPct here appends "%" directly; the chart drawdown series IS a fraction
 // so it uses lib/format's formatPercent instead.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { BacktestCurves, BacktestRun, Strategy } from "@/lib/types";
 
@@ -42,6 +47,18 @@ export function useCurves(id: string, enabled: boolean) {
     queryFn: () => api<BacktestCurves>(`/backtests/${id}/curves`),
     enabled,
     staleTime: 60 * 60_000, // a finished run's curves never change
+  });
+}
+
+// Parallel curve fetch for the comparison overlay. Shares the ["curves", id]
+// cache with useCurves, so opening a tear sheet after comparing is a cache hit.
+export function useCurvesMany(ids: string[]) {
+  return useQueries({
+    queries: ids.map((id) => ({
+      queryKey: ["curves", id],
+      queryFn: () => api<BacktestCurves>(`/backtests/${id}/curves`),
+      staleTime: 60 * 60_000,
+    })),
   });
 }
 
@@ -97,4 +114,63 @@ export function curveRows(
     rows.push(row);
   }
   return rows;
+}
+
+// ── multi-run comparison ──────────────────────────────────────────────────────
+
+// Max series in one overlay; more than this and the chart is unreadable + the
+// palette (8 colours) starts repeating.
+export const MAX_COMPARE = 6;
+
+// Metric shape the tear sheet + comparison both read out of run.metrics.
+export type Metrics = {
+  pretax?: Record<string, number>;
+  aftertax?: Record<string, number>;
+  total_tax_paid?: number;
+};
+
+// Palette colour for the Nth overlaid run — kept identical between the chart
+// line and the table swatch so a colour maps to exactly one run everywhere.
+export const seriesColor = (i: number) => `var(--series-${(i % 8) + 1})`;
+
+// Same-strategy runs need disambiguating; append a short id only when the
+// strategy name repeats in the selection, otherwise keep it clean.
+export function runLabels(runs: BacktestRun[]): Record<string, string> {
+  const counts = new Map<string, number>();
+  for (const r of runs) counts.set(r.strategy, (counts.get(r.strategy) ?? 0) + 1);
+  const out: Record<string, string> = {};
+  for (const r of runs) {
+    out[r.id] =
+      (counts.get(r.strategy) ?? 0) > 1
+        ? `${r.strategy} · ${r.id.slice(0, 6)}`
+        : r.strategy;
+  }
+  return out;
+}
+
+// Align N runs' curves on the date axis: one row per date present in ANY run,
+// one column per run id. Recharts breaks a line at missing dates — fine, runs on
+// the same period/freq share a grid; differing grids just render honest gaps.
+export function mergeCurvesByDate(
+  inputs: { id: string; series: Record<string, (string | number)[]> }[],
+  key: string,
+): Record<string, string | number>[] {
+  const byDate = new Map<string, Record<string, string | number>>();
+  for (const { id, series } of inputs) {
+    const dates = series.date ?? [];
+    const vals = series[key] ?? [];
+    for (let i = 0; i < dates.length; i++) {
+      const d = String(dates[i]);
+      let row = byDate.get(d);
+      if (!row) {
+        row = { date: d };
+        byDate.set(d, row);
+      }
+      if (vals[i] != null) row[id] = vals[i];
+    }
+  }
+  // ISO dates sort lexicographically.
+  return [...byDate.values()].sort((a, b) =>
+    String(a.date) < String(b.date) ? -1 : 1,
+  );
 }

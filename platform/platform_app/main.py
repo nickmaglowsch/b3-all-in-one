@@ -5,7 +5,14 @@ from sqlalchemy import text
 
 from platform_app.config import settings
 from platform_app.db import engine
-from platform_app.routes import imports_router, irpf_router, portfolio_router
+from platform_app.routes import (
+    backtests_router,
+    imports_router,
+    irpf_router,
+    market_router,
+    portfolio_router,
+    strategies_router,
+)
 from platform_app.schemas import UserCreate, UserRead
 from platform_app.tenancy import get_current_tenant
 from platform_app.users import (
@@ -48,6 +55,9 @@ app.include_router(
 app.include_router(imports_router)
 app.include_router(portfolio_router)
 app.include_router(irpf_router)
+app.include_router(strategies_router)
+app.include_router(backtests_router)
+app.include_router(market_router)
 
 
 @app.get("/health")

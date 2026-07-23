@@ -1,4 +1,6 @@
 import asyncio
+import datetime
+import json
 import shutil
 import tempfile
 import uuid
@@ -7,10 +9,12 @@ from pathlib import Path
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import delete, insert, select
 
-from platform_app import b3run
+from platform_app import b3run, enginerun
 from platform_app.config import settings
 from platform_app.db import async_session_maker
-from platform_app.models import CashEvent, CostBasisOverride, Import, Position, Trade
+from platform_app.models import (
+    BacktestRun, CashEvent, CostBasisOverride, Import, Position, Trade,
+)
 
 # Postgres-backed queue (spec 01: Redis is cache-only, jobs live in Postgres).
 # Constructing the App does not open a connection — the pool opens on app.open_async().
@@ -56,6 +60,61 @@ def _position_dict(tid: uuid.UUID, r: dict[str, str]) -> dict:
         avg_cost=b3run.to_float(r["avg_cost"]), total_cost=b3run.to_float(r["total_cost"]),
         market=r["market"],
     )
+
+
+def _last_json(text: str) -> dict:
+    """The engine prints progress to stdout then a final JSON summary line last.
+    Scan from the end for the first line that parses as a JSON object."""
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
+    raise ValueError("no JSON summary in engine output")
+
+
+@app.task(name="run_backtest")
+async def run_backtest(run_id: str) -> dict:
+    """Shell into the engine venv to run one backtest. Writes artifacts under
+    ARTIFACTS_DIR/{run_id}/ and stores the metrics summary on the row."""
+    rid = uuid.UUID(run_id)
+    async with async_session_maker() as session:
+        run = await session.get(BacktestRun, rid)
+        if run is None:
+            return {"run_id": run_id, "status": "missing"}
+        run.status = "running"
+        await session.commit()
+
+        # Absolute: the engine subprocess runs with cwd=engine, so a relative
+        # artifacts_dir would land under engine/, not where the API reads it.
+        out_dir = Path(settings.artifacts_dir).resolve() / run_id
+        args = [run.strategy, str(out_dir), json.dumps(run.params or {})]
+        proc = await asyncio.to_thread(
+            enginerun.run_script, "run_backtest_json.py", args
+        )
+        run.finished_at = datetime.datetime.now(datetime.timezone.utc)
+        if proc.returncode != 0:
+            run.status = "error"
+            run.error = (proc.stderr or proc.stdout)[-2000:]
+            await session.commit()
+            return {"run_id": run_id, "status": "error", "error": run.error}
+
+        try:
+            summary = _last_json(proc.stdout)
+        except ValueError as e:
+            run.status = "error"
+            run.error = f"{e}: {(proc.stderr or proc.stdout)[-1000:]}"
+            await session.commit()
+            return {"run_id": run_id, "status": "error", "error": run.error}
+
+        run.status = "done"
+        run.error = None
+        run.metrics = summary
+        run.artifacts_path = str(out_dir)
+        await session.commit()
+        return {"run_id": run_id, "status": "done"}
 
 
 @app.task(name="process_imports")

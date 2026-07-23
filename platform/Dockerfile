@@ -21,6 +21,20 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY taxcore/scripts ./scripts
 COPY taxcore/methodologies ./methodologies
 
+# --- engine: backtest bench CODE + its own venv (/opt/engine/.venv), deps from
+# requirements.txt. NO b3_pipeline_rs (Rust is ingestion-only; backtests read the
+# DB and fall back to the Python pivot), NO tests, NO ui — see the dockerignore.
+# libgomp1: runtime lib for scipy/sklearn wheels pulled by requirements.txt.
+WORKDIR /opt/engine
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY engine/requirements.txt ./
+RUN uv venv .venv --python 3.12 \
+    && uv pip install --python .venv -r requirements.txt
+COPY engine/b3_pipeline ./b3_pipeline
+COPY engine/backtests ./backtests
+COPY engine/scripts ./scripts
+
 # --- platform app ---
 WORKDIR /app
 # Deps first for layer caching.
@@ -32,9 +46,12 @@ RUN uv sync --frozen --no-dev
 RUN chmod +x /app/docker-entrypoint.sh
 
 ENV PATH="/app/.venv/bin:$PATH"
-# taxcore lives at a fixed in-image path; b3run reads these (host runs leave them unset).
+# taxcore + engine live at fixed in-image paths; b3run/enginerun read these
+# (host runs leave them unset and use the ../taxcore + ../engine defaults).
 ENV TAXCORE_DIR=/opt/taxcore \
-    TAXCORE_PYTHON=/opt/taxcore/.venv/bin/python
+    TAXCORE_PYTHON=/opt/taxcore/.venv/bin/python \
+    ENGINE_DIR=/opt/engine \
+    ENGINE_PYTHON=/opt/engine/.venv/bin/python
 EXPOSE 8000
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["uvicorn", "platform_app.main:app", "--host", "0.0.0.0", "--port", "8000"]

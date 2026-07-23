@@ -5,6 +5,9 @@ os.environ["DATABASE_URL"] = (
     "postgresql+asyncpg://postgres:devpassword@localhost:5432/platform_test"
 )
 os.environ["ENVIRONMENT"] = "development"
+# Backtests read the market plane from the real `b3` DB (engine_database_url's
+# default). Stub benchmarks so the engine subprocess never touches yfinance/BCB.
+os.environ["ENGINE_BENCH_OFFLINE"] = "1"
 
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient

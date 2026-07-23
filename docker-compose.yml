@@ -34,11 +34,19 @@ services:
     env_file: .env.example
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      # Engine market plane (in-container host is `postgres`). Overrides the
+      # env_file's localhost value.
+      ENGINE_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      # Self-contained local stack: stub IBOV/CDI so backtests need no external
+      # network (valid for price-only strategies). Unset to fetch real benchmarks.
+      ENGINE_BENCH_OFFLINE: "1"
       REDIS_URL: redis://redis:6379/0
       UPLOADS_DIR: /data/uploads
+      ARTIFACTS_DIR: /data/artifacts
       RUN_MIGRATIONS: "1"   # api runs `alembic upgrade head` before uvicorn (entrypoint)
     volumes:
-      - uploads_data:/data/uploads   # shared with worker so saved files are visible to jobs
+      - uploads_data:/data/uploads       # shared with worker so saved files are visible to jobs
+      - artifacts_data:/data/artifacts   # shared with worker so backtest artifacts are readable
     ports:
       - "8000:8000"
     depends_on:
@@ -61,10 +69,14 @@ services:
     env_file: .env.example
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      ENGINE_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      ENGINE_BENCH_OFFLINE: "1"
       REDIS_URL: redis://redis:6379/0
       UPLOADS_DIR: /data/uploads
+      ARTIFACTS_DIR: /data/artifacts
     volumes:
-      - uploads_data:/data/uploads   # same volume as api: reads files the api saved
+      - uploads_data:/data/uploads       # same volume as api: reads files the api saved
+      - artifacts_data:/data/artifacts   # backtest jobs write here; api reads curves back
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,3 +85,4 @@ services:
 volumes:
   postgres_data:
   uploads_data:
+  artifacts_data:

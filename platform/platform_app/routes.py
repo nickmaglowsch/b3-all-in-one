@@ -6,24 +6,33 @@ request. Routers + task functions only (no service/repository layers).
 from __future__ import annotations
 
 import asyncio
+import csv
+import json
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, tasks
+from platform_app import b3run, enginerun, tasks
 from platform_app.config import settings
 from platform_app.db import get_async_session
-from platform_app.models import CashEvent, CostBasisOverride, Import, Position, Trade
+from platform_app.models import (
+    BacktestRun, CashEvent, CostBasisOverride, Import, Position, Trade,
+)
 from platform_app.tenancy import get_current_tenant
 
 imports_router = APIRouter(prefix="/imports", tags=["imports"])
 portfolio_router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 irpf_router = APIRouter(prefix="/irpf", tags=["irpf"])
+strategies_router = APIRouter(prefix="/strategies", tags=["backtests"])
+backtests_router = APIRouter(prefix="/backtests", tags=["backtests"])
+market_router = APIRouter(prefix="/market", tags=["market"])
 
 
 def _detect_kind(name: str) -> str:
@@ -222,3 +231,159 @@ async def irpf_report(
         return {"year": body.year, "markdown": proc.stdout}
     finally:
         shutil.rmtree(ws, ignore_errors=True)
+
+
+# ── Strategy gallery (public) ─────────────────────────────────────────────────
+# Registry discovery only runs inside the engine venv, so shell into it once and
+# cache the JSON in-process. ponytail: process-lifetime cache, no TTL — the
+# gallery only changes when the image (its specs/plugins) is rebuilt.
+_STRATEGIES_CACHE: list | None = None
+
+
+@strategies_router.get("")
+async def list_strategies() -> list[dict]:
+    global _STRATEGIES_CACHE
+    if _STRATEGIES_CACHE is None:
+        proc = await asyncio.to_thread(enginerun.run_script, "list_strategies.py", [])
+        if proc.returncode != 0:
+            raise HTTPException(500, f"list_strategies failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        _STRATEGIES_CACHE = json.loads(proc.stdout)
+    return _STRATEGIES_CACHE
+
+
+# ── Backtests ─────────────────────────────────────────────────────────────────
+
+class BacktestRequest(BaseModel):
+    strategy: str
+    params: dict | None = None
+    start: str | None = None
+    end: str | None = None
+    freq: str | None = None
+
+
+def _run_dict(r: BacktestRun) -> dict:
+    return {
+        "id": str(r.id), "strategy": r.strategy, "status": r.status,
+        "error": r.error, "params": r.params, "metrics": r.metrics,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+    }
+
+
+@backtests_router.post("")
+async def create_backtest(
+    body: BacktestRequest,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    known = {s["name"] for s in await list_strategies()}
+    if body.strategy not in known:
+        raise HTTPException(404, f"unknown strategy: {body.strategy}")
+    run = BacktestRun(
+        tenant_id=tid, strategy=body.strategy, status="pending",
+        params={"params": body.params or {}, "start": body.start,
+                "end": body.end, "freq": body.freq},
+    )
+    session.add(run)
+    await session.commit()
+
+    # ponytail: per-request procrastinate pool — mirrors the imports path.
+    async with tasks.app.open_async():
+        await tasks.run_backtest.defer_async(run_id=str(run.id))
+    return _run_dict(run)
+
+
+@backtests_router.get("")
+async def list_backtests(
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    _user, tid = tenant
+    rows = (
+        await session.scalars(
+            select(BacktestRun).where(BacktestRun.tenant_id == tid)
+            .order_by(BacktestRun.created_at.desc())
+        )
+    ).all()
+    return [_run_dict(r) for r in rows]
+
+
+async def _get_run(rid: str, tid: uuid.UUID, session: AsyncSession) -> BacktestRun:
+    try:
+        run = await session.get(BacktestRun, uuid.UUID(rid))
+    except ValueError:
+        run = None
+    if run is None or run.tenant_id != tid:
+        raise HTTPException(404, "backtest not found")
+    return run
+
+
+@backtests_router.get("/{run_id}")
+async def get_backtest(
+    run_id: str,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    return _run_dict(await _get_run(run_id, tid, session))
+
+
+@backtests_router.get("/{run_id}/curves")
+async def get_backtest_curves(
+    run_id: str,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    run = await _get_run(run_id, tid, session)
+    if not run.artifacts_path:
+        raise HTTPException(409, f"backtest not finished (status={run.status})")
+    path = Path(run.artifacts_path) / "curves.csv"
+    if not path.exists():
+        raise HTTPException(404, "curves artifact missing")
+    with path.open(newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    # Column-oriented series: {"date": [...], "aftertax": [...], ...}. dates stay
+    # strings; the rest parse to float.
+    cols = rows[0].keys() if rows else []
+    series: dict[str, list] = {c: [] for c in cols}
+    for r in rows:
+        for c in cols:
+            series[c].append(r[c] if c == "date" else float(r[c]))
+    return {"id": run_id, "series": series}
+
+
+# ── Market status ─────────────────────────────────────────────────────────────
+
+@market_router.get("/status")
+async def market_status() -> dict:
+    """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
+    0-row tables are reported honestly (fresh: null)."""
+    conn = await asyncpg.connect(settings.engine_database_url)
+    try:
+        prices = await conn.fetchrow(
+            "SELECT count(*) AS rows, count(DISTINCT ticker) AS tickers, "
+            "min(date) AS min_date, max(date) AS max_date FROM prices"
+        )
+        tables = {}
+        for name, datecol in (("corporate_actions", "event_date"),
+                              ("fundamentals_pit", "filing_date")):
+            row = await conn.fetchrow(
+                f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}"
+            )
+            tables[name] = {
+                "rows": row["rows"],
+                "fresh": row["fresh"].isoformat() if row["fresh"] else None,
+            }
+    finally:
+        await conn.close()
+    return {
+        "prices": {
+            "rows": prices["rows"],
+            "tickers": prices["tickers"],
+            "min_date": prices["min_date"].isoformat() if prices["min_date"] else None,
+            "max_date": prices["max_date"].isoformat() if prices["max_date"] else None,
+        },
+        "tables": tables,
+    }

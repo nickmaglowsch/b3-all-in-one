@@ -11,10 +11,18 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://postgres:devpassword@localhost:5432/b3"
     redis_url: str = "redis://localhost:6379/0"
     uploads_dir: str = "./uploads"
+    artifacts_dir: str = "./artifacts"
     # Where taxcore's code + interpreter live. Empty => b3run's host defaults
     # (../taxcore and its .venv). The image sets these to /opt/taxcore.
     taxcore_dir: str = ""
     taxcore_python: str = ""
+    # Same pattern for the backtest engine. Empty => enginerun's host defaults
+    # (../engine and its .venv). The image sets these to /opt/engine.
+    engine_dir: str = ""
+    engine_python: str = ""
+    # DSN the engine subprocess reads (ENGINE_DATABASE_URL) for the market plane.
+    # Plain psycopg-style URL (no +asyncpg); host is `postgres` inside containers.
+    engine_database_url: str = "postgresql://postgres:devpassword@localhost:5432/b3"
     secret_key: str = "dev-secret-change-me"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"

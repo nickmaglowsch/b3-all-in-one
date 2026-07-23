@@ -20,3 +20,18 @@ taxcore/*
 !taxcore/pyproject.toml
 !taxcore/uv.lock
 taxcore/**/__pycache__
+
+# engine: bake in ONLY the backtest CODE + requirements. NO b3_pipeline_rs (Rust,
+# ingestion-only), NO tests, NO ui, NO data/db/.venv/research — backtests read the
+# market plane from Postgres, not from files in the image.
+!engine
+engine/*
+!engine/b3_pipeline
+!engine/backtests
+!engine/scripts
+!engine/requirements.txt
+engine/b3_pipeline_rs
+engine/b3_pipeline/**/__pycache__
+engine/backtests/**/__pycache__
+engine/scripts/**/__pycache__
+engine/backtests/output

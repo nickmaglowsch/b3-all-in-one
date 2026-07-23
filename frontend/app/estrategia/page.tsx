@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { DataTable, type Column } from "@/components/ui/DataTable";
@@ -8,18 +9,26 @@ import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SectionNav } from "@/components/ui/SectionNav";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { DivergingBars } from "@/components/charts/DivergingBars";
 import { IconCompass } from "@/components/icons";
 import { ApiError } from "@/lib/api";
 import { formatDate, formatPercent } from "@/lib/format";
-import type { DriftRow, Sleeve } from "@/lib/types";
+import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
+import {
+  useDeleteUserStrategy,
+  usePromoteStrategy,
+  useSaveUserStrategy,
+  useUserStrategies,
+} from "@/lib/strategies";
 import {
   CADENCE_OPTIONS,
   CASH_REF,
   DEFAULT_REBALANCE,
   compactBRL,
   useAssetOverrides,
+  useCreateBacktest,
   usePositions,
   useRebalancePlan,
   useRebalanceSettings,
@@ -34,27 +43,47 @@ import {
   type TradeLine,
 } from "./lib";
 
+const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
+
 export default function EstrategiaPage() {
   const sleeves = useSleeves();
   const hasSleeves = (sleeves.data?.length ?? 0) > 0;
 
   return (
     <>
-      <PageHeader eyebrow="Alocação" title="Estratégia">
-        <span className="font-mono text-[11px] text-muted">
-          sleeves · alvo · rebalanceamento
-        </span>
-      </PageHeader>
+      <PageHeader eyebrow="Alocação" title="Estratégia" />
+
+      <SectionNav
+        items={[
+          { id: "sleeves", label: "Sleeves" },
+          { id: "carteiras", label: "Minhas carteiras" },
+          { id: "configuracoes", label: "Configurações" },
+          ...(hasSleeves
+            ? [
+                { id: "alvo", label: "Alvo x atual" },
+                { id: "plano", label: "Rebalanceamento" },
+              ]
+            : []),
+        ]}
+      />
 
       <div className="space-y-4">
-        <SleevesEditor />
-        <SettingsPanel />
+        <div id="sleeves" className={ANCHOR}>
+          <SleevesEditor />
+        </div>
+        <div id="configuracoes" className={ANCHOR}>
+          <SettingsPanel />
+        </div>
         {sleeves.isLoading ? (
           <Skeleton className="h-40 w-full" />
         ) : hasSleeves ? (
           <>
-            <TargetPanel />
-            <RebalancePanel />
+            <div id="alvo" className={ANCHOR}>
+              <TargetPanel />
+            </div>
+            <div id="plano" className={ANCHOR}>
+              <RebalancePanel />
+            </div>
           </>
         ) : null}
       </div>
@@ -69,13 +98,33 @@ interface Row {
   target_pct: string; // kept as string so the input can be cleared mid-edit
 }
 
+// Engine fixed_weight spec → the editor's rows. Readback caveat (spec/06): sleeves
+// are {strategy, weight(fraction)} or {asset:"CDI", weight}; map back to
+// {strategy_ref, target_pct(%)} and asset:"CDI" → CASH_CDI.
+function specToRows(spec: Record<string, unknown>): Row[] {
+  const sleeves = Array.isArray(spec.sleeves)
+    ? (spec.sleeves as Record<string, unknown>[])
+    : [];
+  return sleeves.map((s) => ({
+    strategy_ref:
+      s.asset === "CDI" ? CASH_REF : String(s.strategy ?? s.ticker ?? ""),
+    target_pct: String(Math.round(Number(s.weight ?? 0) * 1e6) / 1e4),
+  }));
+}
+
 function SleevesEditor() {
   const sleeves = useSleeves();
   const strategies = useStrategies();
+  const userStrats = useUserStrategies();
   const save = useSaveSleeves();
+  const saveStrat = useSaveUserStrategy();
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
   const [syncedFrom, setSyncedFrom] = useState<Sleeve[] | null>(null);
+  // "Salvar como estratégia" form — shares `rows` with the live-target editor.
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [editId, setEditId] = useState<string | undefined>();
 
   // Seed the editor from server data on first load and after each save (when not
   // mid-edit). Adjusting state during render — guarded by reference identity so it
@@ -90,10 +139,30 @@ function SleevesEditor() {
     );
   }
 
-  const refOptions = useMemo(() => {
-    const names = (strategies.data ?? []).map((s) => s.name);
-    return [CASH_REF, ...names];
-  }, [strategies.data]);
+  // A user fixed_weight portfolio can't be a sleeve of another (cycle guard —
+  // server 422s); drop those names from the picker.
+  const fixedWeightNames = useMemo(
+    () =>
+      new Set(
+        (userStrats.data ?? [])
+          .filter((u) => u.kind === "fixed_weight")
+          .map((u) => u.name),
+      ),
+    [userStrats.data],
+  );
+
+  // Split the merged gallery: platform built-ins vs the tenant's own rule
+  // strategies (source:"user", minus fixed_weight portfolios) — grouped in the
+  // picker via <optgroup>.
+  const { builtinRefs, userRefs } = useMemo(() => {
+    const b: string[] = [];
+    const u: string[] = [];
+    for (const s of strategies.data ?? []) {
+      if (fixedWeightNames.has(s.name)) continue;
+      (s.source === "user" ? u : b).push(s.name);
+    }
+    return { builtinRefs: b, userRefs: u };
+  }, [strategies.data, fixedWeightNames]);
 
   // Strategies that read CVM fundamentals — flag them in the picker so the choice
   // is informed (native <option> can't hold a badge, so the label carries a marker).
@@ -107,12 +176,52 @@ function SleevesEditor() {
     [strategies.data],
   );
 
+  const optLabel = (n: string) =>
+    needsFunds.has(n) ? `${n} · precisa de fundamentos` : n;
+
   const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
   const refs = rows.map((r) => r.strategy_ref);
   const hasDup = new Set(refs).size !== refs.length;
   const hasBlank = rows.some((r) => !r.strategy_ref || r.target_pct.trim() === "");
   const sumOk = Math.abs(sum - 100) < 0.01;
-  const canSave = rows.length > 0 && sumOk && !hasDup && !hasBlank && !save.isPending;
+  const sleevesValid = rows.length > 0 && sumOk && !hasDup && !hasBlank;
+  const canSave = sleevesValid && !save.isPending;
+  const canSaveStrat = sleevesValid && name.trim() !== "" && !saveStrat.isPending;
+
+  const loadStrategy = (u: UserStrategy) => {
+    setDirty(true);
+    setRows(specToRows(u.spec));
+    setName(u.name);
+    setDesc(typeof u.spec.description === "string" ? u.spec.description : "");
+    setEditId(u.id);
+    saveStrat.reset();
+    document
+      .getElementById("sleeves")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const onSaveStrat = () =>
+    saveStrat.mutate(
+      {
+        id: editId,
+        body: {
+          kind: "fixed_weight",
+          name: name.trim(),
+          description: desc.trim() || undefined,
+          sleeves: rows.map((r) => ({
+            strategy_ref: r.strategy_ref,
+            target_pct: parseFloat(r.target_pct),
+          })),
+        },
+      },
+      {
+        onSuccess: () => {
+          setName("");
+          setDesc("");
+          setEditId(undefined);
+        },
+      },
+    );
 
   const edit = (patch: (rs: Row[]) => Row[]) => {
     setDirty(true);
@@ -128,6 +237,7 @@ function SleevesEditor() {
   };
 
   return (
+    <div className="space-y-4">
     <Card
       title="Sleeves"
       action={
@@ -156,15 +266,23 @@ function SleevesEditor() {
                 className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink"
               >
                 <option value="">selecione…</option>
-                {refOptions.map((name) => (
-                  <option key={name} value={name}>
-                    {name === CASH_REF
-                      ? "Caixa (CDI)"
-                      : needsFunds.has(name)
-                        ? `${name} · precisa de fundamentos`
-                        : name}
-                  </option>
-                ))}
+                <option value={CASH_REF}>Caixa (CDI)</option>
+                <optgroup label="Estratégias da plataforma">
+                  {builtinRefs.map((n) => (
+                    <option key={n} value={n}>
+                      {optLabel(n)}
+                    </option>
+                  ))}
+                </optgroup>
+                {userRefs.length > 0 && (
+                  <optgroup label="Minhas estratégias de regra">
+                    {userRefs.map((n) => (
+                      <option key={n} value={n}>
+                        {optLabel(n)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
               <div className="flex items-center gap-1">
                 <input
@@ -235,7 +353,219 @@ function SleevesEditor() {
               {w}
             </p>
           ))}
+
+          <div className="space-y-2 border-t border-hairline pt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+              {editId ? "Editar carteira" : "Salvar como estratégia"}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Nome da carteira"
+                className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
+              />
+              <input
+                value={desc}
+                onChange={(e) => setDesc(e.target.value)}
+                placeholder="Descrição (opcional)"
+                className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
+              />
+              <button
+                type="button"
+                onClick={onSaveStrat}
+                disabled={!canSaveStrat}
+                className="rounded-md bg-navy px-4 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {saveStrat.isPending
+                  ? "Salvando…"
+                  : editId
+                    ? "Atualizar"
+                    : "Salvar como estratégia"}
+              </button>
+              {editId && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditId(undefined);
+                    setName("");
+                    setDesc("");
+                    saveStrat.reset();
+                  }}
+                  className="rounded-md border border-hairline px-3 py-1.5 text-xs text-muted hover:bg-hairline/40"
+                >
+                  Cancelar
+                </button>
+              )}
+            </div>
+            <p className="text-[11px] text-muted">
+              Salva a alocação atual como carteira nomeada — dá para backtestar e
+              ativar em “Minhas carteiras”.
+            </p>
+            {saveStrat.error && (
+              <p className="text-xs text-loss" role="alert">
+                {saveStrat.error instanceof ApiError
+                  ? saveStrat.error.message
+                  : "Falha ao salvar a estratégia."}
+              </p>
+            )}
+            {saveStrat.isSuccess && (
+              <p className="text-xs text-gain">Carteira salva.</p>
+            )}
+            {saveStrat.data?.warnings?.map((w, i) => (
+              <p key={i} className="text-xs text-series-4" role="status">
+                {w}
+              </p>
+            ))}
+          </div>
         </div>
+      )}
+    </Card>
+    <MinhasCarteiras onEdit={loadStrategy} activeEditId={editId} />
+    </div>
+  );
+}
+
+// ── saved portfolio strategies ───────────────────────────────────────────────
+
+function MinhasCarteiras({
+  onEdit,
+  activeEditId,
+}: {
+  onEdit: (u: UserStrategy) => void;
+  activeEditId?: string;
+}) {
+  const userStrats = useUserStrategies();
+  const promote = usePromoteStrategy();
+  const del = useDeleteUserStrategy();
+  const backtest = useCreateBacktest();
+
+  const portfolios = (userStrats.data ?? []).filter(
+    (u) => u.kind === "fixed_weight",
+  );
+
+  const onDelete = (u: UserStrategy) => {
+    if (!window.confirm(`Excluir a carteira “${u.name}”?`)) return;
+    del.mutate(u.id);
+  };
+
+  return (
+    <Card id="carteiras" className={ANCHOR} title="Minhas carteiras">
+      {userStrats.isLoading ? (
+        <Skeleton className="h-20 w-full" />
+      ) : portfolios.length === 0 ? (
+        <p className="text-sm text-muted">
+          Nenhuma carteira salva. Monte os sleeves acima e use “Salvar como
+          estratégia”.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {portfolios.map((u) => {
+            const nSleeves = Array.isArray(u.spec.sleeves)
+              ? (u.spec.sleeves as unknown[]).length
+              : 0;
+            const ranId =
+              backtest.data && backtest.variables?.strategy === u.name
+                ? backtest.data.id
+                : null;
+            return (
+              <li
+                key={u.id}
+                className={`rounded-lg border bg-paper p-3 ${
+                  u.id === activeEditId ? "border-navy" : "border-hairline"
+                }`}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-ink">
+                      {u.name}
+                    </p>
+                    <p className="font-mono text-[11px] text-muted">
+                      {nSleeves} sleeve(s) · atualizada {formatDate(u.updated_at)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => promote.mutate(u.id)}
+                      disabled={promote.isPending && promote.variables === u.id}
+                      className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+                    >
+                      {promote.isPending && promote.variables === u.id
+                        ? "Ativando…"
+                        : "Ativar"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => backtest.mutate({ strategy: u.name })}
+                      disabled={
+                        backtest.isPending &&
+                        backtest.variables?.strategy === u.name
+                      }
+                      className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40 disabled:opacity-40"
+                    >
+                      {backtest.isPending &&
+                      backtest.variables?.strategy === u.name
+                        ? "Enviando…"
+                        : "Backtest"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onEdit(u)}
+                      className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40"
+                    >
+                      Editar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(u)}
+                      disabled={del.isPending && del.variables === u.id}
+                      className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-loss hover:bg-hairline/40 disabled:opacity-40"
+                    >
+                      Excluir
+                    </button>
+                  </div>
+                </div>
+
+                {ranId && (
+                  <p className="mt-2 text-xs text-gain">
+                    Backtest enviado —{" "}
+                    <Link href={`/bench/${ranId}`} className="underline">
+                      ver resultado
+                    </Link>
+                    .
+                  </p>
+                )}
+                {promote.error && promote.variables === u.id && (
+                  <p className="mt-2 text-xs text-loss" role="alert">
+                    {promote.error instanceof ApiError
+                      ? promote.error.message
+                      : "Falha ao ativar."}
+                  </p>
+                )}
+                {promote.isSuccess && promote.variables === u.id && (
+                  <p className="mt-2 text-xs text-gain">
+                    Carteira ativada — alvo atualizado.
+                  </p>
+                )}
+                {del.error && del.variables === u.id && (
+                  <p className="mt-2 text-xs text-loss" role="alert">
+                    {del.error instanceof ApiError
+                      ? del.error.message
+                      : "Falha ao excluir."}
+                  </p>
+                )}
+                {backtest.error && backtest.variables?.strategy === u.name && (
+                  <p className="mt-2 text-xs text-loss" role="alert">
+                    {backtest.error instanceof ApiError
+                      ? backtest.error.message
+                      : "Falha ao enviar o backtest."}
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </Card>
   );

@@ -26,14 +26,14 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import enginerun
+from platform_app import enginerun, specstore
 from platform_app.db import get_async_session
 from platform_app.models import CashEvent, Position, Trade
 from platform_app.routes import (
     _fundamentals_available,
+    _gallery,
     _latest_engine_prices,
     _needs_funds_msg,
-    list_strategies,
 )
 from platform_app.tenancy import get_current_tenant
 
@@ -95,14 +95,14 @@ def _read_curve(path: Path) -> list[dict]:
                 for r in csv.DictReader(fh)]
 
 
-def _run_whatif(strategy: str, config: dict) -> dict:
+def _run_whatif(strategy: str, config: dict, extra_env: dict | None = None) -> dict:
     """Run scripts/whatif_run.py in the engine venv (mirrors enginerun's subprocess
     pattern; reuses its interpreter + env resolution) and return {summary, curve}.
     Artifacts land in a temp dir we read then delete. Blocking — call via to_thread."""
     out = Path(tempfile.mkdtemp(prefix="b3whatif-"))
     try:
         proc = enginerun.run_script(
-            "whatif_run.py", [strategy, str(out), json.dumps(config)])
+            "whatif_run.py", [strategy, str(out), json.dumps(config)], extra_env)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
         return {"summary": enginerun._last_json(proc.stdout),
@@ -123,7 +123,7 @@ async def create_whatif(
     _user, tid = tenant
     if not body.strategy_ids:
         raise HTTPException(422, "strategy_ids must be non-empty")
-    gallery = {s["name"]: s for s in await list_strategies()}
+    gallery = {s["name"]: s for s in await _gallery(session, tid)}
     for sid in body.strategy_ids:
         if sid not in gallery:
             raise HTTPException(404, f"unknown strategy: {sid}")
@@ -138,11 +138,12 @@ async def create_whatif(
     total_invested = round(sum(flows.values()), 2)
     start = min(flows)  # earliest ISO date == the tenant's first trade
 
+    extra_env = await specstore.user_specs_env(session, tid) or None
     scenarios = []
     for sid in body.strategy_ids:
         config = {"flows": flows_list, "start": start, "freq": body.freq}
         try:
-            out = await asyncio.to_thread(_run_whatif, sid, config)
+            out = await asyncio.to_thread(_run_whatif, sid, config, extra_env)
         except RuntimeError as e:
             raise HTTPException(500, f"whatif ({sid}) failed: {e}")
         m = out["summary"]

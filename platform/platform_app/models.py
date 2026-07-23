@@ -207,6 +207,29 @@ class RebalanceSettings(Base):
     )
 
 
+class UserStrategy(Base):
+    # spec/06: a user-authored engine strategy spec (rank_and_hold | fixed_weight),
+    # stored verbatim in `spec` (single source of truth). `name` is the registry
+    # key BacktestRun.strategy / PortfolioSleeve.strategy_ref store; the row `id`
+    # is the on-disk {id}.yaml filename when materialized for the engine subprocess.
+    __tablename__ = "user_strategies"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "name", name="uq_user_strategies_tenant_name"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # rank_and_hold | fixed_weight
+    spec: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class DarfPayment(Base):
     # Mirrors taxcore/data/darf_payments.csv. Empty by default (CRUD lands later).
     __tablename__ = "darf_payments"

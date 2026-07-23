@@ -14,21 +14,23 @@ import tempfile
 import uuid
 from datetime import date
 from pathlib import Path
+from typing import Annotated, Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
-from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
+from pydantic import BaseModel, Field, model_validator
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, tasks
+from platform_app import b3run, enginerun, specstore, tasks
 from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    PortfolioSleeve, Position, RebalanceSettings, Trade,
+    PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
 )
-from platform_app.tenancy import get_current_tenant
+from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
 imports_router = APIRouter(prefix="/imports", tags=["imports"])
 portfolio_router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -107,6 +109,22 @@ async def list_imports(
     ]
 
 
+def _value_position(p, price: float | None) -> dict:
+    """Position row marked to the latest engine close. Unpriced (Renda Fixa,
+    delisted, ticker absent from the market plane) → nulls, so the UI leaves it
+    out of the P/L base instead of pretending value == cost."""
+    cost = float(p.total_cost or 0.0)
+    mv = round(float(p.qty or 0.0) * price, 2) if price else None
+    return {
+        "ticker": p.ticker, "qty": p.qty, "avg_cost": p.avg_cost,
+        "total_cost": p.total_cost, "market": p.market,
+        "last_price": price,
+        "market_value": mv,
+        "pnl": None if mv is None else round(mv - cost, 2),
+        "pnl_pct": None if mv is None or cost <= 0 else (mv - cost) / cost,
+    }
+
+
 @portfolio_router.get("/positions")
 async def get_positions(
     tenant=Depends(get_current_tenant),
@@ -118,11 +136,62 @@ async def get_positions(
             select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
         )
     ).all()
-    return [
-        {"ticker": p.ticker, "qty": p.qty, "avg_cost": p.avg_cost,
-         "total_cost": p.total_cost, "market": p.market}
-        for p in rows
-    ]
+    try:
+        prices = dict(await _latest_engine_prices([p.ticker for p in rows]))
+    except Exception:
+        # ponytail: market plane down → cost-only view instead of a 500. Add a
+        # cache/retry here only if the engine DB turns out to be flaky.
+        prices = {}
+    return [_value_position(p, prices.get(p.ticker)) for p in rows]
+
+
+def _downsample(values: list[float], target: int = 40) -> list[float]:
+    """Every k-th close, first and last always kept. ~126 sessions in 6 months →
+    ~32 points, which is all a 72px sparkline can resolve anyway."""
+    if len(values) <= target:
+        return values
+    step = math.ceil(len(values) / target)
+    out = values[::step]
+    if (len(values) - 1) % step:
+        out.append(values[-1])
+    return out
+
+
+@portfolio_router.get("/price-history")
+async def get_price_history(
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict[str, list[float]]:
+    """~6 months of closes per held ticker for the positions sparklines, one
+    batched query over the whole book. Unpriced tickers are simply absent."""
+    _user, tid = tenant
+    tickers = sorted({t for t in (await session.scalars(
+        select(Position.ticker).where(Position.tenant_id == tid)
+    )).all() if t})
+    if not tickers:
+        return {}
+    try:
+        conn = await asyncpg.connect(settings.engine_database_url)
+        try:
+            rows = await conn.fetch(
+                "SELECT ticker, close FROM prices "
+                "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
+                # window anchored to the snapshot's own last date, not today —
+                # a stale market plane should still draw a chart.
+                "AND date >= (SELECT MAX(date) FROM prices) - INTERVAL '6 months' "
+                "ORDER BY ticker, date",
+                tickers,
+            )
+        finally:
+            await conn.close()
+    except Exception:
+        # ponytail: market plane down → no sparklines, same fallback as
+        # /positions. A decoration isn't worth a 500.
+        return {}
+    series: dict[str, list[float]] = {}
+    for r in rows:
+        series.setdefault(r["ticker"], []).append(float(r["close"]))
+    return {t: _downsample(v) for t, v in series.items()}
 
 
 @portfolio_router.get("/trades")
@@ -215,8 +284,9 @@ async def put_sleeves(
     total = sum(s.target_pct for s in body)
     if abs(total - 100.0) > 0.01:
         raise HTTPException(422, f"sleeve percentages must sum to 100 (got {total:g})")
-    # CASH_CDI is the risk-free sleeve; anything else must be a real gallery spec.
-    gallery = {s["name"]: s for s in await list_strategies()}
+    # CASH_CDI is the risk-free sleeve; anything else must be a real gallery spec
+    # (built-ins + this tenant's user strategies).
+    gallery = {s["name"]: s for s in await _gallery(session, tid)}
     known = set(gallery) | {"CASH_CDI"}
     for ref in refs:
         if ref not in known:
@@ -244,9 +314,11 @@ async def put_sleeves(
 
 # ── Combined target + rebalance advisor (spec/05 Features 1 & 3) ──────────────
 # advise_weights per strategy sleeve is deterministic for a given day's data, so
-# cache the JSON per (strategy, date). ponytail: process-lifetime dict keyed by
-# the calendar day — same lifecycle as _STRATEGIES_CACHE.
-_SLEEVE_WEIGHTS_CACHE: dict[tuple[str, str, str], dict] = {}
+# cache the JSON per (strategy, date, freq). ponytail: process-lifetime dict keyed
+# by the calendar day — same lifecycle as _STRATEGIES_CACHE. USER refs also carry
+# (tenant_id, updated_at) so two tenants' same-named specs can't collide and a
+# same-day edit busts the entry; built-in refs keep the shared 3-tuple key.
+_SLEEVE_WEIGHTS_CACHE: dict[tuple, dict] = {}
 
 
 def _needs_funds_msg(strategies: list[str]) -> str:
@@ -281,19 +353,21 @@ async def _advise(**kwargs) -> dict:
         raise HTTPException(500, f"advise_weights failed: {e}")
 
 
-async def _advise_strategy(strategy: str, freq: str) -> dict:
+async def _advise_strategy(strategy: str, freq: str, extra_env: dict | None = None) -> dict:
     """Advise a strategy's target weights at the given rebalance cadence (freq).
     freq='ME' is the default path — identical to today. A non-default cadence is
     threaded as ``--params rebalance_freq`` through the engine script (enginerun's
     advise_weights wrapper exposes no params passthrough); reuses run_script + its
-    exit-code-3 / last-JSON parsing, no new engine code."""
+    exit-code-3 / last-JSON parsing, no new engine code. extra_env points the
+    registry at the tenant's user specs when the strategy is a user ref."""
     if freq == "ME":
-        return await _advise(strategy=strategy)
+        return await _advise(strategy=strategy, extra_env=extra_env)
 
     def _run() -> dict:
         proc = enginerun.run_script(
             "advise_weights.py",
             [strategy, "--params", json.dumps({"rebalance_freq": freq})],
+            extra_env,
         )
         if proc.returncode == enginerun.NEEDS_FUNDAMENTALS_EXIT:
             raise enginerun._needs_fundamentals(proc.stderr, strategy)
@@ -347,6 +421,19 @@ async def _combined_target(
     if not sleeves:
         raise HTTPException(409, "no sleeves configured — PUT /portfolio/sleeves first")
 
+    # A sleeve ref may be one of the tenant's user strategies — materialize them
+    # and point the engine subprocess at the dir. updated_at keys the cache so a
+    # same-day edit isn't served stale and two tenants never collide.
+    user_rows = (await session.scalars(
+        select(UserStrategy).where(UserStrategy.tenant_id == tid)
+    )).all()
+    extra_env = (
+        {"ENGINE_USER_SPECS_DIR": str(specstore.materialize_user_specs(
+            [(str(r.id), r.spec) for r in user_rows], tid))}
+        if user_rows else {}
+    )
+    user_upd = {r.name: r.updated_at.isoformat() if r.updated_at else "" for r in user_rows}
+
     today = date.today().isoformat()
     combined: dict[str, float] = {}
     cash_weight = 0.0
@@ -356,11 +443,14 @@ async def _combined_target(
         if s.strategy_ref == "CASH_CDI":
             cash_weight += pct
             continue
-        key = (s.strategy_ref, today, freq)
+        if s.strategy_ref in user_upd:
+            key = (s.strategy_ref, today, freq, str(tid), user_upd[s.strategy_ref])
+        else:
+            key = (s.strategy_ref, today, freq)
         adv = _SLEEVE_WEIGHTS_CACHE.get(key)
         if adv is None:
             try:
-                adv = await _advise_strategy(s.strategy_ref, freq)
+                adv = await _advise_strategy(s.strategy_ref, freq, extra_env or None)
             except enginerun.EngineNeedsFundamentals as e:
                 missing.append(e.strategy or s.strategy_ref)
                 continue
@@ -738,22 +828,391 @@ async def tlh_plan(
         session, tid, [(s.ticker, s.qty) for s in body.sells], exclude=body.exclude)
 
 
-# ── Strategy gallery (public) ─────────────────────────────────────────────────
-# Registry discovery only runs inside the engine venv, so shell into it once and
-# cache the JSON in-process. ponytail: process-lifetime cache, no TTL — the
-# gallery only changes when the image (its specs/plugins) is rebuilt.
-_STRATEGIES_CACHE: list | None = None
+# ── Strategy gallery (built-ins + per-tenant user strategies) ─────────────────
+# Registry discovery only runs inside the engine venv, so shell into it and cache
+# the JSON in-process. ponytail: process-lifetime caches, no TTL. Built-ins only
+# change on an image rebuild; the per-tenant gallery self-heals via a cheap
+# (count, max(updated_at)) fingerprint and is popped on save/delete.
+_STRATEGIES_CACHE: list | None = None                    # built-ins, global
+_TENANT_GALLERY: dict[uuid.UUID, tuple[tuple, list]] = {}  # tid -> (fingerprint, merged)
+_SIGNALS_CACHE: list | None = None                       # named-signal catalog, global
 
 
-@strategies_router.get("")
-async def list_strategies() -> list[dict]:
+async def _builtins() -> list[dict]:
+    """The built-in gallery (no ENGINE_USER_SPECS_DIR), tagged source=builtin."""
     global _STRATEGIES_CACHE
     if _STRATEGIES_CACHE is None:
         proc = await asyncio.to_thread(enginerun.run_script, "list_strategies.py", [])
         if proc.returncode != 0:
             raise HTTPException(500, f"list_strategies failed: {(proc.stderr or proc.stdout)[-2000:]}")
-        _STRATEGIES_CACHE = json.loads(proc.stdout)
+        _STRATEGIES_CACHE = [{**s, "source": "builtin"} for s in json.loads(proc.stdout)]
     return _STRATEGIES_CACHE
+
+
+async def _gallery(session: AsyncSession, tid: uuid.UUID | None) -> list[dict]:
+    """Merged strategy gallery. tid=None → built-ins only. Otherwise fingerprint
+    the tenant's rows; 0 rows → built-ins; else materialize + shell list_strategies
+    with the env var (built-ins + user specs, merged by the registry) and cache
+    under the fingerprint. User entries are tagged source=user."""
+    if tid is None:
+        return await _builtins()
+    count, maxupd = (await session.execute(
+        select(func.count(UserStrategy.id), func.max(UserStrategy.updated_at))
+        .where(UserStrategy.tenant_id == tid)
+    )).one()
+    if not count:
+        return await _builtins()
+    fingerprint = (count, maxupd.isoformat() if maxupd else None)
+    cached = _TENANT_GALLERY.get(tid)
+    if cached and cached[0] == fingerprint:
+        return cached[1]
+
+    rows = (await session.scalars(
+        select(UserStrategy).where(UserStrategy.tenant_id == tid)
+    )).all()
+    d = specstore.materialize_user_specs([(str(r.id), r.spec) for r in rows], tid)
+    proc = await asyncio.to_thread(
+        enginerun.run_script, "list_strategies.py", [], {"ENGINE_USER_SPECS_DIR": str(d)})
+    if proc.returncode != 0:
+        raise HTTPException(500, f"list_strategies failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    user_names = {r.name for r in rows}
+    merged = [{**s, "source": "user" if s["name"] in user_names else "builtin"}
+              for s in json.loads(proc.stdout)]
+    _TENANT_GALLERY[tid] = (fingerprint, merged)
+    return merged
+
+
+@strategies_router.get("")
+async def list_strategies(
+    tenant=Depends(get_optional_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    """Public: anon → built-ins; authed → built-ins + the tenant's user strategies
+    (each tagged with a ``source`` of "builtin" or "user")."""
+    return await _gallery(session, tenant[1] if tenant else None)
+
+
+@strategies_router.get("/signals")
+async def list_signals() -> list[dict]:
+    """Named-signal catalog for the factor picker (shell list_signals.py once)."""
+    global _SIGNALS_CACHE
+    if _SIGNALS_CACHE is None:
+        proc = await asyncio.to_thread(enginerun.run_script, "list_signals.py", [])
+        if proc.returncode != 0:
+            raise HTTPException(500, f"list_signals failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        _SIGNALS_CACHE = json.loads(proc.stdout)
+    return _SIGNALS_CACHE
+
+
+# ── User-created strategies (spec/06) ─────────────────────────────────────────
+# Pydantic validates the statically-checkable rules at the boundary (name, numeric
+# ranges, rebalance enum, portfolio weights). The engine's validate_spec.py does the
+# deep signal/factor validation; the gallery resolves sleeve refs + the cycle guard.
+
+_REBALANCE = Literal["ME", "QE", "W-FRI"]
+
+
+class _RankUniverse(BaseModel):
+    min_adtv: float = Field(default=1_000_000.0, ge=0)
+    min_price: float = Field(default=1.0, ge=0)
+    smallcap_below_median: bool = False
+
+
+class _RankSignal(BaseModel):
+    factor: str | None = None
+    expr: str | None = None
+    lookback: int | None = Field(default=None, ge=1, le=36)
+    shift: int | None = Field(default=None, ge=0)
+    range: list[float] | None = None
+    apply_glitch: bool | None = None
+
+    @model_validator(mode="after")
+    def _one_source(self):
+        if bool(self.factor) == bool(self.expr):
+            raise ValueError("signal needs exactly one of factor / expr")
+        return self
+
+
+class _RankSelection(BaseModel):
+    top_pct: float | None = Field(default=None, gt=0, le=1)
+    top_n: int | None = Field(default=None, ge=1)
+    min_names: int = Field(default=1, ge=1)
+    dedup_roots: bool = False
+
+    @model_validator(mode="after")
+    def _one_cut(self):
+        if (self.top_pct is None) == (self.top_n is None):
+            raise ValueError("selection needs exactly one of top_pct / top_n")
+        return self
+
+
+class RankStrategyIn(BaseModel):
+    kind: Literal["rank_and_hold"]
+    name: str = Field(min_length=1)
+    description: str = ""
+    rebalance: _REBALANCE = "ME"
+    needs_fundamentals: bool = False
+    warmup_pad: int | None = Field(default=None, ge=0)
+    weighting: Literal["equal", "market_cap"] = "equal"
+    universe: _RankUniverse = Field(default_factory=_RankUniverse)
+    signal: _RankSignal
+    selection: _RankSelection
+
+
+class PortfolioSleeveIn(BaseModel):
+    strategy_ref: str = Field(min_length=1)
+    target_pct: float = Field(gt=0, le=100)
+
+
+class PortfolioStrategyIn(BaseModel):
+    kind: Literal["fixed_weight"]
+    name: str = Field(min_length=1)
+    description: str = ""
+    rebalance: _REBALANCE = "QE"
+    sleeves: list[PortfolioSleeveIn] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _weights_sum(self):
+        total = sum(s.target_pct for s in self.sleeves)
+        if abs(total - 100.0) > 1e-2:  # == weights sum to 1 ± 1e-4
+            raise ValueError(f"portfolio percentages must sum to 100 (got {total:g})")
+        return self
+
+
+StrategyIn = Annotated[RankStrategyIn | PortfolioStrategyIn, Field(discriminator="kind")]
+
+
+def _compile_rank(m: RankStrategyIn) -> dict:
+    spec: dict = {
+        "name": m.name.strip(), "kind": "rank_and_hold", "description": m.description,
+        "rebalance": m.rebalance, "weighting": m.weighting,
+        "universe": m.universe.model_dump(exclude_none=True),
+        "signal": m.signal.model_dump(exclude_none=True),
+        "selection": m.selection.model_dump(exclude_none=True),
+    }
+    if m.needs_fundamentals:
+        spec["needs_fundamentals"] = True
+    if m.warmup_pad is not None:
+        spec["warmup_pad"] = m.warmup_pad
+    return spec
+
+
+def _compile_portfolio(m: PortfolioStrategyIn) -> dict:
+    sleeves = [
+        {"asset": "CDI", "weight": s.target_pct / 100.0} if s.strategy_ref == "CASH_CDI"
+        else {"strategy": s.strategy_ref, "weight": s.target_pct / 100.0}
+        for s in m.sleeves
+    ]
+    return {
+        "name": m.name.strip(), "kind": "fixed_weight", "description": m.description,
+        "rebalance": m.rebalance, "sleeves": sleeves,
+    }
+
+
+async def _validate_spec_engine(spec: dict) -> bool:
+    """Shell validate_spec.py; raise 422 on structured errors, return
+    needs_fundamentals (inferred from f_* refs)."""
+    proc = await asyncio.to_thread(
+        enginerun.run_script, "validate_spec.py", ["--spec-json", json.dumps(spec)])
+    try:
+        report = json.loads((proc.stdout or "").strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        raise HTTPException(500, f"validate_spec failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    if not report.get("ok"):
+        raise HTTPException(422, "; ".join(report.get("errors") or ["invalid spec"]))
+    return bool(report.get("needs_fundamentals"))
+
+
+async def _compile_and_validate(
+    body, session: AsyncSession, tid: uuid.UUID, *, exclude_id: uuid.UUID | None = None
+) -> tuple[dict, list[str]]:
+    """Pydantic-validated body → engine spec dict + soft warnings. Rejects
+    built-in-name collisions, unresolvable sleeve refs, and portfolio cycles."""
+    name = body.name.strip()
+    builtin_names = {s["name"] for s in await _builtins()}
+    if name in builtin_names or name == "CASH_CDI":
+        raise HTTPException(422, f"name {name!r} collides with a built-in strategy")
+
+    if body.kind == "rank_and_hold":
+        spec = _compile_rank(body)
+    else:
+        rows = (await session.scalars(
+            select(UserStrategy).where(UserStrategy.tenant_id == tid)
+        )).all()
+        user_fixed = {r.name for r in rows if r.kind == "fixed_weight" and r.id != exclude_id}
+        user_rank = {r.name for r in rows if r.kind == "rank_and_hold"}
+        resolvable = builtin_names | user_rank | {"CASH_CDI"}
+        for s in body.sleeves:
+            ref = s.strategy_ref
+            if ref in user_fixed or ref == name:
+                raise HTTPException(
+                    422, f"sleeve {ref!r}: a portfolio cannot reference another user "
+                         f"portfolio (would recurse)")
+            if ref not in resolvable:
+                raise HTTPException(422, f"unknown sleeve strategy_ref: {ref!r}")
+        spec = _compile_portfolio(body)
+
+    needs_funds = await _validate_spec_engine(spec)
+    if needs_funds:
+        spec["needs_fundamentals"] = True  # persist inferred flag for gallery/engine
+    warnings: list[str] = []
+    if needs_funds and not await _fundamentals_available():
+        warnings.append(_needs_funds_msg([name]))
+    return spec, warnings
+
+
+def _user_strategy_dict(r: UserStrategy) -> dict:
+    return {
+        "id": str(r.id), "name": r.name, "kind": r.kind, "spec": r.spec,
+        "source": "user",
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+    }
+
+
+async def _get_user_strategy(sid: str, tid: uuid.UUID, session: AsyncSession) -> UserStrategy:
+    try:
+        row = await session.get(UserStrategy, uuid.UUID(sid))
+    except ValueError:
+        row = None
+    if row is None or row.tenant_id != tid:
+        raise HTTPException(404, "strategy not found")
+    return row
+
+
+@strategies_router.get("/user")
+async def list_user_strategies(
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    _user, tid = tenant
+    rows = (await session.scalars(
+        select(UserStrategy).where(UserStrategy.tenant_id == tid).order_by(UserStrategy.name)
+    )).all()
+    return [_user_strategy_dict(r) for r in rows]
+
+
+@strategies_router.post("/user")
+async def create_user_strategy(
+    body: StrategyIn = Body(...),
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    spec, warnings = await _compile_and_validate(body, session, tid)
+    row = UserStrategy(tenant_id=tid, name=body.name.strip(), kind=body.kind, spec=spec)
+    session.add(row)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, f"strategy name {body.name.strip()!r} already exists")
+    _TENANT_GALLERY.pop(tid, None)
+    await session.refresh(row)
+    return {**_user_strategy_dict(row), "warnings": warnings}
+
+
+async def _cascade_rename(
+    session: AsyncSession, tid: uuid.UUID, old: str, new: str, exclude_id: uuid.UUID
+) -> None:
+    """Rename old→new across the tenant's live sleeves and other user portfolios
+    that reference it (keeps the registry key consistent)."""
+    await session.execute(
+        update(PortfolioSleeve)
+        .where(PortfolioSleeve.tenant_id == tid, PortfolioSleeve.strategy_ref == old)
+        .values(strategy_ref=new)
+    )
+    others = (await session.scalars(
+        select(UserStrategy).where(
+            UserStrategy.tenant_id == tid, UserStrategy.kind == "fixed_weight",
+            UserStrategy.id != exclude_id,
+        )
+    )).all()
+    for o in others:
+        sleeves = o.spec.get("sleeves", [])
+        if any(sl.get("strategy") == old for sl in sleeves):
+            o.spec = {**o.spec, "sleeves": [
+                {**sl, "strategy": new} if sl.get("strategy") == old else sl
+                for sl in sleeves
+            ]}
+
+
+@strategies_router.put("/user/{sid}")
+async def update_user_strategy(
+    sid: str,
+    body: StrategyIn = Body(...),
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    row = await _get_user_strategy(sid, tid, session)
+    if body.kind != row.kind:
+        raise HTTPException(422, "cannot change a strategy's kind — delete and recreate")
+    spec, warnings = await _compile_and_validate(body, session, tid, exclude_id=row.id)
+    old_name, new_name = row.name, body.name.strip()
+    row.name = new_name
+    row.spec = spec
+    if new_name != old_name:
+        await _cascade_rename(session, tid, old_name, new_name, row.id)
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise HTTPException(409, f"strategy name {new_name!r} already exists")
+    _TENANT_GALLERY.pop(tid, None)
+    await session.refresh(row)
+    return {**_user_strategy_dict(row), "warnings": warnings}
+
+
+@strategies_router.delete("/user/{sid}")
+async def delete_user_strategy(
+    sid: str,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    row = await _get_user_strategy(sid, tid, session)
+    n = await session.scalar(
+        select(func.count()).select_from(PortfolioSleeve)
+        .where(PortfolioSleeve.tenant_id == tid, PortfolioSleeve.strategy_ref == row.name)
+    )
+    if n:
+        raise HTTPException(409, f"{row.name!r} is a live sleeve — remove it from /portfolio/sleeves first")
+    others = (await session.scalars(
+        select(UserStrategy).where(
+            UserStrategy.tenant_id == tid, UserStrategy.kind == "fixed_weight",
+            UserStrategy.id != row.id,
+        )
+    )).all()
+    for o in others:
+        if any(sl.get("strategy") == row.name for sl in o.spec.get("sleeves", [])):
+            raise HTTPException(409, f"{row.name!r} is referenced by portfolio {o.name!r}")
+    await session.delete(row)
+    await session.commit()
+    _TENANT_GALLERY.pop(tid, None)
+    return {"deleted": sid}
+
+
+@strategies_router.post("/user/{sid}/promote")
+async def promote_user_strategy(
+    sid: str,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Compile a portfolio strategy's sleeves into the live target (reuses the
+    existing PUT /portfolio/sleeves logic — same validation + atomic replace)."""
+    _user, tid = tenant
+    row = await _get_user_strategy(sid, tid, session)
+    if row.kind != "fixed_weight":
+        raise HTTPException(422, "only portfolio (fixed_weight) strategies can be promoted")
+    sleeves = [
+        SleeveIn(
+            strategy_ref="CASH_CDI" if sl.get("asset") == "CDI" else sl["strategy"],
+            target_pct=round(float(sl["weight"]) * 100.0, 6),
+        )
+        for sl in row.spec.get("sleeves", [])
+    ]
+    return await put_sleeves(sleeves, tenant, session)
 
 
 # ── Backtests ─────────────────────────────────────────────────────────────────
@@ -782,7 +1241,7 @@ async def create_backtest(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
-    known = {s["name"] for s in await list_strategies()}
+    known = {s["name"] for s in await _gallery(session, tid)}
     if body.strategy not in known:
         raise HTTPException(404, f"unknown strategy: {body.strategy}")
     run = BacktestRun(

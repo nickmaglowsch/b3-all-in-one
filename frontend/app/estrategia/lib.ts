@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Position, Sleeve, SleevesSaveResult, Target } from "@/lib/types";
 // Reused across the two feature dirs I own — same queryKey dedupes the fetch.
-export { useStrategies, compactBRL } from "../bench/lib";
+export { useStrategies, useCreateBacktest, compactBRL } from "../bench/lib";
 
 export const CASH_REF = "CASH_CDI";
 

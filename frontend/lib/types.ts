@@ -51,6 +51,12 @@ export interface Position {
   avg_cost: number;
   total_cost: number;
   market: string;
+  // Marked to the latest engine close; null when the ticker has no price
+  // (Renda Fixa, delisted) — such rows stay out of the P/L base.
+  last_price: number | null;
+  market_value: number | null;
+  pnl: number | null;
+  pnl_pct: number | null;
 }
 
 export interface Trade {
@@ -123,6 +129,37 @@ export interface Strategy {
   description: string;
   needs_fundamentals: boolean;
   params: StrategyParam[];
+  // GET /strategies tags each entry: built-in gallery vs this tenant's own.
+  source?: "builtin" | "user";
+}
+
+// ── User-created strategies ───────────────────────────────────────────────────
+// The engine runs strategies as data (see spec/06-user-strategies.md). Two kinds:
+// a factor-ranked equity book, or a fixed-weight sleeve blend.
+export type StrategyKind = "rank_and_hold" | "fixed_weight";
+
+// GET /strategies/signals — the named-signal catalog for the factor picker.
+export interface SignalDef {
+  name: string;
+  expr: string;
+  [param: string]: unknown; // default params (lookback, …)
+}
+
+// GET /strategies/user — the tenant's rows, spec in the engine schema verbatim.
+// `spec` is loosely typed here; each builder maps it to/from its own form shape.
+export interface UserStrategy {
+  id: string;
+  name: string;
+  kind: StrategyKind;
+  spec: Record<string, unknown>;
+  source: "user";
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+// POST/PUT /strategies/user echo the row plus soft warnings (e.g. needs-funds).
+export interface SaveStrategyResult extends UserStrategy {
+  warnings: string[];
 }
 
 export interface BacktestRun {

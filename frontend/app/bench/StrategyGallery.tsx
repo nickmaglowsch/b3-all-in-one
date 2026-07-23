@@ -22,6 +22,15 @@ export function KindBadge({ kind }: { kind: Strategy["kind"] }) {
   );
 }
 
+export function UserBadge() {
+  // Distinguishes this tenant's own strategies from the built-in gallery.
+  return (
+    <span className="inline-flex items-center rounded-[4px] bg-navy/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-navy">
+      minha
+    </span>
+  );
+}
+
 export function FundamentalsBadge() {
   // Strategy reads CVM fundamentals — surfaced so users know it depends on that
   // data being ingested (a fundamentals-less environment can't build its target).
@@ -102,6 +111,7 @@ export function StrategyGallery({
                       {s.name}
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
+                      {s.source === "user" && <UserBadge />}
                       {s.needs_fundamentals && <FundamentalsBadge />}
                       <KindBadge kind={s.kind} />
                     </span>

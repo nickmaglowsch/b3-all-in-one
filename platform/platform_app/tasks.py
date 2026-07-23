@@ -9,7 +9,7 @@ from pathlib import Path
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import delete, insert, select
 
-from platform_app import b3run, enginerun
+from platform_app import b3run, enginerun, specstore
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import (
@@ -91,8 +91,11 @@ async def run_backtest(run_id: str) -> dict:
         # artifacts_dir would land under engine/, not where the API reads it.
         out_dir = Path(settings.artifacts_dir).resolve() / run_id
         args = [run.strategy, str(out_dir), json.dumps(run.params or {})]
+        # Point the registry at the tenant's user specs (empty for zero-spec tenants,
+        # so this is a no-op identical to today for built-in strategies).
+        extra_env = await specstore.user_specs_env(session, run.tenant_id)
         proc = await asyncio.to_thread(
-            enginerun.run_script, "run_backtest_json.py", args
+            enginerun.run_script, "run_backtest_json.py", args, extra_env
         )
         run.finished_at = datetime.datetime.now(datetime.timezone.utc)
         if proc.returncode != 0:

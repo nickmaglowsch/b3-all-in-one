@@ -40,6 +40,7 @@ auth_backend = AuthenticationBackend(
 fastapi_users = FastAPIUsers[User, uuid.UUID](get_user_manager, [auth_backend])
 
 current_active_user = fastapi_users.current_user(active=True)
+current_optional_user = fastapi_users.current_user(active=True, optional=True)
 
 
 def get_google_oauth_client() -> GoogleOAuth2:

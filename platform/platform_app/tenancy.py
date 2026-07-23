@@ -3,7 +3,16 @@ import uuid
 from fastapi import Depends
 
 from platform_app.models import User
-from platform_app.users import current_active_user
+from platform_app.users import current_active_user, current_optional_user
+
+
+async def get_optional_tenant(
+    user: User | None = Depends(current_optional_user),
+) -> tuple[User, uuid.UUID] | None:
+    """Same as get_current_tenant but returns None for anonymous requests, so a
+    public endpoint (GET /strategies) can serve built-ins to anon and the merged
+    gallery to an authed tenant."""
+    return (user, user.id) if user else None
 
 
 async def get_current_tenant(

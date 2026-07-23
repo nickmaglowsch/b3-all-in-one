@@ -11,7 +11,10 @@ import { Money } from "@/components/ui/Money";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Skeleton } from "@/components/ui/Skeleton";
+import { SectionNav } from "@/components/ui/SectionNav";
 import { IconAlert } from "@/components/icons";
+
+const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
 
 // ── API shapes (POST /tlh/plans) — mirrors taxcore/scripts/tlh_plan.py --json ──
 interface Situation {
@@ -112,13 +115,21 @@ export default function TlhPage() {
     <>
       <PageHeader eyebrow="Colheita de prejuízo" title="TLH" />
 
-      <p className="mb-6 flex items-start gap-2 text-xs text-muted">
+      <p className="mb-4 flex items-start gap-2 text-xs text-muted">
         <span aria-hidden>ⓘ</span>
         Plano informativo — execute por sua conta na sua corretora.
       </p>
 
+      <SectionNav
+        items={[
+          { id: "situacao", label: "Situação do mês" },
+          { id: "simular", label: "Simular vendas" },
+          ...(plan.isPending || plan.data ? [{ id: "plano", label: "Plano" }] : []),
+        ]}
+      />
+
       {/* Situation panel */}
-      <div className="mb-6 grid gap-4 sm:grid-cols-2">
+      <div id="situacao" className={`mb-6 grid gap-4 sm:grid-cols-2 ${ANCHOR}`}>
         {situation.isPending
           ? CLASSES.map((c) => <Skeleton key={c} className="h-36 w-full" />)
           : CLASSES.map((c) => (
@@ -132,7 +143,7 @@ export default function TlhPage() {
       </div>
 
       {/* Sells builder */}
-      <Card title="Simular vendas" className="mb-6">
+      <Card id="simular" title="Simular vendas" className={`mb-6 ${ANCHOR}`}>
         <SellsBuilder
           held={held}
           loading={positions.isPending}
@@ -174,11 +185,13 @@ export default function TlhPage() {
       </Card>
 
       {/* Plan output */}
-      {plan.isPending ? (
-        <Skeleton className="h-64 w-full" />
-      ) : plan.data ? (
-        <PlanResult plan={plan.data} />
-      ) : null}
+      <div id="plano" className={ANCHOR}>
+        {plan.isPending ? (
+          <Skeleton className="h-64 w-full" />
+        ) : plan.data ? (
+          <PlanResult plan={plan.data} />
+        ) : null}
+      </div>
     </>
   );
 }

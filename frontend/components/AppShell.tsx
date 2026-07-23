@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { clearToken, getToken } from "@/lib/api";
 import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
@@ -11,7 +11,9 @@ import {
   IconChart,
   IconClock,
   IconCompass,
+  IconClose,
   IconLogout,
+  IconMenu,
   IconReceipt,
   IconScissors,
   IconUpload,
@@ -45,15 +47,38 @@ function ShellChrome({
   children: React.ReactNode;
 }) {
   const router = useRouter();
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     if (!getToken()) router.replace("/login");
   }, [router]);
 
+  // Drawer is transient: any navigation or Escape closes it.
+  useEffect(() => setOpen(false), [pathname]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <div className="flex min-h-screen">
-      <aside className="fixed inset-y-0 left-0 flex w-60 flex-col border-r border-hairline bg-panel">
-        <div className="px-5 py-5">
+      {open && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          onClick={() => setOpen(false)}
+          className="fixed inset-0 z-30 bg-ink/25 md:hidden"
+        />
+      )}
+
+      <aside
+        id="app-nav"
+        className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-hairline bg-panel transition-transform md:translate-x-0 ${
+          open ? "translate-x-0" : "-translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between px-5 py-5">
           <Link href="/portfolio" className="block">
             <span className="font-display text-lg font-extrabold tracking-tight text-navy">
               B3
@@ -62,6 +87,14 @@ function ShellChrome({
               {" · tudo-em-um"}
             </span>
           </Link>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Fechar menu"
+            className="-mr-1 rounded-md p-1 text-muted hover:text-ink md:hidden"
+          >
+            <IconClose size={18} />
+          </button>
         </div>
 
         <nav className="flex-1 px-3">
@@ -92,7 +125,25 @@ function ShellChrome({
         <SidebarFooter />
       </aside>
 
-      <main className="ml-60 flex-1 px-8 py-8">
+      <main className="min-w-0 flex-1 px-4 pb-8 md:ml-60 md:px-8 md:py-8">
+        <div className="sticky top-0 z-20 -mx-4 mb-4 flex h-14 items-center gap-2 border-b border-hairline bg-paper px-4 md:hidden">
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label="Abrir menu"
+            aria-expanded={open}
+            aria-controls="app-nav"
+            className="-ml-1 rounded-md p-1.5 text-ink hover:bg-hairline/40"
+          >
+            <IconMenu size={20} />
+          </button>
+          <span className="font-display text-base font-extrabold tracking-tight text-navy">
+            B3
+          </span>
+          <span className="font-display text-base font-bold tracking-tight text-ink">
+            · tudo-em-um
+          </span>
+        </div>
         <div className="mx-auto max-w-6xl">{children}</div>
       </main>
     </div>

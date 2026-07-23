@@ -3,14 +3,18 @@ export function Card({
   className = "",
   title,
   action,
+  id,
 }: {
   children: React.ReactNode;
   className?: string;
   title?: React.ReactNode;
   action?: React.ReactNode;
+  /** anchor target for SectionNav */
+  id?: string;
 }) {
   return (
     <section
+      id={id}
       className={`rounded-lg border border-hairline bg-panel ${className}`}
     >
       {(title || action) && (

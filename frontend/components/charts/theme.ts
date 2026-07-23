@@ -12,7 +12,7 @@ export const SERIES = [
 
 export const CHART = {
   grid: "var(--hairline)",
-  axis: "#c3c2b7", // dataviz baseline/axis (light)
+  axis: "var(--axis)", // dataviz baseline/axis (themed)
   tick: "var(--muted)",
   surface: "var(--panel)",
   divergePos: "var(--diverge-pos)",

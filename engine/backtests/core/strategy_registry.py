@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import pkgutil
 from pathlib import Path
 from typing import Optional
@@ -87,6 +88,20 @@ class StrategyRegistry:
                 self.register(kinds[spec["kind"]](spec))
             except Exception as e:
                 logger.warning("Failed to load strategy spec %s: %s", path.name, e)
+
+        # Per-tenant user specs, materialized by the platform into a scratch dir
+        # (JSON-as-YAML). Built-ins win on name collision: only register a user
+        # spec whose name is not already taken. Same load-and-warn wrapper.
+        user_dir = os.environ.get("ENGINE_USER_SPECS_DIR")
+        if user_dir and Path(user_dir).is_dir():
+            for path in sorted(Path(user_dir).glob("*.yaml")):
+                try:
+                    spec = yaml.safe_load(path.read_text())
+                    if spec["name"] in self._strategies:
+                        continue
+                    self.register(kinds[spec["kind"]](spec))
+                except Exception as e:
+                    logger.warning("Failed to load user strategy spec %s: %s", path.name, e)
 
 
 # ── Global singleton ──────────────────────────────────────────────────────────

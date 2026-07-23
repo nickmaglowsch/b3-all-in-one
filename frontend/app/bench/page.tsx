@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import type { Strategy } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { ApiError } from "@/lib/api";
@@ -8,6 +9,7 @@ import { StrategyGallery } from "./StrategyGallery";
 import { RunPanel } from "./RunPanel";
 import { RunsList } from "./RunsList";
 import { ComparePanel } from "./ComparePanel";
+import { UserStrategies } from "./UserStrategies";
 import { useBacktests, useStrategies } from "./lib";
 
 export default function BenchPage() {
@@ -15,6 +17,7 @@ export default function BenchPage() {
   const backtests = useBacktests();
   const [selected, setSelected] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
+  const [cloneFrom, setCloneFrom] = useState<Strategy | null>(null);
 
   const selectedStrategy = useMemo(
     () => strategies.data?.find((s) => s.name === selected) ?? null,
@@ -64,8 +67,20 @@ export default function BenchPage() {
         </Card>
 
         <Card title="Rodar backtest">
-          <RunPanel strategy={selectedStrategy} onRan={() => {}} />
+          <RunPanel
+            strategy={selectedStrategy}
+            onRan={() => {}}
+            onClone={setCloneFrom}
+          />
         </Card>
+      </div>
+
+      <div className="mt-4">
+        <UserStrategies
+          onBacktest={setSelected}
+          cloneFrom={cloneFrom}
+          onConsumeClone={() => setCloneFrom(null)}
+        />
       </div>
 
       <div className="mt-4">

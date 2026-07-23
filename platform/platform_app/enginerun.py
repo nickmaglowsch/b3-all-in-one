@@ -46,21 +46,26 @@ def _engine_python() -> list[str]:
     return ["uv", "run", "--directory", str(ENGINE), "python"]
 
 
-def _env() -> dict:
+def _env(extra_env: dict | None = None) -> dict:
     # Forward the parent env (so ENGINE_BENCH_OFFLINE flows through) and pin the
-    # market-plane DSN the engine reads.
+    # market-plane DSN the engine reads. extra_env (e.g. ENGINE_USER_SPECS_DIR)
+    # is merged last so callers that name a user strategy can point the registry
+    # at the tenant's materialized specs.
     return {
         **os.environ,
         "ENGINE_DATABASE_URL": settings.engine_database_url,
         "PYTHONWARNINGS": "ignore",
+        **(extra_env or {}),
     }
 
 
-def run_script(script: str, args: list[str]) -> subprocess.CompletedProcess:
+def run_script(
+    script: str, args: list[str], extra_env: dict | None = None
+) -> subprocess.CompletedProcess:
     """``python scripts/<script> [args...]`` with the engine interpreter."""
     return subprocess.run(
         [*_engine_python(), str(ENGINE / "scripts" / script), *args],
-        cwd=ENGINE, env=_env(), capture_output=True, text=True,
+        cwd=ENGINE, env=_env(extra_env), capture_output=True, text=True,
     )
 
 
@@ -80,6 +85,7 @@ def advise_weights(
     weights: dict | None = None,
     positions: dict | None = None,
     nav_cash: float = 0.0,
+    extra_env: dict | None = None,
 ) -> dict:
     """Run scripts/advise_weights.py and return its parsed JSON. Pass either a
     ``strategy`` name (signals) or fixed ``weights`` (no signals). When
@@ -92,7 +98,7 @@ def advise_weights(
         args += ["--weights", json.dumps(weights)]
     if positions is not None:
         args += ["--positions", json.dumps(positions), "--nav-cash", str(float(nav_cash))]
-    proc = run_script("advise_weights.py", args)
+    proc = run_script("advise_weights.py", args, extra_env)
     if proc.returncode == NEEDS_FUNDAMENTALS_EXIT:
         raise _needs_fundamentals(proc.stderr, strategy)
     if proc.returncode != 0:

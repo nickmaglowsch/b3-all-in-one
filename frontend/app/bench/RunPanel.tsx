@@ -17,9 +17,11 @@ const FREQS = [
 export function RunPanel({
   strategy,
   onRan,
+  onClone,
 }: {
   strategy: Strategy | null;
   onRan: () => void;
+  onClone?: (s: Strategy) => void;
 }) {
   const [start, setStart] = useState("2023-01-01");
   const [end, setEnd] = useState("");
@@ -66,7 +68,18 @@ export function RunPanel({
           <h3 className="text-sm font-semibold text-ink">{strategy.name}</h3>
           <p className="mt-1 text-xs leading-snug text-muted">{strategy.description}</p>
         </div>
-        <KindBadge kind={strategy.kind} />
+        <div className="flex shrink-0 items-center gap-2">
+          {onClone && strategy.source !== "user" && (
+            <button
+              type="button"
+              onClick={() => onClone(strategy)}
+              className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-navy hover:bg-hairline/40"
+            >
+              Clonar
+            </button>
+          )}
+          <KindBadge kind={strategy.kind} />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">

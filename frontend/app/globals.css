@@ -1,8 +1,7 @@
 @import "tailwindcss";
 
 /* ── Design tokens ────────────────────────────────────────────────────────────
-   Light mode only. Structured so a later dark mode is one `@media`/`[data-theme]`
-   block overriding the :root values below — nothing else references raw hex. */
+   Light/dark mode. Structured so dark mode overrides are in a `@media` block. */
 :root {
   /* surfaces & ink */
   --paper: #fafaf8; /* page plane */
@@ -11,6 +10,9 @@
   --muted: #5c616b; /* secondary text */
   --hairline: #e4e2dc; /* borders, rules, recessive grid */
   --navy: #1b2a4a; /* brand */
+
+  /* dataviz chrome */
+  --axis: #c3c2b7; /* chart baseline/axis label */
 
   /* money / delta — sign carries meaning, color reinforces (dataviz light values) */
   --gain: #006300; /* success text green */
@@ -46,6 +48,8 @@
   --color-hairline: var(--hairline);
   --color-navy: var(--navy);
 
+  --color-axis: var(--axis);
+
   --color-gain: var(--gain);
   --color-loss: var(--loss);
 
@@ -68,8 +72,42 @@
   --font-mono: var(--font-plex-mono);
 }
 
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* surfaces & ink — warm near-black base, light text */
+    --paper: #1f1d1a;
+    --panel: #2a2622;
+    --ink: #f5f3f0;
+    --muted: #a6adb8;
+    --hairline: #3d3a36;
+    --navy: #5a8fd9;
+
+    /* dataviz chrome */
+    --axis: #7a7a7a;
+
+    /* money / delta — lightened for dark backgrounds */
+    --gain: #5ec05e;
+    --loss: #ff5252;
+
+    /* categorical chart series — lightened for dark backgrounds */
+    --series-1: #5a9fff;
+    --series-2: #ff9d5a;
+    --series-3: #4dd9a3;
+    --series-4: #ffc933;
+    --series-5: #ff9dc4;
+    --series-6: #4db84d;
+    --series-7: #7d5fd9;
+    --series-8: #ff5252;
+
+    /* diverging */
+    --diverge-pos: #5a9fff;
+    --diverge-neg: #ff5252;
+    --diverge-mid: #2a2824;
+  }
+}
+
 html {
-  color-scheme: light;
+  color-scheme: light dark;
 }
 
 body {

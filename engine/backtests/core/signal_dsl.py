@@ -105,14 +105,35 @@ def _build_funcs(ns: dict) -> dict:
     }
 
 
+def _reject_disallowed_syntax(tree: ast.AST, expr: str) -> None:
+    """Walk the AST and reject any node type outside the whitelist. Shared by
+    evaluate() (before eval) and check_syntax() (data-free validation) so the
+    allow-list lives in exactly one place."""
+    for node in ast.walk(tree):
+        if not isinstance(node, _ALLOWED):
+            raise ValueError(f"signal expr: disallowed syntax {type(node).__name__!r} in {expr!r}")
+
+
+def check_syntax(expr: str) -> None:
+    """Validate a signal expression against the AST whitelist *without* any
+    ``shared_data`` — parse it and reject disallowed node types. Raises
+    ``ValueError`` on a parse error or disallowed syntax; returns ``None`` when
+    the expression is structurally safe to evaluate. Name/function existence is
+    NOT checked here (that needs the market-data namespace); ``evaluate()``
+    enforces it at run time."""
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"signal expr: parse error in {expr!r}: {e.msg}") from e
+    _reject_disallowed_syntax(tree, expr)
+
+
 def evaluate(expr: str, namespace: dict) -> pd.DataFrame:
     """Evaluate a signal expression string against ``namespace`` (name -> frame or
     scalar). Returns a wide DataFrame. Raises ValueError on disallowed syntax or
     unknown names/functions."""
     tree = ast.parse(expr, mode="eval")
-    for node in ast.walk(tree):
-        if not isinstance(node, _ALLOWED):
-            raise ValueError(f"signal expr: disallowed syntax {type(node).__name__!r} in {expr!r}")
+    _reject_disallowed_syntax(tree, expr)
     funcs = _build_funcs(namespace)
     return _ev(tree.body, namespace, funcs)
 

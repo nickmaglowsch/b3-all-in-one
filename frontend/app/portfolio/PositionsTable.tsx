@@ -4,10 +4,19 @@ import { useMemo, useState } from "react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
+import { PctDelta } from "@/components/ui/PctDelta";
+import { Sparkline } from "@/components/charts/Sparkline";
 import { formatQty } from "@/lib/format";
 import type { Position } from "@/lib/types";
 
-type SortKey = "ticker" | "market" | "qty" | "avg_cost" | "total_cost";
+type SortKey =
+  | "ticker"
+  | "market"
+  | "qty"
+  | "avg_cost"
+  | "total_cost"
+  | "market_value"
+  | "pnl";
 type Dir = "asc" | "desc";
 
 // Text sorts asc first, numerics desc first (biggest position on top is the useful default).
@@ -17,6 +26,8 @@ const DEFAULT_DIR: Record<SortKey, Dir> = {
   qty: "desc",
   avg_cost: "desc",
   total_cost: "desc",
+  market_value: "desc",
+  pnl: "desc",
 };
 
 function SortHeader({
@@ -51,7 +62,13 @@ function SortHeader({
   );
 }
 
-export function PositionsTable({ positions }: { positions: Position[] }) {
+export function PositionsTable({
+  positions,
+  history = {},
+}: {
+  positions: Position[];
+  history?: Record<string, number[]>;
+}) {
   const [sort, setSort] = useState<{ key: SortKey; dir: Dir }>({
     key: "total_cost",
     dir: "desc",
@@ -62,6 +79,12 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
     const sorted = [...positions].sort((a, b) => {
       const av = a[key];
       const bv = b[key];
+      // Unpriced rows (Renda Fixa, delisted) sink to the bottom either way —
+      // flipping the sort shouldn't float a column of dashes to the top.
+      if (av === null || bv === null) {
+        if (av === bv) return 0;
+        return av === null ? 1 : -1;
+      }
       const cmp =
         typeof av === "number" && typeof bv === "number"
           ? av - bv
@@ -117,6 +140,40 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
       header: head("total_cost", "Custo total", "right"),
       align: "right",
       render: (p) => <Money value={p.total_cost} />,
+    },
+    {
+      key: "market_value",
+      header: head("market_value", "Valor de mercado", "right"),
+      align: "right",
+      render: (p) =>
+        p.market_value === null ? (
+          <span className="text-muted">—</span>
+        ) : (
+          <Money value={p.market_value} />
+        ),
+    },
+    {
+      key: "pnl",
+      header: head("pnl", "Rentabilidade", "right"),
+      align: "right",
+      render: (p) =>
+        p.pnl === null ? (
+          <span className="text-muted">—</span>
+        ) : (
+          <span className="inline-flex items-baseline justify-end gap-2">
+            <Money value={p.pnl} sign />
+            {p.pnl_pct !== null && (
+              <PctDelta value={p.pnl_pct} className="text-xs" />
+            )}
+          </span>
+        ),
+    },
+    {
+      // Not sortable — "shape" has no total order worth a header click.
+      key: "trend",
+      header: "Tendência 6m",
+      align: "right",
+      render: (p) => <Sparkline values={history[p.ticker]} />,
     },
   ];
 

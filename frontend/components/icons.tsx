@@ -84,6 +84,16 @@ export const IconAlert = (p: IconProps) => (
     <path d="M12 10v4M12 17h.01" />
   </Svg>
 );
+export const IconMenu = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 7h16M4 12h16M4 17h16" />
+  </Svg>
+);
+export const IconClose = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </Svg>
+);
 export const IconLogout = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3" />

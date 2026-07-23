@@ -1,8 +1,12 @@
 import os
 
-# Point the app at an ephemeral test DB before any platform_app import reads settings.
+# Ephemeral test DB name is overridable so parallel test runs (e.g. two feature
+# agents) don't race on the same database. Set PLATFORM_TEST_DB to isolate.
+TEST_DB = os.environ.get("PLATFORM_TEST_DB", "platform_test")
+
+# Point the app at the test DB before any platform_app import reads settings.
 os.environ["DATABASE_URL"] = (
-    "postgresql+asyncpg://postgres:devpassword@localhost:5432/platform_test"
+    f"postgresql+asyncpg://postgres:devpassword@localhost:5432/{TEST_DB}"
 )
 os.environ["ENVIRONMENT"] = "development"
 # Backtests read the market plane from the real `b3` DB (engine_database_url's
@@ -15,7 +19,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 ADMIN_DSN = "postgresql+asyncpg://postgres:devpassword@localhost:5432/postgres"
-TEST_DB = "platform_test"
 
 
 async def _admin(sql: str) -> None:

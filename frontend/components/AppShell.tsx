@@ -9,6 +9,7 @@ import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
 import {
   IconChart,
+  IconClock,
   IconCompass,
   IconLogout,
   IconReceipt,
@@ -21,6 +22,7 @@ const NAV = [
   { href: "/portfolio", label: "Portfólio", Icon: IconWallet },
   { href: "/imports", label: "Importações", Icon: IconUpload },
   { href: "/estrategia", label: "Estratégia", Icon: IconCompass },
+  { href: "/simulacao", label: "Simulação", Icon: IconClock },
   { href: "/irpf", label: "IRPF", Icon: IconReceipt },
   { href: "/tlh", label: "TLH", Icon: IconScissors },
   { href: "/bench", label: "Bench", Icon: IconChart },

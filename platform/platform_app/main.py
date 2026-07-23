@@ -14,6 +14,8 @@ from platform_app.routes import (
     strategies_router,
     tlh_router,
 )
+from platform_app.routes_portfolio_settings import portfolio_settings_router
+from platform_app.routes_whatif import whatif_router
 from platform_app.schemas import UserCreate, UserRead
 from platform_app.tenancy import get_current_tenant
 from platform_app.users import (
@@ -60,6 +62,8 @@ app.include_router(tlh_router)
 app.include_router(strategies_router)
 app.include_router(backtests_router)
 app.include_router(market_router)
+app.include_router(whatif_router)
+app.include_router(portfolio_settings_router)
 
 
 @app.get("/health")

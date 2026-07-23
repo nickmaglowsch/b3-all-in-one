@@ -53,6 +53,45 @@ sys.path.insert(0, str(ROOT))
 # subprocess entry points behave identically (no second copy to drift).
 from scripts.run_backtest_json import _install_benchmark_stubs  # noqa: E402
 
+# Distinct exit code the platform (platform_app/enginerun.py) keys on: the
+# strategy needs CVM fundamentals but fundamentals_pit is empty in the active
+# engine DB. Any other failure keeps the ordinary non-zero/stringly exit.
+NEEDS_FUNDAMENTALS_EXIT = 3
+
+
+def _fundamentals_empty(db_path: str | None) -> bool:
+    """True when fundamentals_pit has 0 rows in the active engine DB.
+
+    Resolves the backend exactly as the strategies do (storage.get_connection:
+    ENGINE_DATABASE_URL wins, else the strategy's db_path). Any DB/table error →
+    treat as *not* provably empty, so we fall back to the generic no-rows error
+    rather than misattribute an unrelated failure to missing fundamentals.
+    """
+    from b3_pipeline import storage
+
+    try:
+        with storage.get_connection(db_path) as conn:
+            n = storage.read_sql("SELECT COUNT(*) AS n FROM fundamentals_pit", conn)
+        return int(n.iloc[0]["n"]) == 0
+    except Exception:
+        return False
+
+
+def _exit_needs_fundamentals(strategy: str) -> None:
+    """Emit the machine-detectable 'needs fundamentals' error (JSON on stderr)
+    and exit with NEEDS_FUNDAMENTALS_EXIT."""
+    err = {
+        "error": "needs_fundamentals",
+        "strategy": strategy,
+        "message": (
+            f"strategy '{strategy}' requires fundamentals data, which has not "
+            f"been ingested in this environment"
+        ),
+    }
+    json.dump(err, sys.stderr)
+    sys.stderr.write("\n")
+    raise SystemExit(NEEDS_FUNDAMENTALS_EXIT)
+
 
 def _latest_prices(raw_close: pd.DataFrame, tickers: set[str]) -> dict[str, float]:
     """Last non-NaN raw (unadjusted) close per requested ticker; drops unpriced
@@ -164,6 +203,12 @@ def _advise_from_strategy(args) -> dict:
     sums = tw.fillna(0.0).abs().sum(axis=1)
     live = sums > 1e-9
     if not bool(live.any()):
+        # Distinguish "needs fundamentals that aren't ingested" (a fixable
+        # environment gap the platform surfaces as a clean 422) from a genuine
+        # empty result. Only when the strategy declares the dependency AND the
+        # table is actually empty do we emit the structured error.
+        if needs_funds and _fundamentals_empty(params.get("db_path")):
+            _exit_needs_fundamentals(args.strategy)
         raise SystemExit(
             f"strategy '{args.strategy}' produced no live target rows for {start}..{end}"
         )

@@ -201,9 +201,11 @@ async def put_sleeves(
     body: list[SleeveIn],
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
-) -> list[dict]:
+) -> dict:
     """Replace the whole sleeve set atomically. Validates percentages sum to 100
-    (±0.01) and every strategy_ref is 'CASH_CDI' or a real gallery spec."""
+    (±0.01) and every strategy_ref is 'CASH_CDI' or a real gallery spec. Saving a
+    fundamentals-needing strategy is allowed even when none are ingested yet (data
+    may arrive later) — the response just carries a warning."""
     _user, tid = tenant
     refs = [s.strategy_ref for s in body]
     if len(set(refs)) != len(refs):
@@ -212,7 +214,8 @@ async def put_sleeves(
     if abs(total - 100.0) > 0.01:
         raise HTTPException(422, f"sleeve percentages must sum to 100 (got {total:g})")
     # CASH_CDI is the risk-free sleeve; anything else must be a real gallery spec.
-    known = {s["name"] for s in await list_strategies()} | {"CASH_CDI"}
+    gallery = {s["name"]: s for s in await list_strategies()}
+    known = set(gallery) | {"CASH_CDI"}
     for ref in refs:
         if ref not in known:
             raise HTTPException(422, f"unknown strategy_ref: {ref}")
@@ -222,7 +225,19 @@ async def put_sleeves(
         session.add(PortfolioSleeve(
             tenant_id=tid, strategy_ref=s.strategy_ref, target_pct=s.target_pct))
     await session.commit()
-    return [{"strategy_ref": s.strategy_ref, "target_pct": s.target_pct} for s in body]
+
+    # Soft warning (no hard-refuse): chosen strategy needs fundamentals and none
+    # are ingested yet. Only touches the engine DB when it can actually matter.
+    warnings: list[str] = []
+    needs = [r for r in refs if gallery.get(r, {}).get("needs_fundamentals")]
+    if needs and not await _fundamentals_available():
+        warnings.append(_needs_funds_msg(needs))
+
+    return {
+        "sleeves": [{"strategy_ref": s.strategy_ref, "target_pct": s.target_pct}
+                    for s in body],
+        "warnings": warnings,
+    }
 
 
 # ── Combined target + rebalance advisor (spec/05 Features 1 & 3) ──────────────
@@ -232,9 +247,34 @@ async def put_sleeves(
 _SLEEVE_WEIGHTS_CACHE: dict[tuple[str, str], dict] = {}
 
 
+def _needs_funds_msg(strategies: list[str]) -> str:
+    """pt-BR message naming the strategy/strategies that need fundamentals data."""
+    uniq = list(dict.fromkeys(strategies))
+    names = ", ".join(f"'{s}'" for s in uniq)
+    if len(uniq) == 1:
+        return (f"A estratégia {names} precisa de dados fundamentalistas, que "
+                f"ainda não foram ingeridos neste ambiente.")
+    return (f"As estratégias {names} precisam de dados fundamentalistas, que "
+            f"ainda não foram ingeridos neste ambiente.")
+
+
+async def _fundamentals_available() -> bool:
+    """True when fundamentals_pit has any rows in the engine market plane.
+    Same DSN/pattern as market_status — the actual-availability check the guards
+    key on, so a strategy 'just works' the moment fundamentals are ingested."""
+    conn = await asyncpg.connect(settings.engine_database_url)
+    try:
+        n = await conn.fetchval("SELECT count(*) FROM fundamentals_pit")
+    finally:
+        await conn.close()
+    return bool(n and n > 0)
+
+
 async def _advise(**kwargs) -> dict:
     try:
         return await asyncio.to_thread(enginerun.advise_weights, **kwargs)
+    except enginerun.EngineNeedsFundamentals:
+        raise  # callers turn this into a clean 422 (never a 500)
     except RuntimeError as e:
         raise HTTPException(500, f"advise_weights failed: {e}")
 
@@ -254,6 +294,7 @@ async def _combined_target(
     today = date.today().isoformat()
     combined: dict[str, float] = {}
     cash_weight = 0.0
+    missing: list[str] = []   # strategies that need fundamentals not yet ingested
     for s in sleeves:
         pct = float(s.target_pct) / 100.0
         if s.strategy_ref == "CASH_CDI":
@@ -262,10 +303,16 @@ async def _combined_target(
         key = (s.strategy_ref, today)
         adv = _SLEEVE_WEIGHTS_CACHE.get(key)
         if adv is None:
-            adv = await _advise(strategy=s.strategy_ref)
+            try:
+                adv = await _advise(strategy=s.strategy_ref)
+            except enginerun.EngineNeedsFundamentals as e:
+                missing.append(e.strategy or s.strategy_ref)
+                continue
             _SLEEVE_WEIGHTS_CACHE[key] = adv
         for t, w in adv["weights"].items():
             combined[t] = combined.get(t, 0.0) + pct * float(w)
+    if missing:
+        raise HTTPException(422, _needs_funds_msg(missing))
     return combined, cash_weight
 
 

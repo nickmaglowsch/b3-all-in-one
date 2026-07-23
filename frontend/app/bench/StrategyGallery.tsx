@@ -22,6 +22,16 @@ export function KindBadge({ kind }: { kind: Strategy["kind"] }) {
   );
 }
 
+export function FundamentalsBadge() {
+  // Strategy reads CVM fundamentals — surfaced so users know it depends on that
+  // data being ingested (a fundamentals-less environment can't build its target).
+  return (
+    <span className="inline-flex items-center rounded-[4px] bg-series-4/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-series-4">
+      fundamentos
+    </span>
+  );
+}
+
 export function StrategyGallery({
   strategies,
   loading,
@@ -91,7 +101,10 @@ export function StrategyGallery({
                     <span className="text-sm font-semibold leading-snug text-ink">
                       {s.name}
                     </span>
-                    <KindBadge kind={s.kind} />
+                    <span className="flex shrink-0 items-center gap-1">
+                      {s.needs_fundamentals && <FundamentalsBadge />}
+                      <KindBadge kind={s.kind} />
+                    </span>
                   </div>
                   <p className="mt-1 line-clamp-2 text-xs leading-snug text-muted">
                     {s.description}

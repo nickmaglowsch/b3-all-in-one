@@ -153,6 +153,8 @@ def cap_weights(w: pd.Series, cap: float) -> pd.Series:
 class BesstQualityStrategy(StrategyBase):
     """Quarterly BESST-sector, quality + dividend screened, cap-weighted (8% cap)."""
 
+    needs_fundamentals: bool = True
+
     @property
     def name(self) -> str:
         return "BESST Quality"

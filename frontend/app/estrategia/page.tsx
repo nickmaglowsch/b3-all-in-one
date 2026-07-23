@@ -86,6 +86,18 @@ function SleevesEditor() {
     return [CASH_REF, ...names];
   }, [strategies.data]);
 
+  // Strategies that read CVM fundamentals — flag them in the picker so the choice
+  // is informed (native <option> can't hold a badge, so the label carries a marker).
+  const needsFunds = useMemo(
+    () =>
+      new Set(
+        (strategies.data ?? [])
+          .filter((s) => s.needs_fundamentals)
+          .map((s) => s.name),
+      ),
+    [strategies.data],
+  );
+
   const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
   const refs = rows.map((r) => r.strategy_ref);
   const hasDup = new Set(refs).size !== refs.length;
@@ -137,7 +149,11 @@ function SleevesEditor() {
                 <option value="">selecione…</option>
                 {refOptions.map((name) => (
                   <option key={name} value={name}>
-                    {name === CASH_REF ? "Caixa (CDI)" : name}
+                    {name === CASH_REF
+                      ? "Caixa (CDI)"
+                      : needsFunds.has(name)
+                        ? `${name} · precisa de fundamentos`
+                        : name}
                   </option>
                 ))}
               </select>
@@ -205,6 +221,11 @@ function SleevesEditor() {
           {save.isSuccess && !dirty && (
             <p className="text-xs text-gain">Sleeves salvos.</p>
           )}
+          {save.data?.warnings?.map((w, i) => (
+            <p key={i} className="text-xs text-series-4" role="status">
+              {w}
+            </p>
+          ))}
         </div>
       )}
     </Card>

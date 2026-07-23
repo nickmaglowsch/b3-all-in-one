@@ -34,6 +34,9 @@ from backtests.strategies.sp500_b3 import (
 class TopMarketCapStrategy(StrategyBase):
     """Top N companies by PIT market cap, cap- or equal-weighted."""
 
+    # Market cap = split-adjusted shares x price; shares come from fundamentals_pit.
+    needs_fundamentals: bool = True
+
     @property
     def name(self) -> str:
         return "Top Market Cap"

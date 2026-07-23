@@ -211,6 +211,8 @@ def load_fundamentals_full(db_path: str) -> pd.DataFrame:
 class TwoLegValueStrategy(StrategyBase):
     """Integrated two-leg value screen (banks + operating companies)."""
 
+    needs_fundamentals: bool = True
+
     @property
     def name(self) -> str:
         return "Two-Leg Value"

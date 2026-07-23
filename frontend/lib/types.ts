@@ -84,6 +84,11 @@ export interface Sleeve {
   target_pct: number;
 }
 
+export interface SleevesSaveResult {
+  sleeves: Sleeve[];
+  warnings: string[];
+}
+
 export interface DriftRow {
   ticker: string;
   target_w: number;

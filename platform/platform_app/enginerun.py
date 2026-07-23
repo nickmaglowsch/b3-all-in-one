@@ -19,6 +19,21 @@ from platform_app.config import settings
 _DEFAULT_ENGINE = Path(__file__).resolve().parents[2] / "engine"
 ENGINE = Path(settings.engine_dir) if settings.engine_dir else _DEFAULT_ENGINE
 
+# Mirror of advise_weights.NEEDS_FUNDAMENTALS_EXIT: the strategy needs CVM
+# fundamentals but fundamentals_pit is empty in the active engine DB.
+NEEDS_FUNDAMENTALS_EXIT = 3
+
+
+class EngineNeedsFundamentals(RuntimeError):
+    """advise_weights signalled that a strategy needs CVM fundamentals which are
+    not ingested (exit code 3 + a JSON error line on stderr). Routes map this to
+    a 422 with a friendly message naming the strategy."""
+
+    def __init__(self, strategy: str, message: str) -> None:
+        self.strategy = strategy
+        self.message = message
+        super().__init__(message)
+
 
 def _engine_python() -> list[str]:
     """The interpreter that has the engine's deps (pandas, psycopg, yaml)."""
@@ -78,6 +93,25 @@ def advise_weights(
     if positions is not None:
         args += ["--positions", json.dumps(positions), "--nav-cash", str(float(nav_cash))]
     proc = run_script("advise_weights.py", args)
+    if proc.returncode == NEEDS_FUNDAMENTALS_EXIT:
+        raise _needs_fundamentals(proc.stderr, strategy)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
     return _last_json(proc.stdout)
+
+
+def _needs_fundamentals(stderr: str, strategy: str | None) -> EngineNeedsFundamentals:
+    """Build EngineNeedsFundamentals from advise_weights' JSON error line."""
+    payload: dict = {}
+    for line in reversed((stderr or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                payload = {}
+            break
+    return EngineNeedsFundamentals(
+        payload.get("strategy") or strategy or "?",
+        payload.get("message") or "requires fundamentals data",
+    )

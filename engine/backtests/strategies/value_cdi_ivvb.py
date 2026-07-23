@@ -34,6 +34,9 @@ IVVB11_TICKER = "IVVB11.SA"
 class ValueCdiIvvbStrategy(StrategyBase):
     """Equal thirds: Two-Leg Value / CDI / IVVB11, rebalanced quarterly."""
 
+    # Nests the Two-Leg Value sleeve, which reads fundamentals_pit.
+    needs_fundamentals: bool = True
+
     @property
     def name(self) -> str:
         return "Value / CDI / IVVB11 (thirds)"

@@ -7,7 +7,14 @@
 import { useMemo, useState } from "react";
 import type { SignalDef, Strategy, UserStrategy } from "@/lib/types";
 import { ApiError } from "@/lib/api";
-import { useSaveUserStrategy, useSignals } from "@/lib/strategies";
+import { useSaveUserStrategy, useSignals, useStrategySpec } from "@/lib/strategies";
+import {
+  RegimeEditor,
+  compileRegime,
+  isEmptyRegime,
+  parseRegime,
+  type RegimeValue,
+} from "./RegimeEditor";
 
 type SelMode = "top_pct" | "top_n";
 
@@ -137,32 +144,72 @@ function validate(f: FormState): string | null {
   return null;
 }
 
-export function StrategyForm({
+// Public entry: clones fetch the built-in's raw spec first so the WHOLE form
+// prefills (factor/expr/universe/selection/regime), not just exposed params. The
+// fetch is async — we gate on the loading state, then mount the inner form once
+// so its useState initializes from the resolved spec. 404 (a code-kind strategy
+// has no clonable spec) → cloneSpec stays null and the inner form falls back to
+// the params-only prefill with the existing note.
+export function StrategyForm(props: {
+  editing: UserStrategy | null;
+  clone: Strategy | null;
+  onClose: () => void;
+  onSaved: (warnings: string[]) => void;
+}) {
+  const { clone } = props;
+  const specQ = useStrategySpec(clone ? clone.name : null);
+
+  if (clone && specQ.isLoading) {
+    return (
+      <p className="px-1 py-6 text-sm text-muted">
+        Carregando spec de <span className="font-semibold text-ink">{clone.name}</span>…
+      </p>
+    );
+  }
+  const cloneSpec = clone && specQ.data ? specQ.data.spec : null;
+  return <StrategyFormInner {...props} cloneSpec={cloneSpec} />;
+}
+
+function StrategyFormInner({
   editing,
   clone,
+  cloneSpec,
   onClose,
   onSaved,
 }: {
   editing: UserStrategy | null;
   clone: Strategy | null;
+  cloneSpec: Record<string, unknown> | null;
   onClose: () => void;
   onSaved: (warnings: string[]) => void;
 }) {
   const signals = useSignals();
   const save = useSaveUserStrategy();
 
+  // Source of the prefill: an edited row, a full-spec clone, params-only clone,
+  // or nothing (new). A full-spec clone reuses fromSpec but takes a fresh name.
+  const srcSpec = editing?.spec ?? cloneSpec ?? null;
   const [f, setF] = useState<FormState>(() =>
-    editing ? fromSpec(editing.spec) : clone ? fromClone(clone) : DEFAULTS,
+    editing
+      ? fromSpec(editing.spec)
+      : cloneSpec
+        ? { ...fromSpec(cloneSpec), name: `${clone!.name} (cópia)` }
+        : clone
+          ? fromClone(clone)
+          : DEFAULTS,
   );
   // Optional signal/top-level fields the form doesn't expose — preserved so an
-  // edit round-trips instead of silently dropping range/shift/warmup_pad.
+  // edit or full clone round-trips instead of silently dropping
+  // range/shift/warmup_pad.
   const [preserved] = useState(() => ({
-    signal: editing ? pick(obj(editing.spec.signal), ["range", "shift", "apply_glitch"]) : {},
-    top: editing ? pick(editing.spec, ["warmup_pad"]) : {},
-    fundLocked: editing
-      ? Boolean(editing.spec.needs_fundamentals)
-      : Boolean(clone?.needs_fundamentals),
+    signal: srcSpec ? pick(obj(srcSpec.signal), ["range", "shift", "apply_glitch"]) : {},
+    top: srcSpec ? pick(srcSpec, ["warmup_pad"]) : {},
+    fundLocked: Boolean(srcSpec?.needs_fundamentals ?? clone?.needs_fundamentals),
   }));
+  // Regime overlay: parsed from the source spec (edit/full clone), else empty.
+  // Compiled back into body.regime only when non-empty (see submit).
+  const [regime, setRegime] = useState<RegimeValue>(() => parseRegime(srcSpec?.regime));
+  const [regimeOpen, setRegimeOpen] = useState(() => !isEmptyRegime(parseRegime(srcSpec?.regime)));
   const [tried, setTried] = useState(false);
 
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
@@ -221,6 +268,7 @@ export function StrategyForm({
       selection,
       ...preserved.top,
     };
+    if (!isEmptyRegime(regime)) body.regime = compileRegime(regime);
 
     save.mutate(
       { id: editing?.id, body },
@@ -249,12 +297,19 @@ export function StrategyForm({
         </Field>
       </div>
 
-      {clone && (
-        <p className="rounded-md border border-hairline bg-paper px-3 py-2 text-xs text-muted">
-          Clonado de <span className="font-semibold text-ink">{clone.name}</span> — só os
-          parâmetros expostos foram copiados. Confira o fator e o universo.
-        </p>
-      )}
+      {clone &&
+        (cloneSpec ? (
+          <p className="rounded-md border border-hairline bg-paper px-3 py-2 text-xs text-muted">
+            Clonado de <span className="font-semibold text-ink">{clone.name}</span> — spec
+            completa copiada (fator, universo, seleção, regime). Renomeie e ajuste à
+            vontade.
+          </p>
+        ) : (
+          <p className="rounded-md border border-hairline bg-paper px-3 py-2 text-xs text-muted">
+            Clonado de <span className="font-semibold text-ink">{clone.name}</span> — só os
+            parâmetros expostos foram copiados. Confira o fator e o universo.
+          </p>
+        ))}
 
       {/* ── Fator ─────────────────────────────────────────────────────────── */}
       <fieldset className="rounded-md border border-hairline p-3">
@@ -455,6 +510,30 @@ export function StrategyForm({
           </select>
         </Field>
       </div>
+
+      {/* ── Overlay de regime (avançado) ──────────────────────────────────── */}
+      <fieldset className="rounded-md border border-hairline p-3">
+        <legend className="flex items-center gap-2 px-1 text-xs font-semibold text-ink">
+          Overlay de regime
+          <span className="font-mono text-[10px] text-muted">avançado</span>
+          <button
+            type="button"
+            onClick={() => setRegimeOpen((o) => !o)}
+            className="rounded-md border border-hairline bg-paper px-2 py-0.5 text-[11px] font-medium text-navy hover:bg-hairline/40"
+          >
+            {regimeOpen ? "Ocultar" : isEmptyRegime(regime) ? "Configurar" : "Editar"}
+          </button>
+        </legend>
+        {regimeOpen ? (
+          <RegimeEditor value={regime} onChange={setRegime} />
+        ) : (
+          <p className="px-1 text-xs text-muted">
+            {isEmptyRegime(regime)
+              ? "Opcional — gate/escala o book por regime macro, parkeando em CDI quando “off”."
+              : `${regime.inputs.length} entrada(s) e ${regime.rules.length} regra(s) configuradas.`}
+          </p>
+        )}
+      </fieldset>
 
       {tried && error && (
         <p className="text-sm text-loss" role="alert">

@@ -171,3 +171,23 @@ async def test_user_strategy_backtest_e2e(client):
     assert row["status"] == "done"
     assert row["metrics"]["strategy"] == "E2EMom"
     assert row["metrics"]["final_aftertax_nav"] > 0
+
+
+async def test_get_builtin_spec_for_clone(client):
+    """GET /strategies/{name}/spec returns a built-in config strategy's raw spec so
+    the frontend can clone it with the FULL factor/universe/selection. Code-kind and
+    unknown names → 404."""
+    # Built-in rank_and_hold config strategy → 200 with the raw spec dict.
+    r = await client.get("/strategies/MomSharpe/spec")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["name"] == "MomSharpe"
+    assert body["kind"] == "rank_and_hold"
+    assert body["spec"]["kind"] == "rank_and_hold"
+    assert "signal" in body["spec"]  # the factor block a params-only clone would lose
+
+    # A code-kind (StrategyBase) strategy has no data spec → 404.
+    assert (await client.get("/strategies/DualMomentum/spec")).status_code == 404
+
+    # Unknown name → 404.
+    assert (await client.get("/strategies/NoSuchStrategy/spec")).status_code == 404

@@ -904,6 +904,24 @@ async def list_signals() -> list[dict]:
     return _SIGNALS_CACHE
 
 
+@strategies_router.get("/{name}/spec")
+async def get_strategy_spec(
+    name: str,
+    tenant=Depends(get_optional_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Raw spec of a config (spec-kind) strategy — for cloning a built-in into user
+    space (the gallery only exposes params, which loses factor/universe/selection).
+    404 if the strategy is code-kind (no data spec) or unknown. Built-ins are global;
+    an authed tenant's own spec-kind strategies resolve too (env-var, like _gallery)."""
+    extra_env = await specstore.user_specs_env(session, tenant[1]) if tenant else {}
+    proc = await asyncio.to_thread(
+        enginerun.run_script, "get_strategy_spec.py", ["--name", name], extra_env)
+    if proc.returncode != 0:
+        raise HTTPException(404, f"strategy {name!r} has no cloneable spec")
+    return json.loads(proc.stdout)
+
+
 # ── User-created strategies (spec/06) ─────────────────────────────────────────
 # Pydantic validates the statically-checkable rules at the boundary (name, numeric
 # ranges, rebalance enum, portfolio weights). The engine's validate_spec.py does the

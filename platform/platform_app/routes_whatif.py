@@ -1,8 +1,164 @@
-"""What-if portfolio simulation: replay the tenant's real dated cash flows through
-an alternative strategy. Filled in by the what-if feature wave.
+"""What-if portfolio simulation: replay the tenant's REAL dated cash flows through
+an alternative strategy, from their first trade to today (spec/05 Feature 2).
+
+"Same money in, different strategy, after-tax." We extract the tenant's real net
+external cash flows from their own tables (buys − sells − income) and feed them,
+on their true dates, into the engine running each alternative strategy. The
+comparison is a point comparison against the real book (total invested + actual
+market value) plus each scenario's after-tax equity curve — we do NOT reconstruct
+a full historical portfolio index here (that's portfolio_index's job).
 
 Owned by the what-if agent. Registered in main.py as `whatif_router`.
 """
-from fastapi import APIRouter
+from __future__ import annotations
+
+import asyncio
+import csv
+import json
+import shutil
+import tempfile
+from collections import defaultdict
+from datetime import date
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from platform_app import enginerun
+from platform_app.db import get_async_session
+from platform_app.models import CashEvent, Position, Trade
+from platform_app.routes import (
+    _fundamentals_available,
+    _latest_engine_prices,
+    _needs_funds_msg,
+    list_strategies,
+)
+from platform_app.tenancy import get_current_tenant
 
 whatif_router = APIRouter(prefix="/whatif", tags=["whatif"])
+
+# cash_events categories that are a return of/on capital (not new external money):
+# mirrors taxcore portfolio_index.INCOME_CATEGORIES. Net external flow =
+# buys − sells − income, the exact definition etf_counterfactual replays.
+INCOME_CATEGORIES = {"income", "amortization"}
+
+
+class WhatIfRequest(BaseModel):
+    strategy_ids: list[str]
+    freq: str = "ME"
+
+
+async def _net_flows(session: AsyncSession, tid) -> dict[str, float]:
+    """Real dated net external cash flows per ISO date: buys (+) − sells (−)
+    from `trades`, minus income from `cash_events`. Same-date flows are summed."""
+    trades = (await session.scalars(
+        select(Trade).where(Trade.tenant_id == tid)
+    )).all()
+    events = (await session.scalars(
+        select(CashEvent).where(CashEvent.tenant_id == tid)
+    )).all()
+
+    flows: dict[str, float] = defaultdict(float)
+    for t in trades:
+        if not t.date or t.amount is None:
+            continue
+        if t.side == "Compra":
+            flows[t.date.isoformat()] += abs(float(t.amount))
+        elif t.side == "Venda":
+            flows[t.date.isoformat()] -= abs(float(t.amount))
+    for e in events:
+        if e.date and e.amount is not None and e.event_category in INCOME_CATEGORIES:
+            flows[e.date.isoformat()] -= abs(float(e.amount))
+    return {d: v for d, v in flows.items()}
+
+
+async def _actual_value(session: AsyncSession, tid) -> float:
+    """Σ current positions × latest engine price — the real book's mark today
+    (same price source as /portfolio/target and the rebalance advisor)."""
+    positions = (await session.scalars(
+        select(Position).where(Position.tenant_id == tid)
+    )).all()
+    held = {p.ticker: float(p.qty or 0.0)
+            for p in positions if p.ticker and (p.qty or 0.0) != 0}
+    prices = dict(await _latest_engine_prices(list(held)))
+    return round(sum(qty * prices.get(t, 0.0) for t, qty in held.items()), 2)
+
+
+def _read_curve(path: Path) -> list[dict]:
+    """curves.csv → [{date, aftertax}], the after-tax equity path for the overlay."""
+    if not path.exists():
+        return []
+    with path.open(newline="") as fh:
+        return [{"date": r["date"], "aftertax": float(r["aftertax"])}
+                for r in csv.DictReader(fh)]
+
+
+def _run_whatif(strategy: str, config: dict) -> dict:
+    """Run scripts/whatif_run.py in the engine venv (mirrors enginerun's subprocess
+    pattern; reuses its interpreter + env resolution) and return {summary, curve}.
+    Artifacts land in a temp dir we read then delete. Blocking — call via to_thread."""
+    out = Path(tempfile.mkdtemp(prefix="b3whatif-"))
+    try:
+        proc = enginerun.run_script(
+            "whatif_run.py", [strategy, str(out), json.dumps(config)])
+        if proc.returncode != 0:
+            raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
+        return {"summary": enginerun._last_json(proc.stdout),
+                "curve": _read_curve(out / "curves.csv")}
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
+@whatif_router.post("")
+async def create_whatif(
+    body: WhatIfRequest,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Replay the tenant's real cash flows through each requested strategy and
+    return a point comparison (invested + actual value) plus per-scenario
+    after-tax curves and metrics."""
+    _user, tid = tenant
+    if not body.strategy_ids:
+        raise HTTPException(422, "strategy_ids must be non-empty")
+    gallery = {s["name"]: s for s in await list_strategies()}
+    for sid in body.strategy_ids:
+        if sid not in gallery:
+            raise HTTPException(404, f"unknown strategy: {sid}")
+    needs = [s for s in body.strategy_ids if gallery[s].get("needs_fundamentals")]
+    if needs and not await _fundamentals_available():
+        raise HTTPException(422, _needs_funds_msg(needs))
+
+    flows = await _net_flows(session, tid)
+    if not flows:
+        raise HTTPException(422, "no trades to replay — import a portfolio first")
+    flows_list = [{"date": d, "amount": a} for d, a in sorted(flows.items())]
+    total_invested = round(sum(flows.values()), 2)
+    start = min(flows)  # earliest ISO date == the tenant's first trade
+
+    scenarios = []
+    for sid in body.strategy_ids:
+        config = {"flows": flows_list, "start": start, "freq": body.freq}
+        try:
+            out = await asyncio.to_thread(_run_whatif, sid, config)
+        except RuntimeError as e:
+            raise HTTPException(500, f"whatif ({sid}) failed: {e}")
+        m = out["summary"]
+        aft = m.get("aftertax") or {}
+        scenarios.append({
+            "strategy": sid,
+            "final_value": round(float(m.get("final_aftertax_nav", 0.0)), 2),
+            "ann_return": aft.get("Ann. Return (%)"),
+            "sharpe": aft.get("Sharpe"),
+            "max_dd": aft.get("Max Drawdown (%)"),
+            "curve": out["curve"],
+        })
+
+    return {
+        "as_of": date.today().isoformat(),
+        "total_invested": total_invested,
+        "actual_value": await _actual_value(session, tid),
+        "scenarios": scenarios,
+    }

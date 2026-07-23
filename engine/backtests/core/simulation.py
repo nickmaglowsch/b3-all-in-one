@@ -301,7 +301,7 @@ def run_simulation(
     name: str = "Strategy",
     monthly_sales_exemption: float = 0.0,
     defer_tax: bool = False,
-    contribution: float = 0.0,
+    contribution: "float | pd.Series" = 0.0,
 ) -> dict:
     """
     Run a generic, institutional-grade portfolio simulation.
@@ -313,18 +313,31 @@ def run_simulation(
         initial_capital: Starting BRL
         tax_rate: Capital gains tax rate applied to net realized gains
         slippage: Transaction cost applied per trade (e.g., 0.001 for 0.1%)
-        contribution: Periodic buy-in in BRL **per calendar month** (aporte).
+        contribution: Periodic buy-in in BRL (aporte). Two forms:
+                     • scalar — a flat amount **per calendar month**; deposits
+                       accrue by calendar month and land on the next live
+                       rebalance row (1x for ME, 3x for QE, first weekly row of
+                       each month for W-FRI).
+                     • pandas Series indexed by date — real dated cash flows
+                       (the what-if replay). At each live rebalance the engine
+                       deploys every flow that has arrived and not yet been
+                       deployed (cumulative-minus-deployed), so pre-inception
+                       and hold-row flows land on the next live row — same
+                       "deploy at the rebalance" approximation as the scalar
+                       path. Pair with initial_capital=0 for a pure flow replay.
                      Deposited into NAV right before the rebalance, so the
                      existing target-weight logic spreads it over the book —
                      the name farthest below target absorbs the most new cash.
-                     Negative = withdrawal. Deposits accrue by calendar month
-                     and land on the next live rebalance row (1x for ME, 3x for
-                     QE, first weekly row of each month for W-FRI).
+                     Negative = withdrawal.
 
     Returns:
         Dictionary containing pre-tax and after-tax equity curves, tax ledgers, etc.
     """
-    if initial_capital <= 0 and contribution <= 0:
+    has_flows = (
+        bool((contribution > 0).any()) if isinstance(contribution, pd.Series)
+        else contribution > 0
+    )
+    if initial_capital <= 0 and not has_flows:
         raise ValueError(
             "No money in the portfolio: set initial_capital > 0, contribution > 0, "
             "or both (initial_capital=0 with a contribution is a pure-DCA run)."
@@ -343,6 +356,7 @@ def run_simulation(
 
     initialized = False
     last_deploy = None      # date of the last rebalance that received a deposit
+    deployed = 0.0          # BRL of dated flows already deployed (Series path only)
 
     # Contract guard: NAV is defined as the sum of position values and this engine
     # does NOT hold uninvested cash. So any live rebalance row whose target weights
@@ -425,9 +439,16 @@ def run_simulation(
             break
 
         cash = 0.0
-        if contribution and live:
-            months = (date.year - last_deploy.year) * 12 + date.month - last_deploy.month
-            cash = contribution * months
+        if contribution is not None and live:
+            if isinstance(contribution, pd.Series):
+                # Dated flows: deploy everything that has arrived (index <= date)
+                # and not yet been deployed. Cumulative-minus-deployed captures
+                # pre-inception and hold-row flows on the next live rebalance —
+                # no window edge to lose a flow on.
+                cash = float(contribution[contribution.index <= date].sum()) - deployed
+            else:
+                months = (date.year - last_deploy.year) * 12 + date.month - last_deploy.month
+                cash = contribution * months
         if cash:
             # Handed to _execute_rebalance as extra NAV: every position's
             # (target_val - current_value) gap widens by w_i * cash, so the
@@ -435,6 +456,7 @@ def run_simulation(
             pt_nav += cash
             at_nav += cash
             last_deploy = date
+            deployed += cash
 
         if pt_nav <= 0 or at_nav <= 0:
             print(f"\n💀 MARGIN CALL! Portfolio went bankrupt on {date.date()}")

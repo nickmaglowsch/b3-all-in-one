@@ -173,6 +173,36 @@ NC=$(curl -fsS "$API/backtests/$RUN_ID/curves" -H "$AUTH" \
 [ "$NC" -gt 0 ] || fail "backtest curves empty"
 echo "[smoke] backtest curves OK ($NC periods)"
 
+# 9) strategy-linked portfolio: sleeves -> combined target -> rebalance plan.
+echo "[smoke] PUT /portfolio/sleeves (MomSharpe 60 / CASH_CDI 40)"
+curl -fsS -X PUT "$API/portfolio/sleeves" -H "$AUTH" \
+  -H 'Content-Type: application/json' \
+  -d '[{"strategy_ref":"MomSharpe","target_pct":60},{"strategy_ref":"CASH_CDI","target_pct":40}]' \
+  -o /dev/null || fail "PUT /portfolio/sleeves failed"
+
+echo "[smoke] GET /portfolio/target"
+curl -fsS "$API/portfolio/target" -H "$AUTH" | python3 -c '
+import sys, json
+t = json.load(sys.stdin)
+assert t["combined_weights"], "combined_weights empty"
+assert abs(t["cash_weight_target"] - 0.4) < 1e-6, t["cash_weight_target"]
+assert t["nav"] > 0, "nav not positive"
+print("[smoke] target OK: %d combined weights, cash=%.2f nav=%.2f" % (
+    len(t["combined_weights"]), t["cash_weight_target"], t["nav"]))
+' || fail "GET /portfolio/target failed or empty"
+
+echo "[smoke] POST /portfolio/rebalance-plans"
+curl -fsS -X POST "$API/portfolio/rebalance-plans" -H "$AUTH" \
+  -H 'Content-Type: application/json' -d '{"new_cash":0}' | python3 -c '
+import sys, json
+p = json.load(sys.stdin)
+tr = p["trades"]
+assert tr["sells"] or tr["buys"], "no trades proposed"
+assert set(p["tax"]["situation"]) == {"AÇÃO", "FII"}, p["tax"].get("situation")
+print("[smoke] rebalance OK: %d sells, %d buys, tax buckets=%s" % (
+    len(tr["sells"]), len(tr["buys"]), list(p["tax"]["situation"])))
+' || fail "POST /portfolio/rebalance-plans failed"
+
 echo "[smoke] =================================================="
 echo "[smoke] PASS  health=${t_health}s  imports=$((SECONDS - t_imp))s  positions=$NPOS  backtest=$((SECONDS - t_bt))s  total=$((SECONDS - t0))s"
 echo "[smoke] =================================================="

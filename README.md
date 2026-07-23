@@ -62,6 +62,23 @@ gated on `RUN_MIGRATIONS=1`); the **worker** applies its own procrastinate schem
 Uploaded files land on a shared `uploads_data` volume mounted into both services at
 `/data/uploads`, so files the api saves are visible to the worker's import jobs.
 
+### Strategy-linked portfolio (spec/05)
+
+Attach strategies to the portfolio as fixed-percentage sleeves, then get told what to
+buy/sell to rebalance — tax-optimally. All prices come from the engine market plane
+(`advise_weights.py`, latest `raw_close`); tax runs through taxcore's TLH machinery.
+
+- `GET/PUT /portfolio/sleeves` — sleeve config `[{strategy_ref, target_pct}]`, validated
+  to sum to 100 (`CASH_CDI` is the risk-free sleeve; everything else a gallery spec).
+- `GET /portfolio/target` — the combined target: each strategy sleeve's advised weights
+  (blended `Σ pct/100 × weights`) plus `cash_weight_target` from `CASH_CDI`, the current
+  weights from the priced book, and per-ticker `drift`. `409` when no sleeves configured.
+- `POST /portfolio/rebalance-plans {new_cash?, exclude?, pins?}` — advisor v0
+  (single-shot, this month): combined target → integer trade list → tax overlay
+  (per-class situation, isenção usage, harvest + T+1 rebuys). Pinned/excluded tickers are
+  held in place (dropped from both sells and buys); `notes` flags e.g. an ações month
+  above the R$20k isenção. Advisory only — nothing executes.
+
 ### End-to-end smoke
 
 ```

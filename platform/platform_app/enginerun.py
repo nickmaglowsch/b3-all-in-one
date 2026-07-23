@@ -7,6 +7,7 @@ discovery and the simulation only run inside the engine's own interpreter.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -46,3 +47,37 @@ def run_script(script: str, args: list[str]) -> subprocess.CompletedProcess:
         [*_engine_python(), str(ENGINE / "scripts" / script), *args],
         cwd=ENGINE, env=_env(), capture_output=True, text=True,
     )
+
+
+def _last_json(text: str) -> dict:
+    """Parse the last JSON object line of stdout — build_shared_data prints
+    progress lines before advise_weights emits its one-line JSON payload."""
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            return json.loads(line)
+    raise ValueError(f"no JSON object in engine output:\n{text[-2000:]}")
+
+
+def advise_weights(
+    *,
+    strategy: str | None = None,
+    weights: dict | None = None,
+    positions: dict | None = None,
+    nav_cash: float = 0.0,
+) -> dict:
+    """Run scripts/advise_weights.py and return its parsed JSON. Pass either a
+    ``strategy`` name (signals) or fixed ``weights`` (no signals). When
+    ``positions`` is given the payload also carries a trade list + valuations.
+    Raises RuntimeError on a non-zero exit (caller maps to HTTP)."""
+    args: list[str] = []
+    if strategy:
+        args.append(strategy)
+    if weights is not None:
+        args += ["--weights", json.dumps(weights)]
+    if positions is not None:
+        args += ["--positions", json.dumps(positions), "--nav-cash", str(float(nav_cash))]
+    proc = run_script("advise_weights.py", args)
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
+    return _last_json(proc.stdout)

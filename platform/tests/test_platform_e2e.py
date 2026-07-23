@@ -127,3 +127,52 @@ async def test_tlh_plans_after_import(client):
     r = await client.post(
         "/tlh/plans", json={"sells": [{"ticker": "PETR4", "qty": 10_000_000}]}, headers=headers)
     assert r.status_code == 422, r.text
+
+
+async def test_target_and_rebalance_after_import(client):
+    """Runs after the import test (same module/session) so the dev tenant has its 45
+    positions. This module sorts before test_sleeves, so no sleeves exist yet."""
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # No sleeves configured yet → 409.
+    assert (await client.get("/portfolio/target", headers=headers)).status_code == 409
+
+    good = [{"strategy_ref": "MomSharpe", "target_pct": 60},
+            {"strategy_ref": "CASH_CDI", "target_pct": 40}]
+    assert (await client.put("/portfolio/sleeves", json=good, headers=headers)).status_code == 200
+
+    # --- Combined target + drift ---
+    tgt = (await client.get("/portfolio/target", headers=headers)).json()
+    cw = tgt["combined_weights"]
+    assert cw, "expected non-empty combined weights"
+    assert tgt["cash_weight_target"] == pytest.approx(0.4)
+    # Full allocation (investable + cash) sums to 1; MomSharpe fills the 60% sleeve.
+    assert sum(cw.values()) + tgt["cash_weight_target"] == pytest.approx(1.0, abs=1e-6)
+    assert sum(cw.values()) == pytest.approx(0.6, abs=1e-6)
+    assert tgt["nav"] > 0
+    for d in tgt["drift"]:
+        assert d["drift_w"] == pytest.approx(d["target_w"] - d["current_w"])
+        assert d["drift_brl"] == pytest.approx((d["target_w"] - d["current_w"]) * tgt["nav"])
+
+    # --- Rebalance plan: integer trades, tax overlay, exclude honored ---
+    positions = {p["ticker"] for p in
+                 (await client.get("/portfolio/positions", headers=headers)).json()}
+    assert "PETR4" in positions  # the ticker we'll exclude is really held
+
+    plan = (await client.post(
+        "/portfolio/rebalance-plans",
+        json={"new_cash": 0, "exclude": ["PETR4"]}, headers=headers)).json()
+    sells, buys = plan["trades"]["sells"], plan["trades"]["buys"]
+
+    for leg in sells + buys:
+        assert isinstance(leg["qty"], int) and leg["qty"] > 0
+    # never sell what isn't held
+    for s in sells:
+        assert s["ticker"] in positions, s["ticker"]
+    # exclude honored: PETR4 in neither leg
+    assert all(leg["ticker"] != "PETR4" for leg in sells + buys)
+    # tax section present with both class buckets in the current situation
+    assert set(plan["tax"]["situation"]) == {"AÇÃO", "FII"}
+    assert isinstance(plan["notes"], list)
+    assert plan["nav"] > 0

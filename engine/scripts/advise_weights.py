@@ -9,8 +9,16 @@ the portfolio loop (spec 05, Feature 1) needs.
 Usage:
     python scripts/advise_weights.py <strategy_name> [--params '<json>'] \
         [--positions '<json>'] [--nav-cash <brl>]
+    python scripts/advise_weights.py --weights '<json>' \
+        [--positions '<json>'] [--nav-cash <brl>]
 
   --params     strategy parameter overrides, same JSON as run_backtest_json.
+  --weights    fixed target weights, {"TICKER": w, ...}, as an alternative to a
+               strategy name (the positional is then omitted). Signal generation
+               is skipped entirely: the tickers are priced from latest raw_close
+               and, with --positions/--nav-cash, the same integer-share trade
+               list is produced. "CASH_CDI" is treated as the cash sleeve — it is
+               excluded from the trades and its weight simply stays uninvested.
   --positions  current book, {"TICKER": {"qty": N, "avg_cost": BRL}, ...}. When
                given (with --nav-cash), also emit an integer-share trade list to
                move the book to the advised weights (pure computation, NO tax
@@ -19,6 +27,7 @@ Usage:
 
 Prints a one-line JSON object to stdout:
     {strategy, as_of, weights: {ticker: w}, skipped_rows_note[, trades]}
+(strategy is null in --weights mode.)
 
 Reads the market plane from Postgres via ENGINE_DATABASE_URL (falls back to the
 local sqlite DB when unset). Network mirrors run_backtest_json: IBOV is always
@@ -115,17 +124,24 @@ def _build_trades(
         "sells": sells,
         "buys": buys,
         "unpriced_skipped": sorted(set(skipped)),
+        # Per-ticker current market value (avg_cost fallback for unpriced holdings).
+        # Lets the platform derive current weights / NAV from the same valuation the
+        # trade math uses, no separate price query.
+        "positions_valued": {t: v["current_value"] for t, v in eng_pos.items()},
     }
 
 
-def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("strategy")
-    ap.add_argument("--params", default="", help="JSON param overrides")
-    ap.add_argument("--positions", default="", help='JSON {ticker:{qty,avg_cost}}')
-    ap.add_argument("--nav-cash", type=float, default=0.0, help="uninvested BRL")
-    args = ap.parse_args()
+def _build_shared(start: str, end: str, freq: str, needs_funds: bool):
+    """Install the benchmark stubs and build the market plane once."""
+    offline = os.environ.get("ENGINE_BENCH_OFFLINE") == "1"
+    _install_benchmark_stubs(start, end, offline)
+    from backtests.core.shared_data import build_shared_data
 
+    db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
+    return build_shared_data(db_path, start, end, freq, include_fundamentals=needs_funds)
+
+
+def _advise_from_strategy(args) -> dict:
     from backtests.core.strategy_registry import get_registry
     from backtests.core.strategy_base import dedup_target_weights
 
@@ -138,13 +154,7 @@ def main() -> None:
     freq = str(params.get("rebalance_freq", "ME"))
     needs_funds = bool(getattr(strat, "needs_fundamentals", False))
 
-    offline = os.environ.get("ENGINE_BENCH_OFFLINE") == "1"
-    _install_benchmark_stubs(start, end, offline)
-
-    from backtests.core.shared_data import build_shared_data
-
-    db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
-    shared = build_shared_data(db_path, start, end, freq, include_fundamentals=needs_funds)
+    shared = _build_shared(start, end, freq, needs_funds)
 
     _, tw = strat.generate_signals(shared, params)
     tw = dedup_target_weights(tw, shared["adtv"])
@@ -172,11 +182,52 @@ def main() -> None:
             f"{int(trailing_skipped)} trailing all-zero (warmup/park) row(s) skipped"
         ),
     }
-
     if args.positions:
-        positions_in = json.loads(args.positions)
-        out["trades"] = _build_trades(positions_in, args.nav_cash, row, shared["raw_close"])
+        out["trades"] = _build_trades(
+            json.loads(args.positions), args.nav_cash, row, shared["raw_close"])
+    return out
 
+
+def _advise_from_weights(args) -> dict:
+    """Fixed-weight mode: no signals. Price the given tickers from latest raw_close
+    and (with --positions) emit the trade list. CASH_CDI is the cash sleeve — kept
+    out of the tradeable target so its share of NAV just stays as BRL."""
+    weights_in = json.loads(args.weights)
+    start, end, freq = "2005-01-01", datetime.today().strftime("%Y-%m-%d"), "ME"
+    shared = _build_shared(start, end, freq, needs_funds=False)
+    raw_close = shared["raw_close"]
+    if raw_close is None or raw_close.empty:
+        raise SystemExit("no price data available to value --weights")
+
+    as_of = raw_close.index[-1]
+    row = pd.Series(
+        {t: float(w) for t, w in weights_in.items() if t != "CASH_CDI"}, dtype=float)
+
+    out = {
+        "strategy": None,
+        "as_of": as_of.date().isoformat(),
+        "weights": {str(t): float(w) for t, w in weights_in.items()},
+        "skipped_rows_note": "weights mode: signals skipped; priced from latest raw_close",
+    }
+    if args.positions:
+        out["trades"] = _build_trades(
+            json.loads(args.positions), args.nav_cash, row, raw_close)
+    return out
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("strategy", nargs="?", help="strategy name; omit when using --weights")
+    ap.add_argument("--params", default="", help="JSON param overrides")
+    ap.add_argument("--weights", default="", help='JSON {ticker: w} fixed target')
+    ap.add_argument("--positions", default="", help='JSON {ticker:{qty,avg_cost}}')
+    ap.add_argument("--nav-cash", type=float, default=0.0, help="uninvested BRL")
+    args = ap.parse_args()
+
+    if bool(args.strategy) == bool(args.weights):
+        ap.error("pass exactly one of <strategy> or --weights")
+
+    out = _advise_from_weights(args) if args.weights else _advise_from_strategy(args)
     json.dump(out, sys.stdout)
     sys.stdout.write("\n")
 

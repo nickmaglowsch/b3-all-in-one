@@ -11,6 +11,7 @@ import json
 import shutil
 import tempfile
 import uuid
+from datetime import date
 from pathlib import Path
 
 import asyncpg
@@ -224,6 +225,173 @@ async def put_sleeves(
     return [{"strategy_ref": s.strategy_ref, "target_pct": s.target_pct} for s in body]
 
 
+# ── Combined target + rebalance advisor (spec/05 Features 1 & 3) ──────────────
+# advise_weights per strategy sleeve is deterministic for a given day's data, so
+# cache the JSON per (strategy, date). ponytail: process-lifetime dict keyed by
+# the calendar day — same lifecycle as _STRATEGIES_CACHE.
+_SLEEVE_WEIGHTS_CACHE: dict[tuple[str, str], dict] = {}
+
+
+async def _advise(**kwargs) -> dict:
+    try:
+        return await asyncio.to_thread(enginerun.advise_weights, **kwargs)
+    except RuntimeError as e:
+        raise HTTPException(500, f"advise_weights failed: {e}")
+
+
+async def _combined_target(
+    session: AsyncSession, tid: uuid.UUID
+) -> tuple[dict[str, float], float]:
+    """Blend the tenant's sleeves into (combined_weights, cash_weight_target):
+    combined[t] = Σ sleeve_pct/100 × sleeve_weights[t]; CASH_CDI pct becomes the
+    cash weight. 409 when no sleeves are configured."""
+    sleeves = (await session.scalars(
+        select(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid)
+    )).all()
+    if not sleeves:
+        raise HTTPException(409, "no sleeves configured — PUT /portfolio/sleeves first")
+
+    today = date.today().isoformat()
+    combined: dict[str, float] = {}
+    cash_weight = 0.0
+    for s in sleeves:
+        pct = float(s.target_pct) / 100.0
+        if s.strategy_ref == "CASH_CDI":
+            cash_weight += pct
+            continue
+        key = (s.strategy_ref, today)
+        adv = _SLEEVE_WEIGHTS_CACHE.get(key)
+        if adv is None:
+            adv = await _advise(strategy=s.strategy_ref)
+            _SLEEVE_WEIGHTS_CACHE[key] = adv
+        for t, w in adv["weights"].items():
+            combined[t] = combined.get(t, 0.0) + pct * float(w)
+    return combined, cash_weight
+
+
+async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, dict]:
+    rows = (await session.scalars(
+        select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
+    )).all()
+    return {p.ticker: {"qty": float(p.qty or 0.0), "avg_cost": float(p.avg_cost or 0.0)}
+            for p in rows if p.ticker and (p.qty or 0.0) != 0}
+
+
+@portfolio_router.get("/target")
+async def get_target(
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Combined target weights, current weights, and per-ticker drift. Prices the
+    book via one advise_weights --weights valuation pass (same basis as the
+    rebalance trades)."""
+    _user, tid = tenant
+    combined, cash_weight = await _combined_target(session, tid)
+    positions = await _positions_json(session, tid)
+
+    priced = await _advise(weights=combined, positions=positions, nav_cash=0.0)
+    trades = priced.get("trades") or {}
+    nav = float(trades.get("nav", 0.0))
+    valued = trades.get("positions_valued") or {}
+    current = {t: v / nav for t, v in valued.items()} if nav > 0 else {}
+
+    drift = []
+    for t in sorted(set(combined) | set(current)):
+        tw = float(combined.get(t, 0.0))
+        cw = float(current.get(t, 0.0))
+        drift.append({"ticker": t, "target_w": tw, "current_w": cw,
+                      "drift_w": tw - cw, "drift_brl": (tw - cw) * nav})
+
+    return {
+        "as_of": priced["as_of"],
+        "combined_weights": combined,
+        "current_weights": current,
+        "cash_weight_target": cash_weight,
+        "drift": drift,
+        "nav": nav,
+    }
+
+
+class RebalanceRequest(BaseModel):
+    new_cash: float = 0.0
+    exclude: list[str] = []
+    pins: list[str] = []
+
+
+def _freeze_target(
+    combined: dict[str, float], cash_weight: float, frozen: set[str],
+    valued: dict[str, float], final_nav: float,
+) -> dict[str, float]:
+    """Hold `frozen` (excluded/pinned) tickers at their current weight — no trade —
+    and renormalize the rest of `combined` into the remaining budget
+    (1 − cash − Σ frozen). Non-held frozen tickers just drop out (never bought)."""
+    frozen_w = {t: valued[t] / final_nav for t in frozen
+                if valued.get(t) and final_nav > 0}
+    nonfrozen = {t: w for t, w in combined.items() if t not in frozen}
+    total_nf = sum(nonfrozen.values())
+    budget = max(0.0, 1.0 - cash_weight - sum(frozen_w.values()))
+    target = dict(frozen_w)
+    if total_nf > 0:
+        for t, w in nonfrozen.items():
+            target[t] = w / total_nf * budget
+    return target
+
+
+@portfolio_router.post("/rebalance-plans")
+async def create_rebalance_plan(
+    body: RebalanceRequest,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Advisor v0 (single-shot, this month): combined target → integer trade list →
+    tax overlay via the TLH machinery. Advisory only; nothing executes."""
+    _user, tid = tenant
+    combined, cash_weight = await _combined_target(session, tid)
+    positions = await _positions_json(session, tid)
+    held = set(positions)
+    # v0: pins and excludes collapse to one "freeze" set — both mean "don't trade
+    # this ticker, keep its current position" (per-ticker keep-in-place).
+    frozen = {t.upper() for t in (body.exclude + body.pins)}
+
+    target = combined
+    if frozen:
+        # One valuation pass (no new_cash) to learn current values, so frozen holdings
+        # can be pinned at their current weight before renormalizing the rest.
+        val = await _advise(weights=combined, positions=positions, nav_cash=0.0)
+        vtrades = val.get("trades") or {}
+        valued = {k.upper(): v for k, v in (vtrades.get("positions_valued") or {}).items()}
+        final_nav = float(vtrades.get("nav", 0.0)) + body.new_cash
+        target = _freeze_target(combined, cash_weight, frozen, valued, final_nav)
+
+    priced = await _advise(weights=target, positions=positions, nav_cash=body.new_cash)
+    trades = priced.get("trades") or {"sells": [], "buys": [], "nav": 0.0}
+    # Belt-and-suspenders: frozen tickers never appear in a trade (guards rounding).
+    sells = [s for s in trades.get("sells", []) if s["ticker"].upper() not in frozen]
+    buys = [b for b in trades.get("buys", []) if b["ticker"].upper() not in frozen]
+    nav = float(trades.get("nav", 0.0))
+
+    # Tax overlay: run the plan's sells (only tickers actually held) through tlh_plan.
+    tax = await _run_tlh_plan(
+        session, tid, [(s["ticker"], s["qty"]) for s in sells if s["ticker"] in held])
+
+    notes: list[str] = []
+    acao = (tax.get("buckets") or {}).get("AÇÃO") or {}
+    limit = float(tax.get("isencao_limit", 20_000.0))
+    if float(acao.get("gross_after", 0.0)) > limit:
+        notes.append(
+            f"ações gross sales this month would exceed R$20k isenção "
+            f"(gross pós-vendas R$ {acao['gross_after']:,.2f} > R$ {limit:,.0f})")
+
+    return {
+        "as_of": priced["as_of"],
+        "nav": nav,
+        "new_cash": body.new_cash,
+        "trades": {"sells": sells, "buys": buys},
+        "tax": tax,
+        "notes": notes,
+    }
+
+
 class IrpfRequest(BaseModel):
     year: int = 2025
 
@@ -296,22 +464,32 @@ class TlhRequest(BaseModel):
     exclude: list[str] | None = None
 
 
-def _copy_latest_snapshot(src: Path, dst: Path) -> None:
-    """Copy the most-recent CSV from `src` into `dst` — mirrors _common.latest_csv
-    (sorted glob, last wins), the only file price_lookup actually reads per dir."""
-    csvs = sorted(src.glob("*.csv"))
-    if csvs:
-        dst.mkdir(parents=True, exist_ok=True)
-        shutil.copy(csvs[-1], dst / csvs[-1].name)
+async def _latest_engine_prices(tickers: list[str]) -> list[list]:
+    """Latest raw close per ticker from the engine market plane (the same source
+    the rebalance trades are priced from). Returns [[papel, cotacao], ...] rows for
+    a tlh_plan external_prices snapshot."""
+    tickers = sorted({t for t in tickers if t})
+    if not tickers:
+        return []
+    conn = await asyncpg.connect(settings.engine_database_url)
+    try:
+        rows = await conn.fetch(
+            "SELECT DISTINCT ON (ticker) ticker, close FROM prices "
+            "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
+            "ORDER BY ticker, date DESC",
+            tickers,
+        )
+    finally:
+        await conn.close()
+    return [[r["ticker"], float(r["close"])] for r in rows if r["close"]]
 
 
-@tlh_router.post("/plans")
-async def tlh_plan(
-    body: TlhRequest,
-    tenant=Depends(get_current_tenant),
-    session: AsyncSession = Depends(get_async_session),
+async def _run_tlh_plan(
+    session: AsyncSession, tid: uuid.UUID,
+    sells: list[tuple[str, float]], exclude: list[str] | None = None,
 ) -> dict:
-    _user, tid = tenant
+    """Run taxcore's tlh_plan --json over the tenant's book with the given sells.
+    Shared by POST /tlh/plans and the rebalance advisor's tax overlay."""
     trades = (await session.scalars(
         select(Trade).where(Trade.tenant_id == tid).order_by(Trade.id)
     )).all()
@@ -338,26 +516,52 @@ async def tlh_plan(
              e.qty, e.price, e.amount, e.broker, e.source_file] for e in events])
         b3run.write_csv(ws / "data" / "positions.csv", _POSITION_HEADER, [
             [p.ticker, p.qty, p.avg_cost, p.total_cost, p.market] for p in positions])
-        # ponytail: use the vendored taxcore/data snapshots as the price source — the
-        # tenant has no market prices of their own yet. platform-market-prices-later.
-        for name in ("snapshots", "fii_snapshots", "external_prices"):
-            _copy_latest_snapshot(b3run.TAXCORE / "data" / name, ws / "data" / name)
+        # Price source = the engine market plane (Postgres), the same prices the
+        # rebalance trades come from — works in-image where taxcore/data is excluded.
+        # price_lookup reads the latest external_prices CSV (columns papel,cotacao).
+        (ws / "data" / "external_prices").mkdir(parents=True, exist_ok=True)
+        b3run.write_csv(
+            ws / "data" / "external_prices" / f"{date.today().isoformat()}.csv",
+            ["papel", "cotacao"],
+            await _latest_engine_prices([p.ticker for p in positions]),
+        )
 
         args = ["scripts.tlh_plan", "--json"]
-        sells_spec = ",".join(f"{s.ticker}:{s.qty}" for s in body.sells)
+        sells_spec = ",".join(f"{t}:{q}" for t, q in sells)
         if sells_spec:
             args += ["--sells", sells_spec]
-        if body.exclude:
-            args += ["--exclude", ",".join(body.exclude)]
+        if exclude:
+            args += ["--exclude", ",".join(exclude)]
 
         proc = await asyncio.to_thread(b3run.run_module, ws, args)
         if proc.returncode == 2:  # validation error (bad/oversized sell)
             raise HTTPException(422, (proc.stderr or proc.stdout).strip()[-2000:])
         if proc.returncode != 0:
             raise HTTPException(500, f"tlh_plan failed: {(proc.stderr or proc.stdout)[-2000:]}")
-        return json.loads(proc.stdout)
+        return _parse_tlh_stdout(proc.stdout)
     finally:
         shutil.rmtree(ws, ignore_errors=True)
+
+
+def _parse_tlh_stdout(stdout: str) -> dict:
+    """Parse tlh_plan's pretty-printed JSON, skipping any leading ⚠ warning lines
+    it prints when a sold ticker has no cotação in the snapshot."""
+    lines = stdout.splitlines()
+    for i, line in enumerate(lines):
+        if line.rstrip() == "{":
+            return json.loads("\n".join(lines[i:]))
+    return json.loads(stdout)  # pure JSON (no warnings)
+
+
+@tlh_router.post("/plans")
+async def tlh_plan(
+    body: TlhRequest,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    return await _run_tlh_plan(
+        session, tid, [(s.ticker, s.qty) for s in body.sells], exclude=body.exclude)
 
 
 # ── Strategy gallery (public) ─────────────────────────────────────────────────

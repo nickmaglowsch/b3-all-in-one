@@ -32,13 +32,13 @@ SCRIPT = ROOT / "scripts" / "advise_weights.py"
 STRATEGY = "MomSharpe"  # price-only, no fundamentals needed
 
 
-def _run(*args: str) -> dict:
+def _run_argv(*args: str) -> dict:
     """Run advise_weights offline and parse the last JSON line of stdout (the
     build_shared_data progress prints precede it — same contract the platform
     consumes via reversed(splitlines()))."""
     env = {**os.environ, "ENGINE_BENCH_OFFLINE": "1"}
     proc = subprocess.run(
-        [sys.executable, str(SCRIPT), STRATEGY, *args],
+        [sys.executable, str(SCRIPT), *args],
         capture_output=True, text=True, env=env, cwd=str(ROOT),
     )
     assert proc.returncode == 0, proc.stderr
@@ -47,6 +47,10 @@ def _run(*args: str) -> dict:
         if line.startswith("{"):
             return json.loads(line)
     raise AssertionError(f"no JSON line in stdout:\n{proc.stdout}")
+
+
+def _run(*args: str) -> dict:
+    return _run_argv(STRATEGY, *args)
 
 
 def test_weights_only():
@@ -97,3 +101,35 @@ def test_trade_list_consistency():
 
     assert t["unpriced_skipped"] == []
     assert t["nav"] == pytest.approx(sum_buy + residual)  # NAV = deployed + leftover cash
+
+
+def test_weights_mode():
+    # Fixed weights instead of a strategy: 50% PETR4 / 30% VALE3 / 20% CASH_CDI.
+    # Signals are skipped; the two priced tickers are bought, 20% stays as cash.
+    weights = {"PETR4": 0.5, "VALE3": 0.3, "CASH_CDI": 0.2}
+    positions = {"PETR4": {"qty": 100, "avg_cost": 30.0}}
+    cash = 50_000.0
+    out = _run_argv("--weights", json.dumps(weights),
+                    "--positions", json.dumps(positions), "--nav-cash", str(cash))
+    assert out["strategy"] is None
+    assert out["as_of"].startswith("2025"), out["as_of"]
+    assert out["weights"] == weights  # echoed verbatim, CASH_CDI included
+
+    t = out["trades"]
+    # CASH_CDI is never traded and never counted as an unpriced ticker.
+    assert "CASH_CDI" not in t["unpriced_skipped"]
+    traded = {leg["ticker"] for leg in t["sells"] + t["buys"]}
+    assert "CASH_CDI" not in traded
+    assert t["unpriced_skipped"] == []
+
+    for leg in t["sells"] + t["buys"]:
+        assert isinstance(leg["qty"], int) and leg["qty"] > 0
+        assert leg["est_brl"] == pytest.approx(leg["qty"] * leg["est_price"])
+
+    # 20% of NAV should be left uninvested (CASH_CDI sleeve), within one lot per leg.
+    nav = t["nav"]
+    sum_sell = sum(s["est_brl"] for s in t["sells"])
+    sum_buy = sum(b["est_brl"] for b in t["buys"])
+    residual = cash + sum_sell - sum_buy
+    lot_envelope = sum(leg["est_price"] for leg in t["sells"] + t["buys"])
+    assert abs(residual - 0.2 * nav) <= lot_envelope

@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  platform-tests:
+    name: Platform API tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Same image as the VPS's infra_postgres, so extension behaviour matches.
+        image: imresamu/postgis:16-3.5
+        env:
+          POSTGRES_USER: postgres
+          # platform/tests/conftest.py hardcodes this DSN — don't change it here alone.
+          POSTGRES_PASSWORD: devpassword
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      # The market plane. Empty here — CI has no B3 history, so the tests that
+      # assert non-empty prices are deselected below.
+      - name: Create the b3 market database
+        run: PGPASSWORD=devpassword psql -h localhost -U postgres -c 'CREATE DATABASE b3'
+
+      # b3run/enginerun shell into these venvs at ../taxcore and ../engine, exactly
+      # as they do on a dev box (the image bakes the same two venvs at /opt/*).
+      - name: Build the taxcore venv
+        run: cd taxcore && uv sync --frozen --no-dev
+      - name: Build the engine venv
+        run: |
+          cd engine
+          uv venv .venv --python 3.12
+          uv pip install --python .venv -r requirements-bench.txt
+
+      - name: Test
+        run: cd platform && uv run --frozen pytest -q
+        # Tests marked `market` need a loaded B3 price plane; the b3 DB here is
+        # empty, so conftest skips them (scripts/docker_smoke.sh covers that path
+        # locally). Everything else runs.
+
+  engine-tests:
+    name: Engine tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r engine/requirements.txt
+      # The Rust extension and Postgres-backed tests skip themselves when absent.
+      - run: cd engine && pytest -q
+
+  taxcore-tests:
+    name: Taxcore tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: cd taxcore && uv run --frozen pytest -q
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: cd frontend && npm ci
+      # Type-checks, and with `output: "export"` also proves every route is
+      # still prerenderable. `npm run lint` is NOT wired in: it has pre-existing
+      # react-hooks errors, so it would land red — fix those first, then add it.
+      - run: cd frontend && npm run build
+
+  compose-config:
+    name: Production compose config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          cp .env.prod.example .env.prod
+          docker compose --env-file .env.prod -f docker-compose.prod.yml config
+          rm -f .env.prod

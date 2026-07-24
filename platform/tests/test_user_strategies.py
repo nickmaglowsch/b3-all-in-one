@@ -149,6 +149,7 @@ async def test_promote_portfolio(client):
     assert (await client.post(f"/strategies/user/{rid}/promote", headers=h)).status_code == 422
 
 
+@pytest.mark.market
 async def test_user_strategy_backtest_e2e(client):
     """Full path: create a price-only user rank strategy, backtest by name, run the
     deferred job inline, assert it reaches done — materialization + ENGINE_USER_SPECS_DIR

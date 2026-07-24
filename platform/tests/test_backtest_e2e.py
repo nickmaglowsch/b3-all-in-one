@@ -15,6 +15,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 STRATEGY = "MomSharpe"
 
 
+@pytest.mark.market
 async def test_backtest_bench_e2e(client):
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

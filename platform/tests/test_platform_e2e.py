@@ -104,6 +104,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
     assert _normalize_irpf(r.json()["markdown"]) == _normalize_irpf(GOLDEN_IRPF.read_text())
 
 
+@pytest.mark.market
 async def test_tlh_plans_after_import(client):
     """Runs after the import test above (same module, same session DB) so the dev
     tenant already has its 25 positions + trades. Prices come from the vendored
@@ -132,6 +133,7 @@ async def test_tlh_plans_after_import(client):
     assert r.status_code == 422, r.text
 
 
+@pytest.mark.market
 async def test_target_and_rebalance_after_import(client):
     """Runs after the import test (same module/session) so the dev tenant has its 25
     positions. This module sorts before test_sleeves, so no sleeves exist yet."""

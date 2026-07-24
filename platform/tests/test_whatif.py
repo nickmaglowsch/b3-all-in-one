@@ -58,6 +58,7 @@ async def _seed_book(tenant_id: uuid.UUID) -> None:
         await session.commit()
 
 
+@pytest.mark.market
 async def test_whatif_replays_real_flows(client):
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

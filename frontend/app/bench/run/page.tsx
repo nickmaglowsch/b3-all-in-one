@@ -1,6 +1,7 @@
 "use client";
 
-import { use } from "react";
+import { Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -22,12 +23,19 @@ import {
   useCurves,
 } from "../lib";
 
-export default function TearSheetPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = use(params);
+// The run id rides in ?id= rather than a path segment: a [id] route needs
+// generateStaticParams, and run ids only exist at runtime — `output: "export"`
+// can't prerender them. useSearchParams needs the Suspense boundary to build.
+export default function TearSheetPage() {
+  return (
+    <Suspense fallback={<LoadingSkeleton />}>
+      <TearSheetView />
+    </Suspense>
+  );
+}
+
+function TearSheetView() {
+  const id = useSearchParams().get("id") ?? "";
   const run = useBacktest(id);
   const done = run.data?.status === "done";
   const curves = useCurves(id, done);

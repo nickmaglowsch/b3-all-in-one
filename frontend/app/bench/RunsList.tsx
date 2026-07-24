@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
 import { formatDate } from "@/lib/format";
 
-// Rows must be clickable → /bench/[id]. DataTable (frozen) has no onRowClick, so
+// Rows must be clickable → /bench/run?id=. DataTable (frozen) has no onRowClick, so
 // this renders a native table in the same hairline-ruled, dense visual style.
 // A leading checkbox picks runs for the comparison overlay (done runs only).
 export function RunsList({
@@ -70,7 +70,7 @@ export function RunsList({
             return (
             <tr
               key={r.id}
-              onClick={() => router.push(`/bench/${r.id}`)}
+              onClick={() => router.push(`/bench/run?id=${r.id}`)}
               className={`cursor-pointer border-b border-hairline/70 last:border-0 hover:bg-hairline/30 ${
                 isPicked ? "bg-navy/[0.04]" : ""
               }`}

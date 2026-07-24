@@ -530,7 +530,7 @@ function MinhasCarteiras({
                 {ranId && (
                   <p className="mt-2 text-xs text-gain">
                     Backtest enviado —{" "}
-                    <Link href={`/bench/${ranId}`} className="underline">
+                    <Link href={`/bench/run?id=${ranId}`} className="underline">
                       ver resultado
                     </Link>
                     .

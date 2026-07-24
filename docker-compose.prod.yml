@@ -1,0 +1,68 @@
+# Production stack on the VPS. Postgres/Caddy/Redis are the shared infra
+# (~/infra/docker-compose.yml) — this file brings up only api + worker and joins
+# the external `shared` network so Caddy can reach b3_api:8000 by name.
+# No ports are published: Caddy terminates TLS for b3-api.duckdns.org.
+#
+#   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+services:
+  api:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: b3_api
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@infra_postgres:5432/${POSTGRES_DB}
+      ENGINE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@infra_postgres:5432/${POSTGRES_DB}
+      ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY}
+      FRONTEND_URL: ${FRONTEND_URL}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PRICE_INVESTIDOR: ${STRIPE_PRICE_INVESTIDOR}
+      STRIPE_PRICE_TRADER: ${STRIPE_PRICE_TRADER}
+      UPLOADS_DIR: /data/uploads
+      ARTIFACTS_DIR: /data/artifacts
+      RUN_MIGRATIONS: "1"   # entrypoint runs `alembic upgrade head` before uvicorn
+    volumes:
+      - uploads_data:/data/uploads
+      - artifacts_data:/data/artifacts
+    networks:
+      - shared
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: b3_worker
+    command: ["python", "-m", "platform_app.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@infra_postgres:5432/${POSTGRES_DB}
+      ENGINE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@infra_postgres:5432/${POSTGRES_DB}
+      ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY}
+      UPLOADS_DIR: /data/uploads
+      ARTIFACTS_DIR: /data/artifacts
+    volumes:
+      - uploads_data:/data/uploads       # same volumes as api: reads files the api saved,
+      - artifacts_data:/data/artifacts   # writes backtest artifacts the api serves back
+    networks:
+      - shared
+    restart: unless-stopped
+
+volumes:
+  uploads_data:
+  artifacts_data:
+
+networks:
+  shared:
+    external: true

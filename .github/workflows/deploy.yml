@@ -1,0 +1,83 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-b3
+  cancel-in-progress: false
+
+jobs:
+  backend:
+    name: API + worker to the VPS
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # The api container runs `alembic upgrade head` on boot (RUN_MIGRATIONS=1).
+          script: |
+            set -euo pipefail
+            cd ${{ secrets.VPS_APP_DIR }}
+            git fetch --prune origin main
+            git reset --hard origin/main
+            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+            docker image prune -f
+            docker compose --env-file .env.prod -f docker-compose.prod.yml ps
+
+  frontend:
+    name: Static site to Cloudflare Pages
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    env:
+      # Secrets can't be read in a job-level `if`, so gate the steps on this instead:
+      # until CLOUDFLARE_API_TOKEN is set the job is a green no-op (backend still ships).
+      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - name: Skip until Cloudflare is configured
+        if: env.CF_TOKEN == ''
+        run: echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping frontend deploy"
+
+      - uses: actions/checkout@v4
+        if: env.CF_TOKEN != ''
+      - uses: actions/setup-node@v4
+        if: env.CF_TOKEN != ''
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - if: env.CF_TOKEN != ''
+        run: npm ci
+        working-directory: frontend
+
+      # NEXT_PUBLIC_* are inlined at build time, so a missing one ships a site that
+      # silently calls localhost:8000. Fail here instead.
+      - name: Build
+        if: env.CF_TOKEN != ''
+        working-directory: frontend
+        env:
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
+        run: |
+          set -euo pipefail
+          [ -n "${NEXT_PUBLIC_API_URL:-}" ] || { echo "::error::Missing secret NEXT_PUBLIC_API_URL"; exit 1; }
+          npm run build
+
+      - name: Deploy
+        if: env.CF_TOKEN != ''
+        working-directory: frontend
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # First run auto-creates the `b3-all-in-one` Pages project.
+        run: npx --yes wrangler@4 pages deploy out --project-name=b3-all-in-one --branch=main

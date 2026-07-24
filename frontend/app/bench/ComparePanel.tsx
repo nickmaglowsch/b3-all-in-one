@@ -265,7 +265,7 @@ function RunHeader({
         style={{ background: color }}
       />
       <Link
-        href={`/bench/${run.id}`}
+        href={`/bench/run?id=${run.id}`}
         title={`${label} · ${run.id.slice(0, 8)} — abrir tear sheet`}
         className="max-w-[10rem] truncate font-semibold text-ink hover:underline"
       >

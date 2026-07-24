@@ -16,18 +16,10 @@ import pandas as pd
 from tabulate import tabulate
 
 from methodologies import filters, mixed
-from scripts._common import parse_weights
+from scripts._common import SNAPSHOTS, latest_csv_path, parse_weights
 
 ROOT = Path(__file__).resolve().parent.parent
-SNAPSHOTS = ROOT / "data" / "snapshots"
 WATCHLIST = ROOT / "data" / "watchlist.txt"
-
-
-def latest_snapshot() -> Path:
-    files = sorted(SNAPSHOTS.glob("*.csv"))
-    if not files:
-        raise SystemExit("No snapshots in data/snapshots/. Run fetch_fundamentus.py first.")
-    return files[-1]
 
 
 def load_watchlist() -> set[str]:

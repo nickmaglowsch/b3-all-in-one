@@ -1,19 +1,15 @@
 # B3 Quant Research Platform
 
 An end-to-end Python platform for Brazilian equity research: it **downloads and
-cleans** historical B3 market data, **enriches** it with CVM fundamentals,
-**backtests** strategies against a tax-accurate simulator, **discovers** alpha
-features automatically, and drives all of it from a **Streamlit UI**.
+cleans** historical B3 market data, **enriches** it with CVM fundamentals, and
+**backtests** strategies against a tax-accurate simulator.
 
-It started life as a COTAHIST price scraper. It is now five layers:
+It started life as a COTAHIST price scraper. It is now three layers:
 
 | Layer | Where | What it does |
 |-------|-------|--------------|
 | **Data pipeline** | `b3_pipeline/` | Prices, corporate actions, and fundamentals into one SQLite DB |
 | **Backtesting framework** | `backtests/` | Tax-aware simulator + config/DSL-driven strategies |
-| **Feature discovery** | `research/discovery/` | Auto-generates & IC-ranks hundreds of alpha features |
-| **ML research** | `research/` | Feature-importance study (RandomForest / XGBoost) |
-| **Web UI** | `ui/` | Streamlit app to run every layer from the browser |
 
 All data lands in a single SQLite file (`b3_market_data.sqlite`) with
 split/dividend-adjusted prices (Yahoo-style `adj_close`), point-in-time
@@ -50,7 +46,7 @@ cd b3-pipeline-data-and-backtest-framework
 python -m venv .venv
 source .venv/bin/activate        # Linux/macOS  (.venv\Scripts\activate on Windows)
 
-pip install -r requirements.txt  # pipeline + backtests + ML + Streamlit UI
+pip install -r requirements.txt  # pipeline + backtests
 make dev-rust                    # build the Rust COTAHIST parser into the venv (one-time)
 ```
 
@@ -255,7 +251,6 @@ fixed ETF/CDI blends.
 | `metrics.py` | Sharpe, Calmar, max drawdown, annualised return/vol at any frequency |
 | `portfolio_opt.py` | Equal-weight, inverse-vol, ERC, HRP, rolling-Sharpe, regime-conditional weights |
 | `strategy_returns.py` | Runs the core strategies in one call → monthly after-tax return frame |
-| `plotting.py` | Dark-theme tear sheets |
 
 ### Portfolio construction example
 
@@ -270,72 +265,6 @@ port_ret, weights = compute_portfolio_returns(returns_df, liquid, lambda w: hrp_
 print(build_metrics(port_ret, "My HRP Portfolio", 12))
 ```
 
-### Runnable research scripts (`backtests/`)
-
-```bash
-python -m backtests.portfolio_compare_all         # all portfolio methods: 4-panel dashboard + CSV
-python -m backtests.portfolio_stability_analysis  # sub-period metrics + rolling 36-month Sharpe
-python -m backtests.sp500_b3_index                # SP500-style market-cap B3 index reconstruction
-```
-
-## Feature discovery engine
-
-`research/discovery/` automatically generates, evaluates, and ranks hundreds of
-candidate alpha features by **Information Coefficient (IC)** — replacing manual
-factor selection with a systematic sweep-and-prune pipeline.
-
-```bash
-python -m research.discovery.main                 # full run: generate → evaluate → prune → export
-python -m research.discovery.main --incremental   # skip already-computed features
-python -m research.discovery.main --force-recompute
-python -m research.discovery.main --no-fundamentals
-```
-
-**How it works.** Level 0 base signals (~15 categories: momentum, volatility,
-volume, beta, skew/kurtosis, illiquidity, mean reversion, market/CDI regime, …)
-across many windows → Level 1 unary transforms (cross-sectional `rank`/`zscore`)
-→ Level 2 composites (`delta`, `ratio_to_mean`, `ratio`, `product` on the
-best features). Each feature is scored by IC (Spearman rank correlation vs
-forward returns at 5/10/20/60-day horizons), then pruned by NaN/variance filter →
-IC threshold → correlation dedup (>0.90) → cap at 500. Computed features and IC
-time-series are cached in `research/feature_store/` (Parquet + a `registry.json`
-with a source-data hash that auto-invalidates on new data), so re-runs are
-incremental.
-
-**Outputs** land in `research/output/`: a ranked `feature_catalog.json` (consumed
-by backtests via `store:<id>`), a text report, and diagnostic plots (IC bar
-chart, rolling IC time-series, IC decay, turnover scatter, correlation heatmap,
-train/test overfit scatter).
-
-## ML research pipeline
-
-`research/main.py` is a separate feature-importance study: it engineers ~19
-price/volume/cross-sectional/regime features, builds binary classification
-targets, trains RandomForest + XGBoost, and compares feature-importance rankings.
-
-```bash
-python -m research.main
-```
-
-## Web UI
-
-A Streamlit app to run every layer from the browser.
-
-```bash
-streamlit run ui/app.py      # or: python run_ui.py
-```
-
-Then open http://localhost:8501.
-
-| Page | Description |
-|------|-------------|
-| **Pipeline** | DB stats, browse raw COTAHIST files & tables, trigger pipeline runs with live logs |
-| **Backtest Runner** | Pick a registered strategy, configure params via dynamic forms, run in background, view interactive Plotly results |
-| **Dashboard** | Browse saved results, compare strategies side-by-side (equity overlays, correlation matrices) |
-| **Research** | ML feature-importance rankings, model metrics, trigger the research pipeline |
-| **Discovery** | Feature-discovery catalog, IC rankings, and diagnostic charts |
-| **Fundamentals** | Browse CVM fundamentals and point-in-time filings |
-
 ## Testing
 
 ```bash
@@ -345,8 +274,7 @@ make test-rust                             # Rust unit tests
 ```
 
 The `tests/` suite covers the parser, corporate actions, CVM ingestion (PIT,
-storage, historical), the config-strategy engines, the data loader, and the
-discovery core.
+storage, historical), the config-strategy engines, and the simulator.
 
 ## License
 

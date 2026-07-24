@@ -506,9 +506,7 @@ class SP500B3Strategy(StrategyBase):
     """SP500-style B3 Index plugin.
 
     Quarterly (QE) rebalance. At each rebalance the framework simulator resets
-    to the target weights; intra-quarter market-cap drift is only fully modeled
-    by the standalone runner (backtests/sp500_b3_index.py), which is the
-    reference implementation of the index.
+    to the target weights; intra-quarter market-cap drift is not modeled.
     """
 
     needs_fundamentals: bool = True

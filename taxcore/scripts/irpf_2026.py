@@ -244,8 +244,7 @@ def snapshot_positions(tl: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
 
 
 def renda_fixa_year_end(year: int) -> pd.DataFrame:
-    """Build per-product saldo snapshot at 31/12/(year-1) and 31/12/year
-    using the same parsing logic as scripts/renda_fixa_analysis.py.
+    """Build per-product saldo snapshot at 31/12/(year-1) and 31/12/year.
 
     Returns one row per (code, bank) pair with:
       aplic_total, exit_date, status, value_prev, value_cur, irpf_grupo, irpf_codigo.

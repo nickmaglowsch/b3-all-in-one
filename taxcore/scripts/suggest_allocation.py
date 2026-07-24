@@ -24,12 +24,11 @@ import pandas as pd
 from tabulate import tabulate
 
 from methodologies import filters, mixed
-from scripts._common import price_lookup
+from scripts._common import SNAPSHOTS, latest_csv_path, price_lookup
 
 ROOT = Path(__file__).resolve().parent.parent
 POSITIONS = ROOT / "data" / "positions.csv"
 WATCHLIST = ROOT / "data" / "watchlist.txt"
-SNAPSHOTS = ROOT / "data" / "snapshots"
 
 
 def load_watchlist() -> set[str]:
@@ -57,11 +56,11 @@ def main(argv: list[str]) -> int:
                    help="Only suggest names not already in your portfolio")
     args = p.parse_args(argv[1:])
 
-    snap_files = sorted(SNAPSHOTS.glob("*.csv"))
-    if not snap_files:
+    snap_path = latest_csv_path(SNAPSHOTS)
+    if snap_path is None:
         print("No snapshots. Run fetch_fundamentus.py first.", file=sys.stderr)
         return 1
-    snap = pd.read_csv(snap_files[-1])
+    snap = pd.read_csv(snap_path)
 
     # Price lookup spans equity + FII + external sources. The equity snapshot
     # is still used as the *ranking universe* below — FIIs and BDR-ETFs are

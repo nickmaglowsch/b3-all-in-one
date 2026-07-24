@@ -16,7 +16,7 @@ from platform_app.models import (
     BacktestRun, CashEvent, CostBasisOverride, Import, Position, Trade,
 )
 
-# Postgres-backed queue (spec 01: Redis is cache-only, jobs live in Postgres).
+# Postgres-backed queue (spec 01: jobs live in Postgres).
 # Constructing the App does not open a connection — the pool opens on app.open_async().
 app = App(connector=PsycopgConnector(conninfo=settings.psycopg_dsn))
 
@@ -62,19 +62,6 @@ def _position_dict(tid: uuid.UUID, r: dict[str, str]) -> dict:
     )
 
 
-def _last_json(text: str) -> dict:
-    """The engine prints progress to stdout then a final JSON summary line last.
-    Scan from the end for the first line that parses as a JSON object."""
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except ValueError:
-                continue
-    raise ValueError("no JSON summary in engine output")
-
-
 @app.task(name="run_backtest")
 async def run_backtest(run_id: str) -> dict:
     """Shell into the engine venv to run one backtest. Writes artifacts under
@@ -105,7 +92,7 @@ async def run_backtest(run_id: str) -> dict:
             return {"run_id": run_id, "status": "error", "error": run.error}
 
         try:
-            summary = _last_json(proc.stdout)
+            summary = enginerun._last_json(proc.stdout)
         except ValueError as e:
             run.status = "error"
             run.error = f"{e}: {(proc.stderr or proc.stdout)[-1000:]}"

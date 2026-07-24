@@ -2,13 +2,9 @@ use pyo3::prelude::*;
 use pyo3_arrow::PyRecordBatch;
 
 mod adjustments;
-mod correlation;
-mod cross_section;
-mod feature_eval;
 mod parser;
 mod pivot;
 mod schema;
-pub(crate) mod util;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -128,12 +124,6 @@ fn cotahist_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(detect_splits, m)?)?;
     m.add_function(wrap_pyfunction!(compute_split_adjustment, m)?)?;
     m.add_function(wrap_pyfunction!(pivot_and_ffill, m)?)?;
-    m.add_function(wrap_pyfunction!(feature_eval::compute_ic_series, m)?)?;
-    m.add_function(wrap_pyfunction!(feature_eval::compute_ic_series_batch, m)?)?;
-    m.add_function(wrap_pyfunction!(feature_eval::compute_turnover_rs, m)?)?;
-    m.add_function(wrap_pyfunction!(cross_section::cross_sectional_rank, m)?)?;
-    m.add_function(wrap_pyfunction!(cross_section::cross_sectional_zscore, m)?)?;
-    m.add_function(wrap_pyfunction!(correlation::compute_pairwise_spearman, m)?)?;
     Ok(())
 }
 

@@ -6,7 +6,7 @@ external cash flows from their own tables (buys − sells − income) and feed t
 on their true dates, into the engine running each alternative strategy. The
 comparison is a point comparison against the real book (total invested + actual
 market value) plus each scenario's after-tax equity curve — we do NOT reconstruct
-a full historical portfolio index here (that's portfolio_index's job).
+a full historical portfolio index here.
 
 Owned by the what-if agent. Registered in main.py as `whatif_router`.
 """
@@ -39,9 +39,8 @@ from platform_app.tenancy import get_current_tenant
 
 whatif_router = APIRouter(prefix="/whatif", tags=["whatif"])
 
-# cash_events categories that are a return of/on capital (not new external money):
-# mirrors taxcore portfolio_index.INCOME_CATEGORIES. Net external flow =
-# buys − sells − income, the exact definition etf_counterfactual replays.
+# cash_events categories that are a return of/on capital (not new external money).
+# Net external flow = buys − sells − income.
 INCOME_CATEGORIES = {"income", "amortization"}
 
 

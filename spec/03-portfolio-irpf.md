@@ -29,8 +29,10 @@ interfaces are replaced.
 Ports of the existing scripts, as API + UI instead of stdout markdown:
 - **Positions & status** (`portfolio_status.py`): current positions, avg cost, market value
   (from shared market plane — replaces per-user snapshot CSVs), P&L, income received.
-- **Benchmarking** (`portfolio_index.py`, `etf_counterfactual`): portfolio vs IBOV/CDI/ETF
-  counterfactuals.
+- **Benchmarking**: portfolio vs IBOV/CDI/ETF counterfactuals. The point-comparison
+  half ships in `routes_whatif.py`; the full historical portfolio index is still to
+  build (taxcore reference impls `portfolio_index.py` / `etf_counterfactual.py` were
+  removed as dead weight — recover from git history if useful).
 - **Sector exposure** (`sector_exposure.py`).
 - **Rankings & allocation** (`rank*.py` + `methodologies/`): platform-wide equity/FII
   rankings computed once per market-data refresh and cached (methodologies are pure

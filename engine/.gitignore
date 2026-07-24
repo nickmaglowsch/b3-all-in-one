@@ -5,13 +5,12 @@
 .devcontainer/.env
 .claude-worktrees/
 .DS_Store
-.streamlit/
 results/
 .claude/settings.local.json
+.claude/agent-memory/
 tasks/
 .claude/auth.local.md
 b3_pipeline_rs/target/
-research/feature_store/
 __pycache__/
 .cache/
 *.log
@@ -20,4 +19,3 @@ __pycache__/
 backtests/output/
 backtests/*.png
 backtests/*.csv
-research/output/

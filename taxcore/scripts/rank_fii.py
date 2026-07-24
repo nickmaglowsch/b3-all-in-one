@@ -17,21 +17,20 @@ import pandas as pd
 from tabulate import tabulate
 
 from methodologies import fii_filters, fii_mixed
-from scripts._common import parse_weights
+from scripts._common import FII_SNAPSHOTS, latest_csv_path, parse_weights
 
 ROOT = Path(__file__).resolve().parent.parent
-FII_SNAPSHOTS = ROOT / "data" / "fii_snapshots"
 POSITIONS = ROOT / "data" / "positions.csv"
 
 
 def latest_snapshot() -> Path:
-    files = sorted(FII_SNAPSHOTS.glob("*.csv"))
-    if not files:
+    snap = latest_csv_path(FII_SNAPSHOTS)
+    if snap is None:
         raise SystemExit(
             "No FII snapshots in data/fii_snapshots/. "
             "Run fetch_fundamentus_fii.py first."
         )
-    return files[-1]
+    return snap
 
 
 def held_fii_tickers(snapshot: pd.DataFrame) -> set[str]:

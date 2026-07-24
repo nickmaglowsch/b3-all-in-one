@@ -38,18 +38,18 @@ import pandas as pd
 from tabulate import tabulate
 
 from methodologies import fii_cheapest
+from scripts._common import FII_SNAPSHOTS, latest_csv_path
 
 ROOT = Path(__file__).resolve().parent.parent
-SNAPSHOTS = ROOT / "data" / "fii_snapshots"
 METADATA = ROOT / "data" / "fii_metadata.csv"
 POSITIONS = ROOT / "data" / "positions.csv"
 
 
 def latest_snapshot() -> Path:
-    files = sorted(SNAPSHOTS.glob("*.csv"))
-    if not files:
+    snap = latest_csv_path(FII_SNAPSHOTS)
+    if snap is None:
         raise SystemExit("No FII snapshots in data/fii_snapshots/. Run fetch_fundamentus_fii.py first.")
-    return files[-1]
+    return snap
 
 
 def _rebalance(df: pd.DataFrame, ranked: pd.DataFrame, dropped: pd.DataFrame, args) -> int:

@@ -32,17 +32,17 @@ from tabulate import tabulate
 
 from methodologies import cheapest
 from scripts import balance_dates
+from scripts._common import SNAPSHOTS, latest_csv_path
 
 ROOT = Path(__file__).resolve().parent.parent
-SNAPSHOTS = ROOT / "data" / "snapshots"
 SECTORS = ROOT / "data" / "sectors_cache.csv"
 
 
 def latest_snapshot() -> Path:
-    files = sorted(SNAPSHOTS.glob("*.csv"))
-    if not files:
+    snap = latest_csv_path(SNAPSHOTS)
+    if snap is None:
         raise SystemExit("No snapshots in data/snapshots/. Run fetch_fundamentus.py first.")
-    return files[-1]
+    return snap
 
 
 def load_sectors() -> dict[str, str]:

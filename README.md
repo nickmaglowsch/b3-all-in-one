@@ -24,7 +24,7 @@ snapshots. See `taxcore/tests/golden/README.md`.
 
 ```
 cp .env.example .env
-docker compose up -d postgres redis        # infra only
+docker compose up -d postgres              # infra only
 docker compose --profile app up --build -d # + api & worker (self-contained images)
 ```
 

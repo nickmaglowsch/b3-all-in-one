@@ -70,12 +70,15 @@ def run_script(
 
 
 def _last_json(text: str) -> dict:
-    """Parse the last JSON object line of stdout — build_shared_data prints
-    progress lines before advise_weights emits its one-line JSON payload."""
+    """Parse the last JSON object line of stdout — the engine prints progress
+    lines before emitting its one-line JSON payload."""
     for line in reversed(text.splitlines()):
         line = line.strip()
         if line.startswith("{"):
-            return json.loads(line)
+            try:
+                return json.loads(line)
+            except ValueError:
+                continue
     raise ValueError(f"no JSON object in engine output:\n{text[-2000:]}")
 
 

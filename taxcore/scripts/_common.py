@@ -16,12 +16,17 @@ FII_SNAPSHOTS = DATA / "fii_snapshots"
 EXTERNAL_PRICES = DATA / "external_prices"
 
 
+def latest_csv_path(d: Path) -> Path | None:
+    """Most recent CSV in directory `d` (snapshots are named by ISO date, so
+    lexicographic sort is chronological), or None if there are none."""
+    files = sorted(d.glob("*.csv")) if d.exists() else []
+    return files[-1] if files else None
+
+
 def latest_csv(d: Path) -> pd.DataFrame | None:
     """Most recent CSV in directory `d`, or None if there are none."""
-    if not d.exists():
-        return None
-    files = sorted(d.glob("*.csv"))
-    return pd.read_csv(files[-1]) if files else None
+    p = latest_csv_path(d)
+    return pd.read_csv(p) if p is not None else None
 
 
 def parse_weights(s: str) -> dict[str, float]:

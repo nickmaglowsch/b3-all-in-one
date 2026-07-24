@@ -61,8 +61,7 @@ def resolve_factor(cfg: dict, shared: dict, params: dict | None = None) -> pd.Da
 
     1. an inline ``expr:`` string (the signal DSL);
     2. a named signal from ``signals.yaml`` (also a DSL ``expr``);
-    3. ``store:<feature_id>`` — the research/discovery IC factor store;
-    4. a bare ``shared_data`` key (e.g. ``mf_composite``, ``f_pe_ratio_dyn``).
+    3. a bare ``shared_data`` key (e.g. ``mf_composite``, ``f_pe_ratio_dyn``).
 
     ``params`` (UI/default values) override the signal's own defaults, so a
     ``lookback`` slider flows into the expression.
@@ -77,26 +76,12 @@ def resolve_factor(cfg: dict, shared: dict, params: dict | None = None) -> pd.Da
         entry = defs[ref]
         merged = {**entry, **scalars}       # spec/params override the signal's defaults
         return _eval_expr(entry["expr"], merged, shared)
-    if isinstance(ref, str) and ref.startswith("store:"):
-        return _load_store_feature(ref[len("store:"):], shared)
     if ref in shared:
         return shared[ref]
     raise KeyError(
         f"Unknown factor {ref!r}: not an expr, a name in signals.yaml, "
-        f"a shared_data key, or store:<id>"
+        f"or a shared_data key"
     )
-
-
-def _load_store_feature(feature_id: str, shared: dict) -> pd.DataFrame:
-    """Load a wide feature from the research/discovery FeatureStore and align it
-    to the rebalance calendar (as-of ffill), mirroring the fundamentals path in
-    shared_data.py:360-369."""
-    from research.discovery.store import FeatureStore
-
-    df = FeatureStore().load_feature(feature_id)      # wide date x ticker, daily
-    rebal = shared["ret"].index
-    idx = df.index.union(rebal).sort_values()
-    return df.reindex(idx).ffill().reindex(rebal)
 
 
 def _build_signal(spec: dict, params: dict, shared: dict) -> tuple[pd.DataFrame, int]:

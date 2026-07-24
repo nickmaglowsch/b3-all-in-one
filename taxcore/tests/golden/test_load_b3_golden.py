@@ -1,8 +1,8 @@
 """Golden-file lock on scripts/load_b3.py.
 
-Runs the parser over the real B3 extracts in ``b3_imports/`` and asserts the
-produced trades/cash_events/positions CSVs match the canonical vendored files
-in ``taxcore/data/``.
+Runs the parser over the synthetic B3 extracts in ``b3_imports/`` (built by
+``make_fixtures.py``) and asserts the produced trades/cash_events/positions CSVs
+match the canonical vendored files in ``taxcore/data/``.
 """
 from __future__ import annotations
 

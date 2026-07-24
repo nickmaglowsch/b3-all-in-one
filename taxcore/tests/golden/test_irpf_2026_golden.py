@@ -4,9 +4,8 @@ Feeds the canonical trades/cash_events CSVs (+ the raw movimentacao extracts the
 script reads directly for renda fixa) and asserts the generated IRPF markdown
 matches the committed golden ``expected/irpf-2025.md``.
 
-The golden was regenerated from the current code + fixtures because the human
-report ``reports/2026-irpf-ano-base-2025.md`` predates the current data (it still
-lists TRPL4 separately; the current parser renames TRPL4 -> ISAE4). See README.md.
+Both the golden and the extracts it derives from are synthetic — see
+``make_fixtures.py`` and README.md.
 """
 from __future__ import annotations
 

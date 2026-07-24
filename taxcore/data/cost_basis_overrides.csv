@@ -1,0 +1,21 @@
+# Manual cost-basis corrections for events the B3 reports cannot capture
+# directly: IPO reservation deliveries (Transferência - Liquidação with empty
+# Preço), spin-off allocations (Cisão / Incorporação), transfers from another
+# broker (Atualização), etc.
+#
+# SYNTHETIC — invented alongside b3_imports/*.xlsx by tests/golden/make_fixtures.py.
+#
+# Columns:
+#   date     — YYYY-MM-DD
+#   ticker   — B3 ticker the row applies to
+#   kind     — 'buy'  : synthetic Compra trade at the given (qty, price)
+#              'sell' : synthetic Venda trade
+#              'cost_adjust' : reduces ticker's cost basis by `amount` (qty unchanged)
+#                              (use to record cisão basis transferring OUT of parent)
+#   qty      — share count (signed implicitly by `kind`)
+#   price    — R$ per share (omit for cost_adjust)
+#   amount   — R$ for cost_adjust rows (positive = basis reduction)
+#   note     — free-text source / reasoning
+date,ticker,kind,qty,price,amount,note
+2024-09-30,XPBR31,buy,10.72,84.17,,Cisao sintetica ITUB4 -> XPBR31: 4.64% da base em 10.72 BDRs
+2024-09-30,ITUB4,cost_adjust,,,902.30,Cisao sintetica: base transferida de ITUB4 para XPBR31

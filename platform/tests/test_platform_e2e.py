@@ -1,5 +1,8 @@
-"""End-to-end: upload the real B3 extracts, run the import job, and assert the
+"""End-to-end: upload the vendored B3 extracts, run the import job, and assert the
 platform path is equivalent to taxcore's golden-tested scripts.
+
+The extracts are synthetic (taxcore/tests/golden/make_fixtures.py) — the counts
+below track whatever that generator last produced.
 
 dev-login -> POST /imports (all 16 fixtures) -> run process_imports inline ->
 positions match taxcore/data/positions.csv, and POST /irpf/reports year=2025
@@ -30,8 +33,8 @@ def _normalize_irpf(text: str) -> str:
 
 
 async def _seed_overrides(tenant_id: uuid.UUID) -> None:
-    """Insert the real cost-basis overrides for this tenant (in file order), so the
-    import reproduces the golden positions (e.g. the XPBR31 cisão buy)."""
+    """Insert the vendored cost-basis overrides for this tenant (in file order), so
+    the import reproduces the golden positions (e.g. the XPBR31 cisão buy)."""
     from platform_app.b3run import to_date, to_float
     from platform_app.db import async_session_maker
     from platform_app.models import CostBasisOverride
@@ -67,7 +70,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
 
     result = await process_imports(tenant_id=tid)
     assert result["status"] == "done", result
-    assert result["positions"] == 45
+    assert result["positions"] == 25
 
     # imports flipped to done
     imports = (await client.get("/imports", headers=headers)).json()
@@ -77,7 +80,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
     # positions equal taxcore/data/positions.csv (ticker/qty/avg_cost, float-tolerant)
     api_pos = {p["ticker"]: p for p in (await client.get("/portfolio/positions", headers=headers)).json()}
     expected = {r["ticker"]: r for r in csv.DictReader(POSITIONS_CSV.read_text().splitlines())}
-    assert len(api_pos) == len(expected) == 45
+    assert len(api_pos) == len(expected) == 25
     for ticker, exp in expected.items():
         assert ticker in api_pos, f"missing {ticker}"
         assert abs(api_pos[ticker]["qty"] - float(exp["qty"])) < 1e-6, ticker
@@ -85,7 +88,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
 
     # trades endpoint returns newest-first, paginated
     trades = (await client.get("/portfolio/trades?limit=5", headers=headers)).json()
-    assert trades["total"] == 1576
+    assert trades["total"] == 74
     assert len(trades["items"]) == 5
     dates = [t["date"] for t in trades["items"]]
     assert dates == sorted(dates, reverse=True)
@@ -103,7 +106,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
 
 async def test_tlh_plans_after_import(client):
     """Runs after the import test above (same module, same session DB) so the dev
-    tenant already has its 45 positions + trades. Prices come from the vendored
+    tenant already has its 25 positions + trades. Prices come from the vendored
     taxcore/data snapshots (platform-market-prices-later)."""
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -130,7 +133,7 @@ async def test_tlh_plans_after_import(client):
 
 
 async def test_target_and_rebalance_after_import(client):
-    """Runs after the import test (same module/session) so the dev tenant has its 45
+    """Runs after the import test (same module/session) so the dev tenant has its 25
     positions. This module sorts before test_sleeves, so no sleeves exist yet."""
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

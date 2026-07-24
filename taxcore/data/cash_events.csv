@@ -1,0 +1,280 @@
+date,ticker,event_type,event_category,is_amortization,qty,price,amount,broker,__source_file
+2024-02-14,MXRF11,Rendimento,income,False,1500.0,,148.5,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-03-08,VALE3,Dividendo,income,False,250.0,,486.2,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-03-14,HGLG11,Rendimento,income,False,100.0,,96.2,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-03-14,MXRF11,Rendimento,income,False,1500.0,,149.32,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-03-21,PETR4,Dividendo,income,False,700.0,,612.4,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-04-02,ITUB4,Juros Sobre Capital Próprio,income,False,600.0,,187.3,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-04-14,KNRI11,Rendimento,income,False,80.0,,88.4,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-04-14,MXRF11,Rendimento,income,False,1500.0,,150.13,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-04-14,HGLG11,Rendimento,income,False,100.0,,96.73,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-04-25,RENT3,Dividendo,income,False,500.0,,84.3,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-05-14,XPML11,Rendimento,income,False,180.0,,92.1,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-05-14,HGLG11,Rendimento,income,False,100.0,,97.26,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-05-14,KNRI11,Rendimento,income,False,80.0,,88.89,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-05-14,MXRF11,Rendimento,income,False,1500.0,,150.95,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-05-17,ISAE4,Juros Sobre Capital Próprio,income,False,500.0,,244.6,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-05-30,B3SA3,Juros Sobre Capital Próprio,income,False,700.0,,132.6,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-14,HGLG11,Rendimento,income,False,100.0,,97.79,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-14,BBAS3,Juros Sobre Capital Próprio,income,False,1100.0,,214.8,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-14,KNRI11,Rendimento,income,False,80.0,,89.37,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-14,XPML11,Rendimento,income,False,180.0,,92.61,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-14,VISC11,Rendimento,income,False,100.0,,71.3,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-14,MXRF11,Rendimento,income,False,1500.0,,151.77,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-06-28,CMIG4,Dividendo,income,False,1234.0,,521.9,ITAU CV S/A,movimentacao-2026-05-08-18-45-28.xlsx
+2024-07-01,ABEV3,Dividendo,income,False,1076.0,,268.4,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-07-14,XPML11,Rendimento,income,False,180.0,,93.11,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-07-14,HGLG11,Rendimento,income,False,100.0,,98.32,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-07-14,VISC11,Rendimento,income,False,100.0,,71.69,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-07-14,MXRF11,Rendimento,income,False,1500.0,,152.58,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-07-14,KNCR11,Rendimento,income,False,100.0,,108.6,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-07-14,KNRI11,Rendimento,income,False,80.0,,89.86,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-09,WEGE3,Juros Sobre Capital Próprio,income,False,300.0,,61.4,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,KNCR11,Rendimento,income,False,100.0,,109.2,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,HGLG11,Rendimento,income,False,100.0,,98.85,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,VISC11,Rendimento,income,False,100.0,,72.08,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,RECR11,Rendimento,income,False,150.0,,142.7,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,MXRF11,Rendimento,income,False,1500.0,,153.4,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,KNRI11,Rendimento,income,False,80.0,,90.34,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-14,XPML11,Rendimento,income,False,180.0,,93.62,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-22,PETR4,Dividendo,income,False,700.0,,635.06,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-08-30,TAEE11,Dividendo,income,False,400.0,,342.1,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-06,VALE3,Dividendo,income,False,250.0,,504.19,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-13,KLBN11,Juros Sobre Capital Próprio,income,False,600.0,,118.9,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,MXRF11,Rendimento,income,False,1500.0,,154.22,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,VISC11,Rendimento,income,False,100.0,,72.48,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,HGLG11,Rendimento,income,False,100.0,,99.37,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,KNCR11,Rendimento,income,False,100.0,,109.79,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,KNRI11,Rendimento,income,False,80.0,,90.83,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,XPML11,Rendimento,income,False,180.0,,94.13,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-14,RECR11,Rendimento,income,False,150.0,,143.48,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-09-30,ITUB4,Cost Adjustment (override),amortization,True,0.0,0.0,902.3,override,cost_basis_overrides.csv
+2024-10-01,ITUB4,Juros Sobre Capital Próprio,income,False,600.0,,194.23,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-11,GOAU4,Dividendo,income,False,1621.0,,176.5,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,VISC11,Rendimento,income,False,100.0,,72.87,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,RECR11,Rendimento,income,False,150.0,,144.27,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,KNCR11,Rendimento,income,False,100.0,,110.39,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,MXRF11,Rendimento,income,False,1500.0,,155.03,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,XPML11,Rendimento,income,False,180.0,,94.63,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,HGRU11,Rendimento,income,False,90.0,,84.9,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,HGLG11,Rendimento,income,False,100.0,,99.9,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-14,KNRI11,Rendimento,income,False,80.0,,91.32,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-10-15,MXRF11,Amortização,amortization,True,1500.0,,145.0,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-08,EGIE3,Juros Sobre Capital Próprio,income,False,350.0,,165.2,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,KNRI11,Rendimento,income,False,80.0,,91.8,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,HGRU11,Rendimento,income,False,90.0,,85.37,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,KNCR11,Rendimento,income,False,100.0,,110.99,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,MXRF11,Rendimento,income,False,1500.0,,155.85,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,XPML11,Rendimento,income,False,180.0,,95.14,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,BTLG11,Rendimento,income,False,110.0,,79.5,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,VISC11,Rendimento,income,False,100.0,,73.26,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,RECR11,Rendimento,income,False,150.0,,145.05,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-14,HGLG11,Rendimento,income,False,100.0,,100.43,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-15,ISAE4,Juros Sobre Capital Próprio,income,False,500.0,,253.65,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-11-29,B3SA3,Juros Sobre Capital Próprio,income,False,700.0,,137.51,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-13,BBAS3,Juros Sobre Capital Próprio,income,False,1100.0,,222.75,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,HGLG11,Rendimento,income,False,100.0,,100.96,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,BTLG11,Rendimento,income,False,110.0,,79.94,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,HGRU11,Rendimento,income,False,90.0,,85.83,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,KNCR11,Rendimento,income,False,100.0,,111.59,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,VISC11,Rendimento,income,False,100.0,,73.65,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,XPML11,Rendimento,income,False,180.0,,95.65,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,MXRF11,Rendimento,income,False,1500.0,,156.67,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,KNRI11,Rendimento,income,False,80.0,,92.29,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-14,RECR11,Rendimento,income,False,150.0,,145.84,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2024-12-20,SBSP3,Dividendo,income,False,400.0,,143.7,ITAU CV S/A,movimentacao-2026-05-08-18-46-11.xlsx
+2025-01-02,ABEV3,Dividendo,income,False,1076.0,,278.33,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,HGLG11,Rendimento,income,False,100.0,,101.49,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,BTLG11,Rendimento,income,False,110.0,,80.37,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,RECR11,Rendimento,income,False,150.0,,146.62,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,KNCR11,Rendimento,income,False,100.0,,112.18,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,VISC11,Rendimento,income,False,100.0,,74.05,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,XPML11,Rendimento,income,False,180.0,,96.15,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,KNRI11,Rendimento,income,False,80.0,,92.78,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,MXRF11,Rendimento,income,False,1500.0,,157.48,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-14,HGRU11,Rendimento,income,False,90.0,,86.3,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-01-24,ISAE4,Dividendo,income,False,500.0,,158.3,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,WEGE3,Juros Sobre Capital Próprio,income,False,300.0,,63.67,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,KNCR11,Rendimento,income,False,100.0,,112.78,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,MXRF11,Rendimento,income,False,1500.0,,158.3,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,BTLG11,Rendimento,income,False,110.0,,80.81,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,RECR11,Rendimento,income,False,150.0,,147.41,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,HGLG11,Rendimento,income,False,100.0,,102.02,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,XPML11,Rendimento,income,False,180.0,,96.66,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,KNRI11,Rendimento,income,False,80.0,,93.26,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,VISC11,Rendimento,income,False,100.0,,74.44,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-14,HGRU11,Rendimento,income,False,90.0,,86.77,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-02-28,TAEE11,Dividendo,income,False,400.0,,354.76,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-07,VALE3,Dividendo,income,False,250.0,,522.18,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,BTLG11,Rendimento,income,False,110.0,,81.25,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,HGRU11,Rendimento,income,False,90.0,,87.23,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,KNRI11,Rendimento,income,False,80.0,,93.75,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,HGLG11,Rendimento,income,False,100.0,,102.55,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,KLBN11,Juros Sobre Capital Próprio,income,False,600.0,,123.3,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,RECR11,Rendimento,income,False,150.0,,148.19,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,MXRF11,Rendimento,income,False,1500.0,,159.12,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,KNCR11,Rendimento,income,False,100.0,,113.38,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,VISC11,Rendimento,income,False,100.0,,74.83,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-14,XPML11,Rendimento,income,False,180.0,,97.17,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-03-20,PETR4,Dividendo,income,False,700.0,,657.72,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-01,ITUB4,Juros Sobre Capital Próprio,income,False,600.0,,201.16,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-11,GOAU4,Dividendo,income,False,1621.0,,183.03,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,HGRU11,Rendimento,income,False,90.0,,87.7,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,KNCR11,Rendimento,income,False,100.0,,113.98,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,BTLG11,Rendimento,income,False,110.0,,81.69,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,HGLG11,Rendimento,income,False,100.0,,103.08,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,VISC11,Rendimento,income,False,100.0,,75.22,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,RECR11,Rendimento,income,False,150.0,,148.98,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,MXRF11,Rendimento,income,False,1500.0,,159.93,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,XPML11,Rendimento,income,False,180.0,,97.67,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-14,KNRI11,Rendimento,income,False,80.0,,94.23,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-15,MXRF11,Amortização,amortization,True,1500.0,,180.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-22,WEGE3,Desdobro,qty_event,False,100.0,,0.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-04-24,RENT3,Dividendo,income,False,500.0,,87.42,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-09,EGIE3,Juros Sobre Capital Próprio,income,False,350.0,,171.31,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,KNCR11,Rendimento,income,False,100.0,,114.57,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,KNRI11,Rendimento,income,False,80.0,,94.72,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,HGRU11,Rendimento,income,False,90.0,,88.17,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,XPML11,Rendimento,income,False,180.0,,98.18,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,HGLG11,Rendimento,income,False,100.0,,103.61,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,BTLG11,Rendimento,income,False,110.0,,82.12,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,RECR11,Rendimento,income,False,150.0,,149.76,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,VISC11,Rendimento,income,False,100.0,,75.61,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-14,MXRF11,Rendimento,income,False,1500.0,,160.75,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-05-16,PETRF500,Opção de Compra sobre Ações,premium,False,300.0,0.61,-183.0,ORAMA DTVM S.A.,negociacao-2026-05-10-22-50-41.xlsx
+2025-05-16,PETRF460,Opção de Compra sobre Ações,premium,False,-300.0,1.28,384.0,ORAMA DTVM S.A.,negociacao-2026-05-10-22-50-41.xlsx
+2025-05-30,B3SA3,Juros Sobre Capital Próprio,income,False,700.0,,142.41,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-10,GOAU4,Bonificação em Ativos,qty_event,False,75.0,8.9,0.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-11,GOAU4,Fração em Ativos,qty_event,False,-1.0,,0.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-12,GOAU4,Leilão de Fração,other,False,1.0,9.87,9.87,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-13,BBAS3,Juros Sobre Capital Próprio,income,False,1100.0,,230.7,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,KNCR11,Rendimento,income,False,100.0,,115.17,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,MXRF11,Rendimento,income,False,1500.0,,161.57,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,HGLG11,Rendimento,income,False,100.0,,104.14,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,KNRI11,Rendimento,income,False,80.0,,95.21,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,HGRU11,Rendimento,income,False,90.0,,88.64,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,XPML11,Rendimento,income,False,180.0,,98.69,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,RECR11,Rendimento,income,False,150.0,,150.55,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,BTLG11,Rendimento,income,False,110.0,,82.56,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-14,VISC11,Rendimento,income,False,100.0,,76.01,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-27,CMIG4,Dividendo,income,False,1234.0,,541.21,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-30,PETR4,Reembolso,reembolso,False,0.0,,37.85,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-07-01,ABEV3,Dividendo,income,False,1076.0,,288.26,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,HGLG11,Rendimento,income,False,100.0,,104.67,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,MXRF11,Rendimento,income,False,1500.0,,162.38,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,HGRU11,Rendimento,income,False,90.0,,89.1,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,BTLG11,Rendimento,income,False,110.0,,83.0,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,KNCR11,Rendimento,income,False,100.0,,115.77,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,KNRI11,Rendimento,income,False,80.0,,95.69,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,XPML11,Rendimento,income,False,180.0,,99.19,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,RECR11,Rendimento,income,False,150.0,,151.33,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-14,VISC11,Rendimento,income,False,100.0,,76.4,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-07-18,ISAE4,Dividendo,income,False,600.0,,191.4,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-08,WEGE3,Juros Sobre Capital Próprio,income,False,300.0,,65.94,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,VISC11,Rendimento,income,False,100.0,,76.79,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,HGLG11,Rendimento,income,False,100.0,,105.19,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,XPML11,Rendimento,income,False,180.0,,99.7,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,VALER780,Opção de Venda sobre Ações,premium,False,-200.0,2.15,430.0,ORAMA DTVM S.A.,negociacao-2026-05-10-22-50-41.xlsx
+2025-08-14,RECR11,Rendimento,income,False,150.0,,152.12,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,MXRF11,Rendimento,income,False,1500.0,,163.2,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,HGRU11,Rendimento,income,False,90.0,,89.57,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,BTLG11,Rendimento,income,False,110.0,,83.44,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,KNRI11,Rendimento,income,False,80.0,,96.18,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-14,KNCR11,Rendimento,income,False,100.0,,116.36,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-21,PETR4,Dividendo,income,False,700.0,,680.38,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-08-29,TAEE11,Dividendo,income,False,400.0,,367.42,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-05,VALE3,Dividendo,income,False,250.0,,540.17,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-12,KLBN11,Juros Sobre Capital Próprio,income,False,600.0,,127.7,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,KNRI11,Rendimento,income,False,80.0,,96.67,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,MXRF11,Rendimento,income,False,1500.0,,164.02,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,XPML11,Rendimento,income,False,180.0,,100.2,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,KNCR11,Rendimento,income,False,100.0,,116.96,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,BTLG11,Rendimento,income,False,110.0,,83.87,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,HGRU11,Rendimento,income,False,90.0,,90.04,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,HGLG11,Rendimento,income,False,100.0,,105.72,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,VISC11,Rendimento,income,False,100.0,,77.18,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-09-14,RECR11,Rendimento,income,False,150.0,,152.9,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-01,ITUB4,Juros Sobre Capital Próprio,income,False,600.0,,208.09,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-10,GOAU4,Dividendo,income,False,1621.0,,189.56,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,MXRF11,Rendimento,income,False,1500.0,,164.83,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,KNCR11,Rendimento,income,False,100.0,,117.56,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,HGRU11,Rendimento,income,False,90.0,,90.5,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,VISC11,Rendimento,income,False,100.0,,77.57,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,HGLG11,Rendimento,income,False,100.0,,106.25,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,BTLG11,Rendimento,income,False,110.0,,84.31,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,XPML11,Rendimento,income,False,180.0,,100.71,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,KNRI11,Rendimento,income,False,80.0,,97.15,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-10-14,RECR11,Rendimento,income,False,150.0,,153.69,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-07,EGIE3,Juros Sobre Capital Próprio,income,False,350.0,,177.42,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,RECR11,Rendimento,income,False,150.0,,154.47,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,BTLG11,Rendimento,income,False,110.0,,84.75,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,HGRU11,Rendimento,income,False,90.0,,90.97,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,KNRI11,Rendimento,income,False,80.0,,97.64,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,HGLG11,Rendimento,income,False,100.0,,106.78,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,KNCR11,Rendimento,income,False,100.0,,118.16,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,MXRF11,Rendimento,income,False,1500.0,,165.65,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,VISC11,Rendimento,income,False,100.0,,77.97,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-14,XPML11,Rendimento,income,False,180.0,,101.22,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-11-28,B3SA3,Juros Sobre Capital Próprio,income,False,700.0,,147.32,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-12,BBAS3,Juros Sobre Capital Próprio,income,False,1100.0,,238.64,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,HGLG11,Rendimento,income,False,100.0,,107.31,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,KNRI11,Rendimento,income,False,80.0,,98.12,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,BTLG11,Rendimento,income,False,110.0,,85.18,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,KNCR11,Rendimento,income,False,100.0,,118.75,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,RECR11,Rendimento,income,False,150.0,,155.26,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,HGRU11,Rendimento,income,False,90.0,,91.44,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,VISC11,Rendimento,income,False,100.0,,78.36,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,MXRF11,Rendimento,income,False,1500.0,,166.47,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-14,XPML11,Rendimento,income,False,180.0,,101.72,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2025-12-19,SBSP3,Dividendo,income,False,400.0,,149.02,ITAU CV S/A,movimentacao-2026-05-10-22-47-45.xlsx
+2026-01-02,ABEV3,Dividendo,income,False,1076.0,,298.19,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,BTLG11,Rendimento,income,False,110.0,,85.62,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,HGRU11,Rendimento,income,False,90.0,,91.9,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,RECR11,Rendimento,income,False,150.0,,156.04,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,VISC11,Rendimento,income,False,100.0,,78.75,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,XPML11,Rendimento,income,False,180.0,,102.23,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,HGLG11,Rendimento,income,False,100.0,,107.84,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,KNRI11,Rendimento,income,False,80.0,,98.61,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-14,MXRF11,Rendimento,income,False,1500.0,,167.29,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-01-23,ISAE4,Dividendo,income,False,600.0,,198.48,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-13,WEGE3,Juros Sobre Capital Próprio,income,False,300.0,,68.22,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,MXRF11,Rendimento,income,False,1500.0,,168.1,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,XPML11,Rendimento,income,False,180.0,,102.74,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,RECR11,Rendimento,income,False,150.0,,156.83,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,HGRU11,Rendimento,income,False,90.0,,92.37,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,VISC11,Rendimento,income,False,100.0,,79.14,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,KNRI11,Rendimento,income,False,80.0,,99.1,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,BTLG11,Rendimento,income,False,110.0,,86.06,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-14,HGLG11,Rendimento,income,False,100.0,,108.37,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-27,VALE3,Reembolso,reembolso,False,0.0,,52.4,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-02-27,TAEE11,Dividendo,income,False,400.0,,380.07,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-06,VALE3,Dividendo,income,False,250.0,,558.16,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-13,KLBN11,Juros Sobre Capital Próprio,income,False,600.0,,132.1,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,BTLG11,Rendimento,income,False,110.0,,86.5,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,RECR11,Rendimento,income,False,150.0,,157.61,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,VISC11,Rendimento,income,False,100.0,,79.54,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,HGRU11,Rendimento,income,False,90.0,,92.84,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,MXRF11,Rendimento,income,False,1500.0,,168.92,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,XPML11,Rendimento,income,False,180.0,,103.24,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,HGLG11,Rendimento,income,False,100.0,,108.9,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-14,KNRI11,Rendimento,income,False,80.0,,99.58,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-03-19,PETR4,Dividendo,income,False,700.0,,703.04,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-01,ITUB4,Juros Sobre Capital Próprio,income,False,600.0,,215.02,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,XPML11,Rendimento,income,False,180.0,,103.75,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,MXRF11,Rendimento,income,False,1500.0,,169.74,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,BTLG11,Rendimento,income,False,110.0,,86.93,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,HGLG11,Rendimento,income,False,100.0,,109.43,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,HGRU11,Rendimento,income,False,90.0,,93.31,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,RECR11,Rendimento,income,False,150.0,,158.4,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,KNRI11,Rendimento,income,False,80.0,,100.07,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-04-14,VISC11,Rendimento,income,False,100.0,,79.93,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,HGLG11,Rendimento,income,False,100.0,,109.96,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,XPML11,Rendimento,income,False,180.0,,104.26,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,HGRU11,Rendimento,income,False,90.0,,93.77,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,RECR11,Rendimento,income,False,150.0,,159.18,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,KNRI11,Rendimento,income,False,80.0,,100.56,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,BTLG11,Rendimento,income,False,110.0,,87.37,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,MXRF11,Rendimento,income,False,1500.0,,170.55,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-14,VISC11,Rendimento,income,False,100.0,,80.32,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-15,BBAS3,Juros Sobre Capital Próprio,income,False,1100.0,,246.59,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx
+2026-05-29,CMIG4,Dividendo,income,False,1234.0,,560.52,ITAU CV S/A,movimentacao-2026-05-10-22-48-08.xlsx

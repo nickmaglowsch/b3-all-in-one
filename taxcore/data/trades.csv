@@ -1,0 +1,75 @@
+date,side,market,maturity,broker,ticker,qty,price,amount,__source_file,signed_qty
+2024-01-09,Compra,Mercado à Vista,-,ITAU CV S/A,MXRF11,1500.0,10.35,15525.0,negociacao-2026-05-08-17-48-45.xlsx,1500.0
+2024-01-16,Compra,Mercado à Vista,-,ITAU CV S/A,IVVB11,40.0,340.0,13600.0,negociacao-2026-05-08-17-48-45.xlsx,40.0
+2024-01-18,Compra,Mercado à Vista,-,ITAU CV S/A,ITUB4,400.0,31.2,12480.0,negociacao-2026-05-08-17-48-45.xlsx,400.0
+2024-01-30,Compra,Mercado à Vista,-,ITAU CV S/A,RENT3,300.0,52.4,15720.0,negociacao-2026-05-08-17-48-45.xlsx,300.0
+2024-02-06,Compra,Mercado à Vista,-,ITAU CV S/A,HGLG11,60.0,152.3,9138.0,negociacao-2026-05-08-17-48-45.xlsx,60.0
+2024-02-08,Compra,Renda Fixa,-,ITAU CV S/A,LFTB11,100.0,108.4,10840.0,negociacao-2026-05-08-17-48-45.xlsx,100.0
+2024-02-15,Compra,Mercado à Vista,-,ITAU CV S/A,PETR4,300.0,27.8,8340.0,negociacao-2026-05-08-17-48-45.xlsx,300.0
+2024-02-20,Compra,Mercado à Vista,-,ITAU CV S/A,ISAE4,300.0,22.4,6720.0,negociacao-2026-05-08-17-48-45.xlsx,300.0
+2024-02-27,Compra,Mercado à Vista,-,ITAU CV S/A,WEGE3,100.0,40.1,4010.0,negociacao-2026-05-08-17-48-45.xlsx,100.0
+2024-03-05,Compra,Mercado à Vista,-,ITAU CV S/A,B3SA3,600.0,11.35,6810.0,negociacao-2026-05-08-17-48-45.xlsx,600.0
+2024-03-12,Compra,Mercado à Vista,-,ITAU CV S/A,VALE3,150.0,58.4,8760.0,negociacao-2026-05-08-17-48-45.xlsx,150.0
+2024-03-19,Compra,Mercado à Vista,-,ITAU CV S/A,TAEE11,250.0,34.2,8550.0,negociacao-2026-05-08-17-48-45.xlsx,250.0
+2024-03-26,Compra,Mercado à Vista,-,ITAU CV S/A,KNRI11,80.0,146.5,11720.0,negociacao-2026-05-08-17-48-45.xlsx,80.0
+2024-04-09,Compra,Mercado à Vista,-,ITAU CV S/A,BBAS3,500.0,27.1,13550.0,negociacao-2026-05-08-17-48-45.xlsx,500.0
+2024-04-16,Compra,Mercado à Vista,-,ITAU CV S/A,CMIG4,1000.0,9.85,9850.0,negociacao-2026-05-08-17-48-45.xlsx,1000.0
+2024-04-16,Compra,Mercado Fracionário,-,ITAU CV S/A,CMIG4F,34.0,9.87,335.58,negociacao-2026-05-08-17-48-45.xlsx,34.0
+2024-04-23,Compra,Mercado à Vista,-,ITAU CV S/A,XPML11,120.0,99.4,11928.0,negociacao-2026-05-08-17-48-45.xlsx,120.0
+2024-05-08,Compra,Mercado à Vista,-,ITAU CV S/A,EGIE3,200.0,39.5,7900.0,negociacao-2026-05-08-17-48-45.xlsx,200.0
+2024-05-14,Compra,Mercado à Vista,-,ITAU CV S/A,ABEV3,800.0,12.85,10280.0,negociacao-2026-05-08-17-48-45.xlsx,800.0
+2024-05-21,Compra,Mercado à Vista,-,ITAU CV S/A,VISC11,100.0,112.6,11260.0,negociacao-2026-05-08-17-48-45.xlsx,100.0
+2024-06-04,Compra,Mercado à Vista,-,ITAU CV S/A,KLBN11,600.0,20.3,12180.0,negociacao-2026-05-08-17-48-45.xlsx,600.0
+2024-06-11,Compra,Mercado à Vista,-,ITAU CV S/A,PETR4,400.0,29.5,11800.0,negociacao-2026-05-08-17-48-45.xlsx,400.0
+2024-06-18,Compra,Mercado à Vista,-,ITAU CV S/A,KNCR11,100.0,103.2,10320.0,negociacao-2026-05-08-17-48-45.xlsx,100.0
+2024-06-25,Compra,Mercado à Vista,-,ITAU CV S/A,SBSP3,250.0,34.8,8700.0,negociacao-2026-05-08-17-48-45.xlsx,250.0
+2024-07-02,Compra,Mercado à Vista,-,ITAU CV S/A,GOAU4,1500.0,8.9,13350.0,negociacao-2026-05-08-17-49-14.xlsx,1500.0
+2024-07-09,Compra,Mercado à Vista,-,ITAU CV S/A,RECR11,150.0,88.4,13260.0,negociacao-2026-05-08-17-49-14.xlsx,150.0
+2024-07-16,Compra,Mercado à Vista,-,ITAU CV S/A,WEGE3,100.0,51.6,5160.0,negociacao-2026-05-08-17-49-14.xlsx,100.0
+2024-07-23,Compra,Mercado à Vista,-,ITAU CV S/A,RENT3,200.0,44.1,8820.0,negociacao-2026-05-08-17-49-14.xlsx,200.0
+2024-08-06,Compra,Mercado à Vista,-,ITAU CV S/A,ISAE4,200.0,25.1,5020.0,negociacao-2026-05-08-17-49-14.xlsx,200.0
+2024-08-14,Compra,Mercado à Vista,-,ITAU CV S/A,ITUB4,200.0,34.9,6980.0,negociacao-2026-05-08-17-49-14.xlsx,200.0
+2024-08-20,Compra,Mercado à Vista,-,ITAU CV S/A,HGLG11,40.0,141.8,5672.0,negociacao-2026-05-08-17-49-14.xlsx,40.0
+2024-09-10,Compra,Mercado à Vista,-,ITAU CV S/A,B3SA3,300.0,13.05,3915.0,negociacao-2026-05-08-17-49-14.xlsx,300.0
+2024-09-17,Compra,Mercado à Vista,-,ITAU CV S/A,HGRU11,90.0,121.4,10926.0,negociacao-2026-05-08-17-49-14.xlsx,90.0
+2024-09-24,Compra,Mercado à Vista,-,ITAU CV S/A,TAEE11,150.0,36.4,5460.0,negociacao-2026-05-08-17-49-14.xlsx,150.0
+2024-10-08,Compra,Mercado à Vista,-,ITAU CV S/A,VALE3,100.0,66.2,6620.0,negociacao-2026-05-08-17-49-14.xlsx,100.0
+2024-10-22,Compra,Mercado à Vista,-,ITAU CV S/A,BTLG11,110.0,98.7,10857.0,negociacao-2026-05-08-17-49-14.xlsx,110.0
+2024-11-05,Compra,Mercado à Vista,-,ITAU CV S/A,XPML11,60.0,104.1,6246.0,negociacao-2026-05-08-17-49-14.xlsx,60.0
+2024-11-19,Compra,Mercado à Vista,-,ITAU CV S/A,BBAS3,400.0,23.3,9320.0,negociacao-2026-05-08-17-49-14.xlsx,400.0
+2024-11-26,Compra,Mercado à Vista,-,ITAU CV S/A,IVVB11,20.0,385.5,7710.0,negociacao-2026-05-08-17-49-14.xlsx,20.0
+2024-12-03,Compra,Mercado à Vista,-,ITAU CV S/A,EGIE3,150.0,36.2,5430.0,negociacao-2026-05-08-17-49-14.xlsx,150.0
+2024-12-10,Compra,Mercado Fracionário,-,ITAU CV S/A,GOAU4F,47.0,9.05,425.35,negociacao-2026-05-08-17-49-14.xlsx,47.0
+2025-01-14,Compra,Mercado à Vista,-,ITAU CV S/A,CMIG4,500.0,10.4,5200.0,negociacao-2026-05-08-17-49-33.xlsx,500.0
+2025-01-28,Compra,Renda Fixa,-,ITAU CV S/A,LFTB11,60.0,114.2,6852.0,negociacao-2026-05-08-17-49-33.xlsx,60.0
+2025-02-11,Compra,Mercado à Vista,-,ITAU CV S/A,ABEV3,400.0,14.6,5840.0,negociacao-2026-05-08-17-49-33.xlsx,400.0
+2025-02-19,Venda,Mercado à Vista,-,ITAU CV S/A,B3SA3,200.0,15.4,3080.0,negociacao-2026-05-08-17-49-33.xlsx,-200.0
+2025-02-19,Venda,Mercado à Vista,-,ITAU CV S/A,ABEV3,150.0,15.1,2265.0,negociacao-2026-05-08-17-49-33.xlsx,-150.0
+2025-03-25,Venda,Mercado à Vista,-,ITAU CV S/A,XPML11,60.0,108.3,6498.0,negociacao-2026-05-08-17-49-33.xlsx,-60.0
+2025-04-15,Venda,Mercado à Vista,-,ITAU CV S/A,PETR4,300.0,38.9,11670.0,negociacao-2026-05-08-17-49-33.xlsx,-300.0
+2025-04-15,Venda,Mercado à Vista,-,ITAU CV S/A,VALE3,200.0,71.5,14300.0,negociacao-2026-05-08-17-49-33.xlsx,-200.0
+2025-05-06,Compra,Mercado à Vista,-,ITAU CV S/A,KNRI11,40.0,151.2,6048.0,negociacao-2026-05-08-17-49-33.xlsx,40.0
+2025-05-20,Compra,Mercado à Vista,-,ITAU CV S/A,PETR4,300.0,33.1,9930.0,negociacao-2026-05-08-17-49-33.xlsx,300.0
+2025-07-15,Venda,Mercado à Vista,-,ITAU CV S/A,RENT3,500.0,40.3,20150.0,negociacao-2026-05-10-22-49-36.xlsx,-500.0
+2025-08-12,Compra,Mercado à Vista,-,ITAU CV S/A,SBSP3,150.0,36.7,5505.0,negociacao-2026-05-10-22-49-36.xlsx,150.0
+2025-08-19,Venda,Mercado à Vista,-,ITAU CV S/A,VISC11,50.0,96.4,4820.0,negociacao-2026-05-10-22-49-36.xlsx,-50.0
+2025-09-09,Venda,Mercado à Vista,-,ITAU CV S/A,KLBN11,300.0,17.6,5280.0,negociacao-2026-05-10-22-49-36.xlsx,-300.0
+2025-09-16,Compra,Mercado à Vista,-,ITAU CV S/A,ISAE4,100.0,27.8,2780.0,negociacao-2026-05-10-22-49-36.xlsx,100.0
+2025-10-07,Compra,Mercado à Vista,-,ITAU CV S/A,KLBN11,300.0,18.2,5460.0,negociacao-2026-05-10-22-49-36.xlsx,300.0
+2025-10-21,Venda,Mercado à Vista,-,ITAU CV S/A,IVVB11,15.0,402.8,6042.0,negociacao-2026-05-10-22-49-36.xlsx,-15.0
+2025-11-12,Venda,Mercado à Vista,-,ITAU CV S/A,ITUB4,400.0,37.2,14880.0,negociacao-2026-05-10-22-49-36.xlsx,-400.0
+2025-11-12,Venda,Mercado à Vista,-,ITAU CV S/A,TAEE11,250.0,38.9,9725.0,negociacao-2026-05-10-22-49-36.xlsx,-250.0
+2025-11-25,Venda,Renda Fixa,-,ITAU CV S/A,LFTB11,40.0,120.1,4804.0,negociacao-2026-05-10-22-49-36.xlsx,-40.0
+2025-12-16,Venda,Mercado à Vista,-,ITAU CV S/A,KNCR11,100.0,112.4,11240.0,negociacao-2026-05-10-22-49-36.xlsx,-100.0
+2026-01-22,Compra,Mercado à Vista,-,ITAU CV S/A,TAEE11,250.0,38.1,9525.0,negociacao-2026-05-10-22-49-53.xlsx,250.0
+2026-02-10,Compra,Mercado à Vista,-,ITAU CV S/A,VALE3,200.0,74.2,14840.0,negociacao-2026-05-10-22-49-53.xlsx,200.0
+2026-03-05,Compra,Mercado à Vista,-,ITAU CV S/A,ITUB4,400.0,35.6,14240.0,negociacao-2026-05-10-22-49-53.xlsx,400.0
+2026-04-14,Compra,Mercado à Vista,-,ITAU CV S/A,XPML11,60.0,103.5,6210.0,negociacao-2026-05-10-22-49-53.xlsx,60.0
+2026-04-28,Compra,Mercado à Vista,-,ITAU CV S/A,MXRF11,300.0,9.6,2880.0,negociacao-2026-05-10-22-49-53.xlsx,300.0
+2026-05-12,Compra,Mercado à Vista,-,ITAU CV S/A,VISC11,50.0,101.2,5060.0,negociacao-2026-05-10-22-49-53.xlsx,50.0
+2026-05-12,Compra,Mercado Fracionário,-,ITAU CV S/A,ABEV3F,26.0,15.85,412.1,negociacao-2026-05-10-22-49-53.xlsx,26.0
+2025-02-05,Compra,Futuro,16/04/2025,ORAMA DTVM S.A.,WINJ25,4.0,126300.0,505200.0,negociacao-2026-05-10-22-50-41.xlsx,4.0
+2025-02-06,Venda,Futuro,16/04/2025,ORAMA DTVM S.A.,WINJ25,2.0,129150.0,258300.0,negociacao-2026-05-10-22-50-41.xlsx,-2.0
+2024-09-19,Compra,Mercado à Vista,-,ORAMA DTVM S.A.,BBAS3,200.0,20.0,4000.0,negociacao-2026-05-10-22-50-41.xlsx,200.0
+2025-03-18,Venda,Mercado à Vista,-,ORAMA DTVM S.A.,CMIG4,300.0,12.0,3600.0,negociacao-2026-05-10-22-50-41.xlsx,-300.0
+2024-09-30,Compra,Mercado à Vista,-,override,XPBR31,10.72,84.17,902.3,cost_basis_overrides.csv,10.72

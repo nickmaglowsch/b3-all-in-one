@@ -1,0 +1,2 @@
+apuracao,codigo,classe,vendas_brutas,pnl_liquido,prejuizo_compensado,base_calculo,aliquota,valor_principal,vencimento,data_pagamento,status,forma_pagamento,comprovante,relatorio,obs
+2025-04,6015,acoes,25970.00,5034.57,0.00,5034.57,0.15,755.19,2025-05-30,2025-05-30,pago,,,,Sintetico - gerado junto com b3_imports/ por tests/golden/make_fixtures.py

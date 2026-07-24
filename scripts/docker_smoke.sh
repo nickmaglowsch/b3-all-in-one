@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# End-to-end smoke of the dockerized stack: clean up --build -> import 3 real B3
-# extracts -> assert portfolio positions + an IRPF report -> run a price-only
+# End-to-end smoke of the dockerized stack: clean up --build -> import 3 of the
+# synthetic B3 extracts -> assert portfolio positions + an IRPF report -> run a price-only
 # backtest and assert its metrics + curves come back.
 #   ./scripts/docker_smoke.sh          # tears the stack down at the end (keeps volumes)
 #   ./scripts/docker_smoke.sh --keep   # leaves the stack running for inspection

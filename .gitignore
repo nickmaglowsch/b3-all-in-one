@@ -19,3 +19,12 @@ node_modules/
 data/raw/
 engine/b3_market_data.sqlite
 .DS_Store
+
+# Runtime upload/artifact storage (UPLOADS_DIR defaults to ./uploads at repo root,
+# so platform/.gitignore never matched it — that is how real B3 extracts got committed).
+uploads/
+artifacts/
+
+# Generated reports hold real portfolio figures. Keep the dir, never the contents.
+taxcore/reports/*
+!taxcore/reports/.gitkeep

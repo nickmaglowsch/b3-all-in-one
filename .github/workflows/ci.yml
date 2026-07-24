@@ -44,9 +44,10 @@ jobs:
           uv pip install --python .venv -r requirements-bench.txt
 
       - name: Test
-        run: cd platform && uv run --frozen pytest -q --ignore=tests/test_backtest_e2e.py
-        # test_backtest_e2e asserts prices.rows > 0 — it needs a loaded market plane,
-        # so it stays a local check (scripts/docker_smoke.sh covers the same path).
+        run: cd platform && uv run --frozen pytest -q
+        # Tests marked `market` need a loaded B3 price plane; the b3 DB here is
+        # empty, so conftest skips them (scripts/docker_smoke.sh covers that path
+        # locally). Everything else runs.
 
   engine-tests:
     name: Engine tests

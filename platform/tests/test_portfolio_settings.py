@@ -140,6 +140,7 @@ async def test_rebalance_settings_put_get_validation(client):
 
 # ── Feature 3: cash/CDI holding folds into cash ───────────────────────────────
 
+@pytest.mark.market
 async def test_cash_cdi_folds_into_cash_on_target(client):
     headers, _ = await _seed(client)
     ov = "/portfolio/settings/asset-overrides"
@@ -157,6 +158,7 @@ async def test_cash_cdi_folds_into_cash_on_target(client):
     await client.put(ov, json=[], headers=headers)  # reset
 
 
+@pytest.mark.market
 async def test_cash_cdi_not_sold_in_rebalance(client):
     headers, _ = await _seed(client)
     ov = "/portfolio/settings/asset-overrides"
@@ -171,6 +173,7 @@ async def test_cash_cdi_not_sold_in_rebalance(client):
 
 # ── Feature 4: rebalance behavior ─────────────────────────────────────────────
 
+@pytest.mark.market
 async def test_buy_only_laggards_yields_no_nonharvest_sells(client):
     headers, _ = await _seed(client)
 
@@ -189,6 +192,7 @@ async def test_buy_only_laggards_yields_no_nonharvest_sells(client):
     await _put_rebal(client, headers)  # reset
 
 
+@pytest.mark.market
 async def test_sell_only_for_harvest_yields_only_loss_sells(client):
     headers, _ = await _seed(client)
     positions = {p["ticker"]: p for p in

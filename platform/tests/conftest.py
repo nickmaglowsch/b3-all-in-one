@@ -13,12 +13,47 @@ os.environ["ENVIRONMENT"] = "development"
 # default). Stub benchmarks so the engine subprocess never touches yfinance/BCB.
 os.environ["ENGINE_BENCH_OFFLINE"] = "1"
 
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 ADMIN_DSN = "postgresql+asyncpg://postgres:devpassword@localhost:5432/postgres"
+
+
+def _market_plane_loaded() -> bool:
+    """True when the engine's `prices` table exists and has rows. Tests marked
+    `market` shell into the engine over the real b3 plane; on a box without B3
+    history (CI — the data is kept out of git for privacy) they can't pass, so
+    they skip instead of failing. Load the plane locally and they run."""
+    import psycopg
+
+    dsn = os.environ.get(
+        "ENGINE_DATABASE_URL", "postgresql://postgres:devpassword@localhost:5432/b3"
+    )
+    try:
+        with psycopg.connect(dsn, connect_timeout=5) as conn:
+            if conn.execute("SELECT to_regclass('prices')").fetchone()[0] is None:
+                return False
+            return conn.execute("SELECT EXISTS (SELECT 1 FROM prices)").fetchone()[0]
+    except psycopg.Error:
+        return False
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "market: needs a loaded B3 market plane (skipped when empty)"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    if _market_plane_loaded():
+        return
+    skip = pytest.mark.skip(reason="market plane empty — load b3 prices to run")
+    for item in items:
+        if "market" in item.keywords:
+            item.add_marker(skip)
 
 
 async def _admin(sql: str) -> None:

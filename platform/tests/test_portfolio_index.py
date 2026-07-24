@@ -205,6 +205,7 @@ async def _seed_book(tenant_id: uuid.UUID) -> None:
 
 
 @_asyncio
+@pytest.mark.market
 async def test_portfolio_index_charts_the_real_book(client):
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

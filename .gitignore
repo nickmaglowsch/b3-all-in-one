@@ -16,6 +16,7 @@ target/
 node_modules/
 .next/
 .open-next/
+out/
 data/raw/
 engine/b3_market_data.sqlite
 .DS_Store

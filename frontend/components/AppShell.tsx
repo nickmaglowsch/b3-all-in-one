@@ -7,7 +7,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { clearToken, getToken } from "@/lib/api";
 import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
+import { Paywall } from "@/components/Paywall";
 import {
+  IconCard,
   IconChart,
   IconClock,
   IconCompass,
@@ -28,13 +30,14 @@ const NAV = [
   { href: "/irpf", label: "IRPF", Icon: IconReceipt },
   { href: "/tlh", label: "TLH", Icon: IconScissors },
   { href: "/bench", label: "Bench", Icon: IconChart },
+  { href: "/assinatura", label: "Assinatura", Icon: IconCard },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  // Login stands alone — no sidebar, no guard.
-  if (pathname === "/login") return <>{children}</>;
+  // Landing and login stand alone — no sidebar, no guard.
+  if (pathname === "/" || pathname === "/login") return <>{children}</>;
 
   return <ShellChrome pathname={pathname}>{children}</ShellChrome>;
 }
@@ -50,8 +53,9 @@ function ShellChrome({
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    if (!getToken()) router.replace("/login");
-  }, [router]);
+    // Carry the destination so a landing "Assinar" click survives the login bounce.
+    if (!getToken()) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
+  }, [router, pathname]);
 
   // Drawer is transient: any navigation or Escape closes it.
   useEffect(() => setOpen(false), [pathname]);
@@ -146,6 +150,8 @@ function ShellChrome({
         </div>
         <div className="mx-auto max-w-6xl">{children}</div>
       </main>
+
+      <Paywall />
     </div>
   );
 }

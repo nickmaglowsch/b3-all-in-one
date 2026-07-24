@@ -15,6 +15,7 @@ dependencies = [
     "procrastinate[psycopg]",
     "psycopg[binary]",
     "pydantic-settings",
+    "stripe",
 ]
 
 [dependency-groups]

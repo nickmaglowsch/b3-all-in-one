@@ -35,6 +35,25 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     # default __tablename__ = "user" (reserved word, but SQLAlchemy auto-quotes it)
     oauth_accounts: Mapped[list[OAuthAccount]] = relationship(lazy="joined")
 
+    # Billing (spec/01: entitlements on the tenant row, written by the Stripe
+    # webhook only). `plan` is what was bought; access also needs plan_status —
+    # see billing.effective_plan.
+    stripe_customer_id: Mapped[str | None] = mapped_column(
+        String, unique=True, index=True, nullable=True
+    )
+    plan: Mapped[str] = mapped_column(
+        String, nullable=False, default="gratis", server_default=text("'gratis'")
+    )
+    plan_status: Mapped[str | None] = mapped_column(String, nullable=True)
+    plan_renews_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Stripe fans events out with no ordering guarantee; the timestamp of the last
+    # applied event lets a late `created` be dropped instead of undoing a `deleted`.
+    plan_event_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
 
 # --- Tenant data plane (Wave 2). Every table carries tenant_id (== user.id). ---
 # The trades/cash_events/positions rows are a deterministic full rebuild by

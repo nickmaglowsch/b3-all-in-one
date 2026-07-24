@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import b3run, enginerun, specstore, tasks
+from platform_app.billing import needs_investidor, needs_trader
 from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import (
@@ -256,7 +257,7 @@ class SleeveIn(BaseModel):
 
 @portfolio_router.get("/sleeves")
 async def get_sleeves(
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_investidor),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     _user, tid = tenant
@@ -270,7 +271,7 @@ async def get_sleeves(
 @portfolio_router.put("/sleeves")
 async def put_sleeves(
     body: list[SleeveIn],
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_investidor),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Replace the whole sleeve set atomically. Validates percentages sum to 100
@@ -472,7 +473,7 @@ async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, di
 
 @portfolio_router.get("/target")
 async def get_target(
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_investidor),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Combined target weights, current weights, and per-ticker drift. Prices the
@@ -563,7 +564,7 @@ def _cap_buys(buys: list[dict], budget: float) -> list[dict]:
 @portfolio_router.post("/rebalance-plans")
 async def create_rebalance_plan(
     body: RebalanceRequest,
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_investidor),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Advisor v0 (single-shot, this month): combined target → integer trade list →
@@ -1100,7 +1101,7 @@ async def _get_user_strategy(sid: str, tid: uuid.UUID, session: AsyncSession) ->
 
 @strategies_router.get("/user")
 async def list_user_strategies(
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_trader),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     _user, tid = tenant
@@ -1113,7 +1114,7 @@ async def list_user_strategies(
 @strategies_router.post("/user")
 async def create_user_strategy(
     body: StrategyIn = Body(...),
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_trader),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1159,7 +1160,7 @@ async def _cascade_rename(
 async def update_user_strategy(
     sid: str,
     body: StrategyIn = Body(...),
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_trader),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1185,7 +1186,7 @@ async def update_user_strategy(
 @strategies_router.delete("/user/{sid}")
 async def delete_user_strategy(
     sid: str,
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_trader),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1214,7 +1215,7 @@ async def delete_user_strategy(
 @strategies_router.post("/user/{sid}/promote")
 async def promote_user_strategy(
     sid: str,
-    tenant=Depends(get_current_tenant),
+    tenant=Depends(needs_trader),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Compile a portfolio strategy's sleeves into the live target (reuses the

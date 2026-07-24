@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    # One recurring price per paid tier (see billing.LADDER). Empty => that tier
+    # can't be bought; /billing/checkout 400s instead of half-creating a session.
+    stripe_price_investidor: str = ""
+    stripe_price_trader: str = ""
 
     @property
     def origins(self) -> list[str]:

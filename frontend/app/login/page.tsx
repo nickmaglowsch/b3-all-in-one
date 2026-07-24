@@ -14,7 +14,9 @@ export default function LoginPage() {
     setError(null);
     try {
       await devLogin();
-      router.replace("/portfolio");
+      // Only same-site paths — an absolute `next` would be an open redirect.
+      const next = new URLSearchParams(window.location.search).get("next");
+      router.replace(next?.startsWith("/") && !next.startsWith("//") ? next : "/portfolio");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Falha ao entrar.");
       setLoading(false);

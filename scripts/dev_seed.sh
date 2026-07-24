@@ -33,6 +33,12 @@ TOKEN="$(curl -sf -X POST "$API/auth/dev-login" | jget "['access_token']")"
 AUTH=(-H "Authorization: Bearer $TOKEN")
 log "token acquired (${#TOKEN} chars)"
 
+# Seeding touches paid routes (sleeves, backtests). New dev tenants are born on the
+# top tier; this also lifts one that predates billing or was flipped to test a paywall.
+curl -sf "${AUTH[@]}" -X POST "$API/billing/dev-plan" \
+  -H 'Content-Type: application/json' -d '{"plan":"trader"}' >/dev/null
+log "plan: trader (dev)"
+
 step "Uploading B3 extracts from $IMPORTS_DIR"
 FILES=()
 for f in "$IMPORTS_DIR"/*.xlsx; do

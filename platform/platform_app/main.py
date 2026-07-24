@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi_users import exceptions
 from sqlalchemy import text
 
+from platform_app.billing import billing_router, needs_investidor, needs_trader
 from platform_app.config import settings
 from platform_app.db import engine
 from platform_app.routes import (
@@ -55,15 +56,21 @@ app.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate), prefix="/auth", tags=["auth"]
 )
 
+app.include_router(billing_router)
+
+# Free tier: import extracts, see the consolidated book, read market status.
 app.include_router(imports_router)
-app.include_router(portfolio_router)
-app.include_router(irpf_router)
-app.include_router(tlh_router)
-app.include_router(strategies_router)
-app.include_router(backtests_router)
 app.include_router(market_router)
-app.include_router(whatif_router)
-app.include_router(portfolio_settings_router)
+# Mixed — the paid /portfolio and /strategies routes carry their own gate (routes.py).
+app.include_router(portfolio_router)
+app.include_router(strategies_router)
+# Investidor: tax (IRPF + DARF, TLH) and the strategy/simulation surface.
+app.include_router(irpf_router, dependencies=[Depends(needs_investidor)])
+app.include_router(tlh_router, dependencies=[Depends(needs_investidor)])
+app.include_router(whatif_router, dependencies=[Depends(needs_investidor)])
+app.include_router(portfolio_settings_router, dependencies=[Depends(needs_investidor)])
+# Trader: the backtest bench.
+app.include_router(backtests_router, dependencies=[Depends(needs_trader)])
 
 
 @app.get("/health")
@@ -94,6 +101,11 @@ if settings.is_dev:
         except exceptions.UserNotExists:
             user = await user_manager.create(
                 UserCreate(email=_DEV_EMAIL, password="devpassword", is_verified=True)
+            )
+            # The dev tenant starts on the top tier so seeding and e2e aren't
+            # paywalled; POST /billing/dev-plan flips it to exercise the paywall.
+            user = await user_manager.user_db.update(
+                user, {"plan": "trader", "plan_status": "active"}
             )
         token = await strategy.write_token(user)
         return {"access_token": token, "token_type": "bearer"}

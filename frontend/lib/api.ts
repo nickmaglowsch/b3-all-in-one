@@ -21,11 +21,32 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** parsed `detail` — an object for structured errors like the 402 paywall */
+    public detail?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
   }
 }
+
+// 402 body from platform_app/billing.require_plan.
+export type PlanRequired = {
+  error: "plan_required";
+  required_plan: string;
+  current_plan: string;
+};
+
+export function isPlanRequired(detail: unknown): detail is PlanRequired {
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    (detail as PlanRequired).error === "plan_required"
+  );
+}
+
+/** Fired on any 402 so one dialog in AppShell can answer every gated call —
+ *  no page needs its own upgrade UI. */
+export const PAYWALL_EVENT = "b3:paywall";
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
@@ -47,27 +68,38 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(401, "Sessão expirada — entre novamente.");
   }
   if (!res.ok) {
-    throw new ApiError(res.status, await errorDetail(res));
+    const detail = await errorDetail(res);
+    if (res.status === 402 && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(PAYWALL_EVENT, { detail }));
+    }
+    throw new ApiError(res.status, errorMessage(detail, res), detail);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
-async function errorDetail(res: Response): Promise<string> {
+async function errorDetail(res: Response): Promise<unknown> {
   try {
-    const j = await res.json();
-    if (typeof j.detail === "string") return j.detail;
-    if (j.detail) return JSON.stringify(j.detail);
+    return (await res.json()).detail ?? null;
   } catch {
-    /* non-JSON body */
+    return null; // non-JSON body
   }
+}
+
+function errorMessage(detail: unknown, res: Response): string {
+  if (typeof detail === "string") return detail;
+  if (isPlanRequired(detail)) return "Recurso de um plano pago.";
+  if (detail) return JSON.stringify(detail);
   return res.statusText || `HTTP ${res.status}`;
 }
 
 // dev-login is public (POST, no body) and returns a JWT in development mode.
 export async function devLogin(): Promise<string> {
   const res = await fetch(`${API_URL}/auth/dev-login`, { method: "POST" });
-  if (!res.ok) throw new ApiError(res.status, await errorDetail(res));
+  if (!res.ok) {
+    const detail = await errorDetail(res);
+    throw new ApiError(res.status, errorMessage(detail, res), detail);
+  }
   const body = (await res.json()) as Bearer;
   setToken(body.access_token);
   return body.access_token;

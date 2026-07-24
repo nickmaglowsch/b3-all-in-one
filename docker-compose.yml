@@ -44,6 +44,10 @@ services:
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
       RUN_MIGRATIONS: "1"   # api runs `alembic upgrade head` before uvicorn (entrypoint)
+      # Stripe secrets stay out of the committed env_file — compose interpolates
+      # them from .env. Only the api talks to Stripe; the worker never does.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
     volumes:
       - uploads_data:/data/uploads       # shared with worker so saved files are visible to jobs
       - artifacts_data:/data/artifacts   # shared with worker so backtest artifacts are readable

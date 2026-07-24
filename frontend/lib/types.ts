@@ -16,6 +16,16 @@ export interface Health {
   status: string;
 }
 
+// GET /billing. `plan` is what the tenant can use *now* (billed_plan gated by
+// status), so the UI never has to reason about dunning itself.
+export interface Subscription {
+  plan: string;
+  billed_plan: string;
+  status: string | null;
+  renews_at: string | null;
+  manageable: boolean;
+}
+
 export interface MarketStatus {
   prices: {
     rows: number;

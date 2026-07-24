@@ -108,7 +108,6 @@ python -m scripts.irpf_2026 --year 2025 > reports/2026-irpf-ano-base-2025.md
 | Script | Purpose |
 |--------|---------|
 | `scripts/fetch_fundamentus.py` | Pull full B3 screener → `data/snapshots/YYYY-MM-DD.csv` |
-| `scripts/fetch_ticker.py TICKER` | Detail page for one ticker (JSON) |
 | `scripts/rank.py [--top N] [--weights ...] [--watchlist]` | Rank latest snapshot |
 | `scripts/load_b3.py` | Parse B3 Excel files in `b3_imports/` → `data/positions.csv` |
 | `scripts/portfolio_status.py` | Current allocation, P&L vs latest prices |

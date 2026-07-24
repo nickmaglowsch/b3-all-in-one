@@ -64,7 +64,7 @@ A non-technical Brazilian retail investor connects their existing **Claude Deskt
 | `scripts/rank.py` / `rank_fii.py` | `rank_equities` / `rank_fiis` | Accept weight overrides as tool args (the "override weights ad-hoc" behavior from CLAUDE.md). |
 | `scripts/portfolio_status.py` | `portfolio_status` | Returns the holdings table + totals as markdown. |
 | `scripts/sector_exposure.py` | `sector_exposure` | Concentration flags. |
-| `scripts/portfolio_vs_ibov.py` | `portfolio_vs_benchmark` | |
+| _(removed; now `GET /portfolio/index`)_ | `portfolio_vs_benchmark` | Daily TWR index vs IBOV/CDI |
 | `scripts/suggest_allocation.py` | `suggest_allocation` | amount arg. |
 | `scripts/irpf_2026.py` | `irpf_report` | Year arg; returns the copy-paste IRPF markdown. **Liability-sensitive** — keep the "verificar no informe" / not-advice framing. |
 | `scripts/tlh_plan.py` | `tlh_plan` | Currently interactive — needs a non-interactive tool signature (inputs as args, no stdin prompts). |

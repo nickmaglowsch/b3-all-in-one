@@ -61,8 +61,8 @@ and reads an after-tax tear sheet — all in the browser.
 - Combined-target drift view + **tax-optimal rebalance advisor** (month-tranched plan:
   20k isenção scheduling, loss-harvest T+1 rebuys, all-class carry buckets).
 - **What-if backtests**: real cash flows replayed through alternative strategies,
-  after-tax; unify `etf_counterfactual` baselines (ETF mix / CDI / frozen basket) as
-  `fixed_weight` specs.
+  after-tax; the old `etf_counterfactual` baselines (ETF mix / CDI / frozen basket)
+  become plain `fixed_weight` specs rather than a parallel simulator.
 - Per-sleeve virtual attribution reporting.
 - MCP server over the public API (revive the existing prototype against real endpoints).
 

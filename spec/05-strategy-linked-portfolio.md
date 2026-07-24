@@ -73,6 +73,12 @@ suboptimal.
 
 "What if every real I invested had followed strategy X instead?"
 
+> **Status: shipped** as `POST /whatif` (`routes_whatif.py`). The taxcore CLIs this
+> section reasons from (`portfolio_index.py`, `etf_counterfactual.py`) have since been
+> deleted — flow extraction is now `routes_whatif._net_flows`, and the actual-portfolio
+> curve is `GET /portfolio/index` (`routes_portfolio_index.py`). References to those
+> modules below are the original design rationale; read them as history.
+
 **Mechanics:** the tenant's real dated net external cash flows (buys − sells − income,
 exactly what `portfolio_index.build_portfolio_index` already extracts into
 `diag["_internals"]`) are replayed through the backtest engine running the alternative

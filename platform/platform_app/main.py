@@ -26,6 +26,7 @@ from platform_app.users import (
     get_google_oauth_client,
     get_jwt_strategy,
     get_user_manager,
+    oauth_backend,
 )
 
 app = FastAPI(title="b3-all-in-one platform")
@@ -45,7 +46,9 @@ app.include_router(
 app.include_router(
     fastapi_users.get_oauth_router(
         get_google_oauth_client(),
-        auth_backend,
+        # Redirect backend: callback bounces the browser to the SPA with the JWT,
+        # instead of returning JSON the static frontend couldn't catch.
+        oauth_backend,
         settings.secret_key,
         associate_by_email=True,
         is_verified_by_default=True,

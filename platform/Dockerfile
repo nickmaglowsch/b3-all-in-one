@@ -52,4 +52,7 @@ ENV TAXCORE_DIR=/opt/taxcore \
     ENGINE_PYTHON=/opt/engine/.venv/bin/python
 EXPOSE 8000
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
-CMD ["uvicorn", "platform_app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers + trust-all: only Caddy can reach this container (no published
+# ports), and it sets X-Forwarded-Proto=https. Without this, request.url_for()
+# builds the OAuth callback as http:// and Google rejects the redirect_uri.
+CMD ["uvicorn", "platform_app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]

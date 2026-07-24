@@ -93,6 +93,21 @@ function errorMessage(detail: unknown, res: Response): string {
   return res.statusText || `HTTP ${res.status}`;
 }
 
+// Google OAuth: ask the API for Google's consent URL, then hand the browser to
+// it. Google → API /auth/google/callback → 302 to /auth/callback?token=… (the
+// API's RedirectTransport), where the SPA stores the token.
+export async function googleLogin(): Promise<void> {
+  const res = await fetch(
+    `${API_URL}/auth/google/authorize?scopes=openid%20email%20profile`,
+  );
+  if (!res.ok) {
+    const detail = await errorDetail(res);
+    throw new ApiError(res.status, errorMessage(detail, res), detail);
+  }
+  const { authorization_url } = (await res.json()) as { authorization_url: string };
+  window.location.href = authorization_url;
+}
+
 // dev-login is public (POST, no body) and returns a JWT in development mode.
 export async function devLogin(): Promise<string> {
   const res = await fetch(`${API_URL}/auth/dev-login`, { method: "POST" });

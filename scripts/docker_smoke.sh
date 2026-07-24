@@ -107,6 +107,21 @@ NPOS=$(curl -fsS "$API/portfolio/positions" -H "$AUTH" \
 [ "$NPOS" -gt 0 ] || fail "portfolio/positions is empty"
 echo "[smoke] positions: $NPOS"
 
+# 5b) the portfolio index must chart the imported book against the market plane.
+#     Benchmarks are stubbed in this stack (ENGINE_BENCH_OFFLINE=1), so assert the
+#     portfolio line only — excluded.benchmarks says they were reported missing.
+curl -fsS "$API/portfolio/index" -H "$AUTH" | python3 -c '
+import sys, json
+r = json.load(sys.stdin)
+s = r["series"]
+assert len(s) > 1, "index series too short"
+assert all(p["portfolio"] > 0 for p in s), "non-positive index level"
+dates = [p["date"] for p in s]
+assert dates == sorted(dates), "index dates out of order"
+print("[smoke] index: %d points, %s -> %s, TWR %.1f%%" % (
+    len(s), r["start"], r["end"], r["metrics"]["portfolio"]["total_return_pct"]))
+' || fail "GET /portfolio/index failed"
+
 # 6) IRPF report must contain "Bens e Direitos". Retry: the taxcore subprocess can
 #    transiently return an incomplete report on the first call right after a heavy
 #    import (worker still winding down). The endpoint is correct — a real break

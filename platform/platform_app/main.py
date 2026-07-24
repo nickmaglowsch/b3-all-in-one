@@ -15,6 +15,7 @@ from platform_app.routes import (
     strategies_router,
     tlh_router,
 )
+from platform_app.routes_portfolio_index import portfolio_index_router
 from platform_app.routes_portfolio_settings import portfolio_settings_router
 from platform_app.routes_whatif import whatif_router
 from platform_app.schemas import UserCreate, UserRead
@@ -68,6 +69,7 @@ app.include_router(strategies_router)
 app.include_router(irpf_router, dependencies=[Depends(needs_investidor)])
 app.include_router(tlh_router, dependencies=[Depends(needs_investidor)])
 app.include_router(whatif_router, dependencies=[Depends(needs_investidor)])
+app.include_router(portfolio_index_router, dependencies=[Depends(needs_investidor)])
 app.include_router(portfolio_settings_router, dependencies=[Depends(needs_investidor)])
 # Trader: the backtest bench.
 app.include_router(backtests_router, dependencies=[Depends(needs_trader)])

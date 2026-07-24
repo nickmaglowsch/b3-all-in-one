@@ -64,6 +64,21 @@ gated on `RUN_MIGRATIONS=1`); the **worker** applies its own procrastinate schem
 Uploaded files land on a shared `uploads_data` volume mounted into both services at
 `/data/uploads`, so files the api saves are visible to the worker's import jobs.
 
+### Portfolio benchmarking (spec/03)
+
+Two complementary answers to "how am I doing?", both off the tenant's own book:
+
+- `GET /portfolio/index` — the book the user *actually* holds as a daily
+  time-weighted index (base 100) against IBOV and CDI. Holdings are rebuilt from their
+  trades + qty_events, valued at the market plane's raw closes; deposits and withdrawals
+  move the NAV but not the line, and proventos count as return the day they land. The
+  response's `excluded` block names everything the index could not see (Futuro, Renda
+  Fixa, unpriced tickers) and `coverage.clamped` says when the chart starts later than
+  the user's real history because the plane does. Benchmarks come from the engine
+  (`scripts/bench_series.py`); with `ENGINE_BENCH_OFFLINE=1` they are reported
+  unavailable rather than drawn flat.
+- `POST /whatif` — the same money through a *different* strategy (spec/05 Feature 2).
+
 ### Strategy-linked portfolio (spec/05)
 
 Attach strategies to the portfolio as fixed-percentage sleeves, then get told what to
@@ -102,7 +117,7 @@ What each tier unlocks (gated routes answer `402` with
 | Tier | Routes |
 |---|---|
 | `gratis` | `/imports`, `/portfolio/{positions,trades,income,price-history}`, `/market` |
-| `investidor` | `/irpf`, `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings}` |
+| `investidor` | `/irpf`, `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings,index}` |
 | `trader` | `/backtests`, `/strategies/user*` |
 
 `GET /strategies` (the gallery) stays public. The dev tenant is created on `trader` so

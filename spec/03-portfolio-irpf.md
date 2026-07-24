@@ -29,10 +29,17 @@ interfaces are replaced.
 Ports of the existing scripts, as API + UI instead of stdout markdown:
 - **Positions & status** (`portfolio_status.py`): current positions, avg cost, market value
   (from shared market plane — replaces per-user snapshot CSVs), P&L, income received.
-- **Benchmarking**: portfolio vs IBOV/CDI/ETF counterfactuals. The point-comparison
-  half ships in `routes_whatif.py`; the full historical portfolio index is still to
-  build (taxcore reference impls `portfolio_index.py` / `etf_counterfactual.py` were
-  removed as dead weight — recover from git history if useful).
+- **Benchmarking**: portfolio vs IBOV/CDI. Two complementary views, both shipped:
+  `GET /portfolio/index` (`routes_portfolio_index.py`) charts the book the tenant
+  actually holds as a daily time-weighted index — holdings rebuilt from their own
+  trades + qty_events, valued at the market plane's raw closes, deposits and
+  withdrawals neutralised; `POST /whatif` (`routes_whatif.py`) is the
+  "same money, different strategy" point comparison. Benchmarks come from the
+  engine (`scripts/bench_series.py`, Yahoo ^BVSP + BCB CDI) and degrade to
+  portfolio-only when unavailable rather than drawing a flat line.
+  Not modelled yet: renda fixa has no daily marks in the plane, so an RF sleeve
+  is excluded from the index and disclosed via the response's `excluded` block
+  (the taxcore CLI valued it as units of the CDI index — a feature of its own).
 - **Sector exposure** (`sector_exposure.py`).
 - **Rankings & allocation** (`rank*.py` + `methodologies/`): platform-wide equity/FII
   rankings computed once per market-data refresh and cached (methodologies are pure

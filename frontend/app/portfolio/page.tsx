@@ -15,6 +15,7 @@ import { SERIES } from "@/components/charts/theme";
 import { IconWallet } from "@/components/icons";
 import { formatInt, formatMoney, formatPercent } from "@/lib/format";
 import { PositionsTable } from "./PositionsTable";
+import { IndexSection } from "./IndexSection";
 import { IncomeSection } from "./IncomeSection";
 import { TradesSection } from "./TradesSection";
 
@@ -165,6 +166,8 @@ export default function PortfolioPage() {
               </ul>
             </div>
           </Card>
+
+          <IndexSection />
 
           <Card title="Posições">
             <PositionsTable positions={positions} history={history.data} />

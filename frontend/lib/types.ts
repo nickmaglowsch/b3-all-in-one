@@ -69,6 +69,48 @@ export interface Position {
   pnl_pct: number | null;
 }
 
+// GET /portfolio/index — daily time-weighted index of the book, base 100, with
+// IBOV/CDI overlays. `ibov`/`cdi` are absent from every point when the engine
+// could not fetch them (offline stack, network down); `excluded` says so.
+// A `type` alias, not an interface: only aliases get the implicit index
+// signature that the chart components' Row type needs.
+export type IndexPoint = {
+  date: string;
+  portfolio: number;
+  ibov?: number;
+  cdi?: number;
+};
+
+export interface IndexMetrics {
+  total_return_pct: number | null;
+  /** null for windows under a year — annualising a short run misleads. */
+  ann_return_pct: number | null;
+  max_dd_pct: number | null;
+}
+
+export interface PortfolioIndex {
+  start: string;
+  end: string;
+  base: number;
+  series: IndexPoint[];
+  nav: number;
+  metrics: { portfolio: IndexMetrics; ibov?: IndexMetrics; cdi?: IndexMetrics };
+  excluded: {
+    markets: string[];
+    categories: string[];
+    unpriced_tickers: string[];
+    benchmarks: boolean;
+  };
+  coverage: {
+    first_trade: string;
+    plane_start: string;
+    /** true when the chart starts after the user's real history does. */
+    clamped: boolean;
+    /** trades newer than the last close, marked at that stale price. */
+    trades_after_plane: number;
+  };
+}
+
 export interface Trade {
   date: string | null;
   side: string;

@@ -18,7 +18,9 @@ export interface Series {
   color?: string;
 }
 
-type Row = Record<string, string | number>;
+// `undefined` is allowed: a series need not cover every row (an overlay the API
+// could not fetch is simply absent from each point, and recharts skips it).
+type Row = Record<string, string | number | undefined>;
 
 // Multi-series line. 2px strokes, recessive hairline grid, crosshair tooltip,
 // legend for ≥2 series. One value axis — never a second/right axis.

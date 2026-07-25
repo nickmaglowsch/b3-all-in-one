@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import datetime
 import json
 import math
 import shutil
@@ -16,7 +17,6 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
-import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select, update
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from platform_app import b3run, enginerun, specstore, tasks
 from platform_app.billing import needs_investidor, needs_trader
 from platform_app.config import settings
-from platform_app.db import get_async_session
+from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
     PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
@@ -194,19 +194,16 @@ async def get_price_history(
     if not tickers:
         return {}
     try:
-        conn = await asyncpg.connect(settings.engine_database_url)
-        try:
-            rows = await conn.fetch(
-                "SELECT ticker, close FROM prices "
-                "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
-                # window anchored to the snapshot's own last date, not today —
-                # a stale market plane should still draw a chart.
-                "AND date >= (SELECT MAX(date) FROM prices) - INTERVAL '6 months' "
-                "ORDER BY ticker, date",
-                tickers,
-            )
-        finally:
-            await conn.close()
+        pool = await get_engine_pool()
+        rows = await pool.fetch(
+            "SELECT ticker, close FROM prices "
+            "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
+            # window anchored to the snapshot's own last date, not today —
+            # a stale market plane should still draw a chart.
+            "AND date >= (SELECT MAX(date) FROM prices) - INTERVAL '6 months' "
+            "ORDER BY ticker, date",
+            tickers,
+        )
     except Exception:
         # ponytail: market plane down → no sparklines, same fallback as
         # /positions. A decoration isn't worth a 500.
@@ -371,12 +368,9 @@ async def _fundamentals_available() -> bool:
     """True when fundamentals_pit has any rows in the engine market plane.
     Same DSN/pattern as market_status — the actual-availability check the guards
     key on, so a strategy 'just works' the moment fundamentals are ingested."""
-    conn = await asyncpg.connect(settings.engine_database_url)
-    try:
-        n = await conn.fetchval("SELECT count(*) FROM fundamentals_pit")
-    finally:
-        await conn.close()
-    return bool(n and n > 0)
+    pool = await get_engine_pool()
+    # EXISTS, not count(*): the question is "any rows?", and count scans them all.
+    return bool(await pool.fetchval("SELECT EXISTS (SELECT 1 FROM fundamentals_pit)"))
 
 
 async def _advise(**kwargs) -> dict:
@@ -770,16 +764,13 @@ async def _latest_engine_prices(tickers: list[str]) -> list[list]:
     tickers = sorted({t for t in tickers if t})
     if not tickers:
         return []
-    conn = await asyncpg.connect(settings.engine_database_url)
-    try:
-        rows = await conn.fetch(
-            "SELECT DISTINCT ON (ticker) ticker, close FROM prices "
-            "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
-            "ORDER BY ticker, date DESC",
-            tickers,
-        )
-    finally:
-        await conn.close()
+    pool = await get_engine_pool()
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (ticker) ticker, close FROM prices "
+        "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
+        "ORDER BY ticker, date DESC",
+        tickers,
+    )
     return [[r["ticker"], float(r["close"])] for r in rows if r["close"]]
 
 
@@ -1382,29 +1373,32 @@ async def get_backtest_curves(
 
 
 # ── Market status ─────────────────────────────────────────────────────────────
+# count(*) + count(DISTINCT ticker) over `prices` is an aggregate across the whole
+# table (89 ms at 257k rows, and it grows linearly with the plane). The dashboard
+# polls this endpoint on a timer from every open tab, so the cost used to scale
+# with the number of people looking at it. One cached answer per TTL decouples the
+# two: the plane only changes when the ingestion pipeline runs, which is a manual,
+# infrequent job.
+_MARKET_STATUS_TTL = datetime.timedelta(seconds=60)
+_market_status_cache: tuple[datetime.datetime, dict] | None = None
 
-@market_router.get("/status")
-async def market_status() -> dict:
-    """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
-    0-row tables are reported honestly (fresh: null)."""
-    conn = await asyncpg.connect(settings.engine_database_url)
-    try:
-        prices = await conn.fetchrow(
-            "SELECT count(*) AS rows, count(DISTINCT ticker) AS tickers, "
-            "min(date) AS min_date, max(date) AS max_date FROM prices"
+
+async def _market_status_uncached() -> dict:
+    pool = await get_engine_pool()
+    prices = await pool.fetchrow(
+        "SELECT count(*) AS rows, count(DISTINCT ticker) AS tickers, "
+        "min(date) AS min_date, max(date) AS max_date FROM prices"
+    )
+    tables = {}
+    for name, datecol in (("corporate_actions", "event_date"),
+                          ("fundamentals_pit", "filing_date")):
+        row = await pool.fetchrow(
+            f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}"
         )
-        tables = {}
-        for name, datecol in (("corporate_actions", "event_date"),
-                              ("fundamentals_pit", "filing_date")):
-            row = await conn.fetchrow(
-                f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}"
-            )
-            tables[name] = {
-                "rows": row["rows"],
-                "fresh": row["fresh"].isoformat() if row["fresh"] else None,
-            }
-    finally:
-        await conn.close()
+        tables[name] = {
+            "rows": row["rows"],
+            "fresh": row["fresh"].isoformat() if row["fresh"] else None,
+        }
     return {
         "prices": {
             "rows": prices["rows"],
@@ -1414,3 +1408,16 @@ async def market_status() -> dict:
         },
         "tables": tables,
     }
+
+
+@market_router.get("/status")
+async def market_status() -> dict:
+    """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
+    0-row tables are reported honestly (fresh: null). Cached for _MARKET_STATUS_TTL."""
+    global _market_status_cache
+    now = datetime.datetime.now(datetime.UTC)
+    if _market_status_cache and now - _market_status_cache[0] < _MARKET_STATUS_TTL:
+        return _market_status_cache[1]
+    payload = await _market_status_uncached()
+    _market_status_cache = (now, payload)
+    return payload

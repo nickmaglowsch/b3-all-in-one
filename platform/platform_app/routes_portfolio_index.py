@@ -19,14 +19,12 @@ from __future__ import annotations
 import asyncio
 import datetime
 
-import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import enginerun, portfolio_index as pidx
-from platform_app.config import settings
-from platform_app.db import get_async_session
+from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import CashEvent, Trade
 from platform_app.tenancy import get_current_tenant
 
@@ -81,18 +79,15 @@ async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:
     as the plane knows it, so the index has a point on exactly the days a mark
     exists. Raises so the caller can turn an unreachable plane into a 503.
     """
-    conn = await asyncpg.connect(settings.engine_database_url)
-    try:
-        days = await conn.fetch(
-            "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
-        rows = await conn.fetch(
-            "SELECT ticker, date, close FROM prices "
-            "WHERE ticker = ANY($1::text[]) AND date >= $2 AND close IS NOT NULL "
-            "ORDER BY ticker, date",
-            tickers, start,
-        )
-    finally:
-        await conn.close()
+    pool = await get_engine_pool()
+    days = await pool.fetch(
+        "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
+    rows = await pool.fetch(
+        "SELECT ticker, date, close FROM prices "
+        "WHERE ticker = ANY($1::text[]) AND date >= $2 AND close IS NOT NULL "
+        "ORDER BY ticker, date",
+        tickers, start,
+    )
 
     closes: dict[str, dict[datetime.date, float]] = {}
     for r in rows:

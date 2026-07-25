@@ -19,7 +19,7 @@ from sqlalchemy import delete
 
 from platform_app import enginerun, routes
 from platform_app.config import settings
-from platform_app.db import async_session_maker
+from platform_app.db import async_session_maker, close_engine_pool
 from platform_app.models import PortfolioSleeve
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -85,6 +85,11 @@ async def empty_engine_db():
     finally:
         settings.engine_database_url = old
         routes._SLEEVE_WEIGHTS_CACHE.clear()
+        # The market-plane pool holds live connections to guard_engine; close it
+        # before dropping the database out from under it. Same reason the sleeve
+        # cache above is cleared — this fixture mutates global config, so it owns
+        # resetting the global state derived from it.
+        await close_engine_pool()
         conn = await asyncpg.connect(admin)
         try:
             await conn.execute(

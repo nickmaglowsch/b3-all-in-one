@@ -1,5 +1,11 @@
-from fastapi import Depends, FastAPI
+import hashlib
+import hmac
+import json
+from urllib.parse import parse_qs, urlparse
+
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi_users import exceptions
 from sqlalchemy import text
 
@@ -41,10 +47,73 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auth routers, imobindex pattern: JWT login at /auth/jwt, Google OAuth at /auth/google.
-app.include_router(
-    fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"]
-)
+# ── OAuth state ↔ browser binding (login CSRF) ────────────────────────────────
+# fastapi-users signs the `state` token over an EMPTY payload, so it proves only
+# "this server issued a state" — never "*this* browser started the flow". Since
+# /auth/google/authorize is unauthenticated, an attacker could run the flow with
+# their own Google account, capture the callback URL before fetching it, and hand
+# it to a victim: the victim's browser completes a login into the ATTACKER's
+# tenant, and every extract they import afterwards lands in the attacker's book.
+#
+# The fix is a value the attacker cannot plant in the victim's browser. We hash
+# the state we just issued into an HttpOnly cookie on /authorize, and on
+# /callback require the presented state to hash to that cookie. No change to the
+# upstream router or the token payload.
+_OAUTH_STATE_COOKIE = "oauth_state"
+_AUTHORIZE_PATH = "/auth/google/authorize"
+_CALLBACK_PATH = "/auth/google/callback"
+
+
+def _state_digest(state: str) -> str:
+    return hashlib.sha256(state.encode()).hexdigest()
+
+
+@app.middleware("http")
+async def bind_oauth_state(request: Request, call_next):
+    if request.url.path == _CALLBACK_PATH:
+        presented = request.query_params.get("state", "")
+        expected = request.cookies.get(_OAUTH_STATE_COOKIE, "")
+        # compare_digest: the comparison is against a value the caller supplies.
+        if not expected or not hmac.compare_digest(_state_digest(presented), expected):
+            return JSONResponse(
+                {"detail": "INVALID_STATE_TOKEN"}, status_code=400)
+        response = await call_next(request)
+        response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
+        return response
+
+    response = await call_next(request)
+    if request.url.path != _AUTHORIZE_PATH or response.status_code != 200:
+        return response
+
+    # Buffer the small JSON body so the issued state can be read out of the
+    # authorization_url, then hand the identical body onward.
+    body = b"".join([chunk async for chunk in response.body_iterator])
+    out = Response(
+        content=body, status_code=response.status_code,
+        headers=dict(response.headers), media_type=response.media_type,
+    )
+    try:
+        url = json.loads(body)["authorization_url"]
+        state = parse_qs(urlparse(url).query)["state"][0]
+    except (ValueError, KeyError, IndexError):
+        return out  # nothing to bind — let the response through unchanged
+    out.set_cookie(
+        _OAUTH_STATE_COOKIE, _state_digest(state),
+        max_age=600, httponly=True, samesite="lax",
+        # Lax still rides the top-level GET redirect back from Google. Secure is
+        # off in dev only, where the stack is plain http on loopback.
+        secure=not settings.is_dev, path="/",
+    )
+    return out
+
+# Google OAuth at /auth/google — the only way in outside development.
+#
+# associate_by_email welds a Google identity onto whatever row already holds that
+# address. That is only safe because the address can no longer be *claimed* by
+# anyone: password registration is dev-only (below), so every row here was created
+# by a Google sign-in that proved the address. With /auth/register open, anyone
+# could POST a stranger's email, wait for them to sign in with Google, and inherit
+# their account — permanently, since no password-reset router is mounted either.
 app.include_router(
     fastapi_users.get_oauth_router(
         get_google_oauth_client(),
@@ -58,9 +127,20 @@ app.include_router(
     prefix="/auth/google",
     tags=["auth"],
 )
-app.include_router(
-    fastapi_users.get_register_router(UserRead, UserCreate), prefix="/auth", tags=["auth"]
-)
+
+if settings.is_dev:
+    # Password login + registration exist for local work and the e2e tests only.
+    # The SPA never calls either (app/login/page.tsx offers Google and dev-login),
+    # so in production they are pure attack surface: an unauthenticated,
+    # unrate-limited credential-stuffing and account-claiming endpoint pair.
+    app.include_router(
+        fastapi_users.get_auth_router(auth_backend), prefix="/auth/jwt", tags=["auth"]
+    )
+    app.include_router(
+        fastapi_users.get_register_router(UserRead, UserCreate),
+        prefix="/auth",
+        tags=["auth"],
+    )
 
 app.include_router(billing_router)
 # LGPD Art. 18 rights over the whole account — free, at every tier, by law.

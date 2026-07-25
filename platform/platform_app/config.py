@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     # Plain psycopg-style URL (no +asyncpg); host is `postgres` inside containers.
     engine_database_url: str = "postgresql://postgres:devpassword@localhost:5432/b3"
     secret_key: str = "dev-secret-change-me"
+    # Wall-clock cap on any taxcore/engine subprocess. Generous — a full-history
+    # backtest is the slow case — but bounded, so a wedged child can't hold a
+    # request thread or one of the worker's two slots forever.
+    subprocess_timeout_s: int = 600
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"
@@ -56,3 +60,15 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+# The signing key fails open: `SECRET_KEY: ${SECRET_KEY}` in compose interpolates a
+# missing var to "", pydantic reads the env var as present-and-empty and so takes ""
+# over the default, and PyJWT happily signs *and verifies* HS256 with a zero-length
+# key. The stack then boots green while anyone can mint a token for any tenant_id.
+# The same key signs OAuth `state`, so it is not only session forgery.
+_UNSAFE_SECRETS = {"", "change-me", "dev-secret-change-me"}
+if not settings.is_dev and settings.secret_key in _UNSAFE_SECRETS:
+    raise RuntimeError(
+        "SECRET_KEY is unset or still the placeholder — refusing to start outside "
+        "development. Generate one with: python -c 'import secrets;print(secrets.token_urlsafe(64))'"
+    )

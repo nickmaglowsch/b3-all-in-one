@@ -131,7 +131,7 @@ async def process_imports(tenant_id: str) -> dict:
         ).all()
         await session.commit()
 
-        ws = Path(tempfile.mkdtemp(prefix="b3import-"))
+        ws = Path(tempfile.mkdtemp(prefix="b3import-", dir=b3run.workspace_root(tid)))
         try:
             b3run.seed_workspace(ws)
             for imp in imports:

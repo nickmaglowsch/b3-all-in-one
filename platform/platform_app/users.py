@@ -45,9 +45,16 @@ auth_backend = AuthenticationBackend(
 
 class RedirectTransport(Transport):
     """OAuth-only transport: the Google callback ends in a browser redirect, so
-    send the user back to the SPA's /auth/callback with the JWT in the query
-    string (the static frontend has no server to read a JSON body). The SPA
-    stores it and drops the token from the URL. Same shape as imobindex."""
+    send the user back to the SPA's /auth/callback carrying the JWT (the static
+    frontend has no server to read a JSON body). The SPA stores it and drops it
+    from the URL.
+
+    In the **fragment**, not the query string. A query string is logged verbatim
+    by Cloudflare Pages and every proxy in between, and this token is a full
+    1h bearer credential that JWTStrategy cannot revoke — so a line in an access
+    log is a working session for whoever reads it. Fragments are never sent to a
+    server at all. Keep it that way.
+    """
 
     scheme = None  # type: ignore[assignment]
 
@@ -55,7 +62,7 @@ class RedirectTransport(Transport):
         self.redirect_url = redirect_url
 
     async def get_login_response(self, token: str) -> Response:
-        return RedirectResponse(f"{self.redirect_url}?token={token}", status_code=302)
+        return RedirectResponse(f"{self.redirect_url}#token={token}", status_code=302)
 
     async def get_logout_response(self) -> Response:
         raise TransportLogoutNotSupportedError()

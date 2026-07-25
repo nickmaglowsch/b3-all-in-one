@@ -50,6 +50,17 @@ ENV TAXCORE_DIR=/opt/taxcore \
     TAXCORE_PYTHON=/opt/taxcore/.venv/bin/python \
     ENGINE_DIR=/opt/engine \
     ENGINE_PYTHON=/opt/engine/.venv/bin/python
+# Drop root. The worker parses attacker-supplied .xlsx through taxcore's
+# pandas/openpyxl venv, so a parse bug in that chain would otherwise run as uid 0
+# with write access to /data/uploads and /data/artifacts — both shared with the
+# api container, both named volumes whose files then land root-owned on the host.
+# The data dirs are created and chowned here because the volumes mount over them
+# as root otherwise.
+RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /data/uploads /data/artifacts \
+    && chown -R 10001:10001 /data /app /opt/taxcore /opt/engine
+USER 10001:10001
+
 EXPOSE 8000
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 # --proxy-headers + trust-all: only Caddy can reach this container (no published

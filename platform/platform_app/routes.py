@@ -42,6 +42,15 @@ backtests_router = APIRouter(prefix="/backtests", tags=["backtests"])
 market_router = APIRouter(prefix="/market", tags=["market"])
 
 
+# Admission control on the upload boundary. `await f.read()` materializes the whole
+# body in RAM before anything is written, so without a cap one authenticated POST
+# of a 5 GB "xlsx" is an OOM of the api container, and a loop of them fills the
+# shared /data/uploads volume. A B3 annual extract is tens of KB; 25 MB x 24 files
+# is already far beyond any real year.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_UPLOAD_FILES = 24
+
+
 def _detect_kind(name: str) -> str:
     low = name.lower()
     if low.startswith("negociacao-"):
@@ -60,6 +69,8 @@ async def create_imports(
     _user, tid = tenant
     if not files:
         raise HTTPException(400, "no files uploaded")
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(400, f"no máximo {MAX_UPLOAD_FILES} arquivos por envio")
     for f in files:
         if not (f.filename or "").lower().endswith(".xlsx"):
             raise HTTPException(400, f"only .xlsx accepted: {f.filename}")
@@ -68,13 +79,19 @@ async def create_imports(
     dest.mkdir(parents=True, exist_ok=True)
     created: list[Import] = []
     for f in files:
+        # Read one byte past the cap: enough to know it is oversized, without ever
+        # holding the oversized body. Rejecting after a full read would be the DoS.
+        data = await f.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                413, f"arquivo grande demais (limite {MAX_UPLOAD_BYTES // 1024 // 1024} MB): {f.filename}")
         # Starlette hands back the client's filename verbatim, so `..` in it would
         # write outside the tenant's directory — and LGPD erasure rmtree's exactly
         # that directory, so an escaped extract would outlive the account that owns
         # it. The same name is later joined into the IRPF workspace (irpf_report).
         name = Path(f.filename).name
         path = dest / name
-        path.write_bytes(await f.read())
+        path.write_bytes(data)
         imp = Import(
             tenant_id=tid, filename=name, stored_path=str(path),
             kind=_detect_kind(name), status="pending",
@@ -326,6 +343,18 @@ async def put_sleeves(
 # same-day edit busts the entry; built-in refs keep the shared 3-tuple key.
 _SLEEVE_WEIGHTS_CACHE: dict[tuple, dict] = {}
 
+# Every key here embeds a date or an updated_at, so entries are never reused past
+# the day they were written — without a bound the dict just grows by
+# (tenants x strategies) per day until the process restarts. Dropping the whole
+# thing on overflow is fine: it is a cache, and the next call refills what it needs.
+_CACHE_MAX = 1024
+
+
+def _bounded(cache: dict) -> dict:
+    if len(cache) > _CACHE_MAX:
+        cache.clear()
+    return cache
+
 
 def _needs_funds_msg(strategies: list[str]) -> str:
     """pt-BR message naming the strategy/strategies that need fundamentals data."""
@@ -460,7 +489,7 @@ async def _combined_target(
             except enginerun.EngineNeedsFundamentals as e:
                 missing.append(e.strategy or s.strategy_ref)
                 continue
-            _SLEEVE_WEIGHTS_CACHE[key] = adv
+            _bounded(_SLEEVE_WEIGHTS_CACHE)[key] = adv
         for t, w in adv["weights"].items():
             combined[t] = combined.get(t, 0.0) + pct * float(w)
     if missing:
@@ -697,7 +726,7 @@ async def irpf_report(
         select(Import).where(Import.tenant_id == tid, Import.kind == "movimentacao")
     )).all()
 
-    ws = Path(tempfile.mkdtemp(prefix="b3irpf-"))
+    ws = Path(tempfile.mkdtemp(prefix="b3irpf-", dir=b3run.workspace_root(tid)))
     try:
         b3run.seed_workspace(ws)
         b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, [
@@ -770,7 +799,7 @@ async def _run_tlh_plan(
         select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
     )).all()
 
-    ws = Path(tempfile.mkdtemp(prefix="b3tlh-"))
+    ws = Path(tempfile.mkdtemp(prefix="b3tlh-", dir=b3run.workspace_root(tid)))
     try:
         b3run.seed_workspace(ws)
         # tlh_plan reads: data/trades.csv + data/cash_events.csv (build_timeline),
@@ -884,7 +913,7 @@ async def _gallery(session: AsyncSession, tid: uuid.UUID | None) -> list[dict]:
     user_names = {r.name for r in rows}
     merged = [{**s, "source": "user" if s["name"] in user_names else "builtin"}
               for s in json.loads(proc.stdout)]
-    _TENANT_GALLERY[tid] = (fingerprint, merged)
+    _bounded(_TENANT_GALLERY)[tid] = (fingerprint, merged)
     return merged
 
 
@@ -1242,11 +1271,17 @@ async def promote_user_strategy(
 # ── Backtests ─────────────────────────────────────────────────────────────────
 
 class BacktestRequest(BaseModel):
+    # start/end/freq are forwarded to the engine, where `freq` reaches
+    # pandas .resample() over ~20 years of daily prices. As a free-form string it
+    # accepts "s", which asks the shared worker to build a second-resolution frame
+    # of hundreds of millions of rows — an OOM of the box the API runs on. Reuse
+    # the cadence enum the rest of the app already validates against, and let
+    # pydantic parse the dates instead of passing text through.
     strategy: str
     params: dict | None = None
-    start: str | None = None
-    end: str | None = None
-    freq: str | None = None
+    start: date | None = None
+    end: date | None = None
+    freq: _REBALANCE | None = None
 
 
 def _run_dict(r: BacktestRun) -> dict:
@@ -1270,8 +1305,12 @@ async def create_backtest(
         raise HTTPException(404, f"unknown strategy: {body.strategy}")
     run = BacktestRun(
         tenant_id=tid, strategy=body.strategy, status="pending",
-        params={"params": body.params or {}, "start": body.start,
-                "end": body.end, "freq": body.freq},
+        # isoformat, not the date object: this column is JSONB, and the engine
+        # reads start/end back as strings.
+        params={"params": body.params or {},
+                "start": body.start.isoformat() if body.start else None,
+                "end": body.end.isoformat() if body.end else None,
+                "freq": body.freq},
     )
     session.add(run)
     await session.commit()

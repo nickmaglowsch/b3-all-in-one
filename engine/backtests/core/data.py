@@ -16,6 +16,24 @@ from datetime import datetime
 from b3_pipeline import storage
 
 
+def _safe_dsn(dsn) -> str:
+    """A Postgres URL with the password masked, for anything that gets printed.
+
+    The platform captures this process's stdout/stderr and returns the tail of it
+    in API error bodies, so an unmasked DSN here hands the database password to
+    any authenticated tenant that can make a backtest fail.
+    """
+    text = str(dsn)
+    if "://" not in text:
+        return text  # a plain file path (SQLite) — nothing to hide
+    scheme, _, rest = text.partition("://")
+    creds, at, host = rest.rpartition("@")
+    if not at:
+        return text  # no credentials in the URL
+    user = creds.split(":", 1)[0]
+    return f"{scheme}://{user}:***@{host}"
+
+
 # ── Disk+memory cache for external market series (benchmarks, CDI) ────────────
 # Every backtest run (and every UI re-run) used to refetch IBOV/ETFs from Yahoo
 # and CDI from BCB. A past [start, end] window is effectively immutable, so we
@@ -271,7 +289,9 @@ def load_b3_data(
         tuple: (adj_close, close_px, fin_vol)
         All as wide DataFrames with shape (date, ticker)
     """
-    print(f"⬇  Loading B3 data from {db_path} ({start} to {end})...")
+    # _safe_dsn, not db_path: it is a full Postgres URL with the password in it,
+    # and this stdout is captured and surfaced in API error bodies.
+    print(f"⬇  Loading B3 data from {_safe_dsn(db_path)} ({start} to {end})...")
 
     # Query: standard lot tickers ending in 3, 4, 5, 6, 11
     # BDRs (34, 35, etc.) and other weird assets are excluded using strict length and suffix checks.
@@ -366,7 +386,7 @@ def load_b3_hlc_data(
         tuple: (adj_close, split_adj_high, split_adj_low, split_adj_close, close_px, fin_vol)
         All as wide DataFrames with shape (date, ticker)
     """
-    print(f"⬇  Loading B3 HLC data from {db_path} ({start} to {end})...")
+    print(f"⬇  Loading B3 HLC data from {_safe_dsn(db_path)} ({start} to {end})...")
 
     query = """
         SELECT date, ticker, split_adj_high, split_adj_low, split_adj_close,

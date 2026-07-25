@@ -9,7 +9,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpassword}
       POSTGRES_DB: b3
     ports:
-      - "5432:5432"
+      # Loopback only. Docker publishes through DOCKER-USER, which bypasses ufw, so
+      # a bare "5432:5432" exposes postgres (password `devpassword`, every tenant's
+      # book) to anything that can route to this host.
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -43,7 +46,10 @@ services:
       - uploads_data:/data/uploads       # shared with worker so saved files are visible to jobs
       - artifacts_data:/data/artifacts   # shared with worker so backtest artifacts are readable
     ports:
-      - "8000:8000"
+      # Loopback only, same reason as postgres — and this stack runs with
+      # ENVIRONMENT=development, which mounts POST /auth/dev-login: an
+      # unauthenticated JWT minter for a seeded trader-tier user.
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy

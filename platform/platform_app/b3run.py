@@ -24,6 +24,8 @@ from platform_app.config import settings
 _DEFAULT_TAXCORE = Path(__file__).resolve().parents[2] / "taxcore"
 TAXCORE = Path(settings.taxcore_dir) if settings.taxcore_dir else _DEFAULT_TAXCORE
 PARSER_VERSION = "taxcore.load_b3"
+# Synthetic exit code for a subprocess we killed on the timeout (shell convention).
+TIMEOUT_EXIT = 124
 
 # Blocks any non-local network connect inside the subprocess (proves the scripts stay
 # offline with these inputs). Auto-imported because the workspace lands on PYTHONPATH.
@@ -51,6 +53,22 @@ def _taxcore_python() -> list[str]:
     return ["uv", "run", "--directory", str(TAXCORE), "python"]
 
 
+def workspace_root(tenant_id: object) -> Path:
+    """Parent dir for a tenant's throwaway workspaces.
+
+    Under UPLOADS_DIR/{tenant_id}, not /tmp, so the residue is reachable by the
+    erasure path. Every workspace holds the tenant's full trades.csv,
+    cash_events.csv and a copy of their B3 extracts — a named person's complete
+    trade history — and is cleaned in a `finally` that a SIGKILL (OOM, container
+    restart) skips. purge_tenant_files already rmtree's UPLOADS_DIR/{tenant_id},
+    so putting them here means "excluir minha conta" reaches them too instead of
+    returning "eliminado" over a /tmp dir that still has the data.
+    """
+    root = Path(settings.uploads_dir) / str(tenant_id) / "workspaces"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def seed_workspace(ws: Path) -> Path:
     """Copy scripts + methodologies + the offline guard; make data/ and b3_imports/."""
     shutil.copytree(TAXCORE / "scripts", ws / "scripts")
@@ -62,12 +80,24 @@ def seed_workspace(ws: Path) -> Path:
 
 
 def run_module(ws: Path, module_args: list[str]) -> subprocess.CompletedProcess:
-    """``python -m <module> [args...]`` inside ``ws`` with taxcore's interpreter."""
+    """``python -m <module> [args...]`` inside ``ws`` with taxcore's interpreter.
+
+    Timeout → exit code 124, same contract as enginerun.run_script: callers
+    already branch on a non-zero return code, and an import that wedges must not
+    hold a worker slot (there are two) or a request thread indefinitely.
+    """
     env = {**os.environ, "PYTHONPATH": str(ws), "PYTHONWARNINGS": "ignore"}
-    return subprocess.run(
-        [*_taxcore_python(), "-m", *module_args],
-        cwd=ws, env=env, capture_output=True, text=True,
-    )
+    argv = [*_taxcore_python(), "-m", *module_args]
+    try:
+        return subprocess.run(
+            argv, cwd=ws, env=env, capture_output=True, text=True,
+            timeout=settings.subprocess_timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, TIMEOUT_EXIT, stdout="",
+            stderr=f"{module_args[0]} timed out after {settings.subprocess_timeout_s}s",
+        )
 
 
 # --- CSV <-> DB value helpers. repr() on floats is byte-identical to how the

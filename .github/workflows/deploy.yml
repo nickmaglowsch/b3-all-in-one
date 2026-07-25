@@ -16,10 +16,20 @@ jobs:
     name: API + worker to the VPS
     runs-on: ubuntu-latest
     environment: production
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # head_repository guard: `branches: [main]` matches the workflow_run's *head*
+    # branch, so a fork PR from a branch literally named `main` that passes CI
+    # would fire this job. The script only ever deploys origin/main, so the blast
+    # radius is a spurious redeploy rather than fork code — but a deploy job that
+    # any outsider can trigger is a lever nobody should be handed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     steps:
       - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1
+        # Pinned to a SHA, not the mutable v1 tag: this step is handed VPS_SSH_KEY,
+        # VPS_HOST and VPS_USER, so whoever can move the tag can exfiltrate them.
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}

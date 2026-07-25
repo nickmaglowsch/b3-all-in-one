@@ -113,6 +113,13 @@ export const IconTrash = (p: IconProps) => (
     <path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
   </Svg>
 );
+export const IconShield = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M12 3l7 3v6c0 4.2-2.9 7.6-7 9-4.1-1.4-7-4.8-7-9V6l7-3Z" />
+    <path d="M9.5 12l1.8 1.8 3.4-3.6" />
+  </Svg>
+);
+
 export const IconLogout = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3" />

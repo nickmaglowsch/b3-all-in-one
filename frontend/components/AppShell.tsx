@@ -20,6 +20,7 @@ import {
   IconMenu,
   IconReceipt,
   IconScissors,
+  IconShield,
   IconUpload,
   IconUsers,
   IconWallet,
@@ -35,13 +36,17 @@ const NAV = [
   { href: "/tlh", label: "TLH", Icon: IconScissors },
   { href: "/bench", label: "Bench", Icon: IconChart },
   { href: "/assinatura", label: "Assinatura", Icon: IconCard },
+  { href: "/conta", label: "Meus dados", Icon: IconShield },
 ];
+
+// Public pages: no sidebar, no login guard. The privacy policy is legally
+// required to be readable *before* signing up, so it belongs here.
+const STANDALONE = ["/", "/login", "/privacidade"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  // Landing and login stand alone — no sidebar, no guard.
-  if (pathname === "/" || pathname === "/login") return <>{children}</>;
+  if (STANDALONE.includes(pathname)) return <>{children}</>;
 
   return <ShellChrome pathname={pathname}>{children}</ShellChrome>;
 }

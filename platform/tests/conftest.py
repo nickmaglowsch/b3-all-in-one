@@ -56,6 +56,50 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+def sample_value(col):
+    """Any value the column will accept — callers key on tenant_id, so nothing
+    else about the row matters."""
+    import datetime
+    import decimal
+    import uuid
+
+    py = col.type.python_type
+    return {
+        uuid.UUID: uuid.uuid4(),
+        int: 1,
+        float: 1.0,
+        decimal.Decimal: decimal.Decimal(1),
+        bool: False,
+        dict: {},
+        datetime.date: datetime.date(2026, 1, 1),
+        datetime.datetime: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+    }.get(py, "x")
+
+
+async def seed_tenant_tables(session, tenant_id) -> list:
+    """One row in *every* tenant-scoped table, so a sweep or an export that
+    quietly stops covering one of them fails in the test that seeded it.
+    Returns the tables it touched."""
+    from sqlalchemy import insert
+
+    from platform_app.db import Base
+
+    tables = [t for t in Base.metadata.sorted_tables if "tenant_id" in t.c]
+    for table in tables:
+        row = {"tenant_id": tenant_id}
+        # Fill whatever else the table demands; the values are irrelevant, the
+        # row only has to exist and carry this tenant_id.
+        for col in table.c:
+            if col.name == "tenant_id" or col.nullable or col.default is not None:
+                continue
+            if col.server_default is not None or col.autoincrement is True:
+                continue
+            row[col.name] = sample_value(col)
+        await session.execute(insert(table).values(**row))
+    await session.commit()
+    return tables
+
+
 async def _admin(sql: str) -> None:
     engine = create_async_engine(ADMIN_DSN, isolation_level="AUTOCOMMIT")
     async with engine.connect() as conn:

@@ -695,6 +695,12 @@ export default function LandingPage() {
             Ferramenta de organização de carteira e apuração. Não é recomendação
             de investimento nem serviço de contabilidade.
           </p>
+          <Link
+            href="/privacidade"
+            className="text-xs text-muted underline underline-offset-2 hover:text-ink"
+          >
+            Política de Privacidade
+          </Link>
         </div>
       </footer>
     </div>

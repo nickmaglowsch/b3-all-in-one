@@ -48,8 +48,8 @@ and `docs/MCP/product-remote-mcp-plan.md` (portfolio). This spec supersedes and 
    metrics, rankings), never raw price feeds; replace yfinance with B3/BCB official series
    or a licensed provider before launch.
 2. **Financial-data custody / LGPD** — the platform holds users' full trade history and
-   tax data. Needs encryption at rest, per-tenant isolation, data export/delete, and a
-   clear privacy posture from day one.
+   tax data. Per-tenant isolation, data export/delete and the privacy posture are done
+   (`08-privacidade-lgpd.md`); encryption at rest and DB-level RLS are still open.
 3. **Tax-correctness liability** — reports must keep the b3-portfolio framing: "conferir
    no informe", never invent CNPJs/values, show provenance for every number. Not tax advice.
 4. **Parser drift** — B3 changes extract formats; parsing needs versioned parsers, a
@@ -63,3 +63,5 @@ and `docs/MCP/product-remote-mcp-plan.md` (portfolio). This spec supersedes and 
 - `04-roadmap.md` — phased implementation plan
 - `05-strategy-linked-portfolio.md` — the loop: sleeves, tax-optimal rebalance advisor,
   what-if backtests on real cash flows
+- `06-user-strategies.md` — user-authored strategy specs
+- `08-privacidade-lgpd.md` — LGPD: registro de tratamento, direitos do titular, retenção

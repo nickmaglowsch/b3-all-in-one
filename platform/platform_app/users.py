@@ -7,8 +7,13 @@ from fastapi_users.authentication import (
     BearerTransport,
     JWTStrategy,
 )
+from fastapi_users.authentication.transport import (
+    Transport,
+    TransportLogoutNotSupportedError,
+)
 from fastapi_users.db import SQLAlchemyUserDatabase
 from httpx_oauth.clients.google import GoogleOAuth2
+from starlette.responses import RedirectResponse, Response
 
 from platform_app.config import settings
 from platform_app.db import get_user_db
@@ -34,6 +39,40 @@ def get_jwt_strategy() -> JWTStrategy:
 auth_backend = AuthenticationBackend(
     name="jwt",
     transport=bearer_transport,
+    get_strategy=get_jwt_strategy,
+)
+
+
+class RedirectTransport(Transport):
+    """OAuth-only transport: the Google callback ends in a browser redirect, so
+    send the user back to the SPA's /auth/callback with the JWT in the query
+    string (the static frontend has no server to read a JSON body). The SPA
+    stores it and drops the token from the URL. Same shape as imobindex."""
+
+    scheme = None  # type: ignore[assignment]
+
+    def __init__(self, redirect_url: str):
+        self.redirect_url = redirect_url
+
+    async def get_login_response(self, token: str) -> Response:
+        return RedirectResponse(f"{self.redirect_url}?token={token}", status_code=302)
+
+    async def get_logout_response(self) -> Response:
+        raise TransportLogoutNotSupportedError()
+
+    @staticmethod
+    def get_openapi_login_responses_success() -> dict:
+        return {}
+
+    @staticmethod
+    def get_openapi_logout_responses_success() -> dict:
+        return {}
+
+
+# Callback lands on the frontend (FRONTEND_URL), NOT the API.
+oauth_backend = AuthenticationBackend(
+    name="jwt-redirect",
+    transport=RedirectTransport(f"{settings.frontend_url}/auth/callback"),
     get_strategy=get_jwt_strategy,
 )
 

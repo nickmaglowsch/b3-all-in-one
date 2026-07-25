@@ -82,7 +82,38 @@ services:
         condition: service_healthy
     profiles: ["app"]
 
+  # Scheduled market-data refresh. Its own service, not a second role for `worker`,
+  # because an ingestion run is minutes to hours and would otherwise sit in front of
+  # every user import and backtest in the same two-slot worker.
+  #
+  # Opt-in locally (`--profile ingest`): starting the dev stack should not begin
+  # downloading tens of GB from B3 on a cron. It runs unconditionally in prod.
+  ingest:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: b3_ingest
+    command: ["python", "-m", "platform_app.worker"]
+    env_file: .env.example
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      ENGINE_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
+      WORKER_QUEUES: ingest
+      # Deliberately NOT ENGINE_BENCH_OFFLINE: this is the one service whose whole
+      # job is to reach B3 and CVM.
+      UPLOADS_DIR: /data/uploads
+      ARTIFACTS_DIR: /data/artifacts
+    volumes:
+      # COTAHIST/CVM archives land in /opt/engine/data. On the container filesystem
+      # they die with the container, so every run would re-download 1994..today.
+      - engine_data:/opt/engine/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["ingest"]
+
 volumes:
   postgres_data:
   uploads_data:
   artifacts_data:
+  engine_data:

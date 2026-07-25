@@ -56,8 +56,12 @@ ENV TAXCORE_DIR=/opt/taxcore \
 # api container, both named volumes whose files then land root-owned on the host.
 # The data dirs are created and chowned here because the volumes mount over them
 # as root otherwise.
+# /opt/engine/data is created here even though the dockerignore keeps engine/data
+# out of the image: Docker seeds a named volume from the image path it mounts over,
+# so if the directory does not exist it is created root-owned and the non-root
+# worker cannot write the archives it downloads there.
 RUN useradd --uid 10001 --create-home --shell /usr/sbin/nologin app \
-    && mkdir -p /data/uploads /data/artifacts \
+    && mkdir -p /data/uploads /data/artifacts /opt/engine/data \
     && chown -R 10001:10001 /data /app /opt/taxcore /opt/engine
 USER 10001:10001
 

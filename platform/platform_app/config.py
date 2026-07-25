@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # backtest is the slow case — but bounded, so a wedged child can't hold a
     # request thread or one of the worker's two slots forever.
     subprocess_timeout_s: int = 600
+    # Ingestion runs on its own clock: a first full COTAHIST backfill is hours of
+    # download + parse, so the per-request cap above would kill it. Bounded anyway
+    # so a stalled B3 download cannot hold the ingest worker forever.
+    ingest_timeout_s: int = 6 * 60 * 60
+    # Cron for the scheduled market-data refresh (UTC — procrastinate schedules in
+    # UTC). 06:00 UTC = 03:00 America/Sao_Paulo, comfortably after B3 has published
+    # the day's COTAHIST and outside the hours anyone is running backtests.
+    ingest_prices_cron: str = "0 6 * * *"
+    # Fundamentals move on a filing calendar, not a daily one — weekly is plenty.
+    ingest_fundamentals_cron: str = "0 7 * * 0"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

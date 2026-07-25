@@ -83,6 +83,30 @@ def run_script(
         )
 
 
+def run_module(
+    module_args: list[str], timeout_s: int | None = None
+) -> subprocess.CompletedProcess:
+    """``python -m <module> [args...]`` with the engine interpreter.
+
+    For the ingestion pipelines (``b3_pipeline.main``, ``b3_pipeline.cvm_main``),
+    which are modules rather than scripts/ entry points. They take minutes to
+    hours, so they get their own timeout rather than the per-request default —
+    but still a bounded one, so a wedged download can't hold a worker slot for a
+    week. Timeout maps to exit 124 like the other runners.
+    """
+    argv = [*_engine_python(), "-m", *module_args]
+    limit = timeout_s if timeout_s is not None else settings.ingest_timeout_s
+    try:
+        return subprocess.run(
+            argv, cwd=ENGINE, env=_env(), capture_output=True, text=True, timeout=limit,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, TIMEOUT_EXIT, stdout="",
+            stderr=f"{module_args[0]} timed out after {limit}s",
+        )
+
+
 def _last_json(text: str) -> dict:
     """Parse the last JSON object line of stdout — the engine prints progress
     lines before emitting its one-line JSON payload."""

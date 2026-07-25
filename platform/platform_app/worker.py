@@ -1,11 +1,25 @@
-"""Procrastinate worker: `python -m platform_app.worker` (docker-compose worker service)."""
+"""Procrastinate worker: `python -m platform_app.worker` (docker-compose worker service).
+
+Two roles, selected by WORKER_QUEUES:
+
+  unset / "default"  — imports and backtests (the compose `worker` service)
+  "ingest"           — the scheduled market-data pipelines (the `ingest` service)
+
+They are split because an ingestion run is minutes to hours and this worker has
+two slots: sharing a queue would let a nightly refresh block every user-facing
+import and backtest behind it. Only a worker that listens on a queue defers its
+periodic tasks, so the ingest service is also what puts the cron schedule in
+motion.
+"""
 
 import asyncio
+import os
 
 from platform_app.tasks import app
 
 
 async def _run() -> None:
+    queues = [q for q in os.environ.get("WORKER_QUEUES", "").split(",") if q]
     async with app.open_async():
         # procrastinate ships its own tables; create them once on a fresh DB.
         # Its schema SQL isn't idempotent, so guard on an existence check rather
@@ -17,7 +31,16 @@ async def _run() -> None:
             await app.schema_manager.apply_schema_async()
         # ponytail: concurrency capped low — worker shares CPU on the single VPS (spec 01);
         # per-tenant quotas are the real admission control, add them when jobs land.
-        await app.run_worker_async(concurrency=2)
+        #
+        # The ingest worker runs one at a time: two concurrent COTAHIST parses on a
+        # shared VPS is how you page yourself. queueing_lock already stops the same
+        # kind overlapping; this stops prices and fundamentals colliding.
+        if queues:
+            await app.run_worker_async(queues=queues, concurrency=1)
+        else:
+            # Default worker: everything EXCEPT ingest, so a multi-hour refresh can
+            # never sit in front of a user's import.
+            await app.run_worker_async(queues=["default"], concurrency=2)
 
 
 def main() -> None:

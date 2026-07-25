@@ -13,7 +13,7 @@ from platform_app import b3run, enginerun, specstore
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import (
-    BacktestRun, CashEvent, CostBasisOverride, Import, Position, Trade,
+    BacktestRun, CashEvent, CostBasisOverride, Import, IngestRun, Position, Trade,
 )
 
 # Postgres-backed queue (spec 01: jobs live in Postgres).
@@ -105,6 +105,72 @@ async def run_backtest(run_id: str) -> dict:
         run.artifacts_path = str(out_dir)
         await session.commit()
         return {"run_id": run_id, "status": "done"}
+
+
+# ── Market-data ingestion (scheduled) ────────────────────────────────────────
+# Runs in-process here rather than under host cron or a GitHub Action: the prod
+# Postgres publishes no ports, the image already carries b3_pipeline and every dep
+# it imports, and procrastinate (already a dependency) gives cron, retries and a
+# queryable job table for free.
+#
+# `queue="ingest"`: a full backfill is hours long and the default worker runs two
+# slots. Left on the default queue it would starve imports and backtests, so the
+# compose worker excludes this queue and a separate one drains it.
+#
+# `queueing_lock`: at most one pending run per kind. A nightly firing while the
+# previous one still runs (or while someone ingests by hand) would have two
+# processes writing the same COTAHIST file and the same price rows.
+
+async def _record_ingest(kind: str, args: list[str]) -> dict:
+    """Run an engine ingestion module, bracketed by an ingest_runs row."""
+    async with async_session_maker() as session:
+        run = IngestRun(kind=kind, status="running")
+        session.add(run)
+        await session.commit()
+        run_id = run.id
+
+    proc = await asyncio.to_thread(enginerun.run_module, args)
+
+    async with async_session_maker() as session:
+        row = await session.get(IngestRun, run_id)
+        row.finished_at = datetime.datetime.now(datetime.timezone.utc)
+        if proc.returncode == 0:
+            row.status = "done"
+        else:
+            row.status = "error"
+            row.error = (proc.stderr or proc.stdout)[-4000:]
+        await session.commit()
+        return {"kind": kind, "status": row.status, "run_id": str(run_id)}
+
+
+@app.periodic(cron=settings.ingest_prices_cron)
+@app.task(name="ingest_prices", queue="ingest", queueing_lock="ingest_prices")
+async def ingest_prices(timestamp: int = 0) -> dict:
+    # timestamp defaults so the job can also be deferred by hand
+    # (`ingest_prices.defer_async()`) — the periodic scheduler passes it, an
+    # operator re-running a failed refresh or kicking off the initial backfill
+    # has nothing to pass. Without the default that call raises inside the worker
+    # before _record_ingest can write a row, so the failure is invisible in
+    # ingest_runs and only shows up in procrastinate_jobs.
+    """Refresh the price plane + corporate actions from B3.
+
+    --force-download is what makes this worth scheduling: B3 rewrites the current
+    year's COTAHIST archive daily, and without it the pipeline reuses the local
+    copy and never advances (see b3_pipeline.main).
+
+    Corporate actions are deliberately NOT skipped. `corporate_actions` was empty
+    for the whole life of this database — the step had only ever been run with
+    --skip-corporate-actions — which left dividend total-return adjustment missing
+    and only detector-inferred splits in place.
+    """
+    return await _record_ingest("prices", ["b3_pipeline.main", "--force-download"])
+
+
+@app.periodic(cron=settings.ingest_fundamentals_cron)
+@app.task(name="ingest_fundamentals", queue="ingest", queueing_lock="ingest_fundamentals")
+async def ingest_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices re: default
+    """Refresh CVM fundamentals (fundamentals_pit), which the f_* signals read."""
+    return await _record_ingest("fundamentals", ["b3_pipeline.cvm_main"])
 
 
 @app.task(name="process_imports")

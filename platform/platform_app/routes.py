@@ -29,7 +29,7 @@ from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
+    IngestRun, PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
@@ -1383,6 +1383,28 @@ _MARKET_STATUS_TTL = datetime.timedelta(seconds=60)
 _market_status_cache: tuple[datetime.datetime, dict] | None = None
 
 
+async def _last_ingest(session: AsyncSession) -> dict[str, dict]:
+    """Latest ingestion attempt per kind. `error` is deliberately not exposed —
+    it carries subprocess output with server paths (privacy._INTERNAL_COLUMNS
+    strips the same field for the same reason); `status` is the part a caller
+    needs. Never fails the status call: knowing the plane is stale matters more
+    than knowing why."""
+    out: dict[str, dict] = {}
+    try:
+        rows = (await session.scalars(
+            select(IngestRun).order_by(IngestRun.kind, IngestRun.started_at.desc())
+        )).all()
+    except Exception:
+        return out
+    for r in rows:
+        out.setdefault(r.kind, {
+            "status": r.status,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        })
+    return out
+
+
 async def _market_status_uncached() -> dict:
     pool = await get_engine_pool()
     prices = await pool.fetchrow(
@@ -1410,14 +1432,38 @@ async def _market_status_uncached() -> dict:
     }
 
 
+# Prices are expected every trading day. Four calendar days absorbs a long weekend
+# plus a feriado without crying wolf; past that the plane is genuinely behind.
+_PRICES_STALE_AFTER_DAYS = 4
+
+
 @market_router.get("/status")
-async def market_status() -> dict:
+async def market_status(
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
     """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
-    0-row tables are reported honestly (fresh: null). Cached for _MARKET_STATUS_TTL."""
+    0-row tables are reported honestly (fresh: null). Cached for _MARKET_STATUS_TTL.
+
+    `stale` is the field worth acting on: this plane sat seven months behind while
+    every position was marked from it, and nothing said so.
+    """
     global _market_status_cache
     now = datetime.datetime.now(datetime.UTC)
     if _market_status_cache and now - _market_status_cache[0] < _MARKET_STATUS_TTL:
-        return _market_status_cache[1]
-    payload = await _market_status_uncached()
-    _market_status_cache = (now, payload)
-    return payload
+        payload = _market_status_cache[1]
+    else:
+        payload = await _market_status_uncached()
+        _market_status_cache = (now, payload)
+
+    max_date = payload["prices"]["max_date"]
+    age_days = (
+        (now.date() - date.fromisoformat(max_date)).days if max_date else None
+    )
+    # Not cached with the payload: ingest rows change on their own schedule, and
+    # this is one indexed query against the platform DB.
+    return {
+        **payload,
+        "prices_age_days": age_days,
+        "stale": age_days is None or age_days > _PRICES_STALE_AFTER_DAYS,
+        "last_ingest": await _last_ingest(session),
+    }

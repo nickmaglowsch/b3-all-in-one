@@ -295,6 +295,39 @@ class UserStrategy(Base):
     )
 
 
+class IngestRun(Base):
+    """One market-data ingestion attempt (prices or CVM fundamentals).
+
+    Not tenant-scoped: the market plane is shared infrastructure, not anyone's
+    book — which is also why it is deliberately absent from the LGPD export and
+    erasure sweeps (they key on tenant_id).
+
+    Exists so a failed refresh is visible. The price plane sat seven months stale
+    with nothing anywhere saying so; the pipeline logs lived and died inside a
+    container. A row per run, surfaced by GET /market/status, is what turns that
+    into something noticeable.
+    """
+
+    __tablename__ = "ingest_runs"
+    __table_args__ = (
+        # The only read is "latest run per kind" (GET /market/status).
+        Index("ix_ingest_runs_kind_started", "kind", text("started_at DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    kind: Mapped[str] = mapped_column(String, nullable=False)  # prices | fundamentals
+    status: Mapped[str] = mapped_column(String, nullable=False)  # running|done|error
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Tail of the subprocess output on failure. Never returned to tenants — it
+    # carries server paths (see the same reasoning in privacy._INTERNAL_COLUMNS).
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class DarfPayment(Base):
     # Mirrors taxcore/data/darf_payments.csv. Empty by default (CRUD lands later).
     __tablename__ = "darf_payments"

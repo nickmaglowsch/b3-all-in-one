@@ -21,7 +21,7 @@ const plexMono = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "B3 · tudo-em-um",
+  title: "Quantax",
   description: "Carteira, IRPF e bench a partir dos seus extratos da B3.",
 };
 

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { API_URL, devLogin, googleLogin } from "@/lib/api";
+import { Brand } from "@/components/Brand";
 
 // Dev-login only exists when the API runs with ENVIRONMENT=development; in prod
 // it 404s, so only show that button when pointed at a local API.
@@ -42,10 +43,7 @@ export default function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-paper px-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <p className="font-display text-2xl font-extrabold tracking-tight">
-            <span className="text-navy">B3</span>
-            <span className="text-ink"> · tudo-em-um</span>
-          </p>
+          <Brand className="text-2xl" />
           <p className="mt-1 text-sm text-muted">
             Carteira, IRPF e bench a partir dos seus extratos da B3.
           </p>

@@ -8,10 +8,12 @@ import { IconChart } from "@/components/icons";
 import { KindBadge } from "./StrategyGallery";
 import { useCreateBacktest } from "./lib";
 
+// Ordered shortest → longest period so the list reads as a scale. The default
+// stays "ME" (see useState below); this only orders the options.
 const FREQS = [
+  { value: "W-FRI", label: "Semanal" },
   { value: "ME", label: "Mensal" },
   { value: "QE", label: "Trimestral" },
-  { value: "W-FRI", label: "Semanal" },
 ];
 
 export function RunPanel({
@@ -160,7 +162,7 @@ function Field({
     <label className="block">
       <span className="mb-1 flex items-baseline gap-1.5">
         <span className="text-xs font-medium text-ink">{label}</span>
-        {hint && <span className="font-mono text-[10px] text-muted">{hint}</span>}
+        {hint && <span className="font-mono text-[11px] text-muted">{hint}</span>}
       </span>
       {children}
     </label>

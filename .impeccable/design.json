@@ -1,0 +1,668 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-25T04:04:20Z",
+  "title": "Design System: Quantax",
+  "extensions": {
+    "colorMeta": {
+      "navy": {
+        "role": "primary",
+        "displayName": "Oscilloscope Navy",
+        "canonical": "oklch(28.9% 0.062 263.9)",
+        "darkMode": "#5a8fd9",
+        "tonalRamp": [
+          "oklch(15% 0.062 263.9)",
+          "oklch(26% 0.062 263.9)",
+          "oklch(38% 0.062 263.9)",
+          "oklch(49% 0.062 263.9)",
+          "oklch(61% 0.062 263.9)",
+          "oklch(72% 0.062 263.9)",
+          "oklch(84% 0.062 263.9)",
+          "oklch(95% 0.062 263.9)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Bench Paper",
+        "canonical": "oklch(98.5% 0.003 106.4)",
+        "darkMode": "#1f1d1a",
+        "tonalRamp": [
+          "oklch(15% 0.003 106.4)",
+          "oklch(26% 0.003 106.4)",
+          "oklch(38% 0.003 106.4)",
+          "oklch(49% 0.003 106.4)",
+          "oklch(61% 0.003 106.4)",
+          "oklch(72% 0.003 106.4)",
+          "oklch(84% 0.003 106.4)",
+          "oklch(95% 0.003 106.4)"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel White",
+        "canonical": "oklch(100% 0 89.9)",
+        "darkMode": "#2a2622",
+        "tonalRamp": [
+          "oklch(15% 0 89.9)",
+          "oklch(26% 0 89.9)",
+          "oklch(38% 0 89.9)",
+          "oklch(49% 0 89.9)",
+          "oklch(61% 0 89.9)",
+          "oklch(72% 0 89.9)",
+          "oklch(84% 0 89.9)",
+          "oklch(95% 0 89.9)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Instrument Ink",
+        "canonical": "oklch(21% 0.008 274.5)",
+        "darkMode": "#f5f3f0",
+        "tonalRamp": [
+          "oklch(15% 0.008 274.5)",
+          "oklch(26% 0.008 274.5)",
+          "oklch(38% 0.008 274.5)",
+          "oklch(49% 0.008 274.5)",
+          "oklch(61% 0.008 274.5)",
+          "oklch(72% 0.008 274.5)",
+          "oklch(84% 0.008 274.5)",
+          "oklch(95% 0.008 274.5)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Legend Grey",
+        "canonical": "oklch(49.2% 0.017 264.4)",
+        "darkMode": "#a6adb8",
+        "tonalRamp": [
+          "oklch(15% 0.017 264.4)",
+          "oklch(26% 0.017 264.4)",
+          "oklch(38% 0.017 264.4)",
+          "oklch(49% 0.017 264.4)",
+          "oklch(61% 0.017 264.4)",
+          "oklch(72% 0.017 264.4)",
+          "oklch(84% 0.017 264.4)",
+          "oklch(95% 0.017 264.4)"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Etched Rule",
+        "canonical": "oklch(91.3% 0.008 91.5)",
+        "darkMode": "#3d3a36",
+        "tonalRamp": [
+          "oklch(15% 0.008 91.5)",
+          "oklch(26% 0.008 91.5)",
+          "oklch(38% 0.008 91.5)",
+          "oklch(49% 0.008 91.5)",
+          "oklch(61% 0.008 91.5)",
+          "oklch(72% 0.008 91.5)",
+          "oklch(84% 0.008 91.5)",
+          "oklch(95% 0.008 91.5)"
+        ]
+      },
+      "axis": {
+        "role": "neutral",
+        "displayName": "Baseline Grey",
+        "canonical": "oklch(81.2% 0.015 102.5)",
+        "darkMode": "#7a7a7a",
+        "tonalRamp": [
+          "oklch(15% 0.015 102.5)",
+          "oklch(26% 0.015 102.5)",
+          "oklch(38% 0.015 102.5)",
+          "oklch(49% 0.015 102.5)",
+          "oklch(61% 0.015 102.5)",
+          "oklch(72% 0.015 102.5)",
+          "oklch(84% 0.015 102.5)",
+          "oklch(95% 0.015 102.5)"
+        ]
+      },
+      "gain": {
+        "role": "tertiary",
+        "displayName": "Gain Green",
+        "canonical": "oklch(43.3% 0.147 142.5)",
+        "darkMode": "#5ec05e",
+        "tonalRamp": [
+          "oklch(15% 0.147 142.5)",
+          "oklch(26% 0.147 142.5)",
+          "oklch(38% 0.147 142.5)",
+          "oklch(49% 0.147 142.5)",
+          "oklch(61% 0.147 142.5)",
+          "oklch(72% 0.147 142.5)",
+          "oklch(84% 0.147 142.5)",
+          "oklch(95% 0.147 142.5)"
+        ]
+      },
+      "loss": {
+        "role": "tertiary",
+        "displayName": "Loss Red",
+        "canonical": "oklch(57.5% 0.186 25.2)",
+        "darkMode": "#ff5252",
+        "tonalRamp": [
+          "oklch(15% 0.186 25.2)",
+          "oklch(26% 0.186 25.2)",
+          "oklch(38% 0.186 25.2)",
+          "oklch(49% 0.186 25.2)",
+          "oklch(61% 0.186 25.2)",
+          "oklch(72% 0.186 25.2)",
+          "oklch(84% 0.186 25.2)",
+          "oklch(95% 0.186 25.2)"
+        ]
+      },
+      "series-1": {
+        "role": "tertiary",
+        "displayName": "Series 1 — Blue",
+        "canonical": "oklch(57.5% 0.163 255.5)",
+        "darkMode": "#5a9fff",
+        "tonalRamp": [
+          "oklch(15% 0.163 255.5)",
+          "oklch(26% 0.163 255.5)",
+          "oklch(38% 0.163 255.5)",
+          "oklch(49% 0.163 255.5)",
+          "oklch(61% 0.163 255.5)",
+          "oklch(72% 0.163 255.5)",
+          "oklch(84% 0.163 255.5)",
+          "oklch(95% 0.163 255.5)"
+        ]
+      },
+      "series-2": {
+        "role": "tertiary",
+        "displayName": "Series 2 — Orange",
+        "canonical": "oklch(67.1% 0.175 40.6)",
+        "darkMode": "#ff9d5a",
+        "tonalRamp": [
+          "oklch(15% 0.175 40.6)",
+          "oklch(26% 0.175 40.6)",
+          "oklch(38% 0.175 40.6)",
+          "oklch(49% 0.175 40.6)",
+          "oklch(61% 0.175 40.6)",
+          "oklch(72% 0.175 40.6)",
+          "oklch(84% 0.175 40.6)",
+          "oklch(95% 0.175 40.6)"
+        ]
+      },
+      "series-3": {
+        "role": "tertiary",
+        "displayName": "Series 3 — Aqua",
+        "canonical": "oklch(66.9% 0.141 162.1)",
+        "darkMode": "#4dd9a3",
+        "tonalRamp": [
+          "oklch(15% 0.141 162.1)",
+          "oklch(26% 0.141 162.1)",
+          "oklch(38% 0.141 162.1)",
+          "oklch(49% 0.141 162.1)",
+          "oklch(61% 0.141 162.1)",
+          "oklch(72% 0.141 162.1)",
+          "oklch(84% 0.141 162.1)",
+          "oklch(95% 0.141 162.1)"
+        ]
+      },
+      "series-4": {
+        "role": "tertiary",
+        "displayName": "Series 4 — Yellow",
+        "canonical": "oklch(76.4% 0.161 75.1)",
+        "darkMode": "#ffc933",
+        "tonalRamp": [
+          "oklch(15% 0.161 75.1)",
+          "oklch(26% 0.161 75.1)",
+          "oklch(38% 0.161 75.1)",
+          "oklch(49% 0.161 75.1)",
+          "oklch(61% 0.161 75.1)",
+          "oklch(72% 0.161 75.1)",
+          "oklch(84% 0.161 75.1)",
+          "oklch(95% 0.161 75.1)"
+        ]
+      },
+      "series-5": {
+        "role": "tertiary",
+        "displayName": "Series 5 — Magenta",
+        "canonical": "oklch(71.6% 0.141 357.4)",
+        "darkMode": "#ff9dc4",
+        "tonalRamp": [
+          "oklch(15% 0.141 357.4)",
+          "oklch(26% 0.141 357.4)",
+          "oklch(38% 0.141 357.4)",
+          "oklch(49% 0.141 357.4)",
+          "oklch(61% 0.141 357.4)",
+          "oklch(72% 0.141 357.4)",
+          "oklch(84% 0.141 357.4)",
+          "oklch(95% 0.141 357.4)"
+        ]
+      },
+      "series-6": {
+        "role": "tertiary",
+        "displayName": "Series 6 — Green",
+        "canonical": "oklch(52.9% 0.18 142.5)",
+        "darkMode": "#4db84d",
+        "tonalRamp": [
+          "oklch(15% 0.18 142.5)",
+          "oklch(26% 0.18 142.5)",
+          "oklch(38% 0.18 142.5)",
+          "oklch(49% 0.18 142.5)",
+          "oklch(61% 0.18 142.5)",
+          "oklch(72% 0.18 142.5)",
+          "oklch(84% 0.18 142.5)",
+          "oklch(95% 0.18 142.5)"
+        ]
+      },
+      "series-7": {
+        "role": "tertiary",
+        "displayName": "Series 7 — Violet",
+        "canonical": "oklch(43.3% 0.167 283.6)",
+        "darkMode": "#7d5fd9",
+        "tonalRamp": [
+          "oklch(15% 0.167 283.6)",
+          "oklch(26% 0.167 283.6)",
+          "oklch(38% 0.167 283.6)",
+          "oklch(49% 0.167 283.6)",
+          "oklch(61% 0.167 283.6)",
+          "oklch(72% 0.167 283.6)",
+          "oklch(84% 0.167 283.6)",
+          "oklch(95% 0.167 283.6)"
+        ]
+      },
+      "series-8": {
+        "role": "tertiary",
+        "displayName": "Series 8 — Red",
+        "canonical": "oklch(62.3% 0.191 24.9)",
+        "darkMode": "#ff5252",
+        "tonalRamp": [
+          "oklch(15% 0.191 24.9)",
+          "oklch(26% 0.191 24.9)",
+          "oklch(38% 0.191 24.9)",
+          "oklch(49% 0.191 24.9)",
+          "oklch(61% 0.191 24.9)",
+          "oklch(72% 0.191 24.9)",
+          "oklch(84% 0.191 24.9)",
+          "oklch(95% 0.191 24.9)"
+        ]
+      },
+      "diverge-pos": {
+        "role": "tertiary",
+        "displayName": "Drift Positive",
+        "canonical": "oklch(57.5% 0.163 255.5)",
+        "darkMode": "#5a9fff",
+        "tonalRamp": [
+          "oklch(15% 0.163 255.5)",
+          "oklch(26% 0.163 255.5)",
+          "oklch(38% 0.163 255.5)",
+          "oklch(49% 0.163 255.5)",
+          "oklch(61% 0.163 255.5)",
+          "oklch(72% 0.163 255.5)",
+          "oklch(84% 0.163 255.5)",
+          "oklch(95% 0.163 255.5)"
+        ]
+      },
+      "diverge-neg": {
+        "role": "tertiary",
+        "displayName": "Drift Negative",
+        "canonical": "oklch(57.5% 0.186 25.2)",
+        "darkMode": "#ff5252",
+        "tonalRamp": [
+          "oklch(15% 0.186 25.2)",
+          "oklch(26% 0.186 25.2)",
+          "oklch(38% 0.186 25.2)",
+          "oklch(49% 0.186 25.2)",
+          "oklch(61% 0.186 25.2)",
+          "oklch(72% 0.186 25.2)",
+          "oklch(84% 0.186 25.2)",
+          "oklch(95% 0.186 25.2)"
+        ]
+      },
+      "diverge-mid": {
+        "role": "tertiary",
+        "displayName": "Drift Neutral",
+        "canonical": "oklch(95.2% 0.004 91.4)",
+        "darkMode": "#2a2824",
+        "tonalRamp": [
+          "oklch(15% 0.004 91.4)",
+          "oklch(26% 0.004 91.4)",
+          "oklch(38% 0.004 91.4)",
+          "oklch(49% 0.004 91.4)",
+          "oklch(61% 0.004 91.4)",
+          "oklch(72% 0.004 91.4)",
+          "oklch(84% 0.004 91.4)",
+          "oklch(95% 0.004 91.4)"
+        ]
+      },
+      "status-pending": {
+        "role": "tertiary",
+        "displayName": "Pending Grey",
+        "canonical": "oklch(49.2% 0.017 264.4)",
+        "note": "Fixed status family — never themed for dark mode.",
+        "tonalRamp": [
+          "oklch(15% 0.017 264.4)",
+          "oklch(26% 0.017 264.4)",
+          "oklch(38% 0.017 264.4)",
+          "oklch(49% 0.017 264.4)",
+          "oklch(61% 0.017 264.4)",
+          "oklch(72% 0.017 264.4)",
+          "oklch(84% 0.017 264.4)",
+          "oklch(95% 0.017 264.4)"
+        ]
+      },
+      "status-processing": {
+        "role": "tertiary",
+        "displayName": "Processing Amber",
+        "canonical": "oklch(61.7% 0.13 71.6)",
+        "note": "Darkened from a natural amber specifically to clear 3:1 against Panel White.",
+        "tonalRamp": [
+          "oklch(15% 0.13 71.6)",
+          "oklch(26% 0.13 71.6)",
+          "oklch(38% 0.13 71.6)",
+          "oklch(49% 0.13 71.6)",
+          "oklch(61% 0.13 71.6)",
+          "oklch(72% 0.13 71.6)",
+          "oklch(84% 0.13 71.6)",
+          "oklch(95% 0.13 71.6)"
+        ]
+      },
+      "status-done": {
+        "role": "tertiary",
+        "displayName": "Done Green",
+        "canonical": "oklch(62.1% 0.207 142.6)",
+        "note": "Fixed status family — never themed for dark mode.",
+        "tonalRamp": [
+          "oklch(15% 0.207 142.6)",
+          "oklch(26% 0.207 142.6)",
+          "oklch(38% 0.207 142.6)",
+          "oklch(49% 0.207 142.6)",
+          "oklch(61% 0.207 142.6)",
+          "oklch(72% 0.207 142.6)",
+          "oklch(84% 0.207 142.6)",
+          "oklch(95% 0.207 142.6)"
+        ]
+      },
+      "status-error": {
+        "role": "tertiary",
+        "displayName": "Error Red",
+        "canonical": "oklch(57.5% 0.186 25.2)",
+        "note": "Fixed status family — never themed for dark mode.",
+        "tonalRamp": [
+          "oklch(15% 0.186 25.2)",
+          "oklch(26% 0.186 25.2)",
+          "oklch(38% 0.186 25.2)",
+          "oklch(49% 0.186 25.2)",
+          "oklch(61% 0.186 25.2)",
+          "oklch(72% 0.186 25.2)",
+          "oklch(84% 0.186 25.2)",
+          "oklch(95% 0.186 25.2)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The landing hero headline and nothing else. The only place type is the loudest thing on screen."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Landing section heads and pricing figures. Marketing surfaces only."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "The PageHeader h1 on every app page. At 24px over 14px body, size ratio carries the hierarchy."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "App default at 14px — a deliberate density choice for a table-reading product. Prose may step to 16px at 65–75ch."
+      },
+      "label": {
+        "displayName": "Mono Eyebrow",
+        "purpose": "The uppercase mono label above a title. 0.14em tracking is the signature; never sans, never accent-coloured."
+      },
+      "numeric": {
+        "displayName": "Numeric",
+        "purpose": "Every currency value, percentage, quantity, date and ticker. Applied via the .tnum utility so columns never shift."
+      }
+    },
+    "shadows": [
+      {
+        "name": "tooltip-sm",
+        "value": "0 1px 2px 0 rgb(0 0 0 / 0.05)",
+        "purpose": "Chart tooltip only. The single shadow used inside the application."
+      },
+      {
+        "name": "landing-float",
+        "value": "0 20px 25px -5px rgb(27 42 74 / 0.05), 0 8px 10px -6px rgb(27 42 74 / 0.05)",
+        "purpose": "Navy-tinted lift under the one floating hero card on the landing page. Marketing surface only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-entrance",
+        "value": "cubic-bezier(0.2, 0.7, 0.2, 1)",
+        "purpose": "The house easing for entrance and reveal — fast out of the gate, long settle."
+      },
+      {
+        "name": "duration-entrance",
+        "value": "0.7s",
+        "purpose": "Fade-up entrance and scroll reveal. Staggered via inline animation-delay."
+      },
+      {
+        "name": "transition-state",
+        "value": "150ms",
+        "purpose": "Default colour transition on interactive elements (buttons, nav items, section tabs)."
+      },
+      {
+        "name": "draw-line",
+        "value": "1.4s ease",
+        "purpose": "SVG line self-draw on chart reveal. Paths are normalized to pathLength=1 so dasharray works at any coordinate scale."
+      },
+      {
+        "name": "marquee",
+        "value": "42s linear infinite",
+        "purpose": "Landing ticker strip. Track content is duplicated and slid -50% for a seamless loop; pauses on hover."
+      },
+      {
+        "name": "float",
+        "value": "6s ease-in-out infinite",
+        "purpose": "Slow 10px vertical drift on the landing hero card."
+      },
+      {
+        "name": "pulse-ring",
+        "value": "2.4s ease-out infinite",
+        "purpose": "Live-status halo expanding from a state dot to 2.6× and fading."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "all of the above disabled",
+        "purpose": "Every animation above is switched off under prefers-reduced-motion, with reveals resolved to their visible state and draw-lines to stroke-dashoffset: 0. Non-negotiable."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px",
+        "note": "The structural breakpoint: sidebar goes from off-canvas drawer to fixed 240px rail."
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ],
+    "containers": [
+      {
+        "name": "sidebar",
+        "value": "240px"
+      },
+      {
+        "name": "content",
+        "value": "1152px",
+        "note": "max-w-6xl, centred in the space right of the sidebar."
+      },
+      {
+        "name": "prose",
+        "value": "672px",
+        "note": "max-w-2xl, used for marketing section heads and long-form copy."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single committed action on a surface. Navy fill, no border, no shadow.",
+      "html": "<button class=\"ds-btn-primary\">Ver planos</button>",
+      "css": ".ds-btn-primary { background: var(--navy, #1b2a4a); color: #fff; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; font-weight: 600; line-height: 1.25; padding: 10px 16px; border: none; border-radius: 6px; cursor: pointer; transition: background-color 150ms ease; } .ds-btn-primary:hover { background: color-mix(in srgb, var(--navy, #1b2a4a) 90%, transparent); } .ds-btn-primary:focus-visible { outline: 2px solid var(--navy, #1b2a4a); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.6; cursor: default; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Everything that isn't the committed action. Bordered on paper, hover washes hairline at 40%.",
+      "html": "<button class=\"ds-btn-secondary\">Agora não</button>",
+      "css": ".ds-btn-secondary { background: var(--paper, #fafaf8); color: var(--ink, #17181c); font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; font-weight: 500; line-height: 1.25; padding: 6px 12px; border: 1px solid var(--hairline, #e4e2dc); border-radius: 6px; cursor: pointer; transition: background-color 150ms ease; } .ds-btn-secondary:hover { background: color-mix(in srgb, var(--hairline, #e4e2dc) 40%, transparent); } .ds-btn-secondary:focus-visible { outline: 2px solid var(--navy, #1b2a4a); outline-offset: 2px; } .ds-btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input-text",
+      "description": "Focus is a border shift to navy — no ring, no glow. Numeric variants right-align in mono with tabular figures.",
+      "html": "<input class=\"ds-input\" type=\"text\" placeholder=\"PETR4\" aria-label=\"Ticker\" />",
+      "css": ".ds-input { background: var(--paper, #fafaf8); color: var(--ink, #17181c); font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; padding: 8px 12px; border: 1px solid var(--hairline, #e4e2dc); border-radius: 6px; transition: border-color 150ms ease; } .ds-input::placeholder { color: var(--muted, #5c616b); } .ds-input:focus { border-color: var(--navy, #1b2a4a); outline: none; } .ds-input--numeric { font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; text-align: right; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The primary page object. Panel surface on the paper page, hairline border, optional ruled header. No shadow.",
+      "html": "<section class=\"ds-card\"><header class=\"ds-card__header\"><h2 class=\"ds-card__title\">Posições</h2></header><div class=\"ds-card__body\">Conteúdo do cartão.</div></section>",
+      "css": ".ds-card { background: var(--panel, #fff); border: 1px solid var(--hairline, #e4e2dc); border-radius: 8px; font-family: 'IBM Plex Sans', system-ui, sans-serif; color: var(--ink, #17181c); } .ds-card__header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--hairline, #e4e2dc); } .ds-card__title { margin: 0; font-size: 14px; font-weight: 600; color: var(--ink, #17181c); } .ds-card__body { padding: 16px; font-size: 14px; }"
+    },
+    {
+      "name": "Data Table",
+      "kind": "custom",
+      "refersTo": "table-cell",
+      "description": "Dense, hairline-ruled, no zebra. Sans uppercase column headers; right-aligned numerics in mono with tabular figures.",
+      "html": "<table class=\"ds-table\"><thead><tr><th>Ativo</th><th class=\"ds-table__num\">Qtd</th><th class=\"ds-table__num\">Preço médio</th></tr></thead><tbody><tr><td>PETR4</td><td class=\"ds-table__num\">300</td><td class=\"ds-table__num\">R$ 34,12</td></tr><tr><td>ITUB4</td><td class=\"ds-table__num\">1.200</td><td class=\"ds-table__num\">R$ 28,90</td></tr><tr><td>HGLG11</td><td class=\"ds-table__num\">45</td><td class=\"ds-table__num\">R$ 162,40</td></tr></tbody></table>",
+      "css": ".ds-table { width: 100%; border-collapse: collapse; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; color: var(--ink, #17181c); } .ds-table thead tr { border-bottom: 1px solid var(--hairline, #e4e2dc); } .ds-table th { padding: 8px 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.025em; color: var(--muted, #5c616b); text-align: left; } .ds-table tbody tr { border-bottom: 1px solid color-mix(in srgb, var(--hairline, #e4e2dc) 70%, transparent); } .ds-table tbody tr:last-child { border-bottom: 0; } .ds-table td { padding: 8px 12px; vertical-align: middle; } .ds-table__num { text-align: right; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "Icon plus label plus colour — never colour alone. Fixed status palette, 10% tint background.",
+      "html": "<span class=\"ds-status ds-status--done\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M20 6 9 17l-5-5\"/></svg>Concluído</span> <span class=\"ds-status ds-status--processing\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3a9 9 0 1 0 9 9\"/></svg>Processando</span> <span class=\"ds-status ds-status--error\"><svg width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M12 3 2 20h20L12 3Z\"/><path d=\"M12 10v4M12 17h.01\"/></svg>Erro</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 9999px; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 12px; font-weight: 500; } .ds-status--done { color: #0ca30c; background: color-mix(in srgb, #0ca30c 10%, transparent); } .ds-status--processing { color: #b5760a; background: color-mix(in srgb, #b5760a 10%, transparent); } .ds-status--error { color: #d03b3b; background: color-mix(in srgb, #d03b3b 10%, transparent); } .ds-status--pending { color: #5c616b; background: color-mix(in srgb, #5c616b 10%, transparent); }"
+    },
+    {
+      "name": "Ticker Chip",
+      "kind": "chip",
+      "refersTo": "ticker-chip",
+      "description": "The smallest object in the system. 4px radius keeps it reading as data, not as a control.",
+      "html": "<span class=\"ds-ticker\">PETR4</span> <span class=\"ds-ticker\">HGLG11</span> <span class=\"ds-ticker\">IVVB11</span>",
+      "css": ".ds-ticker { display: inline-flex; align-items: center; padding: 2px 6px; border: 1px solid var(--hairline, #e4e2dc); border-radius: 4px; background: var(--paper, #fafaf8); color: var(--ink, #17181c); font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; font-weight: 500; line-height: 1; letter-spacing: 0.025em; text-transform: uppercase; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Active state is signalled by tint and text colour together, never the tint alone. Carries aria-current=\"page\".",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav__item ds-nav__item--active\" href=\"#\" aria-current=\"page\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M3 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2H5a2 2 0 0 0-2-2Z\"/><path d=\"M3 8v9a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-3\"/><path d=\"M21 11v4h-4a2 2 0 0 1 0-4h4Z\"/></svg>Portfólio</a><a class=\"ds-nav__item\" href=\"#\"><svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M4 4v16h16\"/><path d=\"m7 14 3-4 3 3 4-6\"/></svg>Bench</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; } .ds-nav__item { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 6px; font-family: 'IBM Plex Sans', system-ui, sans-serif; font-size: 14px; font-weight: 500; color: var(--muted, #5c616b); text-decoration: none; transition: background-color 150ms ease, color 150ms ease; } .ds-nav__item:hover { background: color-mix(in srgb, var(--hairline, #e4e2dc) 40%, transparent); color: var(--ink, #17181c); } .ds-nav__item--active, .ds-nav__item--active:hover { background: color-mix(in srgb, var(--navy, #1b2a4a) 6%, transparent); color: var(--navy, #1b2a4a); } .ds-nav__item:focus-visible { outline: 2px solid var(--navy, #1b2a4a); outline-offset: -2px; }"
+    },
+    {
+      "name": "Empty State",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "The dashed border is the one place the border style changes. Copy names the next action rather than reporting absence.",
+      "html": "<div class=\"ds-empty\"><p class=\"ds-empty__title\">Nenhum extrato importado ainda</p><p class=\"ds-empty__hint\">Baixe os relatórios da B3 e arraste para cá para montar sua carteira.</p><div class=\"ds-empty__action\"><button class=\"ds-btn-primary\">Importar extrato</button></div></div>",
+      "css": ".ds-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 64px 24px; border: 1px dashed var(--hairline, #e4e2dc); border-radius: 8px; background: var(--panel, #fff); font-family: 'IBM Plex Sans', system-ui, sans-serif; } .ds-empty__title { margin: 0; max-width: 24rem; font-size: 14px; font-weight: 500; color: var(--ink, #17181c); } .ds-empty__hint { margin: 4px 0 0; max-width: 24rem; font-size: 14px; color: var(--muted, #5c616b); } .ds-empty__action { margin-top: 16px; }"
+    },
+    {
+      "name": "Signed Value Readout",
+      "kind": "custom",
+      "refersTo": "table-cell",
+      "description": "The system's signature: mono tabular figures where the glyph carries direction and colour only reinforces it. Plain balances stay ink; only signed values take gain/loss.",
+      "html": "<div class=\"ds-readout\"><p class=\"ds-readout__eyebrow\">Resultado do mês</p><p class=\"ds-readout__value ds-readout__value--gain\">+R$ 2.281,20</p><p class=\"ds-readout__delta ds-readout__delta--gain\"><span class=\"ds-readout__glyph\" aria-hidden=\"true\">▲</span>4,12%</p><p class=\"ds-readout__plain\">Patrimônio: R$ 128.940,55</p></div>",
+      "css": ".ds-readout { font-family: 'IBM Plex Sans', system-ui, sans-serif; } .ds-readout__eyebrow { margin: 0 0 4px; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted, #5c616b); } .ds-readout__value { margin: 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 24px; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; } .ds-readout__value--gain { color: var(--gain, #006300); } .ds-readout__value--loss { color: var(--loss, #d03b3b); } .ds-readout__delta { display: inline-flex; align-items: center; gap: 4px; margin: 4px 0 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; } .ds-readout__delta--gain { color: var(--gain, #006300); } .ds-readout__delta--loss { color: var(--loss, #d03b3b); } .ds-readout__glyph { font-size: 0.7em; } .ds-readout__plain { margin: 12px 0 0; font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; color: var(--ink, #17181c); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Instrument Panel",
+    "overview": "This is a calibrated reading instrument, not a dashboard. Everything in it is built for someone who reads closely and expects the readout to be honest — the chart series were validated for adjacency in both light and dark mode before they were tokens, the axis colour is a separate token from the border colour because a baseline is not a divider, and `tnum` is a first-class utility because a number that jitters between rows is a broken instrument. The visual system's job is to be trustworthy at close range.\n\nThe register is quiet and warm. The page plane is Bench Paper (#fafaf8), not white; the dark mode is a deliberately brown near-black (#1f1d1a) rather than the blue-black most tools reach for. Panels sit a half-step above the page in plain white, separated by Etched Rule hairlines rather than shadow. Type is a three-way split with no overlap in duty: Archivo carries every heading at weight 800, IBM Plex Sans carries prose at 14px, and IBM Plex Mono carries every number, every eyebrow, and every ticker. Density is high — the default body size is 14px and tables run at 12px cell padding — but the spacing is even and the rules are thin, so it reads as composed rather than crowded.\n\nThree worlds this is explicitly not. It is not the dark glassy fintech dashboard — neon on black, glassmorphism, purple-to-blue gradients, glowing cards. It is not the playful neobank — rounded-everything, illustrated mascots, big friendly gradients, confetti on success — which optimises for reassuring a novice, the opposite of who this is built for. And it is not the generic admin template: zebra-striped tables, a blue-500 primary, a drop shadow on every card, Inter for everything. What this system does share DNA with is the trading terminal: high density and monospaced figures are the point here, not a hazard to guard against. Depth is the one area left deliberately open: the app is currently flat, and that is recorded as observation rather than law.",
+    "keyCharacteristics": [
+      "Warm paper ground (#fafaf8), never pure white, in a warm-brown dark mode (#1f1d1a)",
+      "Hairline rules do all separation work — no zebra striping, no fills to group rows",
+      "Every number is IBM Plex Mono with tabular figures; columns never shift",
+      "One accent (Oscilloscope Navy) reserved for interaction, kept scarce",
+      "Colour never carries meaning alone — always paired with an icon, a glyph, or a label",
+      "Charts use a purpose-built 8-series palette validated for adjacent-pair distinctness in both modes"
+    ],
+    "rules": [
+      {
+        "name": "The Never-Colour-Alone Rule",
+        "body": "No state or direction is ever communicated by colour by itself. A status badge is always icon + label + colour. A percentage delta always leads with ▲ / ▼ / – before it turns green or red. This is enforced in StatusBadge and PctDelta and must survive into every new component that expresses state.",
+        "section": "colors"
+      },
+      {
+        "name": "The Sign-Carries-Meaning Rule",
+        "body": "Green and red appear only where the sign of a number is itself the information — P&L, deltas, harvest results. A plain balance, a quantity, or a market value stays Instrument Ink no matter how large or small. Colouring every number is how a ledger stops being readable.",
+        "section": "colors"
+      },
+      {
+        "name": "The Scarce Accent Rule",
+        "body": "Oscilloscope Navy marks where you are and what you can do, and almost nothing else. Keep it scarce — a new use should have to earn its place against the fact that navy currently appears on roughly four things per screen. If a new surface needs emphasis, reach for weight, size, or rule-strength before reaching for the accent.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two-Palette Rule",
+        "body": "Interface colour and data colour are separate systems. Never chart in navy; never build a button from a series colour. When a chart needs a single-series colour, it takes series-1, not the brand.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tabular Column Rule",
+        "body": "Any number that will ever sit above or below another number gets Plex Mono and tnum, and is right-aligned. This covers every currency cell, every percentage, every quantity, and the axis ticks. A number that shifts its column width between renders is a defect, not a style preference.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono Eyebrow Rule",
+        "body": "The small uppercase label above a title is always IBM Plex Mono at 11px, 500 weight, 0.14em tracking, in Legend Grey. It is never sans-serif, never bold, never coloured with the accent.",
+        "section": "typography"
+      },
+      {
+        "name": "The Single Display Face Rule",
+        "body": "Archivo appears at 700/800 and never below. If a heading needs to be lighter or smaller than Title, it stops being a heading and becomes Plex Sans at 600.",
+        "section": "typography"
+      },
+      {
+        "name": "The Card-Stack Rule",
+        "body": "App pages are a single-column stack of Cards, not a masonry or a multi-column grid. Width comes from the container, not from side-by-side cards. Two cards may sit side by side only when their contents are genuinely a comparison.",
+        "section": "layout"
+      },
+      {
+        "name": "The No-Zebra Rule",
+        "body": "Rows are never striped and never filled on hover-for-decoration. Separation is the job of the rules alone. Zebra striping in this system reads as a foreign object.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do put every number in IBM Plex Mono with .tnum and right-align it in tables.",
+      "Do pair colour with an icon, a glyph, or a label whenever it carries state or direction.",
+      "Do separate with hairlines. Use border-hairline at full strength for structural boundaries and hairline/70 for row rules.",
+      "Do reach for the Card → PageHeader → DataTable stack when building a new app surface; the density and rhythm come free.",
+      "Do use the series palette in its documented order (series-1 through series-8) and assign by index.",
+      "Do route all number and date rendering through lib/format.ts so pt-BR formatting stays consistent.",
+      "Do keep the accent scarce — a new navy usage should be able to justify itself as \"where you are\" or \"what you can do\".",
+      "Do write empty-state copy as the next action."
+    ],
+    "donts": [
+      "Don't drift toward dark glassy fintech: no neon-on-black, no glassmorphism, no purple-to-blue gradients, no glowing cards.",
+      "Don't drift toward the playful neobank: no mascots, no confetti, no rounded-everything, no big friendly gradients. The primary user is reading closely, not being reassured.",
+      "Don't settle into the generic admin template: no zebra stripes, no blue-500 primary, no drop shadow on every card, no Inter-for-everything.",
+      "Don't zebra-stripe tables or fill rows to group them.",
+      "Don't colour a plain balance green or red. Only signed, directional values get Gain/Loss.",
+      "Don't chart in navy or build interface chrome from a series colour — the two palettes stay separate.",
+      "Don't use pure white (#ffffff) as a page background; the page plane is Bench Paper (#fafaf8) and panels only read as raised because of it.",
+      "Don't introduce a fourth typeface, or use Archivo below weight 700.",
+      "Don't replace the mono eyebrow with a sans-serif or accent-coloured label.",
+      "Don't render a missing value as \"N/A\", \"-\", or an empty cell; it is an em dash —.",
+      "Don't add a focus ring or glow to inputs; focus is a border shift to navy."
+    ]
+  }
+}

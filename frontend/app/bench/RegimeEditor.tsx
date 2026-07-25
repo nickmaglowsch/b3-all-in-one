@@ -324,7 +324,7 @@ export function RegimeEditor({
                 className="space-y-2 rounded-md border border-hairline bg-panel p-2.5"
               >
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-[10px] text-muted">#{i + 1}</span>
+                  <span className="font-mono text-[11px] text-muted">#{i + 1}</span>
                   <select
                     value={rule.kind}
                     onChange={(e) =>
@@ -466,8 +466,8 @@ function Labeled({
   return (
     <label className="block">
       <span className="mb-1 flex items-baseline gap-1">
-        <span className="text-[10px] font-medium text-ink">{label}</span>
-        {hint && <span className="font-mono text-[9px] text-muted">{hint}</span>}
+        <span className="text-[11px] font-medium text-ink">{label}</span>
+        {hint && <span className="font-mono text-[11px] text-muted">{hint}</span>}
       </span>
       {children}
     </label>

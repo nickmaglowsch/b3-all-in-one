@@ -6,26 +6,36 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { kindLabel } from "./lib";
 
+// Metadata chips share the ticker-chip geometry (DESIGN.md Shapes) at the 11px
+// label step. Neutral by default: the series palette is data-only, so a chip
+// only takes colour when the colour means something the label can't carry.
+const badgeCls =
+  "inline-flex items-center rounded-[4px] border px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide";
+
 export function KindBadge({ kind }: { kind: Strategy["kind"] }) {
-  // espec = declarative spec, código = python plugin. Colour + label, never colour alone.
-  const spec = kind === "spec";
+  // espec = declarative spec, código = python plugin. The label carries the
+  // distinction; it needs no hue of its own.
   return (
-    <span
-      className={`inline-flex items-center rounded-[4px] px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide ${
-        spec
-          ? "bg-series-3/10 text-series-3"
-          : "bg-series-7/10 text-series-7"
-      }`}
-    >
+    <span className={`${badgeCls} border-hairline bg-paper text-muted`}>
       {kindLabel(kind)}
     </span>
   );
 }
 
-export function UserBadge() {
-  // Distinguishes this tenant's own strategies from the built-in gallery.
+export function RuleBadge() {
+  // A user strategy authored as a ranking rule rather than cloned from a spec.
   return (
-    <span className="inline-flex items-center rounded-[4px] bg-navy/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-navy">
+    <span className={`${badgeCls} border-hairline bg-paper text-muted`}>
+      regra
+    </span>
+  );
+}
+
+export function UserBadge() {
+  // Distinguishes this tenant's own strategies from the built-in gallery —
+  // ownership is the one distinction worth the interface accent.
+  return (
+    <span className={`${badgeCls} border-navy/25 bg-navy/[0.06] text-navy`}>
       minha
     </span>
   );
@@ -34,8 +44,11 @@ export function UserBadge() {
 export function FundamentalsBadge() {
   // Strategy reads CVM fundamentals — surfaced so users know it depends on that
   // data being ingested (a fundamentals-less environment can't build its target).
+  // A caveat, so it takes the status palette, not a chart series.
   return (
-    <span className="inline-flex items-center rounded-[4px] bg-series-4/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-series-4">
+    <span
+      className={`${badgeCls} border-status-processing/40 bg-status-processing/10 text-ink`}
+    >
       fundamentos
     </span>
   );

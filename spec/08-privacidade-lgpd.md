@@ -74,6 +74,12 @@ completo, então um expurgo por idade quebraria o produto e prejudicaria o titul
 Exclusão da conta apaga tudo na hora. As exceções são de terceiros: logs de acesso por até
 6 meses (art. 15 do Marco Civil) e notas fiscais retidas pelo Stripe pelo prazo fiscal.
 
+Uma sobra conhecida: as linhas já executadas da fila (`procrastinate_jobs`) guardam nos
+argumentos do job o `tenant_id` e o id do backtest, e não são varridas pela exclusão. São
+UUIDs sem nada anexado — depois que a conta sai, não há mais a que ligá-los, então o dado
+é anônimo na prática (art. 12). Ligar o `delete_old_jobs` do procrastinate resolveria a
+sobra de vez.
+
 ## Transferência internacional
 
 Google e Stripe processam fora do Brasil, com base no art. 33, II (cláusulas contratuais) e

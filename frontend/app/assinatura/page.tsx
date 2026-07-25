@@ -83,7 +83,7 @@ export default function AssinaturaPage() {
         </div>
       </Card>
 
-      <div className="grid gap-5 lg:grid-cols-3">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
         {PLANS.map((plan) => {
           const isCurrent = plan.id === current;
           const isDowngrade = planRank(plan.id) < planRank(current);

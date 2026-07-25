@@ -23,6 +23,7 @@ services:
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
       STRIPE_PRICE_INVESTIDOR: ${STRIPE_PRICE_INVESTIDOR}
       STRIPE_PRICE_TRADER: ${STRIPE_PRICE_TRADER}
+      STRIPE_PRICE_ENTERPRISE: ${STRIPE_PRICE_ENTERPRISE}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
       RUN_MIGRATIONS: "1"   # entrypoint runs `alembic upgrade head` before uvicorn

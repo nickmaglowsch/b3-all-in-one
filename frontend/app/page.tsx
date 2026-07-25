@@ -618,7 +618,7 @@ export default function LandingPage() {
             </p>
           </Reveal>
 
-          <div className="mt-10 grid gap-5 lg:grid-cols-3">
+          <div className="mt-10 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
             {PLANS.map((plan, i) => (
               <Reveal key={plan.name} delay={i * 90} className="h-full">
                 <div

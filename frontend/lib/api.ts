@@ -5,6 +5,7 @@ export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const TOKEN_KEY = "b3_token";
+const PORTFOLIO_KEY = "b3_portfolio";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -15,7 +16,42 @@ export function setToken(t: string) {
 }
 export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
+  clearPortfolioId();
 }
+
+// Which book the app is acting on (enterprise tier). Unset => the user's own,
+// which is every account below that tier.
+//
+// It is a subscribable store because two components in different subtrees read it
+// — the sidebar switcher and the carteiras page — and a switch made in one has to
+// be visible in the other. Feed it to useSyncExternalStore; do not copy it into
+// component state, which is how the sidebar ends up naming the previous book.
+const portfolioListeners = new Set<() => void>();
+
+export function subscribePortfolio(onChange: () => void): () => void {
+  portfolioListeners.add(onChange);
+  return () => {
+    portfolioListeners.delete(onChange);
+  };
+}
+
+export function getPortfolioId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(PORTFOLIO_KEY);
+}
+export function setPortfolioId(id: string) {
+  window.localStorage.setItem(PORTFOLIO_KEY, id);
+  portfolioListeners.forEach((fn) => fn());
+}
+export function clearPortfolioId() {
+  window.localStorage.removeItem(PORTFOLIO_KEY);
+  portfolioListeners.forEach((fn) => fn());
+}
+
+// Account-scoped, not book-scoped: the registry of books and the subscription
+// belong to the login. Exempting them also means a stale selection can always be
+// discovered and cleared, instead of 404ing the very call that would fix it.
+const ACCOUNT_SCOPED = ["/portfolios", "/billing"];
 
 export class ApiError extends Error {
   constructor(
@@ -52,6 +88,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  const portfolio = getPortfolioId();
+  if (portfolio && !ACCOUNT_SCOPED.some((p) => path.startsWith(p))) {
+    headers.set("X-Portfolio-Id", portfolio);
+  }
   // JSON only for string bodies — leave FormData (multipart) untouched so the
   // browser sets its own boundary.
   if (typeof init.body === "string" && !headers.has("Content-Type")) {

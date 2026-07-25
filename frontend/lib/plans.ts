@@ -2,7 +2,7 @@
 // paywall dialog. Ids match platform_app/billing.LADDER — the API is the source of
 // truth for entitlement, this file only owns the copy.
 
-export const PLAN_IDS = ["gratis", "investidor", "trader"] as const;
+export const PLAN_IDS = ["gratis", "investidor", "trader", "enterprise"] as const;
 export type PlanId = (typeof PLAN_IDS)[number];
 
 export type Plan = {
@@ -61,6 +61,21 @@ export const PLANS: Plan[] = [
       "Suporte prioritário",
     ],
     cta: "Assinar Trader",
+  },
+  {
+    id: "enterprise",
+    name: "Empresarial",
+    price: "R$ 249",
+    cadence: "/mês",
+    tagline: "Para quem cuida da carteira dos outros.",
+    features: [
+      "Tudo do plano Trader",
+      "Carteiras de clientes ilimitadas",
+      "Troca de carteira sem trocar de login",
+      "IRPF e rebalanceamento por cliente",
+      "Dados isolados entre clientes",
+    ],
+    cta: "Assinar Empresarial",
   },
 ];
 

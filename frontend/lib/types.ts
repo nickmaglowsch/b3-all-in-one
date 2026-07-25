@@ -7,6 +7,14 @@ export interface Me {
   tenant_id: string;
 }
 
+// GET /portfolios. The own book is always first and always present; the rest are
+// client books an enterprise account manages.
+export interface Portfolio {
+  id: string;
+  label: string;
+  is_self: boolean;
+}
+
 export interface Bearer {
   access_token: string;
   token_type: string;

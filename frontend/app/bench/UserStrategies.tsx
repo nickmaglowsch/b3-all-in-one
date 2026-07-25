@@ -12,6 +12,7 @@ import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StrategyForm } from "./StrategyForm";
+import { RuleBadge } from "./StrategyGallery";
 
 export function UserStrategies({
   onBacktest,
@@ -92,7 +93,7 @@ export function UserStrategies({
       }
     >
       {warnings.length > 0 && (
-        <div className="mb-3 rounded-md border border-series-4/30 bg-series-4/10 px-3 py-2 text-xs text-series-4">
+        <div className="mb-3 rounded-md border border-status-processing/40 bg-status-processing/10 px-3 py-2 text-xs text-ink">
           {warnings.map((w, i) => (
             <p key={i}>{w}</p>
           ))}
@@ -126,9 +127,7 @@ export function UserStrategies({
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-ink">{s.name}</span>
-                    <span className="inline-flex items-center rounded-[4px] bg-series-3/10 px-1.5 py-0.5 font-mono text-[10px] font-semibold uppercase tracking-wide text-series-3">
-                      regra
-                    </span>
+                    <RuleBadge />
                   </div>
                   {typeof s.spec.description === "string" && (
                     <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted">

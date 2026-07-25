@@ -248,10 +248,12 @@ function MetricTile({
         highlight ? "border-navy/40 bg-navy/[0.03]" : "border-hairline bg-panel"
       }`}
     >
-      <p className="font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-muted">
+      <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
         {label}
       </p>
-      <p className={`mt-1.5 font-display text-2xl font-extrabold leading-none tracking-tight ${color}`}>
+      {/* Mono + tnum: these tiles stack into a column on narrow viewports, and a
+          headline figure that shifts width between runs is a broken readout. */}
+      <p className={`mt-1.5 font-mono text-2xl font-semibold leading-none tnum tabular-nums ${color}`}>
         {value}
       </p>
       {sub && <div className="mt-1.5">{sub}</div>}

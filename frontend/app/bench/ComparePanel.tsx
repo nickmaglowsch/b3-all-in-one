@@ -173,17 +173,21 @@ export function ComparePanel({
         const isBest = bestByMetric[m.key] === r.id;
         return (
           <span
-            title={isBest ? "melhor" : undefined}
             className={
               isBest
-                ? "inline-flex items-center gap-1 rounded bg-gain/10 px-1.5 py-0.5 font-bold text-ink"
+                ? // Weight + a ruled chip, not gain green: "melhor" is a ranking,
+                  // not a signed value, and green here would misread as a profit.
+                  "inline-flex items-center gap-1 rounded border border-hairline bg-hairline/40 px-1.5 py-0.5 font-semibold text-ink"
                 : undefined
             }
           >
             {isBest && (
-              <span aria-hidden className="text-[0.7em] text-gain">
-                ●
-              </span>
+              <>
+                <span aria-hidden className="text-[0.7em] text-muted">
+                  ●
+                </span>
+                <span className="sr-only">melhor: </span>
+              </>
             )}
             {m.fmt(v as number)}
           </span>

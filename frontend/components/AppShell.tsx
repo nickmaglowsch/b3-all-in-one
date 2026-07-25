@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { clearToken, getToken } from "@/lib/api";
 import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
+import { Brand } from "@/components/Brand";
 import { Paywall } from "@/components/Paywall";
 import {
   IconCard,
@@ -84,12 +85,7 @@ function ShellChrome({
       >
         <div className="flex items-center justify-between px-5 py-5">
           <Link href="/portfolio" className="block">
-            <span className="font-display text-lg font-extrabold tracking-tight text-navy">
-              B3
-            </span>
-            <span className="font-display text-lg font-bold tracking-tight text-ink">
-              {" · tudo-em-um"}
-            </span>
+            <Brand className="text-lg" />
           </Link>
           <button
             type="button"
@@ -141,12 +137,7 @@ function ShellChrome({
           >
             <IconMenu size={20} />
           </button>
-          <span className="font-display text-base font-extrabold tracking-tight text-navy">
-            B3
-          </span>
-          <span className="font-display text-base font-bold tracking-tight text-ink">
-            · tudo-em-um
-          </span>
+          <Brand className="text-base" />
         </div>
         <div className="mx-auto max-w-6xl">{children}</div>
       </main>

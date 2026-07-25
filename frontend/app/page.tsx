@@ -1,12 +1,11 @@
 import Link from "next/link";
+import { Brand } from "@/components/Brand";
 import { Sparkline } from "@/components/charts/Sparkline";
 import { CountUp, Reveal } from "@/components/landing/Motion";
 import { PLANS } from "@/lib/plans";
 import {
-  IconChart,
   IconCheck,
   IconClock,
-  IconReceipt,
   IconScissors,
   IconUpload,
   IconWallet,
@@ -94,7 +93,12 @@ const QUOTES = [
 function TickerTape() {
   const row = [...QUOTES, ...QUOTES]; // duplicated for a seamless -50% loop
   return (
-    <div className="ticker overflow-hidden border-b border-hairline bg-panel/50">
+    // Purely decorative, and the track is duplicated for the loop — without
+    // this a screen reader announces 24 ticker/price/delta triplets twice.
+    <div
+      aria-hidden
+      className="ticker overflow-hidden border-b border-hairline bg-panel/50"
+    >
       <div className="marquee-track flex w-max items-center gap-8 py-2.5">
         {row.map(([sym, px, chg], i) => (
           <span key={`${sym}-${i}`} className="flex items-center gap-2 text-sm">
@@ -112,15 +116,6 @@ function TickerTape() {
   );
 }
 
-function Brand({ className = "" }: { className?: string }) {
-  return (
-    <span className={`font-display font-extrabold tracking-tight ${className}`}>
-      <span className="text-navy">B3</span>
-      <span className="text-ink"> · tudo-em-um</span>
-    </span>
-  );
-}
-
 // ── product peeks ─────────────────────────────────────────────────────────────
 const POSITIONS = [
   { t: "PETR4", v: "R$ 18.240", p: "+2,1%", up: true, s: [3, 4, 3.6, 5, 4.8, 6, 6.4] },
@@ -134,16 +129,18 @@ function DashboardPeek() {
     <div className="animate-in animate-float rounded-xl border border-hairline bg-panel p-5 shadow-xl shadow-navy/5">
       <div className="flex items-center justify-between">
         <div>
-          <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+          <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
             Patrimônio
           </p>
           <p className="mt-1 font-display text-3xl font-extrabold tracking-tight text-ink">
             <CountUp to={128430} prefix="R$ " />
           </p>
         </div>
-        <span className="flex items-center gap-1.5 text-xs text-muted">
-          <span className="pulse-dot relative inline-block h-2 w-2 rounded-full bg-gain" />
-          ao vivo
+        {/* Says what it is. These are mock figures (see note at top of file);
+            claiming "ao vivo" over them was the page asserting data it has not
+            got — the one thing this product's principles forbid. */}
+        <span className="rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
+          exemplo
         </span>
       </div>
 
@@ -167,7 +164,9 @@ function DashboardPeek() {
             <span className="w-16 font-mono text-xs font-medium text-ink">
               {r.t}
             </span>
-            <Sparkline values={r.s} width={48} height={16} />
+            <span aria-hidden>
+              <Sparkline values={r.s} width={48} height={16} />
+            </span>
             <span className="ml-auto tnum text-ink">{r.v}</span>
             <span className={`w-12 text-right tnum ${r.up ? "text-gain" : "text-loss"}`}>
               {r.p}
@@ -206,7 +205,7 @@ function AllocPeek() {
         ))}
       </div>
       <div className="mt-5 border-t border-hairline pt-4">
-        <p className="mb-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+        <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
           Ordens sugeridas
         </p>
         <div className="space-y-2 text-sm">
@@ -240,7 +239,7 @@ function BenchPeek() {
     <div className="rounded-xl border border-hairline bg-panel p-5">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-ink">Carteira vs. CDI</p>
-        <span className="rounded-md bg-series-1/10 px-1.5 py-0.5 text-xs font-medium text-series-1">
+        <span className="rounded-md border border-hairline bg-paper px-1.5 py-0.5 text-xs font-medium text-muted">
           12 meses
         </span>
       </div>
@@ -300,13 +299,14 @@ function IrpfPeek() {
     <div className="rounded-xl border border-hairline bg-panel p-5">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold text-ink">IRPF 2026</p>
-        <span className="rounded-md bg-status-done/10 px-1.5 py-0.5 text-xs font-medium text-status-done">
-          Pronto
+        <span className="inline-flex items-center gap-1 rounded-md bg-status-done/10 px-1.5 py-0.5 text-xs font-medium text-status-done">
+          <IconCheck size={13} />
+          Concluído
         </span>
       </div>
 
       <div className="mt-4 rounded-lg border border-navy/20 bg-navy/[0.04] p-4">
-        <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
           DARF · abril
         </p>
         <p className="mt-1 font-display text-2xl font-extrabold text-ink tnum">
@@ -336,6 +336,9 @@ function IrpfPeek() {
 }
 
 // ── static content ────────────────────────────────────────────────────────────
+// Four, not six: IRPF and Bench used to sit here too, then got deep-dived in
+// the showcase 60 lines below. Saying them twice made the grid filler and blew
+// the ≤4-per-group budget. These four are the ones the showcase does not cover.
 const FEATURES = [
   {
     Icon: IconWallet,
@@ -345,12 +348,7 @@ const FEATURES = [
   {
     Icon: IconUpload,
     title: "Importação dos extratos",
-    body: "Suba os PDFs da B3. A gente lê negociações e movimentações — nada à mão.",
-  },
-  {
-    Icon: IconReceipt,
-    title: "IRPF automático",
-    body: "Ganho de capital, DARF mês a mês e ficha de bens prontos para a declaração.",
+    body: "Suba os extratos .xlsx da B3. A gente lê negociações e movimentações — nada à mão.",
   },
   {
     Icon: IconScissors,
@@ -361,11 +359,6 @@ const FEATURES = [
     Icon: IconClock,
     title: "Simulação",
     body: "Teste um aporte ou uma venda e veja o efeito na carteira e no imposto antes.",
-  },
-  {
-    Icon: IconChart,
-    title: "Bench & backtests",
-    body: "Compare com benchmarks e teste estratégias com dados históricos da B3.",
   },
 ];
 
@@ -391,7 +384,7 @@ const SHOWCASE = [
 ];
 
 const STEPS = [
-  { n: "1", title: "Importe seus extratos", body: "Baixe os relatórios da B3 e arraste para dentro do app." },
+  { n: "1", title: "Importe seus extratos", body: "Baixe os extratos .xlsx na Área do Investidor da B3 e arraste para dentro do app." },
   { n: "2", title: "Veja tudo consolidado", body: "Carteira, proventos e resultado, atualizados com o mercado." },
   { n: "3", title: "Declare e rebalanceie", body: "IRPF pronto, imposto otimizado e ordens para manter a alocação." },
 ];
@@ -405,51 +398,47 @@ export default function LandingPage() {
       <header className="sticky top-0 z-20 border-b border-hairline bg-paper/85 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 md:px-8">
           <Brand className="text-lg" />
-          <nav className="flex items-center gap-6">
+          {/* The persistent action is sign-up, not sign-in: nobody has an
+              account yet. "Entrar" stays available as a quiet text link. */}
+          <nav className="flex items-center gap-4 sm:gap-6">
             <a
               href="#recursos"
-              className="hidden text-sm font-medium text-muted transition-colors hover:text-ink sm:block"
+              className="hidden py-2 text-sm font-medium text-muted transition-colors hover:text-ink sm:block"
             >
               Recursos
             </a>
             <a
               href="#planos"
-              className="hidden text-sm font-medium text-muted transition-colors hover:text-ink sm:block"
+              className="hidden py-2 text-sm font-medium text-muted transition-colors hover:text-ink sm:block"
             >
               Planos
             </a>
             <Link
               href="/login"
-              className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
+              className="py-2 text-sm font-medium text-muted transition-colors hover:text-ink"
             >
               Entrar
+            </Link>
+            <Link
+              href="/login"
+              className="rounded-md bg-navy px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
+            >
+              Começar grátis
             </Link>
           </nav>
         </div>
       </header>
 
+      <main>
       {/* Hero */}
       <section className="relative overflow-hidden">
-        {/* soft brand glows */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -top-24 -left-24 h-96 w-96 rounded-full bg-navy/10 blur-3xl"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -top-10 right-0 h-96 w-96 rounded-full bg-series-1/10 blur-3xl"
-        />
         <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 pt-16 pb-20 md:px-8 md:pt-24 lg:grid-cols-[1.1fr_0.9fr]">
           <div>
             <p className="animate-fade-up mb-4 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
               Para investidores da B3
             </p>
             <h1 className="animate-fade-up font-display text-4xl font-extrabold leading-[1.05] tracking-tight text-ink md:text-6xl">
-              Do extrato da B3 ao{" "}
-              <span className="bg-gradient-to-r from-navy via-series-1 to-series-3 bg-clip-text text-transparent">
-                imposto de renda
-              </span>
-              , tudo em um só lugar.
+              Do extrato da B3 ao imposto de renda, tudo em um só lugar.
             </h1>
             <p
               className="animate-fade-up mt-6 max-w-xl text-lg leading-relaxed text-muted"
@@ -480,7 +469,8 @@ export default function LandingPage() {
               className="animate-fade-up mt-4 text-sm text-muted"
               style={{ animationDelay: "240ms" }}
             >
-              Sem cartão de crédito. Seus dados ficam com você.
+              Sem cartão de crédito. Só leitura dos seus extratos — nada executa
+              na sua corretora.
             </p>
           </div>
 
@@ -495,10 +485,13 @@ export default function LandingPage() {
 
       {/* Stats band */}
       <section className="border-y border-hairline bg-panel/40">
-        <div className="mx-auto grid max-w-6xl grid-cols-3 gap-4 px-4 py-10 text-center md:px-8">
+        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-4 py-10 text-center sm:grid-cols-3 sm:gap-4 md:px-8">
           {[
-            { top: <CountUp to={7} />, label: "relatórios da B3 suportados" },
-            { top: <CountUp to={100} suffix="%" />, label: "dos seus proventos rastreados" },
+            // Every figure here is verifiable in the parser: 2 report kinds
+            // (load_b3.py sniff_kind), 16 movement labels (MOV_CATEGORY), and
+            // the 3 documented steps. Nothing here is a measured usage metric.
+            { top: <CountUp to={2} />, label: "relatórios da B3: negociação e movimentação" },
+            { top: <CountUp to={16} />, label: "tipos de movimentação reconhecidos" },
             { top: <CountUp to={3} />, label: "passos do extrato ao IRPF" },
           ].map((s, i) => (
             <div key={i}>
@@ -522,10 +515,12 @@ export default function LandingPage() {
               Um app para todo o ciclo da sua carteira
             </h2>
           </Reveal>
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {/* No hover-lift: it was an undocumented third shadow and a transform
+              the reduced-motion block never covered. The border carries it. */}
+          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {FEATURES.map(({ Icon, title, body }, i) => (
-              <Reveal key={title} delay={(i % 3) * 80}>
-                <div className="group h-full rounded-lg border border-hairline bg-panel p-5 transition-all hover:-translate-y-1 hover:shadow-lg hover:shadow-navy/5">
+              <Reveal key={title} delay={(i % 4) * 80}>
+                <div className="group h-full rounded-lg border border-hairline bg-panel p-5 transition-colors hover:border-navy/40">
                   <div className="flex h-10 w-10 items-center justify-center rounded-md bg-navy/[0.06] text-navy transition-colors group-hover:bg-navy group-hover:text-white">
                     <Icon size={20} />
                   </div>
@@ -538,9 +533,26 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Feature showcases (alternating text / peek) */}
+      {/* Feature showcases (alternating text / peek).
+          The h2 below is the page's argument: without it these read as three
+          separate tools, which is exactly what competitors already sell one of
+          each. It also gives the section the heading its outline was missing. */}
       <section className="border-t border-hairline bg-panel/40">
-        <div className="mx-auto max-w-6xl space-y-20 px-4 py-20 md:px-8 md:py-28">
+        <div className="mx-auto max-w-6xl px-4 py-20 md:px-8 md:py-28">
+          <Reveal>
+            <p className="mb-3 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+              Por que tudo junto
+            </p>
+            <h2 className="max-w-3xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
+              O mesmo motor de imposto que pontua o backtest calcula sua DARF.
+            </h2>
+            <p className="mt-4 max-w-xl leading-relaxed text-muted">
+              Estratégia, acompanhamento e imposto não são três ferramentas
+              soltas aqui — são o mesmo cálculo, do teste à declaração.
+            </p>
+          </Reveal>
+
+          <div className="mt-16 space-y-20">
           {SHOWCASE.map(({ eyebrow, title, body, Peek }, i) => (
             <Reveal key={title}>
               <div
@@ -561,6 +573,7 @@ export default function LandingPage() {
               </div>
             </Reveal>
           ))}
+          </div>
         </div>
       </section>
 
@@ -571,7 +584,7 @@ export default function LandingPage() {
             Como funciona
           </p>
           <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
-            Do PDF ao imposto em três passos
+            Do extrato ao imposto em três passos
           </h2>
         </Reveal>
         <div className="mt-10 grid gap-6 md:grid-cols-3">
@@ -609,14 +622,14 @@ export default function LandingPage() {
             {PLANS.map((plan, i) => (
               <Reveal key={plan.name} delay={i * 90} className="h-full">
                 <div
-                  className={`relative flex h-full flex-col rounded-lg border bg-panel p-6 transition-transform hover:-translate-y-1 ${
+                  className={`relative flex h-full flex-col rounded-lg border bg-panel p-6 transition-colors ${
                     plan.featured
                       ? "border-navy ring-1 ring-navy"
                       : "border-hairline"
                   }`}
                 >
                   {plan.featured && (
-                    <span className="absolute -top-3 left-6 rounded-full bg-navy px-3 py-1 font-mono text-[10px] font-medium uppercase tracking-[0.12em] text-white">
+                    <span className="absolute -top-3 left-6 rounded-full bg-navy px-3 py-1 font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-white">
                       Mais popular
                     </span>
                   )}
@@ -672,6 +685,7 @@ export default function LandingPage() {
           </Link>
         </Reveal>
       </section>
+      </main>
 
       {/* Footer */}
       <footer className="border-t border-hairline">

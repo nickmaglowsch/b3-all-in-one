@@ -52,7 +52,8 @@ export default function ContaPage() {
       a.href = url;
       a.download = "quantax-meus-dados.json";
       a.click();
-      URL.revokeObjectURL(url);
+      // Revoking in the same tick cancels the download in Safari and older Firefox.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     },
   });
 

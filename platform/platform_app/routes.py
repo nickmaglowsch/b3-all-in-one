@@ -68,11 +68,16 @@ async def create_imports(
     dest.mkdir(parents=True, exist_ok=True)
     created: list[Import] = []
     for f in files:
-        path = dest / f.filename
+        # Starlette hands back the client's filename verbatim, so `..` in it would
+        # write outside the tenant's directory — and LGPD erasure rmtree's exactly
+        # that directory, so an escaped extract would outlive the account that owns
+        # it. The same name is later joined into the IRPF workspace (irpf_report).
+        name = Path(f.filename).name
+        path = dest / name
         path.write_bytes(await f.read())
         imp = Import(
-            tenant_id=tid, filename=f.filename, stored_path=str(path),
-            kind=_detect_kind(f.filename), status="pending",
+            tenant_id=tid, filename=name, stored_path=str(path),
+            kind=_detect_kind(name), status="pending",
         )
         session.add(imp)
         created.append(imp)

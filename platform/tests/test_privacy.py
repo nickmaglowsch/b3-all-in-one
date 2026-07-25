@@ -113,9 +113,14 @@ async def test_export_carries_every_row_of_every_book(client):
         for table in tables:
             rows = book["tables"][table.name]
             assert len(rows) == 1, f"{table.name} missing from the export"
-    # Own rows only, and no server filesystem layout riding along.
-    assert books[me_id]["tables"]["imports"][0]["tenant_id"] == me_id
-    assert "stored_path" not in books[me_id]["tables"]["imports"][0]
+    # Own rows only, and no server filesystem layout riding along — neither the
+    # stored path nor the subprocess stderr a failed parse leaves in `error`.
+    imported = books[me_id]["tables"]["imports"][0]
+    assert imported["tenant_id"] == me_id
+    assert "stored_path" not in imported
+    assert "error" not in imported
+    assert "error" not in books[me_id]["tables"]["backtest_runs"][0]
+    assert imported["status"], "the status is the titular's, and must survive"
 
 
 async def test_an_export_never_reaches_another_account(client):
@@ -130,13 +135,17 @@ async def test_an_export_never_reaches_another_account(client):
     assert body["books"][0]["tables"]["trades"] == []
 
 
-async def test_deleting_the_account_erases_every_book_and_the_login(client, tmp_path):
-    """Art. 18 VI — elimination. Nothing keyed to the account survives it."""
+async def test_deleting_the_account_erases_every_book_and_the_login(client):
+    """Art. 18 VI — elimination. Nothing keyed to the account survives it.
+
+    Every kind of file the platform writes for a tenant is planted first, because
+    "eliminado" is a legal claim about the disk as much as about Postgres.
+    """
     from sqlalchemy import func, select
 
     from platform_app.config import settings
     from platform_app.db import async_session_maker
-    from platform_app.models import Portfolio, User
+    from platform_app.models import BacktestRun, Portfolio, User
 
     headers = await _enterprise(client, "erase@example.com")
     me_id = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
@@ -144,11 +153,31 @@ async def test_deleting_the_account_erases_every_book_and_the_login(client, tmp_
     tables = await _seed(me_id)
     await _seed(client_id)
 
-    # Extracts on disk are personal data too — B3 statements name their holder.
     uploads = Path(settings.uploads_dir)
+    artifacts = Path(settings.artifacts_dir).resolve()
+    planted: list[Path] = []
     for tid in (me_id, client_id):
-        (uploads / str(tid)).mkdir(parents=True, exist_ok=True)
+        # Extracts on disk are personal data too — B3 statements name their holder.
+        (uploads / str(tid) / "negociacao-2025.xlsx").parent.mkdir(parents=True, exist_ok=True)
         (uploads / str(tid) / "negociacao-2025.xlsx").write_bytes(b"x")
+        # The tenant's materialized strategy specs.
+        (artifacts / "user_specs" / str(tid)).mkdir(parents=True, exist_ok=True)
+        planted += [uploads / str(tid), artifacts / "user_specs" / str(tid)]
+
+    # Backtest artifact dirs. The seeded runs have a NULL artifacts_path — which is
+    # what a *failed* run looks like, even though the engine already wrote curves.csv
+    # before failing. Finding these is the whole reason the purge goes by run id.
+    async with async_session_maker() as session:
+        run_ids = (
+            await session.scalars(
+                select(BacktestRun.id).where(BacktestRun.tenant_id.in_([me_id, client_id]))
+            )
+        ).all()
+    assert run_ids, "no backtest rows seeded — the artifact sweep would be untested"
+    for rid in run_ids:
+        (artifacts / str(rid)).mkdir(parents=True, exist_ok=True)
+        (artifacts / str(rid) / "curves.csv").write_text("date,aftertax\n")
+        planted.append(artifacts / str(rid))
 
     r = await client.delete("/privacy/account", headers=headers)
     assert r.status_code == 200, r.text
@@ -164,11 +193,45 @@ async def test_deleting_the_account_erases_every_book_and_the_login(client, tmp_
         assert await session.get(Portfolio, client_id) is None
         assert await session.get(User, me_id) is None
 
-    for tid in (me_id, client_id):
-        assert not (uploads / str(tid)).exists(), "extracts left on disk"
+    for path in planted:
+        assert not path.exists(), f"{path} left on disk after account deletion"
 
     # The token outlives the row it names; the account it names must not answer.
     assert (await client.get("/me", headers=headers)).status_code == 401
+
+
+async def test_a_google_account_takes_its_oauth_rows_with_it(client):
+    """oauth_account.user_id is NOT NULL, and the relationship is eagerly loaded —
+    an ORM delete of the user would try to null it instead of letting the row go.
+    Every other test registers with a password, so only this one walks that path."""
+    from sqlalchemy import func, select
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import OAuthAccount
+
+    headers = await _auth(client, "google-user@example.com")
+    me_id = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+    async with async_session_maker() as session:
+        session.add(
+            OAuthAccount(
+                user_id=me_id,
+                oauth_name="google",
+                access_token="tok",
+                account_id="google-123",
+                account_email="google-user@example.com",
+            )
+        )
+        await session.commit()
+
+    r = await client.delete("/privacy/account", headers=headers)
+    assert r.status_code == 200, r.text
+
+    async with async_session_maker() as session:
+        left = await session.scalar(
+            select(func.count()).select_from(OAuthAccount)
+            .where(OAuthAccount.user_id == me_id)
+        )
+    assert left == 0
 
 
 async def test_deleting_one_account_leaves_the_neighbours_alone(client):

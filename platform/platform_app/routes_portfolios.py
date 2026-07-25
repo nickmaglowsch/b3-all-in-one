@@ -51,9 +51,13 @@ async def purge_tenant_rows(session: AsyncSession, tenant_id: uuid.UUID) -> list
     end — offboarding a client, erasing an account under the LGPD — go through
     here, so neither can drift into leaving rows behind.
     """
-    artifacts = (
+    # By run id, not by artifacts_path: that column is only written on the success
+    # path (tasks.run_backtest), but the engine subprocess creates the directory
+    # and writes curves.csv *before* anything can fail. Trusting the column would
+    # leave a failed run's NAV curve on disk with no row left pointing at it.
+    run_ids = (
         await session.scalars(
-            select(BacktestRun.artifacts_path).where(BacktestRun.tenant_id == tenant_id)
+            select(BacktestRun.id).where(BacktestRun.tenant_id == tenant_id)
         )
     ).all()
     # reversed: sorted_tables is parent-first, and a delete has to run child-first.
@@ -62,7 +66,8 @@ async def purge_tenant_rows(session: AsyncSession, tenant_id: uuid.UUID) -> list
     for table in reversed(Base.metadata.sorted_tables):
         if "tenant_id" in table.c:
             await session.execute(delete(table).where(table.c.tenant_id == tenant_id))
-    return [p for p in artifacts if p]
+    # Same expression tasks.run_backtest builds the directory from.
+    return [str(Path(settings.artifacts_dir).resolve() / str(rid)) for rid in run_ids]
 
 
 def purge_tenant_files(tenant_id: uuid.UUID, artifacts: list[str]) -> None:

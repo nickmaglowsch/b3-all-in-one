@@ -51,6 +51,44 @@ async def _seed_overrides(tenant_id: uuid.UUID) -> None:
         await session.commit()
 
 
+async def test_an_uploaded_filename_cannot_escape_the_tenant_directory(client):
+    """The client picks the filename, and LGPD erasure rmtree's the tenant's upload
+    directory — so an extract written outside it would outlive the account it
+    belongs to. Everything downstream (the IRPF workspace copy) rides on this too."""
+    from platform_app.config import settings
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = (await client.get("/me", headers=headers)).json()["id"]
+
+    uploads = Path(settings.uploads_dir)
+    escaped = uploads / "negociacao-escaped.xlsx"
+    escaped.unlink(missing_ok=True)
+
+    r = await client.post(
+        "/imports",
+        files=[("files", ("../negociacao-escaped.xlsx", b"not really xlsx", _XLSX))],
+        headers=headers,
+    )
+    assert r.status_code == 200, r.text
+
+    assert not escaped.exists(), "upload escaped the tenant directory"
+    assert (uploads / tid / "negociacao-escaped.xlsx").exists()
+    # The stored name is the sanitized one, so the erasure sweep can find it.
+    assert r.json()[0]["filename"] == "negociacao-escaped.xlsx"
+
+    # Leave the dev tenant's import list as the golden test below expects it.
+    from sqlalchemy import delete
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import Import
+
+    async with async_session_maker() as session:
+        await session.execute(delete(Import).where(Import.tenant_id == uuid.UUID(tid)))
+        await session.commit()
+    (uploads / tid / "negociacao-escaped.xlsx").unlink(missing_ok=True)
+
+
 async def test_import_positions_and_irpf_equivalent_to_golden(client):
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

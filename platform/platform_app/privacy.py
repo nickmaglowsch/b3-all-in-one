@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import logging
 import uuid
 
 import stripe
@@ -37,6 +38,8 @@ from platform_app.routes_portfolios import (
 )
 from platform_app.users import current_active_user
 
+log = logging.getLogger(__name__)
+
 privacy_router = APIRouter(prefix="/privacy", tags=["privacy"])
 
 # The encarregado's channel (Art. 41), for the rights these routes can't serve —
@@ -45,8 +48,11 @@ privacy_router = APIRouter(prefix="/privacy", tags=["privacy"])
 CONTACT = "privacidade@quantax.com.br"
 
 # Ours, not the titular's: an export naming them would publish the server's
-# filesystem layout and nothing about the person asking.
-_INTERNAL_COLUMNS = {"stored_path", "artifacts_path"}
+# filesystem layout and nothing about the person asking. `error` is in here for
+# the same reason — it carries the tail of a subprocess stderr, so a deliberately
+# corrupt .xlsx would otherwise turn the export into a map of the deploy. The
+# row's `status` still says the job failed, which is the part that is about them.
+_INTERNAL_COLUMNS = {"stored_path", "artifacts_path", "error"}
 
 
 def _tenant_tables() -> list:
@@ -128,6 +134,9 @@ async def privacy_export(
     """Art. 18 V — access and portability, "em formato que permita a utilização
     subsequente": one JSON file with every row of every book, downloaded rather
     than rendered."""
+    # ponytail: the whole book is materialized in memory. A decade of B3 history
+    # is ~10^5 rows ≈ tens of MB — fine for a page a person opens once. Stream it
+    # (or paginate by table) if a book ever gets big enough to matter.
     books = []
     for tenant_id, label, is_self in await _books(session, user):
         tables = {}
@@ -156,7 +165,7 @@ async def privacy_export(
     )
 
 
-def _forget_at_stripe(customer_id: str) -> None:
+async def _forget_at_stripe(customer_id: str) -> None:
     """Ask the operator to forget the customer too — which also cancels whatever
     it was billing, so an erased account can't keep paying. Stripe keeps the
     invoices it must keep for fiscal retention; that is its obligation, not ours.
@@ -167,9 +176,12 @@ def _forget_at_stripe(customer_id: str) -> None:
     if not (customer_id and settings.stripe_secret_key):
         return
     try:
-        stripe.Customer.delete(customer_id)
+        await stripe.Customer.delete_async(customer_id)
     except Exception:  # noqa: BLE001 — see docstring
-        pass
+        # The user row is already gone, so this id now exists nowhere else: if it
+        # isn't in the log, nobody can ever reconcile the subscription that is
+        # still billing a card for an account that no longer exists.
+        log.exception("stripe customer %s survived account erasure", customer_id)
 
 
 @privacy_router.delete("/account")
@@ -177,8 +189,8 @@ async def delete_account(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
-    """Art. 18 VI — eliminação. Books, files and the login itself, in one
-    transaction.
+    """Art. 18 VI — eliminação. Books and the login itself in one transaction,
+    then the files they named (see purge_tenant_files for why in that order).
 
     A hard delete, not an anonymized tombstone: nothing in this schema keeps a
     non-null FK to the login once its books are gone, and the records a
@@ -200,7 +212,7 @@ async def delete_account(
 
     for tenant_id, paths in artifacts.items():
         purge_tenant_files(tenant_id, paths)
-    _forget_at_stripe(customer_id)
+    await _forget_at_stripe(customer_id)
 
     return {
         "status": "eliminado",

@@ -92,8 +92,15 @@ IX (execução de contrato com o titular).
 - Senhas com hash (fastapi-users); tokens JWT de vida curta (1h).
 - Segredos por variável de ambiente, fora do repositório.
 - HTTPS na borda; CORS restrito a `ALLOWED_ORIGINS`.
-- O export nunca inclui caminhos do servidor (`stored_path`, `artifacts_path`) nem o
-  `stripe_customer_id` — só a informação de que ele existe.
+- O export nunca inclui caminhos do servidor (`stored_path`, `artifacts_path`, e `error`,
+  que carrega o stderr de um subprocesso) nem o `stripe_customer_id` — só a informação de
+  que ele existe.
+- O nome de arquivo enviado é reduzido ao seu último componente antes de virar caminho:
+  a exclusão apaga o diretório `uploads/{tenant_id}`, então um extrato escrito fora dele
+  sobreviveria à conta que o gerou.
+- Os diretórios de artefato de backtest são apagados por convenção (`{run_id}`), não pela
+  coluna `artifacts_path` — ela só é preenchida quando a execução termina bem, e o engine
+  escreve a curva antes de poder falhar.
 
 Pendências conhecidas, na ordem em que valem a pena: criptografia em repouso no volume do
 Postgres, RLS no banco (o gancho está documentado em `tenancy.get_current_tenant`) e

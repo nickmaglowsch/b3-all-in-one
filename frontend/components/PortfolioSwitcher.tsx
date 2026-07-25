@@ -15,8 +15,8 @@ import { usePortfolios } from "@/lib/hooks";
 export function PortfolioSwitcher() {
   const qc = useQueryClient();
   const { data } = usePortfolios();
-  // The server snapshot is null because the static export has no localStorage at
-  // build time; subscribing means a switch made on the carteiras page shows here.
+  // The server snapshot is null because the static export has no sessionStorage
+  // at build time; subscribing means a switch on the carteiras page shows here.
   const active = useSyncExternalStore(subscribePortfolio, getPortfolioId, () => null);
 
   const self = data?.find((p) => p.is_self);
@@ -36,9 +36,12 @@ export function PortfolioSwitcher() {
   function pick(id: string) {
     if (id === self!.id) clearPortfolioId();
     else setPortfolioId(id);
-    // Every cached query holds the previous book's rows, and none of the keys
-    // mention which book they came from. Dropping the lot is the honest reset.
-    qc.clear();
+    // A full reload, not qc.clear(): clearing the query cache leaves *component*
+    // state alone, and a half-edited form is component state. The sleeves editor
+    // stops reseeding itself once dirty, so switching mid-edit and hitting Salvar
+    // would write this client's percentages into the next client's book. Remount
+    // everything — same page, new book, nothing carried over.
+    window.location.reload();
   }
 
   return (

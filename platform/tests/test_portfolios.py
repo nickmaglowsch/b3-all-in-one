@@ -6,6 +6,8 @@ if the switch works there it works for every route, they all read the same
 dependency.
 """
 
+import datetime
+import decimal
 import uuid
 
 import pytest
@@ -44,6 +46,22 @@ async def _create(client, headers, label: str) -> dict:
 
 def _acting(headers: dict[str, str], portfolio_id: str) -> dict[str, str]:
     return {**headers, HEADER: portfolio_id}
+
+
+def _sample_value(col):
+    """Any value the column will accept — the offboard sweep is keyed on
+    tenant_id, so nothing else about the row matters."""
+    py = col.type.python_type
+    return {
+        uuid.UUID: uuid.uuid4(),
+        int: 1,
+        float: 1.0,
+        decimal.Decimal: decimal.Decimal(1),
+        bool: False,
+        dict: {},
+        datetime.date: datetime.date(2026, 1, 1),
+        datetime.datetime: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
+    }.get(py, "x")
 
 
 async def _put_overrides(client, headers, tickers: list[str]):
@@ -121,6 +139,23 @@ async def test_each_portfolio_has_its_own_data(client):
     assert await _get_overrides(client, _acting(headers, client_b)) == []
 
 
+async def test_another_accounts_own_book_is_not_reachable(client):
+    """The highest-value probe: an own book has no `portfolios` row, so the header
+    is the only thing standing between 'my book' and 'anyone's book'."""
+    victim = await _auth(client, "victim@example.com")
+    await _set_plan(client, victim, "investidor")
+    victim_id = (await client.get("/me", headers=victim)).json()["id"]
+    assert (await _put_overrides(client, victim, ["PETR4"])).status_code == 200
+
+    attacker = await _enterprise(client, "attacker@example.com")
+    r = await client.get(
+        "/portfolio/settings/asset-overrides", headers=_acting(attacker, victim_id)
+    )
+    assert r.status_code == 404
+    # And the victim's book is untouched by the attempt.
+    assert await _get_overrides(client, victim) == ["PETR4"]
+
+
 async def test_a_portfolio_you_do_not_own_does_not_exist(client):
     owner = await _enterprise(client, "owner@example.com")
     theirs = (await _create(client, owner, "Cliente do vizinho"))["id"]
@@ -185,14 +220,32 @@ async def test_renaming_a_client_portfolio(client):
 
 
 async def test_deleting_a_client_portfolio_takes_its_data_with_it(client):
-    from sqlalchemy import func, select
+    from sqlalchemy import func, insert, select
 
-    from platform_app.db import async_session_maker
-    from platform_app.models import AssetClassOverride
+    from platform_app.db import Base, async_session_maker
 
     headers = await _enterprise(client, "offboard@example.com")
     pid = (await _create(client, headers, "Cliente que saiu"))["id"]
+    tid = uuid.UUID(pid)
     assert (await _put_overrides(client, _acting(headers, pid), ["PETR4"])).status_code == 200
+
+    # Seed *every* tenant table, so a sweep that quietly stops covering one of them
+    # fails here instead of leaving a client's trades behind after "excluir tudo".
+    tenant_tables = [t for t in Base.metadata.sorted_tables if "tenant_id" in t.c]
+    assert len(tenant_tables) >= 11, "tenant tables vanished — is the sweep still total?"
+    async with async_session_maker() as session:
+        for table in tenant_tables:
+            row = {"tenant_id": tid}
+            # Fill whatever else the table demands; the values are irrelevant, the
+            # row only has to exist and carry this tenant_id.
+            for col in table.c:
+                if col.name == "tenant_id" or col.nullable or col.default is not None:
+                    continue
+                if col.server_default is not None or col.autoincrement is True:
+                    continue
+                row[col.name] = _sample_value(col)
+            await session.execute(insert(table).values(**row))
+        await session.commit()
 
     r = await client.delete(f"/portfolios/{pid}", headers=headers)
     assert r.status_code == 204, r.text
@@ -204,12 +257,11 @@ async def test_deleting_a_client_portfolio_takes_its_data_with_it(client):
 
     # Offboarding a client means their rows leave too — nothing to orphan.
     async with async_session_maker() as session:
-        left = await session.scalar(
-            select(func.count())
-            .select_from(AssetClassOverride)
-            .where(AssetClassOverride.tenant_id == uuid.UUID(pid))
-        )
-    assert left == 0
+        for table in tenant_tables:
+            left = await session.scalar(
+                select(func.count()).select_from(table).where(table.c.tenant_id == tid)
+            )
+            assert left == 0, f"{table.name} kept rows for an offboarded client"
 
 
 async def test_the_own_portfolio_cannot_be_deleted(client):

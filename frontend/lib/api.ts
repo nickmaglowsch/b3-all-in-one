@@ -13,6 +13,9 @@ export function getToken(): string | null {
 }
 export function setToken(t: string) {
   window.localStorage.setItem(TOKEN_KEY, t);
+  // A new login inherits nothing: the previous account's book selection would
+  // otherwise ride along and 404 this account's first requests.
+  clearPortfolioId();
 }
 export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
@@ -21,6 +24,11 @@ export function clearToken() {
 
 // Which book the app is acting on (enterprise tier). Unset => the user's own,
 // which is every account below that tier.
+//
+// sessionStorage, deliberately: an advisor comparing two clients side by side
+// opens two tabs, and localStorage is origin-wide, so tab B's switch would
+// silently redirect tab A's next write into B's book. Per-tab is the only
+// storage that matches how the feature is used.
 //
 // It is a subscribable store because two components in different subtrees read it
 // — the sidebar switcher and the carteiras page — and a switch made in one has to
@@ -37,14 +45,14 @@ export function subscribePortfolio(onChange: () => void): () => void {
 
 export function getPortfolioId(): string | null {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(PORTFOLIO_KEY);
+  return window.sessionStorage.getItem(PORTFOLIO_KEY);
 }
 export function setPortfolioId(id: string) {
-  window.localStorage.setItem(PORTFOLIO_KEY, id);
+  window.sessionStorage.setItem(PORTFOLIO_KEY, id);
   portfolioListeners.forEach((fn) => fn());
 }
 export function clearPortfolioId() {
-  window.localStorage.removeItem(PORTFOLIO_KEY);
+  window.sessionStorage.removeItem(PORTFOLIO_KEY);
   portfolioListeners.forEach((fn) => fn());
 }
 
@@ -109,6 +117,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const detail = await errorDetail(res);
+    // A lapsed subscription strands an advisor inside a client's book: the book is
+    // still listed, so it never looks stale, but every request 402s. Fall back to
+    // the book they *are* still entitled to instead of making them find the way
+    // out. Dropping the header is what stops this from looping.
+    if (
+      res.status === 402 &&
+      typeof window !== "undefined" &&
+      getPortfolioId() &&
+      isPlanRequired(detail) &&
+      detail.required_plan === "enterprise"
+    ) {
+      clearPortfolioId();
+      window.location.reload();
+      throw new ApiError(res.status, errorMessage(detail, res), detail);
+    }
     if (res.status === 402 && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent(PAYWALL_EVENT, { detail }));
     }

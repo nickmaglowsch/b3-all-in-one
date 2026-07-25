@@ -56,12 +56,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Client books have to go first: their tenant_id is no user's id, so the
-    # constraint could not be restored while their rows exist.
+    # DESTRUCTIVE: every client book's rows are deleted, because their tenant_id
+    # is no user's id and the constraint cannot be restored while they exist.
+    # Rolling this back throws away the enterprise tier's whole dataset.
+    #
+    # The predicate is NOT-a-user rather than IS-a-portfolio on purpose: a row
+    # orphaned by a job that finished after its book was deleted matches neither
+    # `portfolios` nor `user`, and a single one of those would abort the whole
+    # downgrade on the FK restore below.
     for table in TENANT_TABLES:
-        op.execute(
-            f'DELETE FROM {table} WHERE tenant_id IN (SELECT id FROM portfolios)'
-        )
+        op.execute(f'DELETE FROM {table} WHERE tenant_id NOT IN (SELECT id FROM "user")')
         op.create_foreign_key(
             f"{table}_tenant_id_fkey", table, "user", ["tenant_id"], ["id"]
         )

@@ -20,8 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from platform_app.billing import needs_enterprise
 from platform_app.config import settings
 from platform_app.db import Base, get_async_session
-from platform_app.models import BacktestRun, Portfolio
-from platform_app.tenancy import get_current_tenant
+from platform_app.models import BacktestRun, Portfolio, User
+from platform_app.users import current_active_user
 
 portfolios_router = APIRouter(prefix="/portfolios", tags=["portfolios"])
 
@@ -55,12 +55,16 @@ async def _owned(session: AsyncSession, portfolio_id: uuid.UUID, owner_id: uuid.
 
 @portfolios_router.get("")
 async def list_portfolios(
-    tenant=Depends(get_current_tenant),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     """Own book first, then the managed ones. Open to every tier: a free account
-    simply gets a one-item list, which is what the switcher renders from."""
-    user, _ = tenant
+    simply gets a one-item list, which is what the switcher renders from.
+
+    Takes the user, not the tenant: this is the call a client recovers a stale or
+    unentitled selection with, so it must be the one route that cannot 402 or 404
+    because of one.
+    """
     rows = (
         await session.scalars(
             select(Portfolio).where(Portfolio.owner_id == user.id).order_by(Portfolio.label)
@@ -123,7 +127,10 @@ async def delete_portfolio(
             select(BacktestRun.artifacts_path).where(BacktestRun.tenant_id == portfolio_id)
         )
     ).all()
-    for table in Base.metadata.sorted_tables:
+    # reversed: sorted_tables is parent-first, and a delete has to run child-first.
+    # No tenant table references another today, so this only matters for the next
+    # one — which is exactly the case the sweep claims to cover for free.
+    for table in reversed(Base.metadata.sorted_tables):
         if "tenant_id" in table.c:
             await session.execute(delete(table).where(table.c.tenant_id == portfolio_id))
     await session.delete(row)

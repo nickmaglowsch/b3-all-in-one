@@ -20,6 +20,10 @@ from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import User
 from platform_app.tenancy import get_current_tenant
+# Identity-only routes take the user directly: depending on the tenant resolver
+# would make billing inherit its 402/404 on a stale book selection, i.e. paywall
+# the very page you fix a lapsed subscription on.
+from platform_app.users import current_active_user
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -105,8 +109,7 @@ async def _ensure_customer(user: User, session: AsyncSession) -> str:
 
 
 @billing_router.get("")
-async def get_subscription(tenant=Depends(get_current_tenant)) -> dict:
-    user, _ = tenant
+async def get_subscription(user: User = Depends(current_active_user)) -> dict:
     return {
         "plan": effective_plan(user),
         "billed_plan": user.plan,
@@ -120,11 +123,10 @@ async def get_subscription(tenant=Depends(get_current_tenant)) -> dict:
 @billing_router.post("/checkout")
 async def create_checkout(
     plan: str = Body(..., embed=True),
-    tenant=Depends(get_current_tenant),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Hosted Checkout session for a paid tier. Returns the URL to redirect to."""
-    user, _ = tenant
     price = price_for(plan)
     if not price:
         raise HTTPException(400, f"plano sem preço configurado: {plan}")
@@ -144,10 +146,9 @@ async def create_checkout(
 
 
 @billing_router.post("/portal")
-async def create_portal(tenant=Depends(get_current_tenant)) -> dict:
+async def create_portal(user: User = Depends(current_active_user)) -> dict:
     """Stripe's billing portal — card updates, invoices, cancellation. Stripe owns
     that whole UI, so we own none of it."""
-    user, _ = tenant
     _require_stripe()
     if not user.stripe_customer_id:
         raise HTTPException(409, "nenhuma assinatura para gerenciar.")
@@ -235,14 +236,13 @@ if settings.is_dev:
     @billing_router.post("/dev-plan")
     async def dev_set_plan(
         plan: str = Body(..., embed=True),
-        tenant=Depends(get_current_tenant),
+        user: User = Depends(current_active_user),
         session: AsyncSession = Depends(get_async_session),
     ) -> dict:
         """Dev-only: flip the tenant's plan without Stripe, so the paywall is
         testable locally. Never mounted outside development."""
         if plan not in LADDER:
             raise HTTPException(400, f"plano desconhecido: {plan}")
-        user, _ = tenant
         user.plan = plan
         user.plan_status = None if plan == FREE else "active"
         session.add(user)

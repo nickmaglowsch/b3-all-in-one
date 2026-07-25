@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 
 from procrastinate import App, PsycopgConnector
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 
 from platform_app import b3run, enginerun, specstore
 from platform_app.config import settings
@@ -155,6 +155,17 @@ async def process_imports(tenant_id: str) -> dict:
             positions = b3run.read_csv_rows(ws / "data" / "positions.csv")
         finally:
             shutil.rmtree(ws, ignore_errors=True)
+
+        # load_b3 runs for minutes with the extracts already copied to a temp dir,
+        # so the book can be offboarded underneath it. Writing anyway would restore
+        # a deleted client's trades under a tenant_id nothing references — invisible
+        # to every route, but still their data, after a UI that promised deletion.
+        # DELETE /portfolios takes the imports with it, so their absence is the signal.
+        still_live = await session.scalar(
+            select(func.count()).select_from(Import).where(Import.tenant_id == tid)
+        )
+        if not still_live:
+            return {"tenant_id": tenant_id, "status": "abandoned", "imports": 0}
 
         # Full replace per tenant, one transaction. Order preserved via ascending ids.
         for model in (Trade, CashEvent, Position):

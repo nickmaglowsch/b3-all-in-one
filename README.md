@@ -131,6 +131,21 @@ stripe trigger customer.subscription.updated                # or drive a real su
 stripe subscriptions create --customer cus_… -d "items[0][price]=$STRIPE_PRICE_TRADER"
 ```
 
+### Privacidade / LGPD (spec/08)
+
+The data-subject rights of art. 18 are routes, not a support mailbox — free at every
+tier, scoped to the **account** (its own book plus every client book it manages):
+
+- `GET /privacy/summary` — confirmação do tratamento: what is stored, counted per book.
+- `GET /privacy/export` — acesso + portabilidade: every row of every book, as JSON.
+- `DELETE /privacy/account` — eliminação: rows, uploaded extracts, backtest artifacts,
+  the Stripe customer and the login itself. Irreversible, and it frees the email.
+
+Both the export and the erasure discover their tables from `Base.metadata` (any table
+with a `tenant_id`), so a new tenant table is covered without touching either — and
+`platform/tests/test_privacy.py` seeds all of them to keep that honest. The frontend
+serves this at `/conta`; the public policy lives at `/privacidade`.
+
 ### End-to-end smoke
 
 ```

@@ -6,11 +6,11 @@ if the switch works there it works for every route, they all read the same
 dependency.
 """
 
-import datetime
-import decimal
 import uuid
 
 import pytest
+
+from tests.conftest import seed_tenant_tables
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -46,22 +46,6 @@ async def _create(client, headers, label: str) -> dict:
 
 def _acting(headers: dict[str, str], portfolio_id: str) -> dict[str, str]:
     return {**headers, HEADER: portfolio_id}
-
-
-def _sample_value(col):
-    """Any value the column will accept — the offboard sweep is keyed on
-    tenant_id, so nothing else about the row matters."""
-    py = col.type.python_type
-    return {
-        uuid.UUID: uuid.uuid4(),
-        int: 1,
-        float: 1.0,
-        decimal.Decimal: decimal.Decimal(1),
-        bool: False,
-        dict: {},
-        datetime.date: datetime.date(2026, 1, 1),
-        datetime.datetime: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
-    }.get(py, "x")
 
 
 async def _put_overrides(client, headers, tickers: list[str]):
@@ -220,9 +204,9 @@ async def test_renaming_a_client_portfolio(client):
 
 
 async def test_deleting_a_client_portfolio_takes_its_data_with_it(client):
-    from sqlalchemy import func, insert, select
+    from sqlalchemy import func, select
 
-    from platform_app.db import Base, async_session_maker
+    from platform_app.db import async_session_maker
 
     headers = await _enterprise(client, "offboard@example.com")
     pid = (await _create(client, headers, "Cliente que saiu"))["id"]
@@ -231,21 +215,9 @@ async def test_deleting_a_client_portfolio_takes_its_data_with_it(client):
 
     # Seed *every* tenant table, so a sweep that quietly stops covering one of them
     # fails here instead of leaving a client's trades behind after "excluir tudo".
-    tenant_tables = [t for t in Base.metadata.sorted_tables if "tenant_id" in t.c]
-    assert len(tenant_tables) >= 11, "tenant tables vanished — is the sweep still total?"
     async with async_session_maker() as session:
-        for table in tenant_tables:
-            row = {"tenant_id": tid}
-            # Fill whatever else the table demands; the values are irrelevant, the
-            # row only has to exist and carry this tenant_id.
-            for col in table.c:
-                if col.name == "tenant_id" or col.nullable or col.default is not None:
-                    continue
-                if col.server_default is not None or col.autoincrement is True:
-                    continue
-                row[col.name] = _sample_value(col)
-            await session.execute(insert(table).values(**row))
-        await session.commit()
+        tenant_tables = await seed_tenant_tables(session, tid)
+    assert len(tenant_tables) >= 11, "tenant tables vanished — is the sweep still total?"
 
     r = await client.delete(f"/portfolios/{pid}", headers=headers)
     assert r.status_code == 204, r.text

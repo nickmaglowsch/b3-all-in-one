@@ -42,6 +42,45 @@ def _clean(label: str) -> str:
     return cleaned
 
 
+async def purge_tenant_rows(session: AsyncSession, tenant_id: uuid.UUID) -> list[str]:
+    """Delete every row keyed to a tenant_id; return the artifact dirs left to
+    unlink. Does not commit — the caller owns the transaction.
+
+    Sweeping by column instead of by model list means a tenant table added later
+    is covered without anyone remembering the callers exist. Both ways a book can
+    end — offboarding a client, erasing an account under the LGPD — go through
+    here, so neither can drift into leaving rows behind.
+    """
+    # By run id, not by artifacts_path: that column is only written on the success
+    # path (tasks.run_backtest), but the engine subprocess creates the directory
+    # and writes curves.csv *before* anything can fail. Trusting the column would
+    # leave a failed run's NAV curve on disk with no row left pointing at it.
+    run_ids = (
+        await session.scalars(
+            select(BacktestRun.id).where(BacktestRun.tenant_id == tenant_id)
+        )
+    ).all()
+    # reversed: sorted_tables is parent-first, and a delete has to run child-first.
+    # No tenant table references another today, so this only matters for the next
+    # one — which is exactly the case the sweep claims to cover for free.
+    for table in reversed(Base.metadata.sorted_tables):
+        if "tenant_id" in table.c:
+            await session.execute(delete(table).where(table.c.tenant_id == tenant_id))
+    # Same expression tasks.run_backtest builds the directory from.
+    return [str(Path(settings.artifacts_dir).resolve() / str(rid)) for rid in run_ids]
+
+
+def purge_tenant_files(tenant_id: uuid.UUID, artifacts: list[str]) -> None:
+    """Files last, after the rows are committed: a failed rmtree must not leave
+    the rows behind, and a book that ended should leave no extracts on disk."""
+    for path in (
+        Path(settings.uploads_dir) / str(tenant_id),
+        Path(settings.artifacts_dir) / "user_specs" / str(tenant_id),
+        *(Path(p) for p in artifacts),
+    ):
+        shutil.rmtree(path, ignore_errors=True)
+
+
 async def _owned(session: AsyncSession, portfolio_id: uuid.UUID, owner_id: uuid.UUID) -> Portfolio:
     """404 rather than 403 — the own book included, which has no row and so can
     be neither renamed nor deleted."""
@@ -114,34 +153,12 @@ async def delete_portfolio(
     tenant=Depends(needs_enterprise),
     session: AsyncSession = Depends(get_async_session),
 ) -> Response:
-    """Offboard a client: the book and everything keyed to it, in one transaction.
-
-    Sweeping by column instead of by model list means a tenant table added later
-    is covered without anyone remembering this route exists.
-    """
+    """Offboard a client: the book and everything keyed to it, in one transaction."""
     user, _ = tenant
     row = await _owned(session, portfolio_id, user.id)
 
-    artifacts = (
-        await session.scalars(
-            select(BacktestRun.artifacts_path).where(BacktestRun.tenant_id == portfolio_id)
-        )
-    ).all()
-    # reversed: sorted_tables is parent-first, and a delete has to run child-first.
-    # No tenant table references another today, so this only matters for the next
-    # one — which is exactly the case the sweep claims to cover for free.
-    for table in reversed(Base.metadata.sorted_tables):
-        if "tenant_id" in table.c:
-            await session.execute(delete(table).where(table.c.tenant_id == portfolio_id))
+    artifacts = await purge_tenant_rows(session, portfolio_id)
     await session.delete(row)
     await session.commit()
-
-    # Files last: a failed rmtree must not leave the rows behind, and a client
-    # who left should not leave their extracts on disk.
-    for path in (
-        Path(settings.uploads_dir) / str(portfolio_id),
-        Path(settings.artifacts_dir) / "user_specs" / str(portfolio_id),
-        *(Path(p) for p in artifacts if p),
-    ):
-        shutil.rmtree(path, ignore_errors=True)
+    purge_tenant_files(portfolio_id, artifacts)
     return Response(status_code=204)

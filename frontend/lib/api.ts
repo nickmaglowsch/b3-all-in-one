@@ -59,7 +59,9 @@ export function clearPortfolioId() {
 // Account-scoped, not book-scoped: the registry of books and the subscription
 // belong to the login. Exempting them also means a stale selection can always be
 // discovered and cleared, instead of 404ing the very call that would fix it.
-const ACCOUNT_SCOPED = ["/portfolios", "/billing"];
+// /privacy joins them for the same reason: LGPD rights are exercised over the
+// login and every book under it, never over the one currently selected.
+const ACCOUNT_SCOPED = ["/portfolios", "/billing", "/privacy"];
 
 export class ApiError extends Error {
   constructor(

@@ -6,6 +6,7 @@ from sqlalchemy import text
 from platform_app.billing import billing_router, needs_investidor, needs_trader
 from platform_app.config import settings
 from platform_app.db import engine
+from platform_app.privacy import privacy_router
 from platform_app.routes import (
     backtests_router,
     imports_router,
@@ -62,6 +63,8 @@ app.include_router(
 )
 
 app.include_router(billing_router)
+# LGPD Art. 18 rights over the whole account — free, at every tier, by law.
+app.include_router(privacy_router)
 
 # Free tier: import extracts, see the consolidated book, read market status.
 app.include_router(imports_router)

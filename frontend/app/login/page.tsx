@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { API_URL, devLogin, googleLogin } from "@/lib/api";
@@ -82,6 +83,17 @@ export default function LoginPage() {
             </p>
           )}
         </div>
+
+        <p className="mt-4 text-center text-xs text-muted">
+          Ao entrar você concorda com o tratamento dos seus dados descrito na{" "}
+          <Link
+            href="/privacidade"
+            className="underline underline-offset-2 hover:text-ink"
+          >
+            Política de Privacidade
+          </Link>
+          .
+        </p>
       </div>
     </main>
   );

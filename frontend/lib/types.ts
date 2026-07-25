@@ -34,6 +34,36 @@ export interface Subscription {
   manageable: boolean;
 }
 
+// GET /privacy/summary — LGPD Art. 18 I/II, the whole account (own book plus
+// every managed one). `records` is a row count per tenant table, keyed by the
+// table name; the page maps those keys to pt-BR labels.
+export interface PrivacyAccount {
+  id: string;
+  email: string;
+  is_active: boolean;
+  is_verified: boolean;
+  plan: string;
+  billed_plan: string;
+  plan_status: string | null;
+  plan_renews_at: string | null;
+  has_stripe_customer: boolean;
+  oauth_providers: string[];
+}
+
+export interface PrivacyBook {
+  id: string;
+  label: string;
+  is_self: boolean;
+  records: Record<string, number>;
+}
+
+export interface PrivacySummary {
+  account: PrivacyAccount;
+  books: PrivacyBook[];
+  /** the encarregado's channel (Art. 41), also printed on the policy page */
+  contact: string;
+}
+
 export interface MarketStatus {
   prices: {
     rows: number;

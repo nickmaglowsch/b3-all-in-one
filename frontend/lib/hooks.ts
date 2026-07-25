@@ -2,7 +2,14 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import type { Health, MarketStatus, Me, Portfolio, Subscription } from "./types";
+import type {
+  Health,
+  MarketStatus,
+  Me,
+  Portfolio,
+  PrivacySummary,
+  Subscription,
+} from "./types";
 
 export function useMe() {
   return useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me") });
@@ -28,6 +35,15 @@ export function useSubscription(awaitingCheckout = false) {
       q.state.dataUpdateCount < 12
         ? 2000
         : false,
+  });
+}
+
+// Account-scoped like /billing: it answers for every book at once, so it is not
+// affected by which one is selected.
+export function usePrivacySummary() {
+  return useQuery({
+    queryKey: ["privacy-summary"],
+    queryFn: () => api<PrivacySummary>("/privacy/summary"),
   });
 }
 

@@ -47,9 +47,13 @@ makes user-submitted strategies safe to accept at all.
 
 ## Operating Context
 
-- **The source document is the B3 Área do Investidor extract.** Users download PDFs
-  (negociação and movimentação reports) and upload them; the platform parses them. Seven
-  B3 report types are supported. Nothing is entered by hand.
+- **The source document is the B3 Área do Investidor extract.** Users download `.xlsx`
+  spreadsheets and upload them; the platform parses them. Exactly **two** report types are
+  recognised — negociação and movimentação (`taxcore/scripts/load_b3.py` `sniff_kind`) —
+  and within movimentação, 16 movement labels are categorised (`MOV_CATEGORY`), covering
+  dividendos, JCP, rendimentos, amortizações and the quantity-only corporate actions.
+  Uploads that are not `.xlsx` are rejected by both the client and the API. Nothing is
+  entered by hand.
 - **The tax calendar drives the year.** IRPF declaration season runs Jan–May. DARF is
   apurada month by month. The R$20k monthly isenção for ações, per-class loss carry-forward,
   and JCP gross-up are structural facts of every tax surface, not edge cases.
@@ -122,8 +126,11 @@ FII, IBOV, CDI, TLH (colheita de prejuízo).
 testimonials, no usage metrics, and no reference logos.** Stripe is wired with real test
 prices and the stack deploys, but nobody is paying yet. Future work must not fabricate
 customer counts, quotes, logos, AUM figures, growth numbers, or "trusted by" proof. The
-landing page's stats stay descriptive of capability (e.g. "7 relatórios da B3 suportados",
-"3 passos do extrato ao IRPF"), never quantitative social proof.
+landing page's stats stay descriptive of capability (e.g. "2 relatórios da B3: negociação e
+movimentação", "16 tipos de movimentação reconhecidos", "3 passos do extrato ao IRPF"),
+never quantitative social proof. Every figure on that page must be traceable to the
+parser; an earlier "7 relatórios" and "100% dos seus proventos rastreados" were removed
+precisely because neither survived that check.
 
 **All test data is synthetic.** The B3 extracts under `taxcore/b3_imports/`, the CSVs
 derived from them, and the IRPF golden are fabricated by

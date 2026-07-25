@@ -2,10 +2,17 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
-import type { Health, MarketStatus, Me, Subscription } from "./types";
+import type { Health, MarketStatus, Me, Portfolio, Subscription } from "./types";
 
 export function useMe() {
   return useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me") });
+}
+
+export function usePortfolios() {
+  return useQuery({
+    queryKey: ["portfolios"],
+    queryFn: () => api<Portfolio[]>("/portfolios"),
+  });
 }
 
 export function useSubscription(awaitingCheckout = false) {

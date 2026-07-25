@@ -17,6 +17,7 @@ from platform_app.routes import (
 )
 from platform_app.routes_portfolio_index import portfolio_index_router
 from platform_app.routes_portfolio_settings import portfolio_settings_router
+from platform_app.routes_portfolios import portfolios_router
 from platform_app.routes_whatif import whatif_router
 from platform_app.schemas import UserCreate, UserRead
 from platform_app.tenancy import get_current_tenant
@@ -65,6 +66,8 @@ app.include_router(billing_router)
 # Free tier: import extracts, see the consolidated book, read market status.
 app.include_router(imports_router)
 app.include_router(market_router)
+# Listing your books is free (everyone has one); managing clients' is enterprise.
+app.include_router(portfolios_router)
 # Mixed — the paid /portfolio and /strategies routes carry their own gate (routes.py).
 app.include_router(portfolio_router)
 app.include_router(strategies_router)

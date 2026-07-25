@@ -100,6 +100,19 @@ export const IconCard = (p: IconProps) => (
     <path d="M3 10h18M7 15h3" />
   </Svg>
 );
+export const IconUsers = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M15 20v-1.5a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4V20" />
+    <circle cx="8.5" cy="7" r="3.2" />
+    <path d="M17 11.2A3.2 3.2 0 0 0 17 5M22 20v-1.5a4 4 0 0 0-3-3.87" />
+  </Svg>
+);
+export const IconTrash = (p: IconProps) => (
+  <Svg {...p}>
+    <path d="M4 7h16M10 4h4a1 1 0 0 1 1 1v2H9V5a1 1 0 0 1 1-1Z" />
+    <path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
+  </Svg>
+);
 export const IconLogout = (p: IconProps) => (
   <Svg {...p}>
     <path d="M9 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3" />

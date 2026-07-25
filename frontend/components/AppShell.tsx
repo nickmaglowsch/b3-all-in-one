@@ -9,6 +9,7 @@ import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
 import { Brand } from "@/components/Brand";
 import { Paywall } from "@/components/Paywall";
+import { PortfolioSwitcher } from "@/components/PortfolioSwitcher";
 import {
   IconCard,
   IconChart,
@@ -20,11 +21,13 @@ import {
   IconReceipt,
   IconScissors,
   IconUpload,
+  IconUsers,
   IconWallet,
 } from "@/components/icons";
 
 const NAV = [
   { href: "/portfolio", label: "Portfólio", Icon: IconWallet },
+  { href: "/carteiras", label: "Carteiras", Icon: IconUsers },
   { href: "/imports", label: "Importações", Icon: IconUpload },
   { href: "/estrategia", label: "Estratégia", Icon: IconCompass },
   { href: "/simulacao", label: "Simulação", Icon: IconClock },
@@ -96,6 +99,8 @@ function ShellChrome({
             <IconClose size={18} />
           </button>
         </div>
+
+        <PortfolioSwitcher />
 
         <nav className="flex-1 px-3">
           <ul className="space-y-0.5">

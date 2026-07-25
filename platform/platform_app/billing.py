@@ -1,6 +1,7 @@
 """Stripe billing: the plan ladder, the entitlement dependency, and /billing routes.
 
-Tiers mirror the landing page — gratis < investidor (R$29/mês) < trader (R$79/mês).
+Tiers mirror the landing page — gratis < investidor (R$29/mês) < trader (R$79/mês)
+< empresarial (R$249/mês, many client books under one login).
 Entitlements live on the user row (== tenant row, spec/01) and are written *only* by
 the webhook: checkout returns a URL, it never grants access. That way a user who
 abandons Stripe's hosted page, or whose card later fails, is never entitled by us.
@@ -19,11 +20,16 @@ from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import User
 from platform_app.tenancy import get_current_tenant
+# Identity-only routes take the user directly: depending on the tenant resolver
+# would make billing inherit its 402/404 on a stale book selection, i.e. paywall
+# the very page you fix a lapsed subscription on.
+from platform_app.users import current_active_user
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
 
 FREE = "gratis"
-LADDER = (FREE, "investidor", "trader")
+ENTERPRISE = "enterprise"
+LADDER = (FREE, "investidor", "trader", ENTERPRISE)
 # Stripe keeps a subscription usable while it retries a failed charge (dunning).
 # Cutting access on the first decline churns customers over an expired card.
 ENTITLED = {"active", "trialing", "past_due"}
@@ -35,6 +41,7 @@ def price_for(plan: str) -> str:
     return {
         "investidor": settings.stripe_price_investidor,
         "trader": settings.stripe_price_trader,
+        ENTERPRISE: settings.stripe_price_enterprise,
     }.get(plan, "")
 
 
@@ -79,6 +86,7 @@ def require_plan(minimum: str):
 # identity, so gated routes sharing these resolve get_current_tenant just once.
 needs_investidor = require_plan("investidor")
 needs_trader = require_plan("trader")
+needs_enterprise = require_plan(ENTERPRISE)
 
 
 def _require_stripe() -> None:
@@ -101,8 +109,7 @@ async def _ensure_customer(user: User, session: AsyncSession) -> str:
 
 
 @billing_router.get("")
-async def get_subscription(tenant=Depends(get_current_tenant)) -> dict:
-    user, _ = tenant
+async def get_subscription(user: User = Depends(current_active_user)) -> dict:
     return {
         "plan": effective_plan(user),
         "billed_plan": user.plan,
@@ -116,11 +123,10 @@ async def get_subscription(tenant=Depends(get_current_tenant)) -> dict:
 @billing_router.post("/checkout")
 async def create_checkout(
     plan: str = Body(..., embed=True),
-    tenant=Depends(get_current_tenant),
+    user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Hosted Checkout session for a paid tier. Returns the URL to redirect to."""
-    user, _ = tenant
     price = price_for(plan)
     if not price:
         raise HTTPException(400, f"plano sem preço configurado: {plan}")
@@ -140,10 +146,9 @@ async def create_checkout(
 
 
 @billing_router.post("/portal")
-async def create_portal(tenant=Depends(get_current_tenant)) -> dict:
+async def create_portal(user: User = Depends(current_active_user)) -> dict:
     """Stripe's billing portal — card updates, invoices, cancellation. Stripe owns
     that whole UI, so we own none of it."""
-    user, _ = tenant
     _require_stripe()
     if not user.stripe_customer_id:
         raise HTTPException(409, "nenhuma assinatura para gerenciar.")
@@ -231,14 +236,13 @@ if settings.is_dev:
     @billing_router.post("/dev-plan")
     async def dev_set_plan(
         plan: str = Body(..., embed=True),
-        tenant=Depends(get_current_tenant),
+        user: User = Depends(current_active_user),
         session: AsyncSession = Depends(get_async_session),
     ) -> dict:
         """Dev-only: flip the tenant's plan without Stripe, so the paywall is
         testable locally. Never mounted outside development."""
         if plan not in LADDER:
             raise HTTPException(400, f"plano desconhecido: {plan}")
-        user, _ = tenant
         user.plan = plan
         user.plan_status = None if plan == FREE else "active"
         session.add(user)

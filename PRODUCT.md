@@ -14,15 +14,22 @@ closely, and compares runs against each other. When audiences conflict, the desi
 optimizes for this user: density, control, and charts that reward close reading beat
 first-visit hand-holding.
 
-Two other confirmed, paying audiences the product already serves:
+Three other confirmed, paying audiences the product already serves:
 
 - **Year-round portfolio owner** (`investidor`, R$29/mês) — has imported their real B3
   extracts and lives in Portfólio, Estratégia, Simulação, and TLH between tax seasons.
 - **DIY investor at IRPF time** (`gratis` → `investidor`) — arrives Jan–May needing a
   copy-paste-ready declaration. Per `spec/00-overview.md`, IRPF is the seasonal
   acquisition hook; backtesting and portfolio care are the year-round retention product.
+- **Assessor or escritório managing other people's books** (`enterprise`, R$249/mês) —
+  the one audience that is not investing its own money. They work across many client
+  books in a session, so switching between them is the primary act, and keeping a
+  client's data from ever appearing under another client's name is the trust boundary
+  the tier is sold on. Every other surface is unchanged for them: a client book is a
+  tenant like any other.
 
-Everyone is a Brazilian retail or prosumer investor filing under Brazilian tax rules.
+Everyone but the assessor is a Brazilian retail or prosumer investor filing under
+Brazilian tax rules; the assessor files on their behalf.
 
 ## Product Purpose
 
@@ -81,9 +88,18 @@ jobs. Auth is JWT via Google OAuth redirect, with a dev-login path locally.
 
 **Tiers and gating:** `gratis` (imports, portfolio, market) < `investidor` R$29/mês
 (IRPF, TLH, what-if, sleeves/target/rebalance/index) < `trader` R$79/mês (backtests, user
-strategies). Gated routes answer `402` with `plan_required`; the frontend turns any 402
-into the upgrade dialog. The strategy gallery stays public. Entitlements are written only
-by the Stripe webhook — checkout never grants access.
+strategies) < `enterprise` R$249/mês (client portfolios). Gated routes answer `402` with
+`plan_required`; the frontend turns any 402 into the upgrade dialog. The strategy gallery
+stays public. Entitlements are written only by the Stripe webhook — checkout never grants
+access.
+
+**One login, many books (`enterprise`).** A `tenant_id` is either a `user.id` — the
+account's own book, which every tier has and which needs no row anywhere — or a
+`portfolios.id`, a client book an enterprise account manages. The `X-Portfolio-Id` header
+picks which one a request acts on, and `tenancy.get_current_tenant` is the only place that
+resolves it, so ownership and entitlement are checked exactly once no matter how many
+routes exist. Losing the tier leaves the client books intact but unreachable; deleting one
+takes its rows and its uploaded extracts with it.
 
 **Honest-gaps constraint:** the product reports what it cannot see rather than papering
 over it. The portfolio index returns an `excluded` block naming what it could not price

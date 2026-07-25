@@ -5,6 +5,7 @@ export const API_URL =
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const TOKEN_KEY = "b3_token";
+const PORTFOLIO_KEY = "b3_portfolio";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -12,10 +13,53 @@ export function getToken(): string | null {
 }
 export function setToken(t: string) {
   window.localStorage.setItem(TOKEN_KEY, t);
+  // A new login inherits nothing: the previous account's book selection would
+  // otherwise ride along and 404 this account's first requests.
+  clearPortfolioId();
 }
 export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
+  clearPortfolioId();
 }
+
+// Which book the app is acting on (enterprise tier). Unset => the user's own,
+// which is every account below that tier.
+//
+// sessionStorage, deliberately: an advisor comparing two clients side by side
+// opens two tabs, and localStorage is origin-wide, so tab B's switch would
+// silently redirect tab A's next write into B's book. Per-tab is the only
+// storage that matches how the feature is used.
+//
+// It is a subscribable store because two components in different subtrees read it
+// — the sidebar switcher and the carteiras page — and a switch made in one has to
+// be visible in the other. Feed it to useSyncExternalStore; do not copy it into
+// component state, which is how the sidebar ends up naming the previous book.
+const portfolioListeners = new Set<() => void>();
+
+export function subscribePortfolio(onChange: () => void): () => void {
+  portfolioListeners.add(onChange);
+  return () => {
+    portfolioListeners.delete(onChange);
+  };
+}
+
+export function getPortfolioId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage.getItem(PORTFOLIO_KEY);
+}
+export function setPortfolioId(id: string) {
+  window.sessionStorage.setItem(PORTFOLIO_KEY, id);
+  portfolioListeners.forEach((fn) => fn());
+}
+export function clearPortfolioId() {
+  window.sessionStorage.removeItem(PORTFOLIO_KEY);
+  portfolioListeners.forEach((fn) => fn());
+}
+
+// Account-scoped, not book-scoped: the registry of books and the subscription
+// belong to the login. Exempting them also means a stale selection can always be
+// discovered and cleared, instead of 404ing the very call that would fix it.
+const ACCOUNT_SCOPED = ["/portfolios", "/billing"];
 
 export class ApiError extends Error {
   constructor(
@@ -52,6 +96,10 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
+  const portfolio = getPortfolioId();
+  if (portfolio && !ACCOUNT_SCOPED.some((p) => path.startsWith(p))) {
+    headers.set("X-Portfolio-Id", portfolio);
+  }
   // JSON only for string bodies — leave FormData (multipart) untouched so the
   // browser sets its own boundary.
   if (typeof init.body === "string" && !headers.has("Content-Type")) {
@@ -69,6 +117,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (!res.ok) {
     const detail = await errorDetail(res);
+    // A lapsed subscription strands an advisor inside a client's book: the book is
+    // still listed, so it never looks stale, but every request 402s. Fall back to
+    // the book they *are* still entitled to instead of making them find the way
+    // out. Dropping the header is what stops this from looping.
+    if (
+      res.status === 402 &&
+      typeof window !== "undefined" &&
+      getPortfolioId() &&
+      isPlanRequired(detail) &&
+      detail.required_plan === "enterprise"
+    ) {
+      clearPortfolioId();
+      window.location.reload();
+      throw new ApiError(res.status, errorMessage(detail, res), detail);
+    }
     if (res.status === 402 && typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent(PAYWALL_EVENT, { detail }));
     }

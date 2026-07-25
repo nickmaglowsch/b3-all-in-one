@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # can't be bought; /billing/checkout 400s instead of half-creating a session.
     stripe_price_investidor: str = ""
     stripe_price_trader: str = ""
+    stripe_price_enterprise: str = ""
 
     @property
     def origins(self) -> list[str]:

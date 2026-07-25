@@ -1,6 +1,7 @@
 """Stripe billing: the plan ladder, the entitlement dependency, and /billing routes.
 
-Tiers mirror the landing page — gratis < investidor (R$29/mês) < trader (R$79/mês).
+Tiers mirror the landing page — gratis < investidor (R$29/mês) < trader (R$79/mês)
+< empresarial (R$249/mês, many client books under one login).
 Entitlements live on the user row (== tenant row, spec/01) and are written *only* by
 the webhook: checkout returns a URL, it never grants access. That way a user who
 abandons Stripe's hosted page, or whose card later fails, is never entitled by us.
@@ -23,7 +24,8 @@ from platform_app.tenancy import get_current_tenant
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
 
 FREE = "gratis"
-LADDER = (FREE, "investidor", "trader")
+ENTERPRISE = "enterprise"
+LADDER = (FREE, "investidor", "trader", ENTERPRISE)
 # Stripe keeps a subscription usable while it retries a failed charge (dunning).
 # Cutting access on the first decline churns customers over an expired card.
 ENTITLED = {"active", "trialing", "past_due"}
@@ -35,6 +37,7 @@ def price_for(plan: str) -> str:
     return {
         "investidor": settings.stripe_price_investidor,
         "trader": settings.stripe_price_trader,
+        ENTERPRISE: settings.stripe_price_enterprise,
     }.get(plan, "")
 
 
@@ -79,6 +82,7 @@ def require_plan(minimum: str):
 # identity, so gated routes sharing these resolve get_current_tenant just once.
 needs_investidor = require_plan("investidor")
 needs_trader = require_plan("trader")
+needs_enterprise = require_plan(ENTERPRISE)
 
 
 def _require_stripe() -> None:

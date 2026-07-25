@@ -55,13 +55,42 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     )
 
 
-# --- Tenant data plane (Wave 2). Every table carries tenant_id (== user.id). ---
+class Portfolio(Base):
+    """A book an account manages on someone else's behalf (spec/07, enterprise tier).
+
+    The row id IS the tenant_id the whole data plane is keyed by, so a managed
+    portfolio is simply another tenant that a firm owns — no route, query or job
+    below changes. The account's own book keeps tenant_id == user.id and has no
+    row here, so every existing tenant stays valid without a backfill.
+    """
+
+    __tablename__ = "portfolios"
+    __table_args__ = (
+        # Two clients with the same name is a double-submit, not a second client.
+        UniqueConstraint("owner_id", "label", name="uq_portfolios_owner_label"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        GUID, ForeignKey("user.id"), index=True, nullable=False
+    )
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# --- Tenant data plane (Wave 2). Every table carries tenant_id. ---
 # The trades/cash_events/positions rows are a deterministic full rebuild by
 # taxcore's load_b3; the import job replaces them wholesale per tenant per run.
 
 
 def _tenant_col() -> Mapped[uuid.UUID]:
-    return mapped_column(GUID, ForeignKey("user.id"), index=True, nullable=False)
+    # ponytail: no FK — a tenant_id is either a user.id (own book) or a
+    # portfolios.id (managed), and one column can't reference both. Ownership is
+    # enforced in tenancy.get_current_tenant, the single door to a tenant_id.
+    # Upgrade path: give every account a portfolios row and point the FK there.
+    return mapped_column(GUID, index=True, nullable=False)
 
 
 class Import(Base):
@@ -209,9 +238,7 @@ class RebalanceSettings(Base):
     # (tenant_id is the PK), upserted on PUT. Defaults reproduce today's behavior.
     __tablename__ = "rebalance_settings"
 
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        GUID, ForeignKey("user.id"), primary_key=True
-    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True)
     buy_only_laggards: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )

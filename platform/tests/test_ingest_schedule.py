@@ -70,6 +70,11 @@ async def test_prices_job_forces_the_current_year_download(monkeypatch):
     assert seen["args"][0] == "b3_pipeline.main"
     assert "--force-download" in seen["args"]
     assert "--skip-corporate-actions" not in seen["args"]
+    # Bounded, or the nightly re-probes and re-downloads 1994..2004 forever to
+    # serve a window no strategy defaults to.
+    assert seen["args"][seen["args"].index("--start-year") + 1] == str(
+        settings.ingest_start_year
+    )
 
 
 @pytest.mark.asyncio(loop_scope="session")

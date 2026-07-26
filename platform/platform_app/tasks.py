@@ -163,7 +163,11 @@ async def ingest_prices(timestamp: int = 0) -> dict:
     --skip-corporate-actions — which left dividend total-return adjustment missing
     and only detector-inferred splits in place.
     """
-    return await _record_ingest("prices", ["b3_pipeline.main", "--force-download"])
+    return await _record_ingest("prices", [
+        "b3_pipeline.main",
+        "--force-download",
+        "--start-year", str(settings.ingest_start_year),
+    ])
 
 
 @app.periodic(cron=settings.ingest_fundamentals_cron)

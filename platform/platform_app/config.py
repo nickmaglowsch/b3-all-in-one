@@ -35,6 +35,13 @@ class Settings(BaseSettings):
     # UTC). 06:00 UTC = 03:00 America/Sao_Paulo, comfortably after B3 has published
     # the day's COTAHIST and outside the hours anyone is running backtests.
     ingest_prices_cron: str = "0 6 * * *"
+    # Earliest COTAHIST year the scheduled refresh covers. The pipeline's own floor
+    # is 1994, but the engine's strategies default to start_date=2005-01-01, so the
+    # decade before that is downloaded and parsed to serve nothing. Bounding it also
+    # keeps the very first run — which has no local archive at all — tractable on a
+    # 2-core box using the pure-Python parser. Lower it if a strategy ever needs
+    # deeper history; the pipeline is idempotent and will just fetch the gap.
+    ingest_start_year: int = 2005
     # Fundamentals move on a filing calendar, not a daily one — weekly is plenty.
     ingest_fundamentals_cron: str = "0 7 * * 0"
     environment: str = "development"

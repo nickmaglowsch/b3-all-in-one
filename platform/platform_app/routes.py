@@ -29,7 +29,8 @@ from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    IngestRun, PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
+    IngestRun, PortfolioSleeve, Position, RebalanceSettings, TaxSummary, Trade,
+    UserStrategy,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
@@ -214,10 +215,26 @@ async def get_price_history(
     return {t: _downsample(v) for t, v in series.items()}
 
 
+# Allow-listed so `sort` can never reach the query as raw SQL. Anything not on
+# this map falls back to date, which is also the default.
+_TRADE_SORTS = {
+    "date": Trade.date,
+    "side": Trade.side,
+    "market": Trade.market,
+    "broker": Trade.broker,
+    "ticker": Trade.ticker,
+    "qty": Trade.qty,
+    "price": Trade.price,
+    "amount": Trade.amount,
+}
+
+
 @portfolio_router.get("/trades")
 async def get_trades(
     limit: int = 50,
     offset: int = 0,
+    sort: str = "date",
+    dir: str = "desc",
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
@@ -226,11 +243,16 @@ async def get_trades(
     total = await session.scalar(
         select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
     )
+    # Sorting belongs here, not in the page component: ordering only the 50 rows
+    # already fetched answers "largest trade on this page", which is not the
+    # question anyone clicking a column header is asking.
+    col = _TRADE_SORTS.get(sort, Trade.date)
+    ordering = col.asc() if dir == "asc" else col.desc()
     rows = (
         await session.scalars(
             select(Trade)
             .where(Trade.tenant_id == tid)
-            .order_by(Trade.date.desc(), Trade.id.desc())
+            .order_by(ordering, Trade.id.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -841,6 +863,74 @@ def _parse_tlh_stdout(stdout: str) -> dict:
         if line.rstrip() == "{":
             return json.loads("\n".join(lines[i:]))
     return json.loads(stdout)  # pure JSON (no warnings)
+
+
+# ── Situação fiscal (cached) ─────────────────────────────────────────────────
+# tlh_plan with NO sells is, by its own docstring, "the current situation
+# (carry/mtd per bucket) with no plan" — isenção headroom, prejuízo a compensar,
+# IR devido and harvest candidates, all from the same engine that scores a
+# backtest and files the IRPF. That is the whole product thesis in one payload.
+#
+# It is cached because producing it dumps the tenant's entire trade history to
+# CSV and shells into taxcore: seconds. Portfólio reads this on load, so the GET
+# never computes — it returns what is stored, says when it was computed, and says
+# whether an import has landed since. Recomputing is always an explicit act.
+
+
+async def _tax_summary_payload(session: AsyncSession, tid: uuid.UUID) -> dict:
+    """Read the cached row and report its freshness. Never runs the engine."""
+    row = await session.get(TaxSummary, tid)
+    if row is None:
+        return {"payload": None, "computed_at": None, "stale": False}
+    # An extract uploaded after the computation makes the figure wrong, not
+    # merely old — including one still processing, which is why this counts every
+    # import rather than only the done ones.
+    newer = await session.scalar(
+        select(func.count()).select_from(Import).where(
+            Import.tenant_id == tid, Import.created_at > row.computed_at
+        )
+    )
+    return {
+        "payload": row.payload,
+        "computed_at": row.computed_at.isoformat(),
+        "stale": bool(newer),
+    }
+
+
+@portfolio_router.get("/tax-summary")
+async def get_tax_summary(
+    tenant=Depends(needs_investidor),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    return await _tax_summary_payload(session, tid)
+
+
+@portfolio_router.post("/tax-summary/refresh")
+async def refresh_tax_summary(
+    tenant=Depends(needs_investidor),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    has_trades = await session.scalar(
+        select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
+    )
+    if not has_trades:
+        # tlh_plan over an empty book has nothing to apurar. A 422 keeps this
+        # consistent with /portfolio/index, whose 422 the frontend already reads
+        # as "no history yet" rather than as a fault.
+        raise HTTPException(422, "Sem negociações para apurar.")
+
+    payload = await _run_tlh_plan(session, tid, [])
+    row = await session.get(TaxSummary, tid)
+    if row is None:
+        session.add(TaxSummary(tenant_id=tid, payload=payload,
+                               computed_at=datetime.datetime.now(datetime.timezone.utc)))
+    else:
+        row.payload = payload
+        row.computed_at = datetime.datetime.now(datetime.timezone.utc)
+    await session.commit()
+    return await _tax_summary_payload(session, tid)
 
 
 @tlh_router.post("/plans")

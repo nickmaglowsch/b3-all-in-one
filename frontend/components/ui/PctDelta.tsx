@@ -1,7 +1,9 @@
 import { formatPercent } from "@/lib/format";
 
-// `value` is a fraction: 0.012 → ▲ 1,2%. The glyph carries direction (not colour
-// alone). Zero renders neutral with a dash.
+// `value` is a fraction: 0.012 → ▲ 1,2%. The glyph carries direction for sighted
+// users; the printed sign carries it for everyone else. Do not wrap the number in
+// Math.abs to "avoid duplicating" the glyph — the glyph is aria-hidden, so that
+// leaves assistive tech announcing a loss as a gain. Zero renders neutral.
 export function PctDelta({
   value,
   className = "",
@@ -20,7 +22,7 @@ export function PctDelta({
       <span aria-hidden className="text-[0.7em]">
         {glyph}
       </span>
-      {formatPercent(Math.abs(value))}
+      {formatPercent(value)}
     </span>
   );
 }

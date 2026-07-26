@@ -1,7 +1,8 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "./api";
+import { api, getPortfolioId, subscribePortfolio } from "./api";
 import type {
   Health,
   MarketStatus,
@@ -20,6 +21,38 @@ export function usePortfolios() {
     queryKey: ["portfolios"],
     queryFn: () => api<Portfolio[]>("/portfolios"),
   });
+}
+
+/**
+ * Which book the page is acting on. The enterprise tier is sold on a client's
+ * data never appearing under another client's name, so the surfaces that show
+ * money have to say whose it is — a sidebar select behind a drawer is not an
+ * answer on a printed page.
+ *
+ * Three states, not two. Collapsing "my own book" and "don't know yet" into one
+ * null fails OPEN: `X-Portfolio-Id` is already on every request, so on a cold
+ * load the positions call can beat /portfolios and paint a client's money under
+ * a label meaning "mine" — and if /portfolios errors, that state is permanent
+ * for the session. Unknown has to be visible, not silently generic.
+ */
+export type ActiveBook =
+  | { state: "self" }
+  | { state: "client"; label: string }
+  | { state: "pending" }
+  | { state: "unknown" };
+
+export function useActiveBook(): ActiveBook {
+  const { data, isError, isLoading } = usePortfolios();
+  const active = useSyncExternalStore(subscribePortfolio, getPortfolioId, () => null);
+  if (!active) return { state: "self" };
+  // "Still loading" is not "we don't know". Collapsing them made every cold load
+  // of a client book open on an alarm before settling — the standard entry frame
+  // for the tier's main flow. Pending renders as absence; unknown renders loudly.
+  if (isLoading || (!data && !isError)) return { state: "pending" };
+  if (isError) return { state: "unknown" };
+  const book = data?.find((p) => p.id === active);
+  if (!book) return { state: "unknown" }; // stale id; the switcher reconciles it
+  return book.is_self ? { state: "self" } : { state: "client", label: book.label };
 }
 
 export function useSubscription(awaitingCheckout = false) {

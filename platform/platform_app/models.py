@@ -328,6 +328,33 @@ class IngestRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class TaxSummary(Base):
+    """Cached `tlh_plan --json` with no sells — the book's current tax situation.
+
+    Cached because producing it dumps the tenant's whole trade history to CSV and
+    shells into taxcore: seconds, not milliseconds. Portfólio is a page-load
+    surface, so it reads whatever is here and never waits for the engine.
+
+    One row per tenant. `process_imports` deletes it, because a new extract makes
+    the old figure wrong rather than merely old — and a stale tax number is the
+    kind of number this product promises never to show without saying so.
+
+    It carries a tenant_id, so privacy._tenant_tables() picks it up for the LGPD
+    export and erasure sweeps without anyone editing that file.
+    """
+
+    __tablename__ = "tax_summaries"
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True)
+    # The tlh_plan payload verbatim: situation/buckets/rates/isencao_limit.
+    # Stored whole rather than shredded into columns — the engine owns this
+    # shape, and mirroring it here would mean a migration every time it moves.
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    computed_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class DarfPayment(Base):
     # Mirrors taxcore/data/darf_payments.csv. Empty by default (CRUD lands later).
     __tablename__ = "darf_payments"

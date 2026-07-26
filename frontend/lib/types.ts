@@ -278,3 +278,46 @@ export interface BacktestCurves {
   // Column-oriented: { date: [...], pretax: [...], aftertax: [...], drawdown: [...], ... }
   series: Record<string, (string | number)[]>;
 }
+
+// GET /portfolio/tax-summary — the cached tlh_plan payload (no sells), i.e. the
+// book's tax situation this month. `payload` is null when it was never computed;
+// `stale` is true when an extract landed after `computed_at`.
+export interface TaxBucket {
+  status: string;
+  gross_after: number;
+  pnl_after: number;
+  carry_used: number;
+  /** IR devido on the month's realised position — an estimate to verify. */
+  ir: number;
+  harvest: {
+    ticker: string;
+    qty: number;
+    price: number;
+    realized_loss: number;
+    partial: boolean;
+  }[];
+}
+
+export interface TaxSituation {
+  /** Gross sales month-to-date. Against isencao_limit this is the headroom. */
+  gross_mtd: number;
+  /** Realised P&L month-to-date. */
+  pnl_mtd: number;
+  /** Prejuízo acumulado available to offset gains. */
+  carry: number;
+}
+
+export interface TaxPlan {
+  month: string;
+  generated: string;
+  isencao_limit: number;
+  rates: Record<string, number>;
+  situation: Record<string, TaxSituation>;
+  buckets: Record<string, TaxBucket>;
+}
+
+export interface TaxSummary {
+  payload: TaxPlan | null;
+  computed_at: string | null;
+  stale: boolean;
+}

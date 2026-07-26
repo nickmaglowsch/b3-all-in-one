@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
@@ -14,10 +14,22 @@ type SortKey =
   | "market"
   | "qty"
   | "avg_cost"
+  | "last_price"
   | "total_cost"
   | "market_value"
   | "pnl";
 type Dir = "asc" | "desc";
+
+const SORT_KEYS: SortKey[] = [
+  "ticker",
+  "market",
+  "qty",
+  "avg_cost",
+  "last_price",
+  "total_cost",
+  "market_value",
+  "pnl",
+];
 
 // Text sorts asc first, numerics desc first (biggest position on top is the useful default).
 const DEFAULT_DIR: Record<SortKey, Dir> = {
@@ -25,31 +37,39 @@ const DEFAULT_DIR: Record<SortKey, Dir> = {
   market: "asc",
   qty: "desc",
   avg_cost: "desc",
+  last_price: "desc",
   total_cost: "desc",
   market_value: "desc",
   pnl: "desc",
 };
 
+const isSortKey = (v: string | null): v is SortKey =>
+  !!v && (SORT_KEYS as string[]).includes(v);
+
 function SortHeader({
   label,
   active,
   dir,
+  nextDir,
   align,
   onClick,
 }: {
   label: string;
   active: boolean;
   dir: Dir;
+  nextDir: Dir;
   align: "left" | "right";
   onClick: () => void;
 }) {
+  // The label names what the click will DO; the current state is on the <th> as
+  // aria-sort, which is where a screen reader expects it. Saying both in one
+  // string is how "Ativo (crescente)" ends up ambiguous about whether it
+  // describes the order now or the order after clicking.
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Ordenar por ${label}${
-        active ? (dir === "asc" ? " (crescente)" : " (decrescente)") : ""
-      }`}
+      aria-label={`Ordenar por ${label}, ${nextDir === "asc" ? "crescente" : "decrescente"}`}
       className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-ink ${
         active ? "text-ink" : ""
       } ${align === "right" ? "flex-row-reverse" : ""}`}
@@ -65,14 +85,33 @@ function SortHeader({
 export function PositionsTable({
   positions,
   history = {},
+  historyFailed = false,
+  historyLoading = false,
 }: {
   positions: Position[];
   history?: Record<string, number[]>;
+  historyFailed?: boolean;
+  historyLoading?: boolean;
 }) {
-  const [sort, setSort] = useState<{ key: SortKey; dir: Dir }>({
-    key: "total_cost",
-    dir: "desc",
+  // Sort lives in the URL: a sorted view is a view worth sending to someone, and
+  // losing it on reload is the difference between a report and a toy.
+  const [sort, setSort] = useState<{ key: SortKey; dir: Dir }>(() => {
+    if (typeof window === "undefined") return { key: "total_cost", dir: "desc" };
+    const p = new URLSearchParams(window.location.search);
+    const key = p.get("ordem");
+    const dir = p.get("dir");
+    return {
+      key: isSortKey(key) ? key : "total_cost",
+      dir: dir === "asc" || dir === "desc" ? dir : "desc",
+    };
   });
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("ordem", sort.key);
+    url.searchParams.set("dir", sort.dir);
+    window.history.replaceState(null, "", url);
+  }, [sort]);
 
   const rows = useMemo(() => {
     const { key, dir } = sort;
@@ -102,48 +141,71 @@ export function PositionsTable({
     );
   }
 
-  const head = (key: SortKey, label: string, align: "left" | "right") => (
-    <SortHeader
-      label={label}
-      active={sort.key === key}
-      dir={sort.dir}
-      align={align}
-      onClick={() => toggle(key)}
-    />
-  );
+  const head = (key: SortKey, label: string, align: "left" | "right") => {
+    const active = sort.key === key;
+    return {
+      header: (
+        <SortHeader
+          label={label}
+          active={active}
+          dir={sort.dir}
+          nextDir={
+            active ? (sort.dir === "asc" ? "desc" : "asc") : DEFAULT_DIR[key]
+          }
+          align={align}
+          onClick={() => toggle(key)}
+        />
+      ),
+      sortable: true as const,
+      sort: active ? sort.dir : undefined,
+    };
+  };
 
   const columns: Column<Position>[] = [
     {
       key: "ticker",
-      header: head("ticker", "Ativo", "left"),
+      ...head("ticker", "Ativo", "left"),
       render: (p) => <TickerChip ticker={p.ticker} />,
     },
     {
       key: "market",
-      header: head("market", "Mercado", "left"),
+      ...head("market", "Mercado", "left"),
       render: (p) => <span className="text-muted">{p.market}</span>,
     },
     {
       key: "qty",
-      header: head("qty", "Quantidade", "right"),
+      ...head("qty", "Quantidade", "right"),
       align: "right",
       render: (p) => formatQty(p.qty),
     },
     {
       key: "avg_cost",
-      header: head("avg_cost", "Preço médio", "right"),
+      ...head("avg_cost", "Preço médio", "right"),
       align: "right",
       render: (p) => <Money value={p.avg_cost} />,
     },
     {
+      // The mark behind every market value on this page. A number whose source
+      // is invisible is a number without provenance.
+      key: "last_price",
+      ...head("last_price", "Última cotação", "right"),
+      align: "right",
+      render: (p) =>
+        p.last_price === null ? (
+          <span className="text-muted">—</span>
+        ) : (
+          <Money value={p.last_price} />
+        ),
+    },
+    {
       key: "total_cost",
-      header: head("total_cost", "Custo total", "right"),
+      ...head("total_cost", "Custo total", "right"),
       align: "right",
       render: (p) => <Money value={p.total_cost} />,
     },
     {
       key: "market_value",
-      header: head("market_value", "Valor de mercado", "right"),
+      ...head("market_value", "Valor de mercado", "right"),
       align: "right",
       render: (p) =>
         p.market_value === null ? (
@@ -154,7 +216,7 @@ export function PositionsTable({
     },
     {
       key: "pnl",
-      header: head("pnl", "Rentabilidade", "right"),
+      ...head("pnl", "Rentabilidade", "right"),
       align: "right",
       render: (p) =>
         p.pnl === null ? (
@@ -173,11 +235,40 @@ export function PositionsTable({
       key: "trend",
       header: "Tendência 6m",
       align: "right",
-      render: (p) => <Sparkline values={history[p.ticker]} />,
+      numeric: false,
+      render: (p) =>
+        // Three distinct answers, three distinct renderings. An em dash for all
+        // of them would make "still fetching" look identical to "this ticker has
+        // no history" and to "the request failed".
+        historyFailed ? (
+          <span className="text-muted" title="Histórico de preços indisponível">
+            —
+          </span>
+        ) : historyLoading ? (
+          <span
+            className="ml-auto block h-3 w-[72px] animate-pulse rounded bg-hairline/70 motion-reduce:animate-none"
+            aria-hidden
+          />
+        ) : (
+          <Sparkline values={history[p.ticker]} />
+        ),
     },
   ];
 
   return (
-    <DataTable columns={columns} rows={rows} getRowKey={(p) => p.ticker} />
+    <div aria-busy={historyLoading || undefined}>
+      {historyFailed && (
+        <p className="mb-3 text-xs text-muted">
+          Não foi possível carregar o histórico de preços — a coluna Tendência
+          está vazia. Os demais números não dependem dela.
+        </p>
+      )}
+      <DataTable
+        columns={columns}
+        rows={rows}
+        getRowKey={(p) => p.ticker}
+        label="Posições da carteira"
+      />
+    </div>
   );
 }

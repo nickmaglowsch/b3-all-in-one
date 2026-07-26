@@ -43,6 +43,22 @@ export function subscribePortfolio(onChange: () => void): () => void {
   };
 }
 
+/** Query param carrying the active book, so a book is linkable and a screenshot
+ *  identifies itself. */
+export const PORTFOLIO_PARAM = "carteira";
+
+// A pasted or bookmarked link must land on the book it names, and it must do so
+// before the first query fires — an effect runs after the first render, by which
+// point the page has already asked the API for the wrong book. Module scope runs
+// once, at import, ahead of everything. sessionStorage stays the store; the URL
+// only seeds it, which keeps the per-tab isolation the two-tab advisor flow needs.
+if (typeof window !== "undefined") {
+  const fromUrl = new URLSearchParams(window.location.search).get(PORTFOLIO_PARAM);
+  if (fromUrl && fromUrl !== window.sessionStorage.getItem(PORTFOLIO_KEY)) {
+    window.sessionStorage.setItem(PORTFOLIO_KEY, fromUrl);
+  }
+}
+
 export function getPortfolioId(): string | null {
   if (typeof window === "undefined") return null;
   return window.sessionStorage.getItem(PORTFOLIO_KEY);
@@ -94,7 +110,21 @@ export function isPlanRequired(detail: unknown): detail is PlanRequired {
  *  no page needs its own upgrade UI. */
 export const PAYWALL_EVENT = "b3:paywall";
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+export type ApiOptions = {
+  /**
+   * Whether a 402 should open the upgrade dialog. Default true, which is right
+   * for anything the user clicked. Pass false for a query that fires on page
+   * load: a modal nobody asked for, over a page they have not read yet, is an
+   * interruption rather than an offer. Those callers render the offer inline.
+   */
+  paywallDialog?: boolean;
+};
+
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  opts: ApiOptions = {},
+): Promise<T> {
   const headers = new Headers(init.headers);
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
@@ -134,7 +164,11 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
       window.location.reload();
       throw new ApiError(res.status, errorMessage(detail, res), detail);
     }
-    if (res.status === 402 && typeof window !== "undefined") {
+    if (
+      res.status === 402 &&
+      typeof window !== "undefined" &&
+      opts.paywallDialog !== false
+    ) {
       window.dispatchEvent(new CustomEvent(PAYWALL_EVENT, { detail }));
     }
     throw new ApiError(res.status, errorMessage(detail, res), detail);

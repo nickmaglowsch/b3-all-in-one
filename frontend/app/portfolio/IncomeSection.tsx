@@ -10,7 +10,6 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconReceipt } from "@/components/icons";
 import { formatMoney } from "@/lib/format";
-import { SERIES } from "@/components/charts/theme";
 
 // event_category is the only breakdown the API exposes (income lumps dividendos +
 // JCP + rendimentos). Friendly pt-BR labels; unknown categories fall back capitalised.
@@ -32,9 +31,16 @@ type MatrixRow = {
   bold?: boolean;
 };
 
+// A computed zero is zero, not missing. The em dash is reserved for values the
+// platform could not produce; printing it here would make a year with genuinely
+// no JCP look like a year it failed to read.
 function Cell({ value, bold }: { value: number; bold?: boolean }) {
-  if (value === 0) return <span className="text-muted">—</span>;
-  return <Money value={value} className={bold ? "font-semibold" : ""} />;
+  return (
+    <Money
+      value={value}
+      className={`${value === 0 ? "text-muted" : ""} ${bold ? "font-semibold" : ""}`}
+    />
+  );
 }
 
 export function IncomeSection() {
@@ -46,7 +52,28 @@ export function IncomeSection() {
   if (q.isLoading) {
     return (
       <Card title="Proventos e eventos de caixa">
-        <Skeleton className="h-40 w-full" />
+        <Skeleton className="h-40 w-full" label="Carregando proventos…" />
+      </Card>
+    );
+  }
+
+  if (q.isError) {
+    return (
+      <Card title="Proventos e eventos de caixa">
+        <EmptyState
+          icon={<IconReceipt size={28} />}
+          title="Não foi possível carregar os proventos."
+          hint="A conexão com a API falhou. Seus lançamentos continuam importados."
+          action={
+            <button
+              type="button"
+              onClick={() => q.refetch()}
+              className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
+            >
+              Tentar de novo
+            </button>
+          }
+        />
       </Card>
     );
   }
@@ -93,6 +120,8 @@ export function IncomeSection() {
     {
       key: "year",
       header: "Ano",
+      // Years stack in a column and must not jitter, whatever the alignment.
+      numeric: true,
       render: (r) => (
         <span className={r.bold ? "font-semibold" : ""}>{r.year ?? "Total"}</span>
       ),
@@ -107,7 +136,9 @@ export function IncomeSection() {
       key: "total",
       header: "Total",
       align: "right",
-      render: (r) => <Money value={r.total} className="font-semibold" />,
+      // Semibold only on the totals row. Bolding the whole column meant weight
+      // no longer marked the one number people came for.
+      render: (r) => <Money value={r.total} className={r.bold ? "font-semibold" : ""} />,
     },
   ];
 
@@ -115,18 +146,19 @@ export function IncomeSection() {
 
   return (
     <Card title="Proventos e eventos de caixa">
-      {/* Per-category totals with inline proportion bars (tokens, no chart component). */}
+      {/* Per-category totals with inline proportion bars (tokens, no chart
+          component). One ink bar, not eight palette entries: the row is already
+          labelled and the length already carries the magnitude, so colour here
+          would encode nothing. Ink, not navy — a magnitude is data, and the
+          accent is reserved for where you are and what you can do. */}
       <ul className="mb-5 space-y-2.5">
-        {cats.map((c, i) => (
+        {cats.map((c) => (
           <li key={c} className="grid grid-cols-[9rem_1fr_auto] items-center gap-3">
             <span className="truncate text-sm text-ink">{label(c)}</span>
-            <span className="h-2 w-full rounded-full bg-hairline/60">
+            <span className="h-2 w-full rounded-xs bg-hairline/60">
               <span
-                className="block h-full rounded-full"
-                style={{
-                  width: `${(Math.abs(grand[c]) / maxAbs) * 100}%`,
-                  background: SERIES[i % SERIES.length],
-                }}
+                className="block h-full rounded-xs bg-ink/25"
+                style={{ width: `${(Math.abs(grand[c]) / maxAbs) * 100}%` }}
               />
             </span>
             <span className="text-right font-mono text-sm tabular-nums text-ink">
@@ -137,8 +169,24 @@ export function IncomeSection() {
       </ul>
 
       <div className="border-t border-hairline pt-3">
-        <DataTable columns={columns} rows={rows} getRowKey={(r) => r.key} />
+        <DataTable
+          columns={columns}
+          rows={rows}
+          getRowKey={(r) => r.key}
+          label="Proventos por ano e categoria"
+          footRowKey="total"
+        />
       </div>
+
+      {/* Premios and reembolsos are real cash here and deliberately outside the
+          rentabilidade curve. Two cards with different scopes on one page need
+          the reconciliation said out loud, not left for the user to notice. */}
+      {cats.some((c) => c === "premium" || c === "reembolso") && (
+        <p className="mt-3 text-xs text-muted">
+          Prêmios e reembolsos entram neste quadro como caixa, mas ficam fora da
+          curva de rentabilidade — não são retorno da carteira.
+        </p>
+      )}
     </Card>
   );
 }

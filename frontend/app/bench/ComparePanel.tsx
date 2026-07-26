@@ -242,7 +242,7 @@ export function ComparePanel({
       </div>
 
       {/* Metrics table (after-tax) */}
-      <DataTable columns={columns} rows={METRICS} getRowKey={(m) => m.key} />
+      <DataTable columns={columns} rows={METRICS} getRowKey={(m) => m.key} label="Métricas comparadas" />
       <p className="mt-2 font-mono text-[11px] text-muted">
         ● melhor por linha · métricas pós-imposto
       </p>

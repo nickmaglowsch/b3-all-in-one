@@ -5,6 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   clearPortfolioId,
   getPortfolioId,
+  PORTFOLIO_PARAM,
   setPortfolioId,
   subscribePortfolio,
 } from "@/lib/api";
@@ -34,8 +35,17 @@ export function PortfolioSwitcher() {
   if (!data || data.length < 2 || !self) return null;
 
   function pick(id: string) {
-    if (id === self!.id) clearPortfolioId();
-    else setPortfolioId(id);
+    const url = new URL(window.location.href);
+    if (id === self!.id) {
+      clearPortfolioId();
+      url.searchParams.delete(PORTFOLIO_PARAM);
+    } else {
+      setPortfolioId(id);
+      url.searchParams.set(PORTFOLIO_PARAM, id);
+    }
+    // The URL names the book so the tab is bookmarkable and tells the advisor
+    // which client they are looking at without opening this drawer.
+    window.history.replaceState(null, "", url);
     // A full reload, not qc.clear(): clearing the query cache leaves *component*
     // state alone, and a half-edited form is component state. The sleeves editor
     // stops reseeding itself once dirty, so switching mid-edit and hitting Salvar

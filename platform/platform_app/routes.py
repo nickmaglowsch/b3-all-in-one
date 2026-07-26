@@ -17,9 +17,10 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +30,8 @@ from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    IngestRun, PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
+    IngestRun, PortfolioSleeve, Position, RebalanceSettings, TaxSummary, Trade,
+    UserStrategy,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
@@ -214,23 +216,71 @@ async def get_price_history(
     return {t: _downsample(v) for t, v in series.items()}
 
 
+# Allow-listed so `sort` can never reach the query as raw SQL. Anything not on
+# this map falls back to date, which is also the default.
+_TRADE_SORTS = {
+    "date": Trade.date,
+    "side": Trade.side,
+    "market": Trade.market,
+    "broker": Trade.broker,
+    "ticker": Trade.ticker,
+    "qty": Trade.qty,
+    "price": Trade.price,
+    "amount": Trade.amount,
+}
+
+
 @portfolio_router.get("/trades")
 async def get_trades(
-    limit: int = 50,
-    offset: int = 0,
+    # Bounded by the framework rather than clamped silently: `offset=-1` is a
+    # Postgres error (500) and `limit=10000000` serialises the whole book, and
+    # both used to get that far. A 422 names the bad parameter instead.
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    sort: str = "date",
+    dir: str = "desc",
+    # Server-side because the table is server-paginated: filtering the 50 rows in
+    # hand would search page 1 and call it the book. Matches ticker or corretora,
+    # which is what "what did I do at XP" and "everything in HGLG11" need.
+    q: str | None = Query(None, max_length=32),
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
-    limit = max(1, min(limit, 500))
+    # An unrecognised sort used to fall back to date and return 200, so a typo
+    # looked like working code that ignored you. Say which values exist.
+    if sort not in _TRADE_SORTS:
+        raise HTTPException(
+            422, f"sort inválido: {sort}. Use um de {', '.join(_TRADE_SORTS)}."
+        )
+    if dir not in ("asc", "desc"):
+        raise HTTPException(422, f"dir inválido: {dir}. Use asc ou desc.")
+    # The filter narrows the count too: "1–50 de 3.117" beside three matching
+    # rows would be the pager describing a different result set than the table.
+    where = [Trade.tenant_id == tid]
+    if q:
+        needle = f"%{q.strip()}%"
+        where.append(Trade.ticker.ilike(needle) | Trade.broker.ilike(needle))
+
     total = await session.scalar(
-        select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
+        select(func.count()).select_from(Trade).where(*where)
     )
+    # Sorting belongs here, not in the page component: ordering only the 50 rows
+    # already fetched answers "largest trade on this page", which is not the
+    # question anyone clicking a column header is asking.
+    col = _TRADE_SORTS[sort]
+    asc = dir == "asc"
+    # The id tiebreak follows the sort direction so the default column can be
+    # served straight off ix_trades_tenant_date (tenant_id, date DESC, id DESC),
+    # scanned forwards or backwards. Hard-coding id DESC would ask for
+    # (date ASC, id DESC), which that index cannot produce — so the most obvious
+    # second click would fall back to a full sort of the tenant's trades.
+    ordering = (col.asc(), Trade.id.asc()) if asc else (col.desc(), Trade.id.desc())
     rows = (
         await session.scalars(
             select(Trade)
-            .where(Trade.tenant_id == tid)
-            .order_by(Trade.date.desc(), Trade.id.desc())
+            .where(*where)
+            .order_by(*ordering)
             .limit(limit)
             .offset(offset)
         )
@@ -841,6 +891,144 @@ def _parse_tlh_stdout(stdout: str) -> dict:
         if line.rstrip() == "{":
             return json.loads("\n".join(lines[i:]))
     return json.loads(stdout)  # pure JSON (no warnings)
+
+
+# ── Situação fiscal (cached) ─────────────────────────────────────────────────
+# tlh_plan with NO sells is, by its own docstring, "the current situation
+# (carry/mtd per bucket) with no plan" — isenção headroom, prejuízo a compensar,
+# IR devido and harvest candidates, all from the same engine that scores a
+# backtest and files the IRPF. That is the whole product thesis in one payload.
+#
+# It is cached because producing it dumps the tenant's entire trade history to
+# CSV and shells into taxcore: seconds. Portfólio reads this on load, so the GET
+# never computes — it returns what is stored, says when it was computed, and says
+# whether an import has landed since. Recomputing is always an explicit act.
+
+
+def _owed_today(payload: dict) -> dict:
+    """IR actually owed on the month as it stands, per bucket.
+
+    NOT `buckets[cls].ir`. That field means three different things depending on
+    which branch of tlh_plan produced it, and in the "TLH recomendado" branch it
+    is the IR *after executing a harvest the user has not executed* — zero, very
+    often, precisely when the real DARF is largest. Reading it as "devido" prints
+    R$ 0,00 to someone who owes money, which is the one thing this product
+    promises never to do.
+
+    So the owed-today figure is derived here from `situation`, which is plain
+    month-to-date fact: gross sales, realised PnL, and accumulated carry. The
+    rules mirror tlh_plan's own no-op branches — ações are isentas at or below
+    the R$20k monthly gross (`gross <= ISENCAO_LIMIT`, inclusive), FIIs have no
+    isenção, and carry offsets a positive result before the rate applies.
+    """
+    limit = payload.get("isencao_limit") or 0.0
+    rates = payload.get("rates") or {}
+    out = {}
+    for cls, s in (payload.get("situation") or {}).items():
+        gross = s.get("gross_mtd") or 0.0
+        pnl = s.get("pnl_mtd") or 0.0
+        carry = s.get("carry") or 0.0
+        # Inclusive, matching tlh_plan: exactly R$20.000,00 of gross is isento.
+        isento = cls == "AÇÃO" and gross <= limit
+        carry_used = min(carry, max(0.0, pnl))
+        taxable = 0.0 if isento else max(0.0, pnl - carry_used)
+        out[cls] = {
+            "isento": isento,
+            "carry_used": carry_used,
+            "taxable": taxable,
+            "ir": taxable * (rates.get(cls) or 0.0),
+        }
+    return out
+
+
+def _month_key(d: datetime.date) -> str:
+    return d.strftime("%m/%Y")
+
+
+async def _tax_summary_payload(session: AsyncSession, tid: uuid.UUID) -> dict:
+    """Read the cached row and report its freshness. Never runs the engine."""
+    row = await session.get(TaxSummary, tid)
+    if row is None:
+        return {"payload": None, "computed_at": None, "stale": False, "stale_reason": None}
+    # An extract uploaded after the computation makes the figure wrong, not
+    # merely old — including one still processing, which is why this counts every
+    # import rather than only the done ones.
+    newer = await session.scalar(
+        select(func.count()).select_from(Import).where(
+            Import.tenant_id == tid, Import.created_at > row.computed_at
+        )
+    )
+    # Every figure in `situation` is month-to-date, so the month rolling over
+    # invalidates them with no import involved: the isenção resets, pnl_mtd
+    # returns to zero, and a payload from last month would otherwise report
+    # itself fresh while saying "neste mês" about a month that ended.
+    rolled = (payload := row.payload).get("month") != _month_key(date.today())
+    reason = "import" if newer else "month" if rolled else None
+    return {
+        "payload": payload,
+        "computed_at": row.computed_at.isoformat(),
+        "stale": bool(newer or rolled),
+        "stale_reason": reason,
+    }
+
+
+@portfolio_router.get("/tax-summary")
+async def get_tax_summary(
+    tenant=Depends(needs_investidor),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    return await _tax_summary_payload(session, tid)
+
+
+# One apuração per tenant at a time. Each is a multi-second subprocess that
+# dumps the whole book to CSV while holding a pooled connection, and the button
+# that fires it sits on a page-load surface — two tabs, or a held-down click,
+# is enough to stack them. In-process only: this is a single-API-container
+# deployment, and the upsert below is what keeps correctness when it is not.
+_tax_refresh_locks: dict[uuid.UUID, asyncio.Lock] = {}
+
+
+@portfolio_router.post("/tax-summary/refresh")
+async def refresh_tax_summary(
+    tenant=Depends(needs_investidor),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    has_trades = await session.scalar(
+        select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
+    )
+    if not has_trades:
+        # tlh_plan over an empty book has nothing to apurar. A 422 keeps this
+        # consistent with /portfolio/index, whose 422 the frontend already reads
+        # as "no history yet" rather than as a fault.
+        raise HTTPException(422, "Sem negociações para apurar.")
+
+    lock = _tax_refresh_locks.setdefault(tid, asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(409, "Uma apuração já está em andamento.")
+    async with lock:
+        # Stamped BEFORE the run, not after. The engine reads the book at T0 and
+        # returns seconds later at T1; stamping T1 makes an import that landed in
+        # between look older than the computation, so the payload would report
+        # itself fresh while missing those trades. Over-reporting stale is the
+        # safe direction.
+        started = datetime.datetime.now(datetime.timezone.utc)
+        payload = await _run_tlh_plan(session, tid, [])
+        payload["owed"] = _owed_today(payload)
+
+        # Upsert, not read-modify-write: two refreshes racing on a tenant with no
+        # cached row would both see None and both INSERT the same primary key.
+        await session.execute(
+            pg_insert(TaxSummary)
+            .values(tenant_id=tid, payload=payload, computed_at=started)
+            .on_conflict_do_update(
+                index_elements=[TaxSummary.tenant_id],
+                set_={"payload": payload, "computed_at": started},
+            )
+        )
+        await session.commit()
+    return await _tax_summary_payload(session, tid)
 
 
 @tlh_router.post("/plans")

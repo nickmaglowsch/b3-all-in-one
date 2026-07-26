@@ -13,7 +13,8 @@ from platform_app import b3run, enginerun, specstore
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import (
-    BacktestRun, CashEvent, CostBasisOverride, Import, IngestRun, Position, Trade,
+    BacktestRun, CashEvent, CostBasisOverride, Import, IngestRun, Position,
+    TaxSummary, Trade,
 )
 
 # Postgres-backed queue (spec 01: jobs live in Postgres).
@@ -238,7 +239,12 @@ async def process_imports(tenant_id: str) -> dict:
             return {"tenant_id": tenant_id, "status": "abandoned", "imports": 0}
 
         # Full replace per tenant, one transaction. Order preserved via ascending ids.
-        for model in (Trade, CashEvent, Position):
+        # TaxSummary goes with them: it is derived from exactly these rows, so
+        # leaving it would serve an isenção headroom and an IR devido computed
+        # against a book that no longer exists. Dropping it rather than
+        # recomputing here keeps this task's cost bounded — the next reader sees
+        # "nunca apurado" and asks for it.
+        for model in (Trade, CashEvent, Position, TaxSummary):
             await session.execute(delete(model).where(model.tenant_id == tid))
         if trades:
             await session.execute(insert(Trade), [_trade_dict(tid, r) for r in trades])

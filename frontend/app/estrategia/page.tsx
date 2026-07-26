@@ -836,7 +836,7 @@ function TargetPanel() {
           </p>
           <DivergingBars data={bars} valueFormat={compactBRL} height={Math.max(200, bars.length * 26)} />
         </div>
-        <DataTable columns={columns} rows={sorted} getRowKey={(r) => r.ticker} />
+        <DataTable columns={columns} rows={sorted} getRowKey={(r) => r.ticker} label="Desvio por ativo" />
       </div>
     </Card>
   );
@@ -971,7 +971,7 @@ function PlanResult({ plan }: { plan: RebalancePlan }) {
             Vender ({sells.length})
           </p>
           {sells.length ? (
-            <DataTable columns={tradeCols} rows={sells} getRowKey={(r) => r.ticker} />
+            <DataTable columns={tradeCols} rows={sells} getRowKey={(r) => r.ticker} label="Vendas sugeridas" />
           ) : (
             <p className="text-sm text-muted">Nenhuma venda necessária.</p>
           )}
@@ -981,7 +981,7 @@ function PlanResult({ plan }: { plan: RebalancePlan }) {
             Comprar ({buys.length})
           </p>
           {buys.length ? (
-            <DataTable columns={tradeCols} rows={buys} getRowKey={(r) => r.ticker} />
+            <DataTable columns={tradeCols} rows={buys} getRowKey={(r) => r.ticker} label="Compras sugeridas" />
           ) : (
             <p className="text-sm text-muted">Nenhuma compra necessária.</p>
           )}

@@ -1,15 +1,18 @@
 "use client";
 
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { IndexMetrics, PortfolioIndex } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
+import { INCOME_LABEL } from "./IncomeSection";
+import type { IncomeRow } from "@/lib/types";
 
 const TITLE = "Rentabilidade vs IBOV e CDI";
 
@@ -21,7 +24,7 @@ function Metric({ label, m }: { label: string; m?: IndexMetrics }) {
   if (!m || m.total_return_pct === null) return null;
   return (
     <div>
-      <p className="font-mono text-[11px] font-medium uppercase tracking-wide text-muted">
+      <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
         {label}
       </p>
       <p className="mt-1 font-mono text-lg tabular-nums text-ink">
@@ -40,25 +43,72 @@ function Metric({ label, m }: { label: string; m?: IndexMetrics }) {
 export function IndexSection() {
   const q = useQuery({
     queryKey: ["portfolio-index"],
-    queryFn: () => api<PortfolioIndex>("/portfolio/index"),
+    queryFn: () =>
+      // This fires on page load, so a 402 must not throw a dialog over a page the
+      // user has not read yet. The offer is rendered inline below instead.
+      api<PortfolioIndex>("/portfolio/index", {}, { paywallDialog: false }),
     retry: false, // 422 (no trades) and 402 (paywall) are answers, not blips
   });
 
+  // Same key as IncomeSection and the page gate, so this is a cache read, not a
+  // fourth request. Used only to decide whether the "fora do retorno" caveat
+  // describes a gap this book actually has.
+  const income = useQuery({
+    queryKey: ["income"],
+    queryFn: () => api<IncomeRow[]>("/portfolio/income"),
+  });
+
+  // One live region for the section, at a fixed position outside every branch.
+  // A region that is unmounted is destroyed rather than updated, so nothing ever
+  // announces that loading finished.
+  const shell = (body: React.ReactNode) => (
+    <>
+      <LoadingStatus busy={q.isLoading} label="Calculando rentabilidade…" />
+      {body}
+    </>
+  );
+
   if (q.isLoading) {
-    return (
+    return shell(
       <Card title={TITLE}>
         <Skeleton className="h-64 w-full" />
-      </Card>
+      </Card>,
     );
   }
 
   if (q.isError || !q.data) {
     const status = q.error instanceof ApiError ? q.error.status : 0;
+
+    // A paywall is not an outage. Blaming the quote base for a plan boundary
+    // tells the user something false about the product and leaves them with
+    // nothing to do about it.
+    if (status === 402) {
+      return (
+        <Card title={TITLE}>
+          <EmptyState
+            icon={<IconChart size={28} />}
+            variant="offer"
+            title="Acompanhar sua carteira contra o IBOV e o CDI faz parte do plano Investidor."
+            hint="Rentabilidade diária ponderada pelo tempo, com queda máxima e retorno anualizado — além de IRPF, TLH e simulação."
+            action={
+              <Link
+                href="/assinatura"
+                className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
+              >
+                Ver o plano Investidor
+              </Link>
+            }
+          />
+        </Card>
+      );
+    }
+
     // 422 is the honest "nothing to chart yet" state; anything else is a fault
-    // the user can retry (the 402 paywall is already handled by AppShell).
-    return (
+    // the user can retry.
+    return shell(
       <Card title={TITLE}>
         <EmptyState
+          variant={status === 422 ? "empty" : "error"}
           icon={<IconChart size={28} />}
           title={
             status === 422
@@ -70,8 +120,19 @@ export function IndexSection() {
               ? "Importe seus extratos de negociação para acompanhar sua carteira contra o IBOV e o CDI."
               : "A base de cotações pode estar indisponível. Tente novamente em instantes."
           }
+          action={
+            status === 422 ? undefined : (
+              <button
+                type="button"
+                onClick={() => q.refetch()}
+                className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
+              >
+                Tentar de novo
+              </button>
+            )
+          }
         />
-      </Card>
+      </Card>,
     );
   }
 
@@ -87,6 +148,15 @@ export function IndexSection() {
       : []),
   ];
 
+  // Categories the engine excludes AND this book actually holds cash in, in the
+  // same pt-BR labels the Proventos card uses.
+  const held = new Set(
+    (income.data ?? []).filter((r) => r.total !== 0).map((r) => r.event_category),
+  );
+  const excludedHeld = data.excluded.categories
+    .filter((c) => held.has(c))
+    .map((c) => INCOME_LABEL[c] ?? c);
+
   // Everything the index could not see, said out loud (spec/03: surfaced, not
   // hidden). Silence here would read as "this is your whole portfolio".
   const caveats = [
@@ -98,10 +168,17 @@ export function IndexSection() {
       `Sem cotação na base: ${data.excluded.unpriced_tickers.join(", ")}.`,
     data.coverage.trades_after_plane > 0 &&
       `${data.coverage.trades_after_plane} operação(ões) posterior(es) à última cotação (${formatDate(data.end)}) foram marcadas nesse preço.`,
+    // EXCLUDED_CATEGORIES is a constant in the engine, so this list is never
+    // empty — printing it unconditionally put permanent boilerplate inside the
+    // block whose whole value is that everything in it is a real, specific gap.
+    // It earns its place only when the book actually holds those categories,
+    // and it says so in the same pt-BR labels the Proventos card uses.
+    excludedHeld.length > 0 &&
+      `Fora do retorno: ${excludedHeld.join(", ")} — aparecem em Proventos como caixa, mas não são retorno da carteira.`,
     !hasBench && "IBOV e CDI indisponíveis nesta execução.",
   ].filter(Boolean) as string[];
 
-  return (
+  return shell(
     <Card title={TITLE}>
       <div className="mb-5 flex flex-wrap gap-x-10 gap-y-4">
         <Metric label="Carteira" m={data.metrics.portfolio} />
@@ -118,17 +195,27 @@ export function IndexSection() {
         labelFormat={formatDate}
       />
 
-      <p className="mt-4 text-xs text-muted">
+      <p className="mt-4 text-sm text-muted">
         Retorno ponderado pelo tempo (TWR): aportes e retiradas mudam o saldo, não
         a linha. Proventos entram como retorno no dia em que caem.
       </p>
+
+      {/* What the index could not see, at the weight of what it could. Reporting
+          the gaps as loudly as the results is a product commitment; rendering
+          them at 12px muted under the fold was the opposite of honouring it.
+          Real list markers, not a typed "·" — the bullet is the list's job. */}
       {caveats.length > 0 && (
-        <ul className="mt-2 space-y-1 text-xs text-muted">
-          {caveats.map((c) => (
-            <li key={c}>· {c}</li>
-          ))}
-        </ul>
+        <div className="mt-4 rounded-md border border-hairline bg-paper p-4">
+          <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+            O que ficou de fora
+          </p>
+          <ul className="mt-2 list-disc space-y-1.5 pl-5 text-sm text-ink marker:text-axis">
+            {caveats.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        </div>
       )}
-    </Card>
+    </Card>,
   );
 }

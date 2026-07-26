@@ -278,3 +278,61 @@ export interface BacktestCurves {
   // Column-oriented: { date: [...], pretax: [...], aftertax: [...], drawdown: [...], ... }
   series: Record<string, (string | number)[]>;
 }
+
+// GET /portfolio/tax-summary — the cached tlh_plan payload (no sells), i.e. the
+// book's tax situation this month. `payload` is null when it was never computed;
+// `stale` is true when an extract landed after `computed_at`.
+export interface TaxBucket {
+  status: string;
+  gross_after: number;
+  pnl_after: number;
+  carry_used: number;
+  /** IR devido on the month's realised position — an estimate to verify. */
+  ir: number;
+  harvest: {
+    ticker: string;
+    qty: number;
+    price: number;
+    realized_loss: number;
+    partial: boolean;
+  }[];
+}
+
+export interface TaxSituation {
+  /** Gross sales month-to-date. Against isencao_limit this is the headroom. */
+  gross_mtd: number;
+  /** Realised P&L month-to-date. */
+  pnl_mtd: number;
+  /** Prejuízo acumulado available to offset gains. */
+  carry: number;
+}
+
+/** IR owed on the month as it stands, computed by the API from `situation`.
+ *  Deliberately not `TaxBucket.ir`, which is the IR *after* executing the
+ *  harvest plan and therefore reads zero exactly when the real DARF is largest. */
+export interface TaxOwed {
+  /** Ações only: gross sales at or below the R$20k monthly limit. */
+  isento: boolean;
+  carry_used: number;
+  taxable: number;
+  ir: number;
+}
+
+export interface TaxPlan {
+  month: string;
+  generated: string;
+  isencao_limit: number;
+  rates: Record<string, number>;
+  situation: Record<string, TaxSituation>;
+  buckets: Record<string, TaxBucket>;
+  /** Absent on payloads cached before this field existed. */
+  owed?: Record<string, TaxOwed>;
+}
+
+export interface TaxSummary {
+  payload: TaxPlan | null;
+  computed_at: string | null;
+  stale: boolean;
+  /** Why it is stale: a newer import, or the month rolling over. */
+  stale_reason: "import" | "month" | null;
+}

@@ -1405,6 +1405,17 @@ async def _last_ingest(session: AsyncSession) -> dict[str, dict]:
     return out
 
 
+# What an absent market plane looks like. A fresh deploy has no `prices` table at
+# all until the first ingest runs, and aggregating a missing table raises — so the
+# status endpoint used to 500 on exactly the environment that most needs to report
+# "there is no data yet". Same posture as /positions and /price-history: the plane
+# is optional, its absence is a fact to report, not an error.
+_EMPTY_PLANE = {
+    "prices": {"rows": 0, "tickers": 0, "min_date": None, "max_date": None},
+    "tables": {},
+}
+
+
 async def _market_status_uncached() -> dict:
     pool = await get_engine_pool()
     prices = await pool.fetchrow(
@@ -1452,7 +1463,13 @@ async def market_status(
     if _market_status_cache and now - _market_status_cache[0] < _MARKET_STATUS_TTL:
         payload = _market_status_cache[1]
     else:
-        payload = await _market_status_uncached()
+        try:
+            payload = await _market_status_uncached()
+        except Exception:
+            # Not cached: an unreachable plane should recover on the next call
+            # rather than be pinned as empty for the whole TTL.
+            return {**_EMPTY_PLANE, "prices_age_days": None, "stale": True,
+                    "last_ingest": await _last_ingest(session)}
         _market_status_cache = (now, payload)
 
     max_date = payload["prices"]["max_date"]

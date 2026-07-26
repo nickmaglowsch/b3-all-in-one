@@ -101,7 +101,9 @@ async def test_market_status_reports_staleness(client, monkeypatch):
     from platform_app import routes
 
     routes._market_status_cache = None
-    old = datetime.date.today() - datetime.timedelta(days=200)
+    # UTC, matching the route's basis — a local date() is a day out either side of
+    # midnight UTC and makes this fail depending on when it runs.
+    old = datetime.datetime.now(datetime.UTC).date() - datetime.timedelta(days=200)
     monkeypatch.setattr(
         routes, "_market_status_uncached",
         lambda: _fake_status(old.isoformat()),
@@ -121,3 +123,29 @@ async def _fake_status(max_date: str) -> dict:
         "prices": {"rows": 1, "tickers": 1, "min_date": "2020-01-01", "max_date": max_date},
         "tables": {},
     }
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_market_status_survives_an_absent_market_plane(client, monkeypatch):
+    """A fresh deploy has no `prices` table until the first ingest runs, and
+    aggregating a missing table raises. The endpoint that exists to report "there
+    is no data yet" must not 500 on exactly that case — the dashboard polls it on
+    every page."""
+    from platform_app import routes
+
+    routes._market_status_cache = None
+
+    async def boom():
+        raise RuntimeError('relation "prices" does not exist')
+
+    monkeypatch.setattr(routes, "_market_status_uncached", boom)
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    r = await client.get("/market/status", headers={"Authorization": f"Bearer {token}"})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["stale"] is True
+    assert body["prices"]["rows"] == 0
+    assert body["prices"]["max_date"] is None
+    routes._market_status_cache = None

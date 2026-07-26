@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import type { IndexMetrics, PortfolioIndex } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
@@ -58,11 +58,21 @@ export function IndexSection() {
     queryFn: () => api<IncomeRow[]>("/portfolio/income"),
   });
 
+  // One live region for the section, at a fixed position outside every branch.
+  // A region that is unmounted is destroyed rather than updated, so nothing ever
+  // announces that loading finished.
+  const shell = (body: React.ReactNode) => (
+    <>
+      <LoadingStatus busy={q.isLoading} label="Calculando rentabilidade…" />
+      {body}
+    </>
+  );
+
   if (q.isLoading) {
-    return (
+    return shell(
       <Card title={TITLE}>
-        <Skeleton className="h-64 w-full" label="Calculando rentabilidade…" />
-      </Card>
+        <Skeleton className="h-64 w-full" />
+      </Card>,
     );
   }
 
@@ -77,6 +87,7 @@ export function IndexSection() {
         <Card title={TITLE}>
           <EmptyState
             icon={<IconChart size={28} />}
+            variant="offer"
             title="Acompanhar sua carteira contra o IBOV e o CDI faz parte do plano Investidor."
             hint="Rentabilidade diária ponderada pelo tempo, com queda máxima e retorno anualizado — além de IRPF, TLH e simulação."
             action={
@@ -94,9 +105,10 @@ export function IndexSection() {
 
     // 422 is the honest "nothing to chart yet" state; anything else is a fault
     // the user can retry.
-    return (
+    return shell(
       <Card title={TITLE}>
         <EmptyState
+          variant={status === 422 ? "empty" : "error"}
           icon={<IconChart size={28} />}
           title={
             status === 422
@@ -120,7 +132,7 @@ export function IndexSection() {
             )
           }
         />
-      </Card>
+      </Card>,
     );
   }
 
@@ -166,7 +178,7 @@ export function IndexSection() {
     !hasBench && "IBOV e CDI indisponíveis nesta execução.",
   ].filter(Boolean) as string[];
 
-  return (
+  return shell(
     <Card title={TITLE}>
       <div className="mb-5 flex flex-wrap gap-x-10 gap-y-4">
         <Metric label="Carteira" m={data.metrics.portfolio} />
@@ -204,6 +216,6 @@ export function IndexSection() {
           </ul>
         </div>
       )}
-    </Card>
+    </Card>,
   );
 }

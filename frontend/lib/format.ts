@@ -41,3 +41,23 @@ export function formatDate(iso: string | null | undefined): string {
   if (y && m && d) return `${d}/${m}/${y}`;
   return iso;
 }
+
+// dd/mm/aaaa às HH:MM in America/Sao_Paulo. `formatDate` slices the ISO string,
+// which is right for a plain date but wrong for a timestamp: it drops the time
+// entirely and, on a UTC value, shifts the day across the -03:00 boundary (a run
+// at 01:00Z would read as the next day). Used where "when was this computed"
+// carries real meaning — a month-to-date tax figure, for one.
+const dateTime = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+export function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return dateTime.format(d).replace(", ", " às ");
+}

@@ -17,8 +17,11 @@ export function Card({
       id={id}
       className={`rounded-lg border border-hairline bg-panel ${className}`}
     >
+      {/* The header wraps rather than overflowing: card actions grew from a
+          single label to filter-plus-page-size, and a header that cannot wrap
+          pushes the whole document sideways on a phone. */}
       {(title || action) && (
-        <header className="flex items-center justify-between gap-4 border-b border-hairline px-4 py-3">
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-hairline px-4 py-3">
           {title && (
             <h2 className="text-sm font-semibold text-ink">{title}</h2>
           )}

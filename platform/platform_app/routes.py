@@ -17,7 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -232,22 +232,43 @@ _TRADE_SORTS = {
 
 @portfolio_router.get("/trades")
 async def get_trades(
-    limit: int = 50,
-    offset: int = 0,
+    # Bounded by the framework rather than clamped silently: `offset=-1` is a
+    # Postgres error (500) and `limit=10000000` serialises the whole book, and
+    # both used to get that far. A 422 names the bad parameter instead.
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     sort: str = "date",
     dir: str = "desc",
+    # Server-side because the table is server-paginated: filtering the 50 rows in
+    # hand would search page 1 and call it the book. Matches ticker or corretora,
+    # which is what "what did I do at XP" and "everything in HGLG11" need.
+    q: str | None = Query(None, max_length=32),
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
-    limit = max(1, min(limit, 500))
+    # An unrecognised sort used to fall back to date and return 200, so a typo
+    # looked like working code that ignored you. Say which values exist.
+    if sort not in _TRADE_SORTS:
+        raise HTTPException(
+            422, f"sort inválido: {sort}. Use um de {', '.join(_TRADE_SORTS)}."
+        )
+    if dir not in ("asc", "desc"):
+        raise HTTPException(422, f"dir inválido: {dir}. Use asc ou desc.")
+    # The filter narrows the count too: "1–50 de 3.117" beside three matching
+    # rows would be the pager describing a different result set than the table.
+    where = [Trade.tenant_id == tid]
+    if q:
+        needle = f"%{q.strip()}%"
+        where.append(Trade.ticker.ilike(needle) | Trade.broker.ilike(needle))
+
     total = await session.scalar(
-        select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
+        select(func.count()).select_from(Trade).where(*where)
     )
     # Sorting belongs here, not in the page component: ordering only the 50 rows
     # already fetched answers "largest trade on this page", which is not the
     # question anyone clicking a column header is asking.
-    col = _TRADE_SORTS.get(sort, Trade.date)
+    col = _TRADE_SORTS[sort]
     asc = dir == "asc"
     # The id tiebreak follows the sort direction so the default column can be
     # served straight off ix_trades_tenant_date (tenant_id, date DESC, id DESC),
@@ -258,7 +279,7 @@ async def get_trades(
     rows = (
         await session.scalars(
             select(Trade)
-            .where(Trade.tenant_id == tid)
+            .where(*where)
             .order_by(*ordering)
             .limit(limit)
             .offset(offset)

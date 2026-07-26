@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { Sparkline } from "@/components/charts/Sparkline";
-import { formatQty } from "@/lib/format";
+import { formatInt, formatQty } from "@/lib/format";
 import type { Position } from "@/lib/types";
 
 type SortKey =
@@ -106,16 +106,34 @@ export function PositionsTable({
     };
   });
 
+  // Only once the user actually sorts. Writing the default on mount put
+  // `?ordem=total_cost&dir=desc` into every shared Portfólio link, claiming two
+  // very generic param names app-wide for state nobody chose.
+  const touched = useRef(false);
   useEffect(() => {
+    if (!touched.current) return;
     const url = new URL(window.location.href);
     url.searchParams.set("ordem", sort.key);
     url.searchParams.set("dir", sort.dir);
     window.history.replaceState(null, "", url);
   }, [sort]);
 
+  // Every row is already in memory, so filtering is a substring match and not a
+  // round trip. "What's my position in PETR4" is the most common question this
+  // table answers, and eight sort headers never answered it.
+  const [filter, setFilter] = useState("");
+
   const rows = useMemo(() => {
+    const needle = filter.trim().toUpperCase();
+    const matched = needle
+      ? positions.filter(
+          (p) =>
+            p.ticker.toUpperCase().includes(needle) ||
+            p.market.toUpperCase().includes(needle),
+        )
+      : positions;
     const { key, dir } = sort;
-    const sorted = [...positions].sort((a, b) => {
+    const sorted = [...matched].sort((a, b) => {
       const av = a[key];
       const bv = b[key];
       // Unpriced rows (Renda Fixa, delisted) sink to the bottom either way —
@@ -131,9 +149,10 @@ export function PositionsTable({
       return dir === "asc" ? cmp : -cmp;
     });
     return sorted;
-  }, [positions, sort]);
+  }, [positions, sort, filter]);
 
   function toggle(key: SortKey) {
+    touched.current = true;
     setSort((s) =>
       s.key === key
         ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
@@ -257,6 +276,24 @@ export function PositionsTable({
 
   return (
     <div aria-busy={historyLoading || undefined}>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <label className="flex items-center gap-2 text-xs text-muted">
+          <span className="sr-only sm:not-sr-only">Filtrar</span>
+          <input
+            type="search"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Ativo ou mercado"
+            aria-label="Filtrar posições por ativo ou mercado"
+            className="w-36 rounded-md border border-hairline bg-paper px-3 py-1.5 font-mono text-xs sm:w-48 text-ink placeholder:text-muted focus:border-navy focus:outline-none"
+          />
+        </label>
+        <p role="status" aria-live="polite" className="font-mono text-xs text-muted">
+          {filter.trim()
+            ? `${formatInt(rows.length)} de ${formatInt(positions.length)} posições`
+            : `${formatInt(positions.length)} posições`}
+        </p>
+      </div>
       {historyFailed && (
         <p className="mb-3 text-xs text-muted">
           Não foi possível carregar o histórico de preços — a coluna Tendência

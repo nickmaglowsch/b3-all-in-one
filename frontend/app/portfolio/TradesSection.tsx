@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { TradesPage } from "@/lib/types";
@@ -9,7 +9,7 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatInt, formatQty } from "@/lib/format";
 import type { Trade } from "@/lib/types";
@@ -80,6 +80,18 @@ export function TradesSection() {
     key: TRADES_DEFAULTS.sort,
     dir: TRADES_DEFAULTS.dir,
   });
+  // Server-side: this table is paginated, so filtering what is already on screen
+  // would search page 1 and present it as the whole book. Debounced so typing a
+  // ticker is one request, not six.
+  const [filterInput, setFilterInput] = useState("");
+  const [filter, setFilter] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setFilter(filterInput.trim());
+      setOffset(0);
+    }, 300);
+    return () => clearTimeout(t);
+  }, [filterInput]);
   // Focus must not sit on a button that the click just disabled. Hand it to the
   // sibling that is still live, and let the status line announce the new range.
   const prevRef = useRef<HTMLButtonElement>(null);
@@ -88,30 +100,58 @@ export function TradesSection() {
   // Sorting is server-side: ordering only the rows already fetched answers
   // "largest trade on this page", which is not what a column header promises.
   const q = useQuery({
-    queryKey: ["trades", limit, offset, sort.key, sort.dir],
+    queryKey: filter
+      ? ["trades", limit, offset, sort.key, sort.dir, filter]
+      : ["trades", limit, offset, sort.key, sort.dir],
     queryFn: () =>
       api<TradesPage>(
-        `/portfolio/trades?limit=${limit}&offset=${offset}&sort=${sort.key}&dir=${sort.dir}`,
+        `/portfolio/trades?limit=${limit}&offset=${offset}&sort=${sort.key}&dir=${sort.dir}` +
+        (filter ? `&q=${encodeURIComponent(filter)}` : ""),
       ),
     placeholderData: keepPreviousData,
   });
 
+  // One live region for the section, at a fixed position outside every branch.
+  // A region that is unmounted is destroyed rather than updated, so nothing ever
+  // announces that loading finished.
+  const shell = (body: React.ReactNode) => (
+    <>
+      <LoadingStatus busy={q.isLoading} label="Carregando negociações…" />
+      {body}
+    </>
+  );
+
   const page = q.data;
   const rows = page?.items ?? [];
 
+  const filterField = (
+    <label className="flex items-center gap-2 text-xs text-muted">
+      <span className="sr-only">Filtrar negociações</span>
+      <input
+        type="search"
+        value={filterInput}
+        onChange={(e) => setFilterInput(e.target.value)}
+        placeholder="Ativo ou corretora"
+        aria-label="Filtrar negociações por ativo ou corretora"
+        className="w-32 rounded-md border border-hairline bg-paper px-3 py-1 font-mono text-xs sm:w-44 text-ink placeholder:text-muted focus:border-navy focus:outline-none"
+      />
+    </label>
+  );
+
   if (q.isLoading) {
-    return (
+    return shell(
       <Card title={TITLE}>
-        <Skeleton className="h-64 w-full" label="Carregando negociações…" />
-      </Card>
+        <Skeleton className="h-64 w-full" />
+      </Card>,
     );
   }
 
   if (q.isError) {
-    return (
+    return shell(
       <Card title={TITLE}>
         <EmptyState
           icon={<IconChart size={28} />}
+          variant="error"
           title="Não foi possível carregar as negociações."
           hint="A conexão com a API falhou. Seu histórico continua importado."
           action={
@@ -124,19 +164,30 @@ export function TradesSection() {
             </button>
           }
         />
-      </Card>
+      </Card>,
     );
   }
 
   if (!page || page.total === 0) {
-    return (
-      <Card title={TITLE}>
+    // A filter that matches nothing is not an empty book. Saying "importe o
+    // extrato" to someone who has 3.117 trades and typed a typo would be the
+    // page misreading its own state.
+    return shell(
+      <Card title={TITLE} action={filterField}>
         <EmptyState
           icon={<IconChart size={28} />}
-          title="Nenhuma negociação importada."
-          hint="Importe o extrato de negociação para ver seu histórico de compras e vendas."
+          title={
+            filter
+              ? `Nenhuma negociação encontrada para "${filter}".`
+              : "Nenhuma negociação importada."
+          }
+          hint={
+            filter
+              ? "Busque por um ativo (PETR4) ou por uma corretora."
+              : "Importe o extrato de negociação para ver seu histórico de compras e vendas."
+          }
         />
-      </Card>
+      </Card>,
     );
   }
 
@@ -213,10 +264,12 @@ export function TradesSection() {
   const pageNo = Math.floor(offset / limit) + 1;
   const pages = Math.max(1, Math.ceil(page.total / limit));
 
-  return (
+  return shell(
     <Card
       title={TITLE}
       action={
+        <div className="flex flex-wrap items-center justify-end gap-3">
+        {filterField}
         <label className="flex items-center gap-2 text-xs text-muted">
           Por página
           <select
@@ -234,6 +287,7 @@ export function TradesSection() {
             ))}
           </select>
         </label>
+        </div>
       }
     >
       <DataTable
@@ -280,6 +334,6 @@ export function TradesSection() {
           </button>
         </div>
       </div>
-    </Card>
+    </Card>,
   );
 }

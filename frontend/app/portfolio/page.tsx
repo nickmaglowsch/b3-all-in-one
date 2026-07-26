@@ -50,7 +50,11 @@ function Stat({
       <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
         {label}
       </p>
-      <div className="mt-1.5 text-2xl leading-none">{children}</div>
+      {/* A six-figure BRL value at 24px mono is ~190px wide, which overflows a
+          two-column tile at 375px and made the whole document scroll sideways.
+          Step down on the smallest screens rather than clipping or wrapping a
+          number mid-figure. */}
+      <div className="mt-1.5 text-xl leading-none sm:text-2xl">{children}</div>
       {sub && <p className="mt-1.5 text-xs text-muted">{sub}</p>}
     </div>
   );
@@ -177,6 +181,7 @@ export default function PortfolioPage() {
         // gone, and tells an advisor a client's book is empty when it is not.
         <EmptyState
           icon={<IconWallet size={28} />}
+          variant="error"
           title="Não foi possível carregar sua carteira."
           hint="A conexão com a API falhou. Nada foi perdido — seus extratos continuam importados."
           action={
@@ -209,7 +214,23 @@ export default function PortfolioPage() {
         />
       ) : (
         <>
-          <SectionNav items={sections} />
+          <SectionNav
+            items={sections}
+            // The client's name rides the sticky bar, so it survives the whole
+            // page and lands in a screenshot of any section — the promise the
+            // enterprise tier is sold on, kept past the first 200px.
+            trailing={
+              book.state === "client" ? (
+                <span className="whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                  {book.label}
+                </span>
+              ) : book.state === "unknown" ? (
+                <span className="whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.14em] text-status-error">
+                  carteira de cliente — nome indisponível
+                </span>
+              ) : undefined
+            }
+          />
           <div className="space-y-6">
             {hasPositions && (
             <section
@@ -228,7 +249,7 @@ export default function PortfolioPage() {
                         : "última cotação disponível"
                   }
                 >
-                  {nothingPriced ? <Unknown /> : <Money value={marketValue} className="text-2xl" />}
+                  {nothingPriced ? <Unknown /> : <Money value={marketValue} className="text-xl sm:text-2xl" />}
                 </Stat>
                 {/* "Never invent a number" has a mirror: never withhold a known
                     one. Cost does not depend on prices, so the price plane being
@@ -245,7 +266,7 @@ export default function PortfolioPage() {
                 >
                   <Money
                     value={nothingPriced ? totalCost : pricedCost}
-                    className="text-2xl"
+                    className="text-xl sm:text-2xl"
                   />
                 </Stat>
                 <Stat
@@ -256,7 +277,7 @@ export default function PortfolioPage() {
                     <Unknown />
                   ) : (
                     <div className="flex flex-wrap items-baseline gap-2">
-                      <Money value={pnl} sign className="text-2xl" />
+                      <Money value={pnl} sign className="text-xl sm:text-2xl" />
                       <PctDelta value={pnlPct} className="text-sm" />
                     </div>
                   )}

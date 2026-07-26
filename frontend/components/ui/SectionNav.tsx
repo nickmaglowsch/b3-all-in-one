@@ -7,7 +7,16 @@ import { useEffect, useState } from "react";
  * scrolling (native); an IntersectionObserver only marks where you are.
  * Anchor targets need `scroll-mt-28 md:scroll-mt-16` to clear the sticky bars.
  */
-export function SectionNav({ items }: { items: { id: string; label: string }[] }) {
+export function SectionNav({
+  items,
+  trailing,
+}: {
+  items: { id: string; label: string }[];
+  /** Right-aligned, stays on screen with the bar. Used for the active client
+   *  book's name, which otherwise lives only in the header and is gone after
+   *  200px of scroll — on a page whose whole job is showing someone's money. */
+  trailing?: React.ReactNode;
+}) {
   const [active, setActive] = useState("");
   const key = items.map((i) => i.id).join(",");
 
@@ -39,7 +48,7 @@ export function SectionNav({ items }: { items: { id: string; label: string }[] }
       aria-label="Seções da página"
       className="sticky top-14 z-10 mb-4 overflow-x-auto border-b border-hairline bg-paper md:top-0"
     >
-      <ul className="flex gap-1 py-2">
+      <ul className="flex items-center gap-1 py-2">
         {items.map(({ id, label }) => (
           <li key={id}>
             <a
@@ -55,6 +64,9 @@ export function SectionNav({ items }: { items: { id: string; label: string }[] }
             </a>
           </li>
         ))}
+        {trailing && (
+          <li className="ml-auto shrink-0 pl-3 pr-1">{trailing}</li>
+        )}
       </ul>
     </nav>
   );

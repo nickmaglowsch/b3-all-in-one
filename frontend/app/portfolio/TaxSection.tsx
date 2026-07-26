@@ -7,10 +7,10 @@ import type { TaxPlan, TaxSummary } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Money } from "@/components/ui/Money";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { IconReceipt } from "@/components/icons";
-import { formatDate, formatMoney, formatPercent, formatQty } from "@/lib/format";
+import { formatDateTime, formatMoney, formatPercent, formatQty } from "@/lib/format";
 
 const TITLE = "Situação fiscal";
 
@@ -170,21 +170,40 @@ export function TaxSection() {
     onSuccess: (data) => qc.setQueryData(["tax-summary"], data),
   });
 
+  // One live region for the whole section, rendered at a fixed position outside
+  // every branch below. Announcing both the start and the end of an apuração
+  // needs the region to survive the transition; putting it inside a branch
+  // destroys and recreates it, and AT hears nothing.
+  const status = (
+    <LoadingStatus
+      busy={q.isLoading || refresh.isPending}
+      label={refresh.isPending ? "Apurando situação fiscal" : "Carregando situação fiscal"}
+      done={refresh.isSuccess ? "Situação fiscal apurada" : ""}
+    />
+  );
+  const shell = (body: React.ReactNode) => (
+    <>
+      {status}
+      {body}
+    </>
+  );
+
   if (q.isLoading) {
-    return (
+    return shell(
       <Card title={TITLE}>
-        <Skeleton className="h-48 w-full" label="Carregando situação fiscal…" />
-      </Card>
+        <Skeleton className="h-48 w-full" />
+      </Card>,
     );
   }
 
   if (q.isError) {
-    const status = q.error instanceof ApiError ? q.error.status : 0;
-    if (status === 402) {
-      return (
+    const httpStatus = q.error instanceof ApiError ? q.error.status : 0;
+    if (httpStatus === 402) {
+      return shell(
         <Card title={TITLE}>
           <EmptyState
             icon={<IconReceipt size={28} />}
+            variant="offer"
             title="A apuração do mês faz parte do plano Investidor."
             hint="Isenção de R$ 20 mil usada e disponível, prejuízo a compensar, IR devido e os candidatos a colheita — apurados pelo mesmo motor que gera seu IRPF."
             action={
@@ -199,10 +218,11 @@ export function TaxSection() {
         </Card>
       );
     }
-    return (
+    return shell(
       <Card title={TITLE}>
         <EmptyState
           icon={<IconReceipt size={28} />}
+          variant="error"
           title="Não foi possível carregar a situação fiscal."
           hint="A conexão com a API falhou. Nada foi perdido."
           action={
@@ -249,16 +269,11 @@ export function TaxSection() {
     </p>
   );
 
-  const busy = (
-    <p role="status" aria-live="polite" className="sr-only">
-      {running ? "Apurando situação fiscal" : ""}
-    </p>
-  );
 
   // Never computed. Not an error and not an empty book — the apuração simply has
   // not been asked for, and it costs a real engine run, so it says so.
   if (!plan) {
-    return (
+    return shell(
       <Card title={TITLE}>
         <EmptyState
           icon={<IconReceipt size={28} />}
@@ -266,19 +281,18 @@ export function TaxSection() {
           hint="A apuração roda o mesmo motor do IRPF sobre todo o seu histórico — leva alguns segundos e fica guardada."
           action={recompute}
         />
-        {busy}
         <div className="text-center">{refreshError}</div>
-      </Card>
+      </Card>,
     );
   }
 
-  return (
+  return shell(
     <Card
       title={TITLE}
       action={
         <div className="flex items-center gap-3">
           <span className="font-mono tnum tabular-nums text-xs text-muted">
-            {plan.month} · apurado em {formatDate(data?.computed_at ?? null)}
+            {plan.month} · apurado em {formatDateTime(data?.computed_at ?? null)}
           </span>
           {recompute}
         </div>
@@ -311,9 +325,7 @@ export function TaxSection() {
         mês como ele está hoje — colher os candidatos acima reduz esse valor, mas
         só depois de executado. Alíquotas de swing trade; não cobre day trade.
       </p>
-
-      {busy}
-    </Card>
+    </Card>,
   );
 }
 

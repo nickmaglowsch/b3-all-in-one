@@ -44,6 +44,15 @@ export type ActiveBook =
 export function useActiveBook(): ActiveBook {
   const { data, isError } = usePortfolios();
   const active = useSyncExternalStore(subscribePortfolio, getPortfolioId, () => null);
+  // sessionStorage does not exist at export time, so the prerendered HTML has no
+  // book and would bake in "Carteira" — the label meaning "my own money" — over
+  // a client's figures. Until hydration we do not know, and say so.
+  const hydrated = useSyncExternalStore(
+    subscribePortfolio,
+    () => true,
+    () => false,
+  );
+  if (!hydrated) return { state: "pending" };
   if (!active) return { state: "self" };
 
   // Answer from cache FIRST. React Query keeps `data` when a *refetch* fails, so

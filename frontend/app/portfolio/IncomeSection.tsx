@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/Card";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Money } from "@/components/ui/Money";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { IconReceipt } from "@/components/icons";
 import { formatMoney } from "@/lib/format";
 
@@ -49,19 +49,30 @@ export function IncomeSection() {
     queryFn: () => api<IncomeRow[]>("/portfolio/income"),
   });
 
+  // One live region for the section, at a fixed position outside every branch.
+  // A region that is unmounted is destroyed rather than updated, so nothing ever
+  // announces that loading finished.
+  const shell = (body: React.ReactNode) => (
+    <>
+      <LoadingStatus busy={q.isLoading} label="Carregando proventos…" />
+      {body}
+    </>
+  );
+
   if (q.isLoading) {
-    return (
+    return shell(
       <Card title="Proventos e eventos de caixa">
-        <Skeleton className="h-40 w-full" label="Carregando proventos…" />
-      </Card>
+        <Skeleton className="h-40 w-full" />
+      </Card>,
     );
   }
 
   if (q.isError) {
-    return (
+    return shell(
       <Card title="Proventos e eventos de caixa">
         <EmptyState
           icon={<IconReceipt size={28} />}
+          variant="error"
           title="Não foi possível carregar os proventos."
           hint="A conexão com a API falhou. Seus lançamentos continuam importados."
           action={
@@ -74,20 +85,20 @@ export function IncomeSection() {
             </button>
           }
         />
-      </Card>
+      </Card>,
     );
   }
 
   const data = q.data ?? [];
   if (data.length === 0) {
-    return (
+    return shell(
       <Card title="Proventos e eventos de caixa">
         <EmptyState
           icon={<IconReceipt size={28} />}
           title="Nenhum provento registrado ainda."
           hint="Importe o extrato de movimentação para ver dividendos, JCP e rendimentos por ano."
         />
-      </Card>
+      </Card>,
     );
   }
 
@@ -144,7 +155,7 @@ export function IncomeSection() {
 
   const maxAbs = Math.max(...cats.map((c) => Math.abs(grand[c])), 1);
 
-  return (
+  return shell(
     <Card title="Proventos e eventos de caixa">
       {/* Per-category totals with inline proportion bars (tokens, no chart
           component). One ink bar, not eight palette entries: the row is already
@@ -187,6 +198,6 @@ export function IncomeSection() {
           curva de rentabilidade — não são retorno da carteira.
         </p>
       )}
-    </Card>
+    </Card>,
   );
 }

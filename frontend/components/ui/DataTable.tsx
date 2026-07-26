@@ -35,6 +35,36 @@ export function DataTable<T>({
   /** Row key that is a summary/total, ruled off from the body above it. */
   footRowKey?: string | number;
 }) {
+  const keyed = rows.map((row, i) => ({ row, key: getRowKey(row, i) }));
+  const foot =
+    footRowKey === undefined ? undefined : keyed.find((r) => r.key === footRowKey);
+  const body = keyed.filter((r) => r !== foot);
+
+  const cells = (row: T, key: string | number, isFoot: boolean) => (
+    <tr
+      key={key}
+      className={
+        isFoot
+          ? // The number people came for stops being one row among many.
+            "border-t-2 border-hairline"
+          : "border-b border-hairline/70 last:border-0"
+      }
+    >
+      {columns.map((c) => (
+        <td
+          key={c.key}
+          className={`px-3 py-2 align-middle text-ink ${
+            c.align === "right" ? "text-right" : "text-left"
+          } ${
+            (c.numeric ?? c.align === "right") ? "font-mono tnum tabular-nums" : ""
+          } ${c.className ?? ""}`}
+        >
+          {c.render(row)}
+        </td>
+      ))}
+    </tr>
+  );
+
   return (
     // Wide tables scroll horizontally, and a scroll container that nothing can
     // focus is unreachable by keyboard — the right-hand columns simply do not
@@ -70,37 +100,15 @@ export function DataTable<T>({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => {
-            const key = getRowKey(row, i);
-            const isFoot = footRowKey !== undefined && key === footRowKey;
-            return (
-              <tr
-                key={key}
-                className={
-                  isFoot
-                    ? // The number people came for stops being one row among many.
-                      "border-t-2 border-hairline"
-                    : "border-b border-hairline/70 last:border-0"
-                }
-              >
-                {columns.map((c) => (
-                  <td
-                    key={c.key}
-                    className={`px-3 py-2 align-middle text-ink ${
-                      c.align === "right" ? "text-right" : "text-left"
-                    } ${
-                      (c.numeric ?? c.align === "right")
-                        ? "font-mono tnum tabular-nums"
-                        : ""
-                    } ${c.className ?? ""}`}
-                  >
-                    {c.render(row)}
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
+          {body.map(({ row, key }) => cells(row, key, false))}
         </tbody>
+        {/* A real <tfoot>, not just a heavier rule: the totals row is a summary
+            of the rows above it, and the element says so to anyone not reading
+            the border. Rendered after tbody in the DOM, which is where the spec
+            has wanted it since HTML5. */}
+        {foot && (
+          <tfoot>{cells(foot.row, foot.key, true)}</tfoot>
+        )}
       </table>
     </div>
   );

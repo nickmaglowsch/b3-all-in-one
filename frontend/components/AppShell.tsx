@@ -149,10 +149,41 @@ function ShellChrome({
           </button>
           <Brand className="text-base" />
         </div>
-        <div className="mx-auto max-w-6xl">{children}</div>
+        <div className="mx-auto max-w-6xl">
+          <MarketStaleNotice />
+          {children}
+        </div>
       </main>
 
       <Paywall />
+    </div>
+  );
+}
+
+/** Positions, P/L, TLH and the rebalance advisor are every one of them marked
+ *  from the shared price plane. When it stops updating those numbers silently go
+ *  stale — this plane once sat seven months behind while the UI presented its
+ *  marks as current. Rendered in AppShell so it covers every page that shows a
+ *  value, rather than trusting each one to remember.
+ *
+ *  Not dismissible: the threshold already absorbs a long weekend plus a feriado,
+ *  so if it is showing, the numbers on screen really are wrong. */
+function MarketStaleNotice() {
+  const market = useMarketStatus();
+  if (!market.data?.stale) return null;
+
+  const age = market.data.prices_age_days;
+  const upTo = formatDate(market.data.prices.max_date);
+
+  return (
+    <div
+      role="status"
+      className="mb-4 rounded-md border border-status-processing/40 bg-status-processing/10 px-3 py-2 text-xs text-ink"
+    >
+      <strong className="font-semibold">Cotações desatualizadas.</strong>{" "}
+      {age === null
+        ? "Ainda não há preços carregados, então posições e P/L aparecem só a custo."
+        : `O último fechamento disponível é de ${upTo} (${age} dias). Valores de mercado, P/L, IRPF e rebalanceamento usam esses preços.`}
     </div>
   );
 }
@@ -166,6 +197,9 @@ function SidebarFooter() {
 
   const apiOk = health.data?.status === "ok";
   const fresh = market.data?.prices.max_date ?? null;
+  // The date alone reads as a fact either way; amber is what makes an old one
+  // look wrong at a glance.
+  const marketStale = market.data?.stale ?? false;
 
   function logout() {
     clearToken();
@@ -186,7 +220,12 @@ function SidebarFooter() {
           API {apiOk ? "no ar" : "indisponível"}
         </span>
       </div>
-      <p className="mb-3 font-mono text-[11px] text-muted">
+      <p
+        className={`mb-3 font-mono text-[11px] ${
+          marketStale ? "text-status-processing" : "text-muted"
+        }`}
+        title={marketStale ? "Cotações desatualizadas" : undefined}
+      >
         Mercado até {formatDate(fresh)}
       </p>
 

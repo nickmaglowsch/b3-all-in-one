@@ -72,6 +72,16 @@ export interface MarketStatus {
     max_date: string | null;
   };
   tables: Record<string, { rows: number; fresh: string | null }>;
+  /** Calendar days between the newest close and today; null when the plane is empty. */
+  prices_age_days: number | null;
+  /** Positions, P/L, TLH and the rebalance advisor are all marked from this plane.
+   *  When it is behind, every one of those numbers is stale — say so rather than
+   *  presenting old marks as current. */
+  stale: boolean;
+  last_ingest: Record<
+    string,
+    { status: string; started_at: string | null; finished_at: string | null }
+  >;
 }
 
 // Imports move pending → processing → done | error; backtests use "running" not

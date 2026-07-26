@@ -40,10 +40,14 @@ export function DataTable<T>({
     // focus is unreachable by keyboard — the right-hand columns simply do not
     // exist for anyone not using a mouse. tabIndex makes it a focusable region;
     // the name tells a screen reader what it just entered.
+    // role="region" ONLY when there is a name for it. An unnamed region is an
+    // unnamed landmark, and pairing it with tabIndex would add a tab stop that
+    // announces nothing — worse than the plain scroll container it replaced, on
+    // every call site that has not passed a label yet.
     <div
       className="overflow-x-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-navy"
       tabIndex={0}
-      role="region"
+      role={label ? "region" : undefined}
       aria-label={label}
     >
       <table className="w-full border-collapse text-sm">

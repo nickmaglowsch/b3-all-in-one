@@ -102,7 +102,7 @@ export default function ImportsPage() {
             />
           ) : (
             <div className="max-h-[28rem] overflow-y-auto">
-              <DataTable columns={columns} rows={rows} getRowKey={(r) => r.id} />
+              <DataTable columns={columns} rows={rows} getRowKey={(r) => r.id} label="Extratos importados" />
             </div>
           )}
         </Card>

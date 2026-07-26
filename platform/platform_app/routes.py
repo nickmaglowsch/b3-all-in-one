@@ -20,6 +20,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -247,12 +248,18 @@ async def get_trades(
     # already fetched answers "largest trade on this page", which is not the
     # question anyone clicking a column header is asking.
     col = _TRADE_SORTS.get(sort, Trade.date)
-    ordering = col.asc() if dir == "asc" else col.desc()
+    asc = dir == "asc"
+    # The id tiebreak follows the sort direction so the default column can be
+    # served straight off ix_trades_tenant_date (tenant_id, date DESC, id DESC),
+    # scanned forwards or backwards. Hard-coding id DESC would ask for
+    # (date ASC, id DESC), which that index cannot produce — so the most obvious
+    # second click would fall back to a full sort of the tenant's trades.
+    ordering = (col.asc(), Trade.id.asc()) if asc else (col.desc(), Trade.id.desc())
     rows = (
         await session.scalars(
             select(Trade)
             .where(Trade.tenant_id == tid)
-            .order_by(ordering, Trade.id.desc())
+            .order_by(*ordering)
             .limit(limit)
             .offset(offset)
         )
@@ -877,11 +884,51 @@ def _parse_tlh_stdout(stdout: str) -> dict:
 # whether an import has landed since. Recomputing is always an explicit act.
 
 
+def _owed_today(payload: dict) -> dict:
+    """IR actually owed on the month as it stands, per bucket.
+
+    NOT `buckets[cls].ir`. That field means three different things depending on
+    which branch of tlh_plan produced it, and in the "TLH recomendado" branch it
+    is the IR *after executing a harvest the user has not executed* — zero, very
+    often, precisely when the real DARF is largest. Reading it as "devido" prints
+    R$ 0,00 to someone who owes money, which is the one thing this product
+    promises never to do.
+
+    So the owed-today figure is derived here from `situation`, which is plain
+    month-to-date fact: gross sales, realised PnL, and accumulated carry. The
+    rules mirror tlh_plan's own no-op branches — ações are isentas at or below
+    the R$20k monthly gross (`gross <= ISENCAO_LIMIT`, inclusive), FIIs have no
+    isenção, and carry offsets a positive result before the rate applies.
+    """
+    limit = payload.get("isencao_limit") or 0.0
+    rates = payload.get("rates") or {}
+    out = {}
+    for cls, s in (payload.get("situation") or {}).items():
+        gross = s.get("gross_mtd") or 0.0
+        pnl = s.get("pnl_mtd") or 0.0
+        carry = s.get("carry") or 0.0
+        # Inclusive, matching tlh_plan: exactly R$20.000,00 of gross is isento.
+        isento = cls == "AÇÃO" and gross <= limit
+        carry_used = min(carry, max(0.0, pnl))
+        taxable = 0.0 if isento else max(0.0, pnl - carry_used)
+        out[cls] = {
+            "isento": isento,
+            "carry_used": carry_used,
+            "taxable": taxable,
+            "ir": taxable * (rates.get(cls) or 0.0),
+        }
+    return out
+
+
+def _month_key(d: datetime.date) -> str:
+    return d.strftime("%m/%Y")
+
+
 async def _tax_summary_payload(session: AsyncSession, tid: uuid.UUID) -> dict:
     """Read the cached row and report its freshness. Never runs the engine."""
     row = await session.get(TaxSummary, tid)
     if row is None:
-        return {"payload": None, "computed_at": None, "stale": False}
+        return {"payload": None, "computed_at": None, "stale": False, "stale_reason": None}
     # An extract uploaded after the computation makes the figure wrong, not
     # merely old — including one still processing, which is why this counts every
     # import rather than only the done ones.
@@ -890,10 +937,17 @@ async def _tax_summary_payload(session: AsyncSession, tid: uuid.UUID) -> dict:
             Import.tenant_id == tid, Import.created_at > row.computed_at
         )
     )
+    # Every figure in `situation` is month-to-date, so the month rolling over
+    # invalidates them with no import involved: the isenção resets, pnl_mtd
+    # returns to zero, and a payload from last month would otherwise report
+    # itself fresh while saying "neste mês" about a month that ended.
+    rolled = (payload := row.payload).get("month") != _month_key(date.today())
+    reason = "import" if newer else "month" if rolled else None
     return {
-        "payload": row.payload,
+        "payload": payload,
         "computed_at": row.computed_at.isoformat(),
-        "stale": bool(newer),
+        "stale": bool(newer or rolled),
+        "stale_reason": reason,
     }
 
 
@@ -904,6 +958,14 @@ async def get_tax_summary(
 ) -> dict:
     _user, tid = tenant
     return await _tax_summary_payload(session, tid)
+
+
+# One apuração per tenant at a time. Each is a multi-second subprocess that
+# dumps the whole book to CSV while holding a pooled connection, and the button
+# that fires it sits on a page-load surface — two tabs, or a held-down click,
+# is enough to stack them. In-process only: this is a single-API-container
+# deployment, and the upsert below is what keeps correctness when it is not.
+_tax_refresh_locks: dict[uuid.UUID, asyncio.Lock] = {}
 
 
 @portfolio_router.post("/tax-summary/refresh")
@@ -921,15 +983,30 @@ async def refresh_tax_summary(
         # as "no history yet" rather than as a fault.
         raise HTTPException(422, "Sem negociações para apurar.")
 
-    payload = await _run_tlh_plan(session, tid, [])
-    row = await session.get(TaxSummary, tid)
-    if row is None:
-        session.add(TaxSummary(tenant_id=tid, payload=payload,
-                               computed_at=datetime.datetime.now(datetime.timezone.utc)))
-    else:
-        row.payload = payload
-        row.computed_at = datetime.datetime.now(datetime.timezone.utc)
-    await session.commit()
+    lock = _tax_refresh_locks.setdefault(tid, asyncio.Lock())
+    if lock.locked():
+        raise HTTPException(409, "Uma apuração já está em andamento.")
+    async with lock:
+        # Stamped BEFORE the run, not after. The engine reads the book at T0 and
+        # returns seconds later at T1; stamping T1 makes an import that landed in
+        # between look older than the computation, so the payload would report
+        # itself fresh while missing those trades. Over-reporting stale is the
+        # safe direction.
+        started = datetime.datetime.now(datetime.timezone.utc)
+        payload = await _run_tlh_plan(session, tid, [])
+        payload["owed"] = _owed_today(payload)
+
+        # Upsert, not read-modify-write: two refreshes racing on a tenant with no
+        # cached row would both see None and both INSERT the same primary key.
+        await session.execute(
+            pg_insert(TaxSummary)
+            .values(tenant_id=tid, payload=payload, computed_at=started)
+            .on_conflict_do_update(
+                index_elements=[TaxSummary.tenant_id],
+                set_={"payload": payload, "computed_at": started},
+            )
+        )
+        await session.commit()
     return await _tax_summary_payload(session, tid)
 
 

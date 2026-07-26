@@ -236,7 +236,9 @@ async def test_tax_summary_cached_after_import(client):
     # as "you owe nothing".
     r = await client.get("/portfolio/tax-summary", headers=headers)
     assert r.status_code == 200, r.text
-    assert r.json() == {"payload": None, "computed_at": None, "stale": False}
+    assert r.json() == {
+        "payload": None, "computed_at": None, "stale": False, "stale_reason": None,
+    }
 
     # Computing is an explicit act, and it stores what it produced.
     r = await client.post("/portfolio/tax-summary/refresh", headers=headers)
@@ -245,10 +247,34 @@ async def test_tax_summary_cached_after_import(client):
     assert set(body["payload"]["situation"]) == {"AÇÃO", "FII"}
     assert body["payload"]["isencao_limit"] == 20_000.0
     assert body["computed_at"]
-    # The tenant's imports all predate this run, so nothing is stale yet.
+    # The tenant's imports all predate this run, and the payload is this month.
     assert body["stale"] is False
+    assert body["stale_reason"] is None
+
+    # `owed` is the API's own figure, derived from `situation`. It must NOT be
+    # copied from buckets[cls].ir, which is the IR *after* executing a harvest —
+    # zero exactly when the real DARF is largest.
+    owed = body["payload"]["owed"]
+    assert set(owed) == {"AÇÃO", "FII"}
+    for cls, o in owed.items():
+        s = body["payload"]["situation"][cls]
+        rate = body["payload"]["rates"][cls]
+        isento = cls == "AÇÃO" and s["gross_mtd"] <= body["payload"]["isencao_limit"]
+        assert o["isento"] is isento
+        expected = 0.0 if isento else max(
+            0.0, s["pnl_mtd"] - min(s["carry"], max(0.0, s["pnl_mtd"]))
+        ) * rate
+        assert o["ir"] == pytest.approx(expected)
 
     # The read serves the stored row: same timestamp, no second engine run.
     cached = (await client.get("/portfolio/tax-summary", headers=headers)).json()
     assert cached["computed_at"] == body["computed_at"]
     assert cached["payload"] == body["payload"]
+
+    # An extract landing after the computation makes the figure wrong, not merely
+    # old — and the payload has to say which of the two staleness causes it is.
+    files = [("files", ("negociacao-stale.xlsx", b"not really xlsx", _XLSX))]
+    await client.post("/imports", files=files, headers=headers)
+    after = (await client.get("/portfolio/tax-summary", headers=headers)).json()
+    assert after["stale"] is True
+    assert after["stale_reason"] == "import"

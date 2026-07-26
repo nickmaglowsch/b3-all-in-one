@@ -11,6 +11,8 @@ import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
+import { INCOME_LABEL } from "./IncomeSection";
+import type { IncomeRow } from "@/lib/types";
 
 const TITLE = "Rentabilidade vs IBOV e CDI";
 
@@ -46,6 +48,14 @@ export function IndexSection() {
       // user has not read yet. The offer is rendered inline below instead.
       api<PortfolioIndex>("/portfolio/index", {}, { paywallDialog: false }),
     retry: false, // 422 (no trades) and 402 (paywall) are answers, not blips
+  });
+
+  // Same key as IncomeSection and the page gate, so this is a cache read, not a
+  // fourth request. Used only to decide whether the "fora do retorno" caveat
+  // describes a gap this book actually has.
+  const income = useQuery({
+    queryKey: ["income"],
+    queryFn: () => api<IncomeRow[]>("/portfolio/income"),
   });
 
   if (q.isLoading) {
@@ -126,6 +136,15 @@ export function IndexSection() {
       : []),
   ];
 
+  // Categories the engine excludes AND this book actually holds cash in, in the
+  // same pt-BR labels the Proventos card uses.
+  const held = new Set(
+    (income.data ?? []).filter((r) => r.total !== 0).map((r) => r.event_category),
+  );
+  const excludedHeld = data.excluded.categories
+    .filter((c) => held.has(c))
+    .map((c) => INCOME_LABEL[c] ?? c);
+
   // Everything the index could not see, said out loud (spec/03: surfaced, not
   // hidden). Silence here would read as "this is your whole portfolio".
   const caveats = [
@@ -137,8 +156,13 @@ export function IndexSection() {
       `Sem cotação na base: ${data.excluded.unpriced_tickers.join(", ")}.`,
     data.coverage.trades_after_plane > 0 &&
       `${data.coverage.trades_after_plane} operação(ões) posterior(es) à última cotação (${formatDate(data.end)}) foram marcadas nesse preço.`,
-    data.excluded.categories.length > 0 &&
-      `Categorias de caixa fora do retorno: ${data.excluded.categories.join(", ")} — aparecem em Proventos, mas não são retorno da carteira.`,
+    // EXCLUDED_CATEGORIES is a constant in the engine, so this list is never
+    // empty — printing it unconditionally put permanent boilerplate inside the
+    // block whose whole value is that everything in it is a real, specific gap.
+    // It earns its place only when the book actually holds those categories,
+    // and it says so in the same pt-BR labels the Proventos card uses.
+    excludedHeld.length > 0 &&
+      `Fora do retorno: ${excludedHeld.join(", ")} — aparecem em Proventos como caixa, mas não são retorno da carteira.`,
     !hasBench && "IBOV e CDI indisponíveis nesta execução.",
   ].filter(Boolean) as string[];
 

@@ -327,7 +327,7 @@ function Results({ data }: { data: WhatIfResult }) {
       </Card>
 
       <Card title="Comparação">
-        <DataTable columns={columns} rows={tableRows} getRowKey={(r) => r.label} />
+        <DataTable columns={columns} rows={tableRows} getRowKey={(r) => r.label} label="Resultado da simulação" />
         <p className="mt-3 text-xs leading-snug text-muted">
           &quot;Retorno&quot; é o valor final sobre o total aportado (não anualizado).
           Comparação após impostos; a carteira real usa o valor de mercado das

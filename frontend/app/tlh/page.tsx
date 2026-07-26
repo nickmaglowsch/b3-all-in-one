@@ -521,6 +521,7 @@ function BucketCard({
               columns={harvestCols}
               rows={bucket.harvest}
               getRowKey={(r) => r.ticker}
+              label="Vendas para colher prejuízo"
             />
           </div>
 

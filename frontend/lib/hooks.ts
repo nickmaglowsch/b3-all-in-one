@@ -42,17 +42,23 @@ export type ActiveBook =
   | { state: "unknown" };
 
 export function useActiveBook(): ActiveBook {
-  const { data, isError, isLoading } = usePortfolios();
+  const { data, isError } = usePortfolios();
   const active = useSyncExternalStore(subscribePortfolio, getPortfolioId, () => null);
   if (!active) return { state: "self" };
-  // "Still loading" is not "we don't know". Collapsing them made every cold load
-  // of a client book open on an alarm before settling — the standard entry frame
-  // for the tier's main flow. Pending renders as absence; unknown renders loudly.
-  if (isLoading || (!data && !isError)) return { state: "pending" };
-  if (isError) return { state: "unknown" };
+
+  // Answer from cache FIRST. React Query keeps `data` when a *refetch* fails, so
+  // checking isError before the lookup would swap a client's name for an alarm
+  // on a background blip — the same "opens on an alarm" failure this hook was
+  // written to remove, just moved to a different trigger.
   const book = data?.find((p) => p.id === active);
-  if (!book) return { state: "unknown" }; // stale id; the switcher reconciles it
-  return book.is_self ? { state: "self" } : { state: "client", label: book.label };
+  if (book) {
+    return book.is_self ? { state: "self" } : { state: "client", label: book.label };
+  }
+  // No answer available. "Still loading" is absence; a real failure, or an id the
+  // list does not contain, is loud — never the generic "Carteira", because the
+  // request still carries X-Portfolio-Id and the money on screen is the client's.
+  if (isError || data) return { state: "unknown" };
+  return { state: "pending" };
 }
 
 export function useSubscription(awaitingCheckout = false) {

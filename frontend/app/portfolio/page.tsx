@@ -142,14 +142,21 @@ export default function PortfolioPage() {
     hasPositions ||
     (income.data?.length ?? 0) > 0 ||
     (tradeProbe.data?.total ?? 0) > 0;
-  // "Nothing here" is only honest once all three have ANSWERED — and a failed
-  // query has not answered. `?? 0` on a rejected query would coalesce an outage
-  // into "you imported nothing", which is the exact lie the error branch below
-  // exists to prevent; guarding only the positions query left the other two
-  // free to tell it.
-  const anyFailed = q.isError || income.isError || tradeProbe.isError;
+
+  // The income and trades probes exist for ONE question: "is this book really
+  // empty, or did it just sell everything / import movimentação only?" So they
+  // are consulted only when positions came back empty. Blocking the page on them
+  // otherwise meant one slow or failing proventos call blanked a portfolio that
+  // had already loaded — the same over-claiming this gate was written to stop,
+  // pointed the other way.
+  const needsEmptinessProof = !q.isLoading && !q.isError && !hasPositions;
   const stillCounting =
-    q.isLoading || income.isLoading || tradeProbe.isLoading;
+    q.isLoading ||
+    (needsEmptinessProof && (income.isLoading || tradeProbe.isLoading));
+  // A probe that failed cannot prove emptiness either: `?? 0` on a rejected
+  // query would coalesce an outage into "you imported nothing".
+  const anyFailed =
+    q.isError || (needsEmptinessProof && (income.isError || tradeProbe.isError));
   const sections = SECTIONS.filter(
     (s) => hasPositions || (s.id !== "resumo" && s.id !== "alocacao"),
   );

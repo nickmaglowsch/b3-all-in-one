@@ -52,9 +52,19 @@ export const PORTFOLIO_PARAM = "carteira";
 // point the page has already asked the API for the wrong book. Module scope runs
 // once, at import, ahead of everything. sessionStorage stays the store; the URL
 // only seeds it, which keeps the per-tab isolation the two-tab advisor flow needs.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 if (typeof window !== "undefined") {
   const fromUrl = new URLSearchParams(window.location.search).get(PORTFOLIO_PARAM);
-  if (fromUrl && fromUrl !== window.sessionStorage.getItem(PORTFOLIO_KEY)) {
+  // Shape-checked before it is trusted. The value rides on X-Portfolio-Id for
+  // the rest of the tab session, so a link carrying junk would turn every
+  // subsequent request into a 400 with no way back from inside the app.
+  if (
+    fromUrl &&
+    UUID_RE.test(fromUrl) &&
+    fromUrl !== window.sessionStorage.getItem(PORTFOLIO_KEY)
+  ) {
     window.sessionStorage.setItem(PORTFOLIO_KEY, fromUrl);
   }
 }
@@ -159,6 +169,21 @@ export async function api<T>(
       getPortfolioId() &&
       isPlanRequired(detail) &&
       detail.required_plan === "enterprise"
+    ) {
+      clearPortfolioId();
+      window.location.reload();
+      throw new ApiError(res.status, errorMessage(detail, res), detail);
+    }
+    // Same escape hatch for a book that no longer resolves: deleted mid-session,
+    // or a pasted link naming someone else's portfolio, which tenancy answers
+    // 404. Without this the header rides on every later request and the tab is
+    // permanently dead — and the switcher cannot rescue it, because it hides
+    // itself for accounts with only one book.
+    if (
+      res.status === 404 &&
+      typeof window !== "undefined" &&
+      getPortfolioId() &&
+      !ACCOUNT_SCOPED.some((p) => path.startsWith(p))
     ) {
       clearPortfolioId();
       window.location.reload();

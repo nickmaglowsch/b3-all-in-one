@@ -27,7 +27,11 @@ const BUCKETS = [
 function Headroom({ grossMtd, limit }: { grossMtd: number; limit: number }) {
   const used = Math.min(grossMtd / limit, 1);
   const left = Math.max(limit - grossMtd, 0);
-  const over = grossMtd >= limit;
+  // Strictly greater: the engine's rule is `gross <= ISENCAO_LIMIT → isento`,
+  // so exactly R$ 20.000,00 of gross sales is still tax-free. `>=` here made
+  // the card announce "limite ultrapassado" on the same row where its own IR
+  // line said zero.
+  const over = grossMtd > limit;
   return (
     <div>
       <div className="flex items-baseline justify-between gap-2">
@@ -88,7 +92,10 @@ function Bucket({
   bucket: (typeof BUCKETS)[number];
 }) {
   const s = plan.situation[bucket.key];
-  const b = plan.buckets[bucket.key];
+  // `owed` is computed by the API from `situation`, deliberately NOT read off
+  // `buckets[cls].ir` — that field is the IR *after* executing the harvest plan
+  // below, so it reads R$ 0,00 exactly when the real DARF is largest.
+  const owed = plan.owed?.[bucket.key];
   const rate = plan.rates[bucket.key];
   if (!s) return null;
 
@@ -104,7 +111,22 @@ function Bucket({
       <div className="mt-3 space-y-2">
         <Figure label="Resultado no mês" value={s.pnl_mtd} signed />
         <Figure label="Prejuízo a compensar" value={s.carry} />
-        <Figure label="IR devido (estimado)" value={b?.ir ?? 0} />
+        {owed ? (
+          <Figure
+            label="IR devido no mês"
+            value={owed.ir}
+            hint={owed.isento ? "(mês isento)" : undefined}
+          />
+        ) : (
+          // An older cached payload predates the `owed` field. Say so rather
+          // than printing a zero we cannot stand behind.
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-xs text-muted">IR devido no mês</span>
+            <span className="font-mono text-sm text-muted">
+              — apure de novo
+            </span>
+          </div>
+        )}
       </div>
 
       <div className="mt-4 border-t border-hairline pt-3">
@@ -212,6 +234,27 @@ export function TaxSection() {
     </button>
   );
 
+  // Rendered in BOTH states. Living only in the never-computed branch meant a
+  // failed recompute over existing numbers was completely silent: the button
+  // re-enabled, the stale figures stayed, and the user believed they had just
+  // re-apurado.
+  const refreshError = refresh.isError && (
+    <p className="mt-3 text-xs text-loss">
+      <span aria-hidden>▲ </span>
+      {refresh.error instanceof ApiError && refresh.error.status === 422
+        ? "Sem negociações para apurar — importe um extrato de negociação primeiro."
+        : refresh.error instanceof ApiError && refresh.error.status === 409
+          ? "Já existe uma apuração em andamento. Aguarde alguns segundos."
+          : "A apuração falhou e os números abaixo continuam os anteriores."}
+    </p>
+  );
+
+  const busy = (
+    <p role="status" aria-live="polite" className="sr-only">
+      {running ? "Apurando situação fiscal" : ""}
+    </p>
+  );
+
   // Never computed. Not an error and not an empty book — the apuração simply has
   // not been asked for, and it costs a real engine run, so it says so.
   if (!plan) {
@@ -223,16 +266,8 @@ export function TaxSection() {
           hint="A apuração roda o mesmo motor do IRPF sobre todo o seu histórico — leva alguns segundos e fica guardada."
           action={recompute}
         />
-        <p role="status" aria-live="polite" className="sr-only">
-          {running ? "Apurando situação fiscal" : ""}
-        </p>
-        {refresh.isError && (
-          <p className="mt-3 text-center text-xs text-loss">
-            {refresh.error instanceof ApiError && refresh.error.status === 422
-              ? "Sem negociações para apurar — importe um extrato de negociação primeiro."
-              : "A apuração falhou. Tente novamente."}
-          </p>
-        )}
+        {busy}
+        <div className="text-center">{refreshError}</div>
       </Card>
     );
   }
@@ -250,14 +285,18 @@ export function TaxSection() {
       }
     >
       {/* A tax figure computed before the newest extract is wrong, not merely
-          old. Saying so is the same commitment as the index's caveat block. */}
+          old — and so is one from last month, since every figure here is
+          month-to-date. Both are reported, with the cause named. */}
       {data?.stale && (
         <p className="mb-4 rounded-md border border-hairline bg-paper p-3 text-sm text-ink">
           <span aria-hidden>▲ </span>
-          Um extrato foi importado depois desta apuração, então estes números não
-          incluem as operações novas. Apure de novo para atualizar.
+          {data.stale_reason === "month"
+            ? `Esta apuração é de ${plan.month} e o mês virou: a isenção reinicia e o resultado do mês volta a zero. Apure de novo para ver ${new Date().toLocaleDateString("pt-BR", { month: "2-digit", year: "numeric" })}.`
+            : "Um extrato foi importado depois desta apuração, então estes números não incluem as operações novas. Apure de novo para atualizar."}
         </p>
       )}
+
+      {refreshError}
 
       <div className="grid gap-3 md:grid-cols-2">
         {BUCKETS.map((b) => (
@@ -268,13 +307,12 @@ export function TaxSection() {
       <HarvestList plan={plan} />
 
       <p className="mt-4 text-xs text-muted">
-        O app apura; você confere contra o informe e declara. O IR estimado usa as
-        alíquotas de swing trade e não cobre day trade.
+        O app apura; você confere contra o informe e declara. O IR devido é o do
+        mês como ele está hoje — colher os candidatos acima reduz esse valor, mas
+        só depois de executado. Alíquotas de swing trade; não cobre day trade.
       </p>
 
-      <p role="status" aria-live="polite" className="sr-only">
-        {running ? "Apurando situação fiscal" : ""}
-      </p>
+      {busy}
     </Card>
   );
 }
@@ -300,7 +338,10 @@ function HarvestList({ plan }: { plan: TaxPlan }) {
               {formatQty(h.qty)}
             </span>
             {h.partial && <span className="text-xs text-muted">parcial</span>}
-            <Money value={-Math.abs(h.realized_loss)} sign className="ml-auto text-sm" />
+            {/* realized_loss already arrives negative from the engine; passing
+                it through unchanged means a sign inversion upstream would show
+                up here instead of being silently absorbed by Math.abs. */}
+            <Money value={h.realized_loss} sign className="ml-auto text-sm" />
           </li>
         ))}
       </ul>

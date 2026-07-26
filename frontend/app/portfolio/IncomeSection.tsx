@@ -13,7 +13,7 @@ import { formatMoney } from "@/lib/format";
 
 // event_category is the only breakdown the API exposes (income lumps dividendos +
 // JCP + rendimentos). Friendly pt-BR labels; unknown categories fall back capitalised.
-const LABEL: Record<string, string> = {
+export const INCOME_LABEL: Record<string, string> = {
   income: "Proventos",
   premium: "Prêmios",
   reembolso: "Reembolsos",
@@ -21,7 +21,7 @@ const LABEL: Record<string, string> = {
   other: "Outros",
   qty_event: "Eventos de qtd.",
 };
-const label = (c: string) => LABEL[c] ?? c.charAt(0).toUpperCase() + c.slice(1);
+const label = (c: string) => INCOME_LABEL[c] ?? c.charAt(0).toUpperCase() + c.slice(1);
 
 type MatrixRow = {
   key: string;

@@ -307,6 +307,17 @@ export interface TaxSituation {
   carry: number;
 }
 
+/** IR owed on the month as it stands, computed by the API from `situation`.
+ *  Deliberately not `TaxBucket.ir`, which is the IR *after* executing the
+ *  harvest plan and therefore reads zero exactly when the real DARF is largest. */
+export interface TaxOwed {
+  /** Ações only: gross sales at or below the R$20k monthly limit. */
+  isento: boolean;
+  carry_used: number;
+  taxable: number;
+  ir: number;
+}
+
 export interface TaxPlan {
   month: string;
   generated: string;
@@ -314,10 +325,14 @@ export interface TaxPlan {
   rates: Record<string, number>;
   situation: Record<string, TaxSituation>;
   buckets: Record<string, TaxBucket>;
+  /** Absent on payloads cached before this field existed. */
+  owed?: Record<string, TaxOwed>;
 }
 
 export interface TaxSummary {
   payload: TaxPlan | null;
   computed_at: string | null;
   stale: boolean;
+  /** Why it is stale: a newer import, or the month rolling over. */
+  stale_reason: "import" | "month" | null;
 }

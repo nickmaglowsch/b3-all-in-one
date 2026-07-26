@@ -39,6 +39,7 @@ def run_pipeline(
     start_year: Optional[int] = None,
     skip_corporate_actions: bool = False,
     detect_nonstandard_splits: bool = False,
+    force_download: bool = False,
 ) -> None:
     """
     Execute the complete B3 data pipeline.
@@ -102,7 +103,15 @@ def run_pipeline(
         logger.info("Step 3/9: Downloading COTAHIST files...")
         downloaded_files = []
         for y in years_to_process:
-            filepath = downloader.download_annual_file(y)
+            # force_download matters for the CURRENT year only, and it is what makes
+            # a repeat run mean anything: B3 rewrites COTAHIST_A<current>.ZIP every
+            # trading day, but download_annual_file returns the local copy when one
+            # exists. Without this a scheduled run re-parses yesterday's file
+            # forever — green logs, no new rows. Closed years never change, so
+            # forcing those would only re-download gigabytes.
+            filepath = downloader.download_annual_file(
+                y, force=force_download and y == config.get_current_year()
+            )
             if filepath:
                 downloaded_files.append(filepath)
 
@@ -256,7 +265,12 @@ def run_pipeline(
         end_time = datetime.now()
         duration = end_time - start_time
         logger.info(f"Total duration: {duration}")
-        logger.info(f"Database: {config.DB_PATH}")
+        # Report where the rows actually went. ENGINE_DATABASE_URL overrides
+        # DB_PATH, so printing DB_PATH unconditionally claimed a SQLite file even
+        # on runs that wrote to Postgres — a confusing first clue when a scheduled
+        # ingest looks successful but the plane hasn't moved. Masked: the URL
+        # carries the password.
+        logger.info(f"Database: {storage.describe_target()}")
 
     except Exception as e:
         logger.exception(f"Pipeline failed with error: {e}")
@@ -410,6 +424,16 @@ Examples:
     )
 
     arg_parser.add_argument(
+        "--force-download",
+        action="store_true",
+        help="Re-download the current year's COTAHIST file instead of reusing the "
+             "local copy. Required for any repeat/scheduled run: B3 rewrites the "
+             "current year's archive daily, and without this the pipeline re-parses "
+             "the already-downloaded file and never advances. Closed years are "
+             "immutable and are never re-downloaded.",
+    )
+
+    arg_parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -432,6 +456,7 @@ Examples:
             start_year=args.start_year,
             skip_corporate_actions=args.skip_corporate_actions,
             detect_nonstandard_splits=args.detect_nonstandard_splits,
+            force_download=args.force_download,
         )
 
 

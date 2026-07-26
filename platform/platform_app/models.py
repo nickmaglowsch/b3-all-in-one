@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -85,19 +86,27 @@ class Portfolio(Base):
 # taxcore's load_b3; the import job replaces them wholesale per tenant per run.
 
 
-def _tenant_col() -> Mapped[uuid.UUID]:
+def _tenant_col(index: bool = True) -> Mapped[uuid.UUID]:
     # ponytail: no FK — a tenant_id is either a user.id (own book) or a
     # portfolios.id (managed), and one column can't reference both. Ownership is
     # enforced in tenancy.get_current_tenant, the single door to a tenant_id.
     # Upgrade path: give every account a portfolios row and point the FK there.
-    return mapped_column(GUID, index=True, nullable=False)
+    #
+    # index=False on the tables whose reads also sort: those carry a composite
+    # (tenant_id, <sort key>) in __table_args__ instead, which serves the plain
+    # tenant_id lookup too. A second single-column index there would be dead
+    # weight the import rebuild pays to maintain.
+    return mapped_column(GUID, index=index, nullable=False)
 
 
 class Import(Base):
     __tablename__ = "imports"
+    __table_args__ = (
+        Index("ix_imports_tenant_created", "tenant_id", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     stored_path: Mapped[str] = mapped_column(String, nullable=False)
     kind: Mapped[str] = mapped_column(String, nullable=False)  # negociacao|movimentacao|unknown
@@ -112,9 +121,13 @@ class Import(Base):
 class Trade(Base):
     # Mirrors taxcore/data/trades.csv (its __source_file column -> source_file here).
     __tablename__ = "trades"
+    __table_args__ = (
+        # GET /portfolio/trades pages by (date DESC, id DESC).
+        Index("ix_trades_tenant_date", "tenant_id", text("date DESC"), text("id DESC")),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
     date: Mapped[datetime.date | None] = mapped_column(Date)
     side: Mapped[str | None] = mapped_column(String)
     market: Mapped[str | None] = mapped_column(String)
@@ -149,9 +162,12 @@ class CashEvent(Base):
 class Position(Base):
     # Mirrors taxcore/data/positions.csv.
     __tablename__ = "positions"
+    __table_args__ = (
+        Index("ix_positions_tenant_ticker", "tenant_id", "ticker"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
     ticker: Mapped[str | None] = mapped_column(String)
     qty: Mapped[float | None] = mapped_column(Float)
     avg_cost: Mapped[float | None] = mapped_column(Float)
@@ -179,9 +195,12 @@ class BacktestRun(Base):
     # (scripts/run_backtest_json.py), stores metrics here and artifacts under
     # ARTIFACTS_DIR/{id}/ (curves.csv, metrics.json).
     __tablename__ = "backtest_runs"
+    __table_args__ = (
+        Index("ix_backtest_runs_tenant_created", "tenant_id", text("created_at DESC")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
-    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
     strategy: Mapped[str] = mapped_column(String, nullable=False)
     params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(  # pending|running|done|error
@@ -274,6 +293,39 @@ class UserStrategy(Base):
     updated_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class IngestRun(Base):
+    """One market-data ingestion attempt (prices or CVM fundamentals).
+
+    Not tenant-scoped: the market plane is shared infrastructure, not anyone's
+    book — which is also why it is deliberately absent from the LGPD export and
+    erasure sweeps (they key on tenant_id).
+
+    Exists so a failed refresh is visible. The price plane sat seven months stale
+    with nothing anywhere saying so; the pipeline logs lived and died inside a
+    container. A row per run, surfaced by GET /market/status, is what turns that
+    into something noticeable.
+    """
+
+    __tablename__ = "ingest_runs"
+    __table_args__ = (
+        # The only read is "latest run per kind" (GET /market/status).
+        Index("ix_ingest_runs_kind_started", "kind", text("started_at DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
+    kind: Mapped[str] = mapped_column(String, nullable=False)  # prices | fundamentals
+    status: Mapped[str] = mapped_column(String, nullable=False)  # running|done|error
+    started_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    finished_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # Tail of the subprocess output on failure. Never returned to tenants — it
+    # carries server paths (see the same reasoning in privacy._INTERNAL_COLUMNS).
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class DarfPayment(Base):

@@ -323,6 +323,25 @@ INDEX_FUNDAMENTALS_PIT_FILING_DATE = "CREATE INDEX IF NOT EXISTS idx_fundamental
 INDEX_FUNDAMENTALS_PIT_PERIOD = "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_period ON fundamentals_pit(period_end);"
 
 
+def describe_target(db_path: Optional[Path] = None) -> str:
+    """Human-readable description of where get_connection() will write, with any
+    password masked. For logs — a run that reports a SQLite path while writing to
+    Postgres is a bad first clue when a scheduled ingest doesn't move the plane.
+    Mirrors the precedence in get_connection below.
+    """
+    env = os.environ.get("ENGINE_DATABASE_URL")
+    dsn = env if _is_pg_url(env) else (str(db_path) if _is_pg_url(db_path) else None)
+    if dsn is None:
+        if db_path is not None:
+            return f"sqlite:{db_path}"
+        return f"sqlite:{_sqlite_path(env) if env else config.DB_PATH}"
+    scheme, _, rest = dsn.partition("://")
+    creds, at, host = rest.rpartition("@")
+    if not at:
+        return dsn
+    return f"{scheme}://{creds.split(':', 1)[0]}:***@{host}"
+
+
 def get_connection(db_path: Optional[Path] = None):
     """Return a DB connection, resolving the backend from ENGINE_DATABASE_URL.
 

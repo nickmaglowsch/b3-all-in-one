@@ -55,10 +55,15 @@ export function useHealth() {
   });
 }
 
+// The market plane only moves when the ingestion pipeline is run, which is a
+// manual job — polling it every minute asked the DB to aggregate the whole
+// `prices` table 60x an hour per open tab to report a number that changes at
+// most daily. The API caches this for a minute regardless; this just stops the
+// client asking for what cannot have changed.
 export function useMarketStatus() {
   return useQuery({
     queryKey: ["market-status"],
     queryFn: () => api<MarketStatus>("/market/status"),
-    refetchInterval: 60_000,
+    refetchInterval: 300_000,
   });
 }

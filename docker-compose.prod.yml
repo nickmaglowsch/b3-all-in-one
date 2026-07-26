@@ -60,9 +60,37 @@ services:
       - shared
     restart: unless-stopped
 
+  # Scheduled market-data refresh (prices nightly, CVM fundamentals weekly). Its
+  # own service so a multi-hour run never sits in front of a user's import or
+  # backtest in the two-slot `worker`. This is also the process that puts the cron
+  # schedule in motion — procrastinate defers periodic tasks from the worker that
+  # listens on their queue.
+  ingest:
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
+    container_name: b3_ingest
+    command: ["python", "-m", "platform_app.worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@infra_postgres:5432/${POSTGRES_DB}
+      ENGINE_DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@infra_postgres:5432/${POSTGRES_DB}
+      ENVIRONMENT: production
+      SECRET_KEY: ${SECRET_KEY}
+      WORKER_QUEUES: ingest
+      UPLOADS_DIR: /data/uploads
+      ARTIFACTS_DIR: /data/artifacts
+    volumes:
+      # COTAHIST/CVM archives land here. Without a volume the scheduled run
+      # re-downloads 1994..today on every container restart.
+      - engine_data:/opt/engine/data
+    networks:
+      - shared
+    restart: unless-stopped
+
 volumes:
   uploads_data:
   artifacts_data:
+  engine_data:
 
 networks:
   shared:

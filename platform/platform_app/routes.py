@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import datetime
 import json
 import math
 import shutil
@@ -16,7 +17,6 @@ from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
 
-import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, UploadFile
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select, update
@@ -26,10 +26,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from platform_app import b3run, enginerun, specstore, tasks
 from platform_app.billing import needs_investidor, needs_trader
 from platform_app.config import settings
-from platform_app.db import get_async_session
+from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
+    IngestRun, PortfolioSleeve, Position, RebalanceSettings, Trade, UserStrategy,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
@@ -40,6 +40,15 @@ tlh_router = APIRouter(prefix="/tlh", tags=["tlh"])
 strategies_router = APIRouter(prefix="/strategies", tags=["backtests"])
 backtests_router = APIRouter(prefix="/backtests", tags=["backtests"])
 market_router = APIRouter(prefix="/market", tags=["market"])
+
+
+# Admission control on the upload boundary. `await f.read()` materializes the whole
+# body in RAM before anything is written, so without a cap one authenticated POST
+# of a 5 GB "xlsx" is an OOM of the api container, and a loop of them fills the
+# shared /data/uploads volume. A B3 annual extract is tens of KB; 25 MB x 24 files
+# is already far beyond any real year.
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_UPLOAD_FILES = 24
 
 
 def _detect_kind(name: str) -> str:
@@ -60,6 +69,8 @@ async def create_imports(
     _user, tid = tenant
     if not files:
         raise HTTPException(400, "no files uploaded")
+    if len(files) > MAX_UPLOAD_FILES:
+        raise HTTPException(400, f"no máximo {MAX_UPLOAD_FILES} arquivos por envio")
     for f in files:
         if not (f.filename or "").lower().endswith(".xlsx"):
             raise HTTPException(400, f"only .xlsx accepted: {f.filename}")
@@ -68,13 +79,19 @@ async def create_imports(
     dest.mkdir(parents=True, exist_ok=True)
     created: list[Import] = []
     for f in files:
+        # Read one byte past the cap: enough to know it is oversized, without ever
+        # holding the oversized body. Rejecting after a full read would be the DoS.
+        data = await f.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                413, f"arquivo grande demais (limite {MAX_UPLOAD_BYTES // 1024 // 1024} MB): {f.filename}")
         # Starlette hands back the client's filename verbatim, so `..` in it would
         # write outside the tenant's directory — and LGPD erasure rmtree's exactly
         # that directory, so an escaped extract would outlive the account that owns
         # it. The same name is later joined into the IRPF workspace (irpf_report).
         name = Path(f.filename).name
         path = dest / name
-        path.write_bytes(await f.read())
+        path.write_bytes(data)
         imp = Import(
             tenant_id=tid, filename=name, stored_path=str(path),
             kind=_detect_kind(name), status="pending",
@@ -177,19 +194,16 @@ async def get_price_history(
     if not tickers:
         return {}
     try:
-        conn = await asyncpg.connect(settings.engine_database_url)
-        try:
-            rows = await conn.fetch(
-                "SELECT ticker, close FROM prices "
-                "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
-                # window anchored to the snapshot's own last date, not today —
-                # a stale market plane should still draw a chart.
-                "AND date >= (SELECT MAX(date) FROM prices) - INTERVAL '6 months' "
-                "ORDER BY ticker, date",
-                tickers,
-            )
-        finally:
-            await conn.close()
+        pool = await get_engine_pool()
+        rows = await pool.fetch(
+            "SELECT ticker, close FROM prices "
+            "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
+            # window anchored to the snapshot's own last date, not today —
+            # a stale market plane should still draw a chart.
+            "AND date >= (SELECT MAX(date) FROM prices) - INTERVAL '6 months' "
+            "ORDER BY ticker, date",
+            tickers,
+        )
     except Exception:
         # ponytail: market plane down → no sparklines, same fallback as
         # /positions. A decoration isn't worth a 500.
@@ -326,6 +340,18 @@ async def put_sleeves(
 # same-day edit busts the entry; built-in refs keep the shared 3-tuple key.
 _SLEEVE_WEIGHTS_CACHE: dict[tuple, dict] = {}
 
+# Every key here embeds a date or an updated_at, so entries are never reused past
+# the day they were written — without a bound the dict just grows by
+# (tenants x strategies) per day until the process restarts. Dropping the whole
+# thing on overflow is fine: it is a cache, and the next call refills what it needs.
+_CACHE_MAX = 1024
+
+
+def _bounded(cache: dict) -> dict:
+    if len(cache) > _CACHE_MAX:
+        cache.clear()
+    return cache
+
 
 def _needs_funds_msg(strategies: list[str]) -> str:
     """pt-BR message naming the strategy/strategies that need fundamentals data."""
@@ -342,12 +368,9 @@ async def _fundamentals_available() -> bool:
     """True when fundamentals_pit has any rows in the engine market plane.
     Same DSN/pattern as market_status — the actual-availability check the guards
     key on, so a strategy 'just works' the moment fundamentals are ingested."""
-    conn = await asyncpg.connect(settings.engine_database_url)
-    try:
-        n = await conn.fetchval("SELECT count(*) FROM fundamentals_pit")
-    finally:
-        await conn.close()
-    return bool(n and n > 0)
+    pool = await get_engine_pool()
+    # EXISTS, not count(*): the question is "any rows?", and count scans them all.
+    return bool(await pool.fetchval("SELECT EXISTS (SELECT 1 FROM fundamentals_pit)"))
 
 
 async def _advise(**kwargs) -> dict:
@@ -460,7 +483,7 @@ async def _combined_target(
             except enginerun.EngineNeedsFundamentals as e:
                 missing.append(e.strategy or s.strategy_ref)
                 continue
-            _SLEEVE_WEIGHTS_CACHE[key] = adv
+            _bounded(_SLEEVE_WEIGHTS_CACHE)[key] = adv
         for t, w in adv["weights"].items():
             combined[t] = combined.get(t, 0.0) + pct * float(w)
     if missing:
@@ -697,7 +720,7 @@ async def irpf_report(
         select(Import).where(Import.tenant_id == tid, Import.kind == "movimentacao")
     )).all()
 
-    ws = Path(tempfile.mkdtemp(prefix="b3irpf-"))
+    ws = Path(tempfile.mkdtemp(prefix="b3irpf-", dir=b3run.workspace_root(tid)))
     try:
         b3run.seed_workspace(ws)
         b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, [
@@ -741,16 +764,13 @@ async def _latest_engine_prices(tickers: list[str]) -> list[list]:
     tickers = sorted({t for t in tickers if t})
     if not tickers:
         return []
-    conn = await asyncpg.connect(settings.engine_database_url)
-    try:
-        rows = await conn.fetch(
-            "SELECT DISTINCT ON (ticker) ticker, close FROM prices "
-            "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
-            "ORDER BY ticker, date DESC",
-            tickers,
-        )
-    finally:
-        await conn.close()
+    pool = await get_engine_pool()
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (ticker) ticker, close FROM prices "
+        "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
+        "ORDER BY ticker, date DESC",
+        tickers,
+    )
     return [[r["ticker"], float(r["close"])] for r in rows if r["close"]]
 
 
@@ -770,7 +790,7 @@ async def _run_tlh_plan(
         select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
     )).all()
 
-    ws = Path(tempfile.mkdtemp(prefix="b3tlh-"))
+    ws = Path(tempfile.mkdtemp(prefix="b3tlh-", dir=b3run.workspace_root(tid)))
     try:
         b3run.seed_workspace(ws)
         # tlh_plan reads: data/trades.csv + data/cash_events.csv (build_timeline),
@@ -884,7 +904,7 @@ async def _gallery(session: AsyncSession, tid: uuid.UUID | None) -> list[dict]:
     user_names = {r.name for r in rows}
     merged = [{**s, "source": "user" if s["name"] in user_names else "builtin"}
               for s in json.loads(proc.stdout)]
-    _TENANT_GALLERY[tid] = (fingerprint, merged)
+    _bounded(_TENANT_GALLERY)[tid] = (fingerprint, merged)
     return merged
 
 
@@ -1242,11 +1262,17 @@ async def promote_user_strategy(
 # ── Backtests ─────────────────────────────────────────────────────────────────
 
 class BacktestRequest(BaseModel):
+    # start/end/freq are forwarded to the engine, where `freq` reaches
+    # pandas .resample() over ~20 years of daily prices. As a free-form string it
+    # accepts "s", which asks the shared worker to build a second-resolution frame
+    # of hundreds of millions of rows — an OOM of the box the API runs on. Reuse
+    # the cadence enum the rest of the app already validates against, and let
+    # pydantic parse the dates instead of passing text through.
     strategy: str
     params: dict | None = None
-    start: str | None = None
-    end: str | None = None
-    freq: str | None = None
+    start: date | None = None
+    end: date | None = None
+    freq: _REBALANCE | None = None
 
 
 def _run_dict(r: BacktestRun) -> dict:
@@ -1270,8 +1296,12 @@ async def create_backtest(
         raise HTTPException(404, f"unknown strategy: {body.strategy}")
     run = BacktestRun(
         tenant_id=tid, strategy=body.strategy, status="pending",
-        params={"params": body.params or {}, "start": body.start,
-                "end": body.end, "freq": body.freq},
+        # isoformat, not the date object: this column is JSONB, and the engine
+        # reads start/end back as strings.
+        params={"params": body.params or {},
+                "start": body.start.isoformat() if body.start else None,
+                "end": body.end.isoformat() if body.end else None,
+                "freq": body.freq},
     )
     session.add(run)
     await session.commit()
@@ -1343,29 +1373,65 @@ async def get_backtest_curves(
 
 
 # ── Market status ─────────────────────────────────────────────────────────────
+# count(*) + count(DISTINCT ticker) over `prices` is an aggregate across the whole
+# table (89 ms at 257k rows, and it grows linearly with the plane). The dashboard
+# polls this endpoint on a timer from every open tab, so the cost used to scale
+# with the number of people looking at it. One cached answer per TTL decouples the
+# two: the plane only changes when the ingestion pipeline runs, which is a manual,
+# infrequent job.
+_MARKET_STATUS_TTL = datetime.timedelta(seconds=60)
+_market_status_cache: tuple[datetime.datetime, dict] | None = None
 
-@market_router.get("/status")
-async def market_status() -> dict:
-    """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
-    0-row tables are reported honestly (fresh: null)."""
-    conn = await asyncpg.connect(settings.engine_database_url)
+
+async def _last_ingest(session: AsyncSession) -> dict[str, dict]:
+    """Latest ingestion attempt per kind. `error` is deliberately not exposed —
+    it carries subprocess output with server paths (privacy._INTERNAL_COLUMNS
+    strips the same field for the same reason); `status` is the part a caller
+    needs. Never fails the status call: knowing the plane is stale matters more
+    than knowing why."""
+    out: dict[str, dict] = {}
     try:
-        prices = await conn.fetchrow(
-            "SELECT count(*) AS rows, count(DISTINCT ticker) AS tickers, "
-            "min(date) AS min_date, max(date) AS max_date FROM prices"
+        rows = (await session.scalars(
+            select(IngestRun).order_by(IngestRun.kind, IngestRun.started_at.desc())
+        )).all()
+    except Exception:
+        return out
+    for r in rows:
+        out.setdefault(r.kind, {
+            "status": r.status,
+            "started_at": r.started_at.isoformat() if r.started_at else None,
+            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+        })
+    return out
+
+
+# What an absent market plane looks like. A fresh deploy has no `prices` table at
+# all until the first ingest runs, and aggregating a missing table raises — so the
+# status endpoint used to 500 on exactly the environment that most needs to report
+# "there is no data yet". Same posture as /positions and /price-history: the plane
+# is optional, its absence is a fact to report, not an error.
+_EMPTY_PLANE = {
+    "prices": {"rows": 0, "tickers": 0, "min_date": None, "max_date": None},
+    "tables": {},
+}
+
+
+async def _market_status_uncached() -> dict:
+    pool = await get_engine_pool()
+    prices = await pool.fetchrow(
+        "SELECT count(*) AS rows, count(DISTINCT ticker) AS tickers, "
+        "min(date) AS min_date, max(date) AS max_date FROM prices"
+    )
+    tables = {}
+    for name, datecol in (("corporate_actions", "event_date"),
+                          ("fundamentals_pit", "filing_date")):
+        row = await pool.fetchrow(
+            f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}"
         )
-        tables = {}
-        for name, datecol in (("corporate_actions", "event_date"),
-                              ("fundamentals_pit", "filing_date")):
-            row = await conn.fetchrow(
-                f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}"
-            )
-            tables[name] = {
-                "rows": row["rows"],
-                "fresh": row["fresh"].isoformat() if row["fresh"] else None,
-            }
-    finally:
-        await conn.close()
+        tables[name] = {
+            "rows": row["rows"],
+            "fresh": row["fresh"].isoformat() if row["fresh"] else None,
+        }
     return {
         "prices": {
             "rows": prices["rows"],
@@ -1374,4 +1440,47 @@ async def market_status() -> dict:
             "max_date": prices["max_date"].isoformat() if prices["max_date"] else None,
         },
         "tables": tables,
+    }
+
+
+# Prices are expected every trading day. Four calendar days absorbs a long weekend
+# plus a feriado without crying wolf; past that the plane is genuinely behind.
+_PRICES_STALE_AFTER_DAYS = 4
+
+
+@market_router.get("/status")
+async def market_status(
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
+    0-row tables are reported honestly (fresh: null). Cached for _MARKET_STATUS_TTL.
+
+    `stale` is the field worth acting on: this plane sat seven months behind while
+    every position was marked from it, and nothing said so.
+    """
+    global _market_status_cache
+    now = datetime.datetime.now(datetime.UTC)
+    if _market_status_cache and now - _market_status_cache[0] < _MARKET_STATUS_TTL:
+        payload = _market_status_cache[1]
+    else:
+        try:
+            payload = await _market_status_uncached()
+        except Exception:
+            # Not cached: an unreachable plane should recover on the next call
+            # rather than be pinned as empty for the whole TTL.
+            return {**_EMPTY_PLANE, "prices_age_days": None, "stale": True,
+                    "last_ingest": await _last_ingest(session)}
+        _market_status_cache = (now, payload)
+
+    max_date = payload["prices"]["max_date"]
+    age_days = (
+        (now.date() - date.fromisoformat(max_date)).days if max_date else None
+    )
+    # Not cached with the payload: ingest rows change on their own schedule, and
+    # this is one indexed query against the platform DB.
+    return {
+        **payload,
+        "prices_age_days": age_days,
+        "stale": age_days is None or age_days > _PRICES_STALE_AFTER_DAYS,
+        "last_ingest": await _last_ingest(session),
     }

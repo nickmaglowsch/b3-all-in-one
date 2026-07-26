@@ -22,11 +22,11 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import enginerun, specstore
+from platform_app import b3run, enginerun, specstore
 from platform_app.db import get_async_session
 from platform_app.models import CashEvent, Position, Trade
 from platform_app.routes import (
@@ -44,8 +44,17 @@ whatif_router = APIRouter(prefix="/whatif", tags=["whatif"])
 INCOME_CATEGORIES = {"income", "amortization"}
 
 
+# Each id replays the tenant's whole history through a full backtest subprocess,
+# serially — so the request's cost is linear in the list the caller sends. Uncapped,
+# one authenticated POST with the whole gallery in it occupies the box for minutes.
+# ponytail: a cap, not a queue — this is a comparison a person reads, and four
+# scenarios is already more than a chart shows well. Move it to the job queue
+# (like /backtests) if the comparison ever needs to be wider than that.
+MAX_SCENARIOS = 4
+
+
 class WhatIfRequest(BaseModel):
-    strategy_ids: list[str]
+    strategy_ids: list[str] = Field(max_length=MAX_SCENARIOS)
     freq: str = "ME"
 
 
@@ -94,11 +103,15 @@ def _read_curve(path: Path) -> list[dict]:
                 for r in csv.DictReader(fh)]
 
 
-def _run_whatif(strategy: str, config: dict, extra_env: dict | None = None) -> dict:
+def _run_whatif(
+    strategy: str, config: dict, tid, extra_env: dict | None = None
+) -> dict:
     """Run scripts/whatif_run.py in the engine venv (mirrors enginerun's subprocess
     pattern; reuses its interpreter + env resolution) and return {summary, curve}.
-    Artifacts land in a temp dir we read then delete. Blocking — call via to_thread."""
-    out = Path(tempfile.mkdtemp(prefix="b3whatif-"))
+    Artifacts land in a scratch dir we read then delete — under the tenant's own
+    uploads dir so a skipped `finally` leaves nothing erasure can't reach (see
+    b3run.workspace_root). Blocking — call via to_thread."""
+    out = Path(tempfile.mkdtemp(prefix="b3whatif-", dir=b3run.workspace_root(tid)))
     try:
         proc = enginerun.run_script(
             "whatif_run.py", [strategy, str(out), json.dumps(config)], extra_env)
@@ -142,7 +155,7 @@ async def create_whatif(
     for sid in body.strategy_ids:
         config = {"flows": flows_list, "start": start, "freq": body.freq}
         try:
-            out = await asyncio.to_thread(_run_whatif, sid, config, extra_env)
+            out = await asyncio.to_thread(_run_whatif, sid, config, tid, extra_env)
         except RuntimeError as e:
             raise HTTPException(500, f"whatif ({sid}) failed: {e}")
         m = out["summary"]

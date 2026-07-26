@@ -22,6 +22,8 @@ ENGINE = Path(settings.engine_dir) if settings.engine_dir else _DEFAULT_ENGINE
 # Mirror of advise_weights.NEEDS_FUNDAMENTALS_EXIT: the strategy needs CVM
 # fundamentals but fundamentals_pit is empty in the active engine DB.
 NEEDS_FUNDAMENTALS_EXIT = 3
+# Synthetic exit code for a subprocess we killed on the timeout (shell convention).
+TIMEOUT_EXIT = 124
 
 
 class EngineNeedsFundamentals(RuntimeError):
@@ -62,11 +64,47 @@ def _env(extra_env: dict | None = None) -> dict:
 def run_script(
     script: str, args: list[str], extra_env: dict | None = None
 ) -> subprocess.CompletedProcess:
-    """``python scripts/<script> [args...]`` with the engine interpreter."""
-    return subprocess.run(
-        [*_engine_python(), str(ENGINE / "scripts" / script), *args],
-        cwd=ENGINE, env=_env(extra_env), capture_output=True, text=True,
-    )
+    """``python scripts/<script> [args...]`` with the engine interpreter.
+
+    A timeout returns exit code 124 rather than raising, so every existing
+    ``if proc.returncode != 0`` caller reports it as an engine failure with no
+    new error handling — and no request or job can pin a thread forever.
+    """
+    argv = [*_engine_python(), str(ENGINE / "scripts" / script), *args]
+    try:
+        return subprocess.run(
+            argv, cwd=ENGINE, env=_env(extra_env), capture_output=True, text=True,
+            timeout=settings.subprocess_timeout_s,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, TIMEOUT_EXIT, stdout="",
+            stderr=f"{script} timed out after {settings.subprocess_timeout_s}s",
+        )
+
+
+def run_module(
+    module_args: list[str], timeout_s: int | None = None
+) -> subprocess.CompletedProcess:
+    """``python -m <module> [args...]`` with the engine interpreter.
+
+    For the ingestion pipelines (``b3_pipeline.main``, ``b3_pipeline.cvm_main``),
+    which are modules rather than scripts/ entry points. They take minutes to
+    hours, so they get their own timeout rather than the per-request default —
+    but still a bounded one, so a wedged download can't hold a worker slot for a
+    week. Timeout maps to exit 124 like the other runners.
+    """
+    argv = [*_engine_python(), "-m", *module_args]
+    limit = timeout_s if timeout_s is not None else settings.ingest_timeout_s
+    try:
+        return subprocess.run(
+            argv, cwd=ENGINE, env=_env(), capture_output=True, text=True, timeout=limit,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, TIMEOUT_EXIT, stdout="",
+            stderr=f"{module_args[0]} timed out after {limit}s",
+        )
 
 
 def _last_json(text: str) -> dict:

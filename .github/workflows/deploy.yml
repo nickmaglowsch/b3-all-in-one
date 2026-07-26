@@ -48,7 +48,13 @@ jobs:
     name: Static site to Cloudflare Pages
     runs-on: ubuntu-latest
     environment: production
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # Same head_repository guard as the backend job — `branches: [main]` matches the
+    # workflow_run's head branch, so a fork PR from a branch named main would
+    # otherwise reach a deploy job holding CLOUDFLARE_API_TOKEN.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     env:
       # Secrets can't be read in a job-level `if`, so gate the steps on this instead:
       # until CLOUDFLARE_API_TOKEN is set the job is a green no-op (backend still ships).

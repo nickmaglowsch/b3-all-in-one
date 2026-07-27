@@ -225,6 +225,29 @@ def _apply_delisted_filter(
     return tuple(result)
 
 
+def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
+    """One (date x ticker) reshape covering every value column.
+
+    Pivoting per value column rebuilt the same grid once per frame — three times
+    in load_b3_data, six in load_b3_hlc_data, over the whole price history on
+    every backtest.
+
+    An empty input is special-cased: a multi-value pivot of no rows produces a
+    column MultiIndex whose value level exists but is unused, so `wide[v]` raises
+    KeyError where the single-value pivot returned an empty frame. A fresh
+    database with no prices yet is a real state (it is what CI runs against), so
+    it gets the empty frames it used to get.
+    """
+    if df.empty:
+        return [
+            pd.DataFrame(index=pd.Index([], name="date"),
+                         columns=pd.Index([], name="ticker"), dtype=float)
+            for _ in values
+        ]
+    wide = df.pivot(index="date", columns="ticker", values=values)
+    return [wide[v] for v in values]
+
+
 def load_b3_data(
     db_path: str, start: str, end: str, filter_delisted: bool = False
 ) -> tuple:
@@ -269,9 +292,8 @@ def load_b3_data(
     df["fin_volume"] = df["volume"].astype(float)
 
     print("🔄  Pivoting data to wide format...")
-    adj_close = df.pivot(index="date", columns="ticker", values="adj_close")
-    close_px = df.pivot(index="date", columns="ticker", values="close")
-    fin_vol = df.pivot(index="date", columns="ticker", values="fin_volume")
+    adj_close, close_px, fin_vol = _pivot_wide(
+        df, ["adj_close", "close", "fin_volume"])
 
     # Forward fill prices to handle missing days, but leave volume as NaN/0
     # to accurately calculate averages
@@ -354,12 +376,11 @@ def load_b3_hlc_data(
     df["fin_volume"] = df["volume"].astype(float)
 
     print("🔄  Pivoting HLC data to wide format...")
-    adj_close = df.pivot(index="date", columns="ticker", values="adj_close")
-    split_high = df.pivot(index="date", columns="ticker", values="split_adj_high")
-    split_low = df.pivot(index="date", columns="ticker", values="split_adj_low")
-    split_close = df.pivot(index="date", columns="ticker", values="split_adj_close")
-    close_px = df.pivot(index="date", columns="ticker", values="close")
-    fin_vol = df.pivot(index="date", columns="ticker", values="fin_volume")
+    # Six frames, one reshape. This is the loader every backtest goes through.
+    adj_close, split_high, split_low, split_close, close_px, fin_vol = _pivot_wide(
+        df, ["adj_close", "split_adj_high", "split_adj_low",
+             "split_adj_close", "close", "fin_volume"],
+    )
 
     # Forward fill prices to handle missing days, leave volume as-is
     adj_close = adj_close.ffill()

@@ -149,3 +149,47 @@ def test_input_frame_is_not_mutated():
     before = px["X"].tolist()
     _detect_and_fix_unrecorded_splits(px, px, fv)
     assert px["X"].tolist() == before
+
+
+# ── Expanding percentile rank (regime signal, same module) ───────────────────
+
+def _pctrank_reference(v):
+    """The expanding().apply() this replaced, kept as the oracle."""
+    return v.expanding(min_periods=12).apply(lambda x: (x.iloc[-1] >= x).mean(), raw=False)
+
+
+def _pctrank_cases():
+    rng = np.random.default_rng(7)
+    idx = lambda n: pd.date_range("2005-01-31", periods=n, freq="ME")
+    cases = {
+        "dense": rng.random(60),
+        "leading_gaps": np.concatenate([[np.nan] * 5, rng.random(55)]),
+        "interior_gaps": None,
+        "ties": np.round(rng.random(60), 1),
+        "all_nan": np.full(30, np.nan),
+        "shorter_than_min_periods": rng.random(5),
+    }
+    v = rng.random(60)
+    v[[7, 20, 33, 41]] = np.nan
+    cases["interior_gaps"] = v
+    return {k: pd.Series(a, index=idx(len(a))) for k, a in cases.items()}
+
+
+def test_expanding_pctrank_matches_the_apply_it_replaced():
+    from backtests.core.shared_data import _expanding_pctrank
+
+    for name, s in _pctrank_cases().items():
+        pd.testing.assert_series_equal(
+            _expanding_pctrank(s), _pctrank_reference(s), check_names=False,
+            obj=f"pctrank[{name}]")
+
+
+def test_expanding_pctrank_scores_a_missing_month_as_zero_not_nan():
+    # Load-bearing quirk of the original: ibov_calm reads this at <= 0.70, so a
+    # NaN here would flip a month from calm to not-calm.
+    from backtests.core.shared_data import _expanding_pctrank
+
+    v = np.arange(1.0, 21.0)
+    v[15] = np.nan
+    s = pd.Series(v, index=pd.date_range("2005-01-31", periods=20, freq="ME"))
+    assert _expanding_pctrank(s).iloc[15] == 0.0

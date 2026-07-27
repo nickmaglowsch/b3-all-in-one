@@ -29,6 +29,27 @@ _SPLIT_TOLERANCE = 0.04  # 4% tolerance for ratio matching
 _VOLUME_SPIKE = 3.0      # event-day BRL volume >= 3x trailing median => crash, not split
 
 
+def _expanding_pctrank(s: pd.Series) -> pd.Series:
+    """Where each observation sits in the distribution of everything before it.
+
+    Replaces ``expanding(min_periods=12).apply(lambda x: (x.iloc[-1] >= x).mean())``,
+    which rebuilt a Series per window and ran a Python callback per period — 11 ms
+    over 20 years of month ends, 51 ms at weekly cadence, on every backtest.
+
+    Two details of the callback are load-bearing and reproduced rather than
+    tidied, because ibov_calm thresholds this at <= 0.70 and would flip:
+
+      · it divides by the window *length*, not the non-NaN count, so leading gaps
+        drag the rank down. Hence `/ arange`, not `rank(pct=True)`.
+      · on a period with no observation, `NaN >= x` is all-False and the mean is
+        0.0, not NaN — a missing month reads as "calmest ever". Preserved here;
+        changing it is a signal change, not a refactor.
+    """
+    ranked = s.expanding(min_periods=12).rank(method="max")
+    out = ranked / np.arange(1, len(s) + 1)
+    return out.mask(s.isna() & s.notna().cumsum().ge(12), 0.0)
+
+
 def _find_split_events(
     adj_s: pd.Series, raw_s: pd.Series, vol_s: pd.Series | None
 ) -> list[tuple]:
@@ -255,9 +276,7 @@ def build_shared_data(
     ibov_daily_ret = ibov_px.pct_change()
     ibov_vol_20d = ibov_daily_ret.rolling(20).std()
     ibov_vol_m = ibov_vol_20d.resample(freq).last()
-    ibov_vol_pctrank = ibov_vol_m.expanding(min_periods=12).apply(
-        lambda x: (x.iloc[-1] >= x).mean(), raw=False
-    )
+    ibov_vol_pctrank = _expanding_pctrank(ibov_vol_m)
     ibov_calm = ibov_vol_pctrank <= 0.70
 
     ibov_ret_20d = ibov_px.pct_change(20)

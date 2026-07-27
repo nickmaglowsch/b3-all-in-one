@@ -1,9 +1,9 @@
 """
 Shared Data Builder
 ===================
-Loads and precomputes all DataFrames needed by strategy plugins.
-Mirrors the data loading done in strategy_returns.py lines 464-549,
-but is exposed as a standalone function for use by the UI backtest service.
+Loads and precomputes all DataFrames needed by strategy plugins, once per run,
+so every strategy in a backtest reads the same frames instead of each rebuilding
+them. This is the single entry point the headless scripts/ runners go through.
 """
 from __future__ import annotations
 

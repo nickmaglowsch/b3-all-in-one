@@ -36,8 +36,7 @@ all handled exactly.
 
 ## Installation
 
-Requirements: **Python 3.9+** and the **Rust stable toolchain** (for the parser
-extension, see below).
+Requirements: **Python 3.9+**.
 
 ```bash
 git clone <repository_url>
@@ -47,31 +46,9 @@ python -m venv .venv
 source .venv/bin/activate        # Linux/macOS  (.venv\Scripts\activate on Windows)
 
 pip install -r requirements.txt  # pipeline + backtests
-make dev-rust                    # build the Rust COTAHIST parser into the venv (one-time)
 ```
 
-`requirements.txt` covers everything. `make dev-rust` must be run once after
-cloning (and again whenever `b3_pipeline_rs/src/` changes).
-
-### Rust extension (COTAHIST parser)
-
-The COTAHIST fixed-width parsing loop is a compiled Rust extension
-(`cotahist_rs`, `pyo3` + `maturin`, `rayon` for parallelism). Parsing ~33 years
-of data takes **~100 ms** instead of ~60 s.
-
-```bash
-# one-time toolchain install
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh && source $HOME/.cargo/env
-
-make dev-rust     # debug build into the active venv (run after clone & on src changes)
-make build-rust   # optimised release wheel -> b3_pipeline_rs/target/wheels/
-make test-rust    # cargo test
-make test         # pytest (Python suite)
-make all          # dev-rust + test
-```
-
-If you see `ImportError: The cotahist_rs Rust extension is not compiled`, run
-`make dev-rust`.
+`requirements.txt` covers everything.
 
 ## Running the data pipelines
 
@@ -89,7 +66,7 @@ python -m b3_pipeline.main --retry-failures    # re-fetch only companies in fetc
 python -m b3_pipeline.main --update-cnpj-map   # just refresh ticker→CNPJ map (fast)
 ```
 
-Pipeline steps: download COTAHIST → parse (Rust) → upsert raw prices → fetch B3
+Pipeline steps: download COTAHIST → parse → upsert raw prices → fetch B3
 corporate actions → compute split factors → compute dividend factors → write
 `split_adj_*` and total-return `adj_close`. It is **idempotent**
 (`INSERT OR REPLACE`, existing-file checks) and resilient to rate limits and
@@ -248,29 +225,13 @@ fixed ETF/CDI blends.
 | `signal_dsl.py` | Safe `ast`-parsed expression interpreter for factor signals |
 | `config_strategy.py` | YAML `rank_and_hold` / `fixed_weight` engines |
 | `strategy_base.py` / `strategy_registry.py` | Plugin base class + auto-discovery registry (plugin classes *and* `specs/*.yaml`) |
-| `metrics.py` | Sharpe, Calmar, max drawdown, annualised return/vol at any frequency |
-| `portfolio_opt.py` | Equal-weight, inverse-vol, ERC, HRP, rolling-Sharpe, regime-conditional weights |
-| `strategy_returns.py` | Runs the core strategies in one call → monthly after-tax return frame |
-
-### Portfolio construction example
-
-```python
-from core.strategy_returns import build_strategy_returns
-from core.portfolio_opt import hrp_weights, compute_portfolio_returns
-from core.metrics import build_metrics
-
-returns_df, sim_results, regime_signals = build_strategy_returns()
-liquid = [c for c in returns_df.columns if c not in ("IBOV", "CDI", "SmallcapMom")]
-port_ret, weights = compute_portfolio_returns(returns_df, liquid, lambda w: hrp_weights(w, 36))
-print(build_metrics(port_ret, "My HRP Portfolio", 12))
-```
+| `metrics.py` | Sharpe, max drawdown, annualised return/vol at any frequency |
 
 ## Testing
 
 ```bash
 make test                                  # full Python suite (pytest)
 python -m pytest tests/test_config_strategy.py   # config-strategy behaviour tests
-make test-rust                             # Rust unit tests
 ```
 
 The `tests/` suite covers the parser, corporate actions, CVM ingestion (PIT,

@@ -109,7 +109,6 @@ reports/YYYY-MM-DD-<topic>.md         ← markdown reports you write
 **Analysis:**
 | Script | What it does |
 |--------|-------------|
-| `scripts/rank.py [--top N] [--watchlist] [--weights ...]` | Equity ranking via mixed methodology |
 | `scripts/rank_fii.py [--top N] [--held] [--segment ...] [--weights ...]` | FII ranking |
 | `scripts/rank_cheapest.py [--pool 30] [--top 20] [--max-balance-age 180] [--refresh-dates] [--no-trap-filter] [--liq ...]` | Clube do Valor "Nova Seleção Quantitativa" — cheapest stocks (banks included). Drops stale-financials names, then pool top 30 → drop value traps → clean 20 |
 | `scripts/balance_dates.py` | Helper for the above: fetches/caches each liquid ticker's last balance date (`Ult_balanco_processado`) into `data/balance_dates/<snapshot-date>.csv` |

@@ -353,27 +353,3 @@ class TaxSummary(Base):
     computed_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-
-
-class DarfPayment(Base):
-    # Mirrors taxcore/data/darf_payments.csv. Empty by default (CRUD lands later).
-    __tablename__ = "darf_payments"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    tenant_id: Mapped[uuid.UUID] = _tenant_col()
-    apuracao: Mapped[str | None] = mapped_column(String)
-    codigo: Mapped[str | None] = mapped_column(String)
-    classe: Mapped[str | None] = mapped_column(String)
-    vendas_brutas: Mapped[float | None] = mapped_column(Float)
-    pnl_liquido: Mapped[float | None] = mapped_column(Float)
-    prejuizo_compensado: Mapped[float | None] = mapped_column(Float)
-    base_calculo: Mapped[float | None] = mapped_column(Float)
-    aliquota: Mapped[float | None] = mapped_column(Float)
-    valor_principal: Mapped[float | None] = mapped_column(Float)
-    vencimento: Mapped[datetime.date | None] = mapped_column(Date)
-    data_pagamento: Mapped[datetime.date | None] = mapped_column(Date)
-    status: Mapped[str | None] = mapped_column(String)
-    forma_pagamento: Mapped[str | None] = mapped_column(String)
-    comprovante: Mapped[str | None] = mapped_column(String)
-    relatorio: Mapped[str | None] = mapped_column(String)
-    obs: Mapped[str | None] = mapped_column(Text)

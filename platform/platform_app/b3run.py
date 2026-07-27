@@ -17,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from platform_app import subprocs
 from platform_app.config import settings
 
 # Host default: platform/platform_app/b3run.py -> b3-all-in-one/taxcore.
@@ -24,8 +25,8 @@ from platform_app.config import settings
 _DEFAULT_TAXCORE = Path(__file__).resolve().parents[2] / "taxcore"
 TAXCORE = Path(settings.taxcore_dir) if settings.taxcore_dir else _DEFAULT_TAXCORE
 PARSER_VERSION = "taxcore.load_b3"
-# Synthetic exit code for a subprocess we killed on the timeout (shell convention).
-TIMEOUT_EXIT = 124
+# Re-exported: callers branch on b3run.TIMEOUT_EXIT.
+TIMEOUT_EXIT = subprocs.TIMEOUT_EXIT
 
 # Blocks any non-local network connect inside the subprocess (proves the scripts stay
 # offline with these inputs). Auto-imported because the workspace lands on PYTHONPATH.
@@ -44,13 +45,7 @@ socket.socket.connect = _blocked
 
 def _taxcore_python() -> list[str]:
     """The interpreter that has taxcore's deps (pandas, openpyxl)."""
-    if settings.taxcore_python:
-        return [settings.taxcore_python]
-    venv = TAXCORE / ".venv" / "bin" / "python"
-    if venv.exists():
-        return [str(venv)]
-    # ponytail: fallback for CI/fresh checkouts without a prebuilt taxcore venv.
-    return ["uv", "run", "--directory", str(TAXCORE), "python"]
+    return subprocs.interpreter(settings.taxcore_python, TAXCORE)
 
 
 def workspace_root(tenant_id: object) -> Path:
@@ -86,18 +81,13 @@ def run_module(ws: Path, module_args: list[str]) -> subprocess.CompletedProcess:
     already branch on a non-zero return code, and an import that wedges must not
     hold a worker slot (there are two) or a request thread indefinitely.
     """
-    env = {**os.environ, "PYTHONPATH": str(ws), "PYTHONWARNINGS": "ignore"}
-    argv = [*_taxcore_python(), "-m", *module_args]
-    try:
-        return subprocess.run(
-            argv, cwd=ws, env=env, capture_output=True, text=True,
-            timeout=settings.subprocess_timeout_s,
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            argv, TIMEOUT_EXIT, stdout="",
-            stderr=f"{module_args[0]} timed out after {settings.subprocess_timeout_s}s",
-        )
+    return subprocs.run(
+        [*_taxcore_python(), "-m", *module_args],
+        cwd=ws,
+        env={**os.environ, "PYTHONPATH": str(ws), "PYTHONWARNINGS": "ignore"},
+        timeout_s=settings.subprocess_timeout_s,
+        label=module_args[0],
+    )
 
 
 # --- CSV <-> DB value helpers. repr() on floats is byte-identical to how the

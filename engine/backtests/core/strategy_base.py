@@ -9,6 +9,7 @@ All strategy plugins live in backtests/strategies/ and extend StrategyBase.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import pandas as pd
@@ -16,31 +17,26 @@ import pandas as pd
 
 # ── Parameter Specification ───────────────────────────────────────────────────
 
+@dataclass(repr=False)
 class ParameterSpec:
-    """Describes a single strategy parameter for UI form generation."""
+    """Describes a single strategy parameter for UI form generation.
 
-    def __init__(
-        self,
-        name: str,
-        label: str,
-        param_type: str,  # "int", "float", "str", "date", "choice"
-        default: Any,
-        description: str = "",
-        min_value: Optional[Any] = None,
-        max_value: Optional[Any] = None,
-        step: Optional[Any] = None,
-        choices: Optional[list] = None,
-    ):
-        self.name = name
-        self.label = label
-        self.param_type = param_type
-        self.default = default
-        self.description = description
-        self.min_value = min_value
-        self.max_value = max_value
-        self.step = step
-        self.choices = choices
+    Field order is a wire contract: call sites build these positionally, and
+    scripts/list_strategies.py serializes them into the frontend's form JSON.
+    """
 
+    name: str
+    label: str
+    param_type: str  # "int", "float", "str", "date", "choice"
+    default: Any
+    description: str = ""
+    min_value: Optional[Any] = None
+    max_value: Optional[Any] = None
+    step: Optional[Any] = None
+    choices: Optional[list] = None
+
+    # Not the generated repr: a spec carries nine fields and only three of them
+    # identify it, so the default would bury the answer in defaults nobody set.
     def __repr__(self) -> str:
         return (
             f"ParameterSpec(name={self.name!r}, type={self.param_type!r}, "

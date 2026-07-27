@@ -108,7 +108,6 @@ python -m scripts.irpf_2026 --year 2025 > reports/2026-irpf-ano-base-2025.md
 | Script | Purpose |
 |--------|---------|
 | `scripts/fetch_fundamentus.py` | Pull full B3 screener → `data/snapshots/YYYY-MM-DD.csv` |
-| `scripts/rank.py [--top N] [--weights ...] [--watchlist]` | Rank latest snapshot |
 | `scripts/load_b3.py` | Parse B3 Excel files in `b3_imports/` → `data/positions.csv` |
 | `scripts/portfolio_status.py` | Current allocation, P&L vs latest prices |
 | `scripts/suggest_allocation.py --amount N` | Suggested buys for new capital |
@@ -120,8 +119,6 @@ You can run them directly without Claude:
 
 ```bash
 python -m scripts.fetch_fundamentus
-python -m scripts.rank --top 30
-python -m scripts.rank --weights value=0.5,quality=0.3,growth=0.2
 python -m scripts.load_b3
 python -m scripts.portfolio_status
 python -m scripts.suggest_allocation --amount 5000

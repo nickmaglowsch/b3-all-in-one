@@ -46,13 +46,6 @@ export interface RegimeValue {
 const obj = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 
-export const emptyRegime = (): RegimeValue => ({
-  addIbov: true,
-  parkWhenTooFew: true,
-  inputs: [],
-  rules: [],
-});
-
 // Non-empty = worth sending. StrategyForm omits the `regime` key when this is
 // false so we never POST an empty overlay.
 export const isEmptyRegime = (v: RegimeValue) =>

@@ -143,6 +143,12 @@ export interface PortfolioIndex {
   series: IndexPoint[];
   nav: number;
   metrics: { portfolio: IndexMetrics; ibov?: IndexMetrics; cdi?: IndexMetrics };
+  /** The holdings this line was built from — the `?tickers=` selection, or the
+   *  whole book when there is none. */
+  tickers: string[];
+  /** Every holding the index can carry, i.e. the menu the filter offers. Equal
+   *  to `tickers` when nothing is filtered out. */
+  universe: string[];
   excluded: {
     markets: string[];
     categories: string[];

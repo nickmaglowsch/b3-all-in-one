@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { CHART, SERIES, TICK_STYLE } from "./theme";
 import { ChartTooltip } from "./ChartTooltip";
+import { NoData } from "./NoData";
 
 type Row = Record<string, string | number>;
 
@@ -37,6 +38,8 @@ export function AreaSeries({
   valueFormat,
   labelFormat,
 }: AreaSeriesProps) {
+  // See LineSeries.impl: bare axes read as "zero", not as "empty window".
+  if (data.length === 0) return <NoData height={height} />;
   const gid = `area-${String(yKey)}`;
   return (
     <div style={{ width: "100%", height }}>

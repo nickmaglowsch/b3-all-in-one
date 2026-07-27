@@ -9,6 +9,7 @@ import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { LineSeries } from "@/components/charts/LineSeries";
+import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { IconClock, IconChart } from "@/components/icons";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
@@ -224,6 +225,10 @@ function Results({ data }: { data: WhatIfResult }) {
     () => overlayCurves(data.scenarios),
     [data.scenarios],
   );
+  // The chart's window only. The "Comparação" table below is the engine's
+  // figures over the whole replay and does not follow it — said so in its note.
+  const period = useDateRange({ min: curveRows[0]?.date, max: data.as_of });
+  const windowed = period.slice(curveRows);
 
   const tableRows: TableRow[] = [
     {
@@ -303,9 +308,12 @@ function Results({ data }: { data: WhatIfResult }) {
       <Card
         title="Patrimônio pós-imposto por estratégia"
         action={
-          <span className="font-mono text-[11px] text-muted">
-            mesmos aportes, veículos diferentes
-          </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-mono text-[11px] text-muted">
+              mesmos aportes, veículos diferentes
+            </span>
+            {period.control}
+          </div>
         }
       >
         {curveRows.length < 2 ? (
@@ -316,7 +324,7 @@ function Results({ data }: { data: WhatIfResult }) {
           />
         ) : (
           <LineSeries
-            data={curveRows}
+            data={windowed}
             xKey="date"
             series={series}
             height={320}
@@ -333,6 +341,8 @@ function Results({ data }: { data: WhatIfResult }) {
           Comparação após impostos; a carteira real usa o valor de mercado das
           posições atuais. Aproximação: cada aporte é aplicado no rebalance
           seguinte.
+          {isFiltered(period.range) &&
+            " Estes números são da simulação inteira, não do período escolhido no gráfico acima."}
         </p>
       </Card>
     </>

@@ -76,7 +76,21 @@ INCOME_CATEGORIES = frozenset({"income", "amortization"})
 # cost refunds rather than investment return.
 EXCLUDED_CATEGORIES = frozenset({"premium", "reembolso"})
 
-TRADING_DAYS_PER_YEAR = 252
+DAYS_PER_YEAR = 365.25          # absorbs the leap day
+
+# Shortest window `summarize` will annualise. Not 1.0: picking a calendar year
+# off a date picker gives 01-01 → 12-31, which is 364 elapsed days — genuinely
+# a hair under a year, and refusing it would caption twelve real months
+# "período < 1 ano". Annualising 364 days moves the figure by ~0.3% relative,
+# which is noise; annualising a quarter is the thing this guard exists to stop,
+# and 0.99 still refuses everything short of about 362 days.
+MIN_ANNUALISE_YEARS = 0.99
+
+
+def years_between(first: datetime.date, last: datetime.date) -> float:
+    """Elapsed calendar years covered by a window — what `summarize` annualises
+    over. See the note there for why this is not a session count."""
+    return (last - first).days / DAYS_PER_YEAR
 
 
 def canonical(ticker: str, market: str | None = None) -> str:
@@ -103,6 +117,36 @@ def canonical(ticker: str, market: str | None = None) -> str:
     if market == PRIMARY_ETF_MARKET:
         return ticker[:-1] if ticker.endswith("H") else ticker
     return ticker[:-1] if ticker.endswith("F") else ticker
+
+
+def select_tickers(
+    qty_deltas: list[tuple[datetime.date, str, float]],
+    flows: list[tuple[datetime.date, str, float, str | None]],
+    keep: set[str] | None,
+) -> tuple[
+    list[tuple[datetime.date, str, float]],
+    list[tuple[datetime.date, str, float]],
+]:
+    """Restrict a book to `keep` before it is chained. `None` keeps everything.
+
+    Answers "which of my assets is helping and which is hurting": rebuild the
+    same TWR over a subset and read the difference. Holdings are the obvious
+    half; the cash is the half that is easy to get wrong. A buy of an asset the
+    user just excluded is not an inflow to the book that remains — left in, it
+    inflates that day's denominator and the subset reads as a loss it never had.
+    So flows carry the ticker that caused them, purely so this function can
+    decide whether they survive.
+
+    Returns flows as the 3-tuples `build_index` takes, which is why the ticker
+    rides alongside rather than inside the chaining math.
+    """
+    return (
+        [q for q in qty_deltas if keep is None or q[1] in keep],
+        [(d, kind, amount) for d, kind, amount, ticker in flows
+         # An untickered cash event cannot be attributed to a selected asset, so
+         # a filtered book must not claim it.
+         if keep is None or (ticker is not None and ticker in keep)],
+    )
 
 
 def _snap(d: datetime.date, grid: list[datetime.date]) -> int:
@@ -240,18 +284,25 @@ def max_drawdown_pct(values: list[float]) -> float:
     return round(100.0 * worst, 2)
 
 
-def summarize(index: list[float], n_days: int) -> dict:
-    """Total return, CAGR and max drawdown for a base-100 series.
+def summarize(index: list[float], years: float) -> dict:
+    """Total return, CAGR and max drawdown for a base-100 series spanning
+    `years` of elapsed calendar time.
 
-    `ann_return_pct` is null for windows under a year: annualising three months
-    of a lucky run reports a number nobody should act on.
+    `ann_return_pct` is null under a year: annualising three months of a lucky
+    run reports a number nobody should act on.
+
+    Calendar years, not sessions/252. The proxy was serviceable while the only
+    window was the whole book, but the frontend's date filter hands users
+    windows chosen on a calendar, and B3 runs ~248-251 sessions a year — so a
+    full twelve months counts ~250 sessions, lands under 1.0, and gets captioned
+    "período < 1 ano". Mirrored in frontend/lib/chartRange.summarize, which
+    summarises the narrowed windows this endpoint never sees; keep them in step.
     """
     if not index:
         return {"total_return_pct": None, "ann_return_pct": None, "max_dd_pct": None}
     total = index[-1] / index[0] - 1.0
-    years = n_days / TRADING_DAYS_PER_YEAR
     ann = None
-    if years >= 1.0 and 1.0 + total > 0:
+    if years >= MIN_ANNUALISE_YEARS and 1.0 + total > 0:
         ann = round(100.0 * ((1.0 + total) ** (1.0 / years) - 1.0), 2)
     return {
         "total_return_pct": round(100.0 * total, 2),

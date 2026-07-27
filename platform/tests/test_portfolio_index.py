@@ -17,7 +17,8 @@ import pytest
 
 from platform_app.portfolio_index import (
     EXCLUDED_MARKETS, PRIMARY_ETF_MARKET, RENDA_FIXA_MARKET, build_index,
-    canonical, is_excluded, max_drawdown_pct, rebase, summarize,
+    canonical, is_excluded, max_drawdown_pct, rebase, select_tickers, summarize,
+    years_between,
 )
 
 D1, D2, D3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
@@ -229,12 +230,85 @@ def test_rebase_and_drawdown():
 
 
 def test_summarize_withholds_annualised_return_under_a_year():
-    short = summarize([100.0, 110.0], n_days=60)
+    short = summarize([100.0, 110.0], years=0.25)
     assert short["total_return_pct"] == 10.0
-    assert short["ann_return_pct"] is None           # 60 days is not a CAGR
+    assert short["ann_return_pct"] is None           # a quarter is not a CAGR
 
-    full = summarize([100.0, 121.0], n_days=504)     # 2 years, +21%
+    full = summarize([100.0, 121.0], years=2.0)      # 2 years, +21%
     assert full["ann_return_pct"] == pytest.approx(10.0, abs=0.05)
+
+
+def test_picking_a_calendar_year_off_the_filter_gets_a_cagr():
+    """The window a date filter makes trivial to select, and the one the old
+    sessions/252 proxy refused: B3 runs ~250 sessions a year, so twelve real
+    months landed at 0.99 "years" and were captioned "período < 1 ano"."""
+    for year, leap in ((2025, False), (2024, True)):
+        span = years_between(date(year, 1, 1), date(year, 12, 31))
+        assert 0.99 <= span <= 1.005, (year, leap, span)
+        assert summarize([100.0, 110.0], span)["ann_return_pct"] is not None
+
+
+def test_a_short_window_is_still_refused():
+    """The guard exists to stop a quarter being annualised into a headline."""
+    q = years_between(date(2025, 1, 1), date(2025, 3, 31))
+    assert summarize([100.0, 110.0], q)["ann_return_pct"] is None
+    # Eleven months is short enough to still be honest about it.
+    assert summarize([100.0, 110.0], years_between(
+        date(2025, 1, 1), date(2025, 11, 30)))["ann_return_pct"] is None
+
+
+# ── Selecting a subset of the book ────────────────────────────────────────────
+# "Which of my assets is helping and which is hurting" is answered by rebuilding
+# the index over a subset, so the cash of the dropped assets has to go with them.
+
+def test_selecting_a_ticker_drops_its_neighbours_cash_too():
+    """A buy of an asset that is not in the selection is not an inflow to the
+    selected book. Left in, it inflates the denominator of the chain on that day
+    and the subset reads as a loss it never had."""
+    qty = [(D1, "X", 100.0), (D1, "Y", 50.0)]
+    flows = [(D1, "buy", 1000.0, "X"), (D1, "buy", 500.0, "Y"),
+             (D2, "income", 30.0, "Y")]
+
+    kept_qty, kept_flows = select_tickers(qty, flows, {"X"})
+
+    assert kept_qty == [(D1, "X", 100.0)]
+    # Flows come back as the 3-tuples build_index takes — the ticker's only job
+    # was to decide whether the flow survives.
+    assert kept_flows == [(D1, "buy", 1000.0)]
+
+
+def test_no_selection_keeps_the_whole_book():
+    qty = [(D1, "X", 100.0)]
+    flows = [(D1, "buy", 1000.0, "X"), (D2, "income", 30.0, None)]
+
+    kept_qty, kept_flows = select_tickers(qty, flows, None)
+
+    assert kept_qty == qty
+    assert kept_flows == [(D1, "buy", 1000.0), (D2, "income", 30.0)]
+
+
+def test_a_selection_drops_cash_that_names_no_ticker():
+    """An untickered cash event cannot be attributed to a selected asset, so a
+    filtered book must not claim it. Counting it would credit the subset with
+    return earned by holdings the user just excluded."""
+    _, kept = select_tickers([], [(D1, "income", 30.0, None)], {"X"})
+    assert kept == []
+
+
+def test_a_selected_subset_is_an_index_of_only_that_subset():
+    """End to end over the pure math, and the whole point of the feature: X
+    doubles while Y halves, so the book reads +25% and neither number is on the
+    chart. Selecting one at a time is what shows the +100% and the -50%."""
+    closes = {"X": {D1: 10.0, D2: 20.0}, "Y": {D1: 10.0, D2: 5.0}}
+    qty = [(D1, "X", 100.0), (D1, "Y", 100.0)]
+    flows = [(D1, "buy", 1000.0, "X"), (D1, "buy", 1000.0, "Y")]
+
+    def index_of(keep):
+        return build_index([D1, D2], closes, *select_tickers(qty, flows, keep))["index"]
+
+    assert index_of(None) == [100.0, 125.0]
+    assert index_of({"X"}) == [100.0, 200.0]
+    assert index_of({"Y"}) == [100.0, 50.0]
 
 
 # ── Endpoint ──────────────────────────────────────────────────────────────────
@@ -318,6 +392,61 @@ async def test_portfolio_index_charts_the_real_book(client):
     assert body["coverage"]["first_trade"] == "2023-01-16"
     assert body["coverage"]["clamped"] is False
     assert body["coverage"]["trades_after_plane"] == 0   # seed ends inside the plane
+
+
+@_asyncio
+@pytest.mark.market
+async def test_portfolio_index_filters_to_the_selected_tickers(client):
+    """`?tickers=` rebuilds the index over a subset of the book — the feature
+    that answers "which of these is helping and which is hurting"."""
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = (await client.get("/me", headers=headers)).json()["id"]
+    await _seed_book(uuid.UUID(tid))
+
+    whole = (await client.get("/portfolio/index", headers=headers)).json()
+    # Every ticker the index can carry, so the UI can offer the filter at all.
+    # WINM23 is excluded upstream (Futuro) and is not on the menu.
+    assert whole["tickers"] == ["PETR4", "VALE3"]
+
+    r = await client.get("/portfolio/index?tickers=PETR4", headers=headers)
+    assert r.status_code == 200, r.text
+    petr = r.json()
+
+    assert petr["tickers"] == ["PETR4"]        # only the selection is charted...
+    assert petr["universe"] == ["PETR4", "VALE3"]   # ...the menu stays whole
+    # A different book is a different line. Identical curves would mean the
+    # filter was accepted and ignored.
+    assert [p["portfolio"] for p in petr["series"]] != [
+        p["portfolio"] for p in whole["series"]]
+
+    # The window is pinned to the whole book, so toggling an asset changes the
+    # lines and never the x-axis — otherwise the two curves are not comparable.
+    assert petr["start"] == whole["start"] and petr["end"] == whole["end"]
+    assert len(petr["series"]) == len(whole["series"])
+    assert petr["coverage"]["first_trade"] == whole["coverage"]["first_trade"]
+
+    # VALE3 is bought two months into the window; before that the subset holds
+    # nothing, so it is flat at the base rather than undefined.
+    vale = (await client.get(
+        "/portfolio/index?tickers=VALE3", headers=headers)).json()
+    assert vale["series"][0]["portfolio"] == 100.0
+    assert vale["nav"] > 0
+
+
+@_asyncio
+@pytest.mark.market
+async def test_selecting_nothing_is_422_not_an_empty_chart(client):
+    """A selection that matches no ticker in the book has no index to draw. A
+    200 with a flat line would read as "these assets went nowhere"."""
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = (await client.get("/me", headers=headers)).json()["id"]
+    await _seed_book(uuid.UUID(tid))
+
+    r = await client.get("/portfolio/index?tickers=NOPE11", headers=headers)
+    assert r.status_code == 422
+    assert "selecionado" in r.json()["detail"] or "select" in r.json()["detail"]
 
 
 @_asyncio

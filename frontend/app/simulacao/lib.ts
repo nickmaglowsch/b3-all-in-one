@@ -5,6 +5,7 @@
 // and the Strategy gallery type from lib/.
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { Dated } from "@/lib/chartRange";
 import type { Strategy } from "@/lib/types";
 
 export interface CurvePoint {
@@ -83,10 +84,10 @@ export const totalReturn = (finalValue: number, invested: number) =>
 // column per strategy. Curves share the same rebalance grid (same flows/freq),
 // so rows align; a later-warming strategy just leaves earlier cells undefined.
 export function overlayCurves(scenarios: WhatIfScenario[]): {
-  rows: Record<string, string | number>[];
+  rows: (Dated & Record<string, string | number>)[];
   series: { key: string; label: string }[];
 } {
-  const byDate = new Map<string, Record<string, string | number>>();
+  const byDate = new Map<string, Dated & Record<string, string | number>>();
   for (const sc of scenarios) {
     for (const p of sc.curve) {
       const row = byDate.get(p.date) ?? { date: p.date };
@@ -94,8 +95,6 @@ export function overlayCurves(scenarios: WhatIfScenario[]): {
       byDate.set(p.date, row);
     }
   }
-  const rows = [...byDate.values()].sort((a, b) =>
-    String(a.date) < String(b.date) ? -1 : 1,
-  );
+  const rows = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
   return { rows, series: scenarios.map((sc) => ({ key: sc.strategy, label: sc.strategy })) };
 }

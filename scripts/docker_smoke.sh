@@ -122,6 +122,26 @@ print("[smoke] index: %d points, %s -> %s, TWR %.1f%%" % (
     len(s), r["start"], r["end"], r["metrics"]["portfolio"]["total_return_pct"]))
 ' || fail "GET /portfolio/index failed"
 
+# 5c) ?tickers= rebuilds the index over a subset of the book — the "which holding
+#     is helping and which is hurting" view. The x-axis must not move when it does,
+#     or the filtered and unfiltered lines are not comparable.
+TK=$(curl -fsS "$API/portfolio/index" -H "$AUTH" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["universe"][0])') \
+  || fail "GET /portfolio/index has no universe"
+curl -fsS "$API/portfolio/index?tickers=$TK" -H "$AUTH" | python3 -c "
+import sys, json
+r = json.load(sys.stdin)
+assert r['tickers'] == ['$TK'], r['tickers']
+assert '$TK' in r['universe'] and len(r['universe']) >= len(r['tickers'])
+print('[smoke] index filtered to $TK: %d points, TWR %.1f%%' % (
+    len(r['series']), r['metrics']['portfolio']['total_return_pct']))
+" || fail "GET /portfolio/index?tickers= failed"
+
+# A selection matching nothing has no index to draw; a 200 with a flat line would
+# read as "these assets went nowhere".
+code=$(curl -s -o /dev/null -w '%{http_code}' "$API/portfolio/index?tickers=NOPE11" -H "$AUTH")
+[ "$code" = "422" ] || fail "empty ticker selection answered $code, want 422"
+
 # 6) IRPF report must contain "Bens e Direitos". Retry: the taxcore subprocess can
 #    transiently return an incomplete report on the first call right after a heavy
 #    import (worker still winding down). The endpoint is correct — a real break

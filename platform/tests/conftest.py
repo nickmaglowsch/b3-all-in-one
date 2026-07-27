@@ -3,11 +3,16 @@ import os
 # Ephemeral test DB name is overridable so parallel test runs (e.g. two feature
 # agents) don't race on the same database. Set PLATFORM_TEST_DB to isolate.
 TEST_DB = os.environ.get("PLATFORM_TEST_DB", "platform_test")
+# Host/port are overridable too: a dev box that already runs its own Postgres on
+# 5432 has to publish the compose one somewhere else, and hardcoding the port
+# here made every test unrunnable there. CI sets neither, so it keeps the
+# localhost:5432 the workflow's service container publishes.
+PG_HOST = os.environ.get("PLATFORM_TEST_PG_HOST", "localhost")
+PG_PORT = os.environ.get("PLATFORM_TEST_PG_PORT", "5432")
+PG_NETLOC = f"postgres:devpassword@{PG_HOST}:{PG_PORT}"
 
 # Point the app at the test DB before any platform_app import reads settings.
-os.environ["DATABASE_URL"] = (
-    f"postgresql+asyncpg://postgres:devpassword@localhost:5432/{TEST_DB}"
-)
+os.environ["DATABASE_URL"] = f"postgresql+asyncpg://{PG_NETLOC}/{TEST_DB}"
 os.environ["ENVIRONMENT"] = "development"
 # Backtests read the market plane from the real `b3` DB (engine_database_url's
 # default). Stub benchmarks so the engine subprocess never touches yfinance/BCB.
@@ -19,7 +24,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-ADMIN_DSN = "postgresql+asyncpg://postgres:devpassword@localhost:5432/postgres"
+ADMIN_DSN = f"postgresql+asyncpg://{PG_NETLOC}/postgres"
 
 
 def _market_plane_loaded() -> bool:
@@ -29,9 +34,7 @@ def _market_plane_loaded() -> bool:
     they skip instead of failing. Load the plane locally and they run."""
     import psycopg
 
-    dsn = os.environ.get(
-        "ENGINE_DATABASE_URL", "postgresql://postgres:devpassword@localhost:5432/b3"
-    )
+    dsn = os.environ.get("ENGINE_DATABASE_URL", f"postgresql://{PG_NETLOC}/b3")
     try:
         with psycopg.connect(dsn, connect_timeout=5) as conn:
             if conn.execute("SELECT to_regclass('prices')").fetchone()[0] is None:

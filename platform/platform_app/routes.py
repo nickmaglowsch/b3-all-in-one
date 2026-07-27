@@ -115,13 +115,25 @@ async def create_imports(
 
 @imports_router.get("")
 async def list_imports(
+    # Was unbounded: every extract the tenant had ever uploaded, on a page-load
+    # surface that also polls while anything is processing.
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     _user, tid = tenant
     rows = (
         await session.scalars(
-            select(Import).where(Import.tenant_id == tid).order_by(Import.created_at)
+            select(Import).where(Import.tenant_id == tid)
+            # Newest first, so a capped page is the recent history rather than
+            # the oldest rows. This used to come back oldest-first with the page
+            # calling .reverse() on the full list — capping that would have
+            # dropped exactly the imports the user just made.
+            # Served by ix_imports_tenant_created scanned backwards.
+            .order_by(Import.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
     ).all()
     return [
@@ -1502,6 +1514,11 @@ async def create_backtest(
 
 @backtests_router.get("")
 async def list_backtests(
+    # Was unbounded, and each row carries a metrics JSONB blob — the listing grew
+    # with every run the tenant had ever submitted. Already newest-first, so a
+    # capped page is the recent runs; served by ix_backtest_runs_tenant_created.
+    limit: int = Query(200, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
@@ -1510,6 +1527,8 @@ async def list_backtests(
         await session.scalars(
             select(BacktestRun).where(BacktestRun.tenant_id == tid)
             .order_by(BacktestRun.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
     ).all()
     return [_run_dict(r) for r in rows]
@@ -1579,17 +1598,29 @@ async def _last_ingest(session: AsyncSession) -> dict[str, dict]:
     than knowing why."""
     out: dict[str, dict] = {}
     try:
-        rows = (await session.scalars(
-            select(IngestRun).order_by(IngestRun.kind, IngestRun.started_at.desc())
+        # DISTINCT ON, not "read everything and keep the first of each kind in
+        # Python". ingest_runs grows by a row per ingestion attempt and never
+        # shrinks, and this endpoint is polled on a timer from every open tab, so
+        # the old form made the cost of answering "is the plane fresh?" scale with
+        # how often the plane had been refreshed. ix_ingest_runs_kind_started
+        # already indexes exactly this; only the query was wrong.
+        #
+        # The column list is explicit so `error` never leaves the database — it
+        # carries subprocess output with server paths.
+        rows = (await session.execute(
+            select(IngestRun.kind, IngestRun.status,
+                   IngestRun.started_at, IngestRun.finished_at)
+            .distinct(IngestRun.kind)
+            .order_by(IngestRun.kind, IngestRun.started_at.desc())
         )).all()
     except Exception:
         return out
-    for r in rows:
-        out.setdefault(r.kind, {
-            "status": r.status,
-            "started_at": r.started_at.isoformat() if r.started_at else None,
-            "finished_at": r.finished_at.isoformat() if r.finished_at else None,
-        })
+    for kind, status, started_at, finished_at in rows:
+        out[kind] = {
+            "status": status,
+            "started_at": started_at.isoformat() if started_at else None,
+            "finished_at": finished_at.isoformat() if finished_at else None,
+        }
     return out
 
 

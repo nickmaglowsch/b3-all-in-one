@@ -76,6 +76,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -221,8 +222,8 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     trade_rows = trade_rows[(trade_rows["qty"] > 0) & (trade_rows["price"] > 0)]
     trade_rows["market"] = "Mercado à Vista"  # Movimentação doesn't expose this
     trade_rows["maturity"] = "-"
-    trade_rows["signed_qty"] = trade_rows.apply(
-        lambda r: r["qty"] if r["side"] == "Compra" else -r["qty"], axis=1)
+    trade_rows["signed_qty"] = np.where(
+        trade_rows["side"] == "Compra", trade_rows["qty"], -trade_rows["qty"])
     trades = trade_rows[[
         "date", "side", "market", "maturity", "broker", "ticker",
         "qty", "price", "amount", "signed_qty", "__source_file",
@@ -311,10 +312,8 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     out["market"] = out["market"].astype(str).str.strip()
     out["ticker"] = out["ticker"].astype(str).str.strip().str.upper()
     # Signed quantity: + for buys, - for sells
-    out["signed_qty"] = out.apply(
-        lambda r: r["qty"] if r["side"].lower().startswith("compra") else -r["qty"],
-        axis=1,
-    )
+    out["signed_qty"] = np.where(
+        out["side"].str.lower().str.startswith("compra"), out["qty"], -out["qty"])
     return out.dropna(subset=["date", "ticker", "qty", "price"])
 
 
@@ -451,11 +450,8 @@ def process_option_activity(
     # distinct trades survive. Grep by 'startswith(\"CMIG\")' to roll up.
     premium_events = pd.DataFrame()
     if not premiums.empty:
-        signed_amount = premiums.apply(
-            lambda r: float(r["amount"]) * (
-                1.0 if str(r["side"]).lower().startswith("venda") else -1.0),
-            axis=1,
-        )
+        signed_amount = premiums["amount"].astype(float) * np.where(
+            premiums["side"].astype(str).str.lower().str.startswith("venda"), 1.0, -1.0)
         premium_events = pd.DataFrame({
             "date":            premiums["date"].values,
             "ticker":          premiums["ticker"].astype(str).values,
@@ -529,8 +525,8 @@ def read_overrides(
         trade_rows["maturity"] = "-"
         trade_rows["broker"] = "override"
         trade_rows["__source_file"] = path.name
-        trade_rows["signed_qty"] = trade_rows.apply(
-            lambda r: r["qty"] if r["side"] == "Compra" else -r["qty"], axis=1)
+        trade_rows["signed_qty"] = np.where(
+            trade_rows["side"] == "Compra", trade_rows["qty"], -trade_rows["qty"])
         synthetic_trades = trade_rows[[
             "date", "side", "market", "maturity", "broker", "ticker",
             "qty", "price", "amount", "signed_qty", "__source_file",

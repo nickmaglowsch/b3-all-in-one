@@ -227,8 +227,8 @@ function Results({ data }: { data: WhatIfResult }) {
   );
   // The chart's window only. The "Comparação" table below is the engine's
   // figures over the whole replay and does not follow it — said so in its note.
-  const window = useDateRange({ min: curveRows[0]?.date, max: data.as_of });
-  const windowed = window.slice(curveRows);
+  const period = useDateRange({ min: curveRows[0]?.date, max: data.as_of });
+  const windowed = period.slice(curveRows);
 
   const tableRows: TableRow[] = [
     {
@@ -312,7 +312,7 @@ function Results({ data }: { data: WhatIfResult }) {
             <span className="font-mono text-[11px] text-muted">
               mesmos aportes, veículos diferentes
             </span>
-            {window.control}
+            {period.control}
           </div>
         }
       >
@@ -321,12 +321,6 @@ function Results({ data }: { data: WhatIfResult }) {
             icon={<IconChart size={26} />}
             title="Sem curva suficiente para exibir."
             hint="A janela de preços não cobre os aportes desta estratégia."
-          />
-        ) : windowed.length === 0 ? (
-          <EmptyState
-            icon={<IconChart size={26} />}
-            title="Nenhum ponto no período selecionado."
-            hint="Amplie as datas acima para ver as curvas de novo."
           />
         ) : (
           <LineSeries
@@ -347,7 +341,7 @@ function Results({ data }: { data: WhatIfResult }) {
           Comparação após impostos; a carteira real usa o valor de mercado das
           posições atuais. Aproximação: cada aporte é aplicado no rebalance
           seguinte.
-          {isFiltered(window.range) &&
+          {isFiltered(period.range) &&
             " Estes números são da simulação inteira, não do período escolhido no gráfico acima."}
         </p>
       </Card>

@@ -112,7 +112,7 @@ export function ComparePanel({
   // Scoped to the overlay, which is why the control sits above the chart rather
   // than in the card header: the metrics table underneath is the engine's, over
   // each run's full window, and nothing here can narrow it.
-  const window = useDateRange();
+  const period = useDateRange();
 
   if (runs.length < 2) {
     return (
@@ -232,10 +232,10 @@ export function ComparePanel({
               <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
                 Período do gráfico
               </span>
-              {window.control}
+              {period.control}
             </div>
             <LineSeries
-              data={window.slice(chartData)}
+              data={period.slice(chartData)}
               xKey="date"
               height={340}
               series={chartSeries}
@@ -259,7 +259,7 @@ export function ComparePanel({
         {/* Said out loud rather than left to be inferred: a narrowed chart above
             an unchanged table is exactly the kind of mismatch a reader assumes
             away. The engine computes these over each run's whole window. */}
-        {isFiltered(window.range) && " · sobre a rodada inteira, não o período do gráfico"}
+        {isFiltered(period.range) && " · sobre a rodada inteira, não o período do gráfico"}
       </p>
     </Card>
   );

@@ -10,7 +10,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
-import { rebaseRows, summarize } from "@/lib/chartRange";
+import { rebaseRows, summarize, yearsBetween } from "@/lib/chartRange";
 import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
@@ -56,9 +56,6 @@ function AssetFilter({
       if (e.type === "keydown" && (e as KeyboardEvent).key !== "Escape") return;
       if (e.type === "pointerdown" && el.contains(e.target as Node)) return;
       el.open = false;
-      // A stale query is a lie about the book: reopen after searching "wege"
-      // and the list shows one ticker, which reads as "this is all you hold".
-      setQuery("");
       // Escape should hand focus back to the trigger rather than to nothing.
       if (e.type === "keydown") el.querySelector("summary")?.focus();
     };
@@ -78,7 +75,12 @@ function AssetFilter({
   const toggle = (t: string) => {
     const next = on(t)
       ? (selected ?? universe).filter((x) => x !== t)
-      : [...(selected ?? []), t];
+      : [...(selected ?? []), t].sort();
+    // Sorted, because the selection is a set but the query key is a string:
+    // re-checking A last gives ["B","A"] where reaching the same two directly
+    // gives ["A","B"], and that is two cache entries and two round trips for
+    // one answer (the API sorts, so the responses are byte-identical).
+    //
     // Back to everything → drop the filter entirely rather than enumerate it,
     // so the chart returns to the request it started on.
     onChange(next.length === universe.length ? null : next);
@@ -89,7 +91,15 @@ function AssetFilter({
       <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
         Ativos no cálculo
       </p>
-      <details ref={box} className="relative mt-2 inline-block">
+      <details
+        ref={box}
+        // On close, wherever it came from — Escape, a click outside, or the
+        // summary itself, which the handler above deliberately ignores. A stale
+        // query is a lie about the book: reopen after searching "wege" and the
+        // list shows one ticker, which reads as "this is all you hold".
+        onToggle={(e) => !e.currentTarget.open && setQuery("")}
+        className="relative mt-2 inline-block"
+      >
         <summary
           // The marker is replaced by the count + caret below; `list-none` alone
           // leaves Safari's own triangle behind, hence the ::-webkit rule.
@@ -227,12 +237,21 @@ export function IndexSection() {
     max: q.data?.end,
   });
 
+  // True while a holding toggle is in flight. keepPreviousData means the query
+  // reports success throughout the refetch, so isLoading is false and every
+  // figure on screen belongs to the *previous* selection — this is the only
+  // signal that says so.
+  const stale = q.isPlaceholderData || (q.isFetching && !q.isLoading);
+
   // One live region for the section, at a fixed position outside every branch.
   // A region that is unmounted is destroyed rather than updated, so nothing ever
   // announces that loading finished.
   const shell = (body: React.ReactNode) => (
     <>
-      <LoadingStatus busy={q.isLoading} label="Calculando rentabilidade…" />
+      <LoadingStatus
+        busy={q.isLoading || stale}
+        label="Calculando rentabilidade…"
+      />
       {body}
     </>
   );
@@ -325,11 +344,17 @@ export function IndexSection() {
   const windowed = isFiltered(range)
     ? rebaseRows(slice(data.series))
     : data.series;
+  // Annualised over the window's own calendar span, which is what the API does
+  // with the full one — a session count would put a calendar year at 0.99 and
+  // caption twelve months "período < 1 ano".
+  const span = windowed.length
+    ? yearsBetween(windowed[0].date, windowed[windowed.length - 1].date)
+    : 0;
   const metrics = isFiltered(range)
     ? Object.fromEntries(
         OVERLAYS.filter((k) => k in (windowed[0] ?? {})).map((k) => [
           k,
-          summarize(windowed.map((r) => r[k] as number), windowed.length),
+          summarize(windowed.map((r) => r[k] as number), span),
         ]),
       )
     : data.metrics;
@@ -345,14 +370,22 @@ export function IndexSection() {
 
   // Everything the index could not see, said out loud (spec/03: surfaced, not
   // hidden). Silence here would read as "this is your whole portfolio".
+  // Two of these describe where the *chart* starts and ends, so a date filter
+  // makes them false — the clamp still says "começa em 09/01/2024" under a
+  // chart the user just moved to 2025. They are facts about the series the API
+  // returned, so they stand down while a window is cutting it, and the window's
+  // own bounds are on screen in the picker above.
+  const wholeSpan = !isFiltered(range);
   const caveats = [
-    data.coverage.clamped &&
+    wholeSpan &&
+      data.coverage.clamped &&
       `O gráfico começa em ${formatDate(data.coverage.plane_start)}, depois da sua primeira operação (${formatDate(data.coverage.first_trade)}), porque a base de cotações não vai mais atrás.`,
     data.excluded.markets.length > 0 &&
       `Fora do cálculo: ${data.excluded.markets.join(", ")}.`,
     data.excluded.unpriced_tickers.length > 0 &&
       `Sem cotação na base: ${data.excluded.unpriced_tickers.join(", ")}.`,
-    data.coverage.trades_after_plane > 0 &&
+    wholeSpan &&
+      data.coverage.trades_after_plane > 0 &&
       `${data.coverage.trades_after_plane} operação(ões) posterior(es) à última cotação (${formatDate(data.end)}) foram marcadas nesse preço.`,
     // EXCLUDED_CATEGORIES is a constant in the engine, so this list is never
     // empty — printing it unconditionally put permanent boilerplate inside the
@@ -371,12 +404,8 @@ export function IndexSection() {
 
   return shell(
     <Card title={TITLE} action={control}>
-      <div className="mb-5 flex flex-wrap gap-x-10 gap-y-4">
-        <Metric label={subset ? "Seleção" : "Carteira"} m={metrics.portfolio} />
-        <Metric label="IBOV" m={metrics.ibov} />
-        <Metric label="CDI" m={metrics.cdi} />
-      </div>
-
+      {/* Outside the dimmed block below: the control the user is operating has
+          to stay crisp and clickable while the answer to the last click loads. */}
       {data.universe.length > 1 && (
         <AssetFilter
           universe={data.universe}
@@ -385,11 +414,21 @@ export function IndexSection() {
         />
       )}
 
-      {windowed.length === 0 ? (
-        <p className="py-16 text-center text-sm text-muted">
-          Nenhum pregão no período selecionado.
-        </p>
-      ) : (
+      {/* Everything below is `data`, which under keepPreviousData is the
+          *previous* selection until the refetch lands — so while it is stale the
+          dropdown already names the new holdings while the line, the labels and
+          the caveat still describe the old ones. Dimmed and marked busy rather
+          than left to look settled; `stale` is what makes that visible, since
+          the query never re-enters isLoading once it has data. */}
+      <div aria-busy={stale || undefined} className={stale ? "opacity-60 transition-opacity" : undefined}>
+        <div className="mb-5 flex flex-wrap gap-x-10 gap-y-4">
+          <Metric label={subset ? "Seleção" : "Carteira"} m={metrics.portfolio} />
+          <Metric label="IBOV" m={metrics.ibov} />
+          <Metric label="CDI" m={metrics.cdi} />
+        </div>
+
+        {/* An empty window is LineSeries' own business now — it answers for all
+            four charts rather than each of them growing its own branch. */}
         <LineSeries
           data={windowed}
           xKey="date"
@@ -398,7 +437,7 @@ export function IndexSection() {
           valueFormat={asReturn}
           labelFormat={formatDate}
         />
-      )}
+      </div>
 
       <p className="mt-4 text-sm text-muted">
         Retorno ponderado pelo tempo (TWR): aportes e retiradas mudam o saldo, não

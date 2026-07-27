@@ -11,7 +11,7 @@ import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { LineSeries } from "@/components/charts/LineSeries";
 import { AreaSeries } from "@/components/charts/AreaSeries";
-import { useDateRange } from "@/components/charts/DateRange";
+import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { formatDate, formatPercent } from "@/lib/format";
 import { ApiError } from "@/lib/api";
 import type { BacktestRun } from "@/lib/types";
@@ -110,8 +110,9 @@ function TearSheet({
   // whole run and cannot follow a window (Sharpe and Calmar are not recoverable
   // from an equity curve alone). A control sitting on the card it filters says
   // what it covers; one at the top of the page would claim the tiles too.
-  const equity = useDateRange({ min: m.start, max: m.end });
-  const drawdown = useDateRange({ min: m.start, max: m.end });
+  const equity = useDateRange({ min: m.start, max: m.end, of: "patrimônio" });
+  const drawdown = useDateRange({ min: m.start, max: m.end, of: "drawdown" });
+  const windowed = isFiltered(equity.range) || isFiltered(drawdown.range);
 
   const preAnn = pre["Ann. Return (%)"] ?? 0;
   const aftAnn = aft["Ann. Return (%)"] ?? 0;
@@ -163,6 +164,18 @@ function TearSheet({
           <span className="text-[11px] text-muted">pós {formatRatio(aft.Calmar ?? 0)}</span>
         } />
       </div>
+
+      {/* The tiles are the engine's figures for the whole run and cannot follow
+          a window — Sharpe and Calmar are not recoverable from an equity curve
+          alone. Narrow the drawdown chart to a calm stretch and the -40% tile
+          sits inches above a chart bottoming out at -12%; placing the control on
+          the card it filters is not the same as saying so. */}
+      {windowed && (
+        <p className="font-mono text-[11px] text-muted">
+          os números acima são da rodada inteira, não do período escolhido nos
+          gráficos
+        </p>
+      )}
 
       {/* Equity curve — pré vs pós is the whole point, so it's the centerpiece */}
       <Card

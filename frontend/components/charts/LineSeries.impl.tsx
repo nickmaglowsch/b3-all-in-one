@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { CHART, SERIES, TICK_STYLE } from "./theme";
 import { ChartTooltip } from "./ChartTooltip";
+import { NoData } from "./NoData";
 
 export interface Series {
   key: string;
@@ -41,6 +42,11 @@ export function LineSeries({
   valueFormat,
   labelFormat,
 }: LineSeriesProps) {
+  // recharts draws bare axes for an empty array, which reads as "the data is
+  // zero" rather than "there is nothing here". Reachable from every date filter
+  // (an inverted range, a holiday-only span), so it is answered once here
+  // instead of at each of the four call sites.
+  if (data.length === 0) return <NoData height={height} />;
   return (
     <div style={{ width: "100%", height }}>
       {series.length >= 2 && (

@@ -69,7 +69,25 @@ export interface RangeMetrics {
   max_dd_pct: number | null;
 }
 
-const TRADING_DAYS_PER_YEAR = 252;
+/**
+ * Elapsed calendar years between two ISO dates.
+ *
+ * Not sessions/252. That proxy was good enough while the only window was the
+ * whole book, but a date picker hands the user windows chosen on the calendar,
+ * and B3 runs ~248-251 sessions a year — so calendar 2025 counts 250 sessions,
+ * lands at 0.992 "years", and a full twelve months gets captioned "período < 1
+ * ano". 365.25 absorbs the leap day.
+ */
+export function yearsBetween(from: string, to: string): number {
+  const ms = Date.parse(`${to.slice(0, 10)}T00:00:00Z`) -
+    Date.parse(`${from.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(ms) ? 0 : ms / (365.25 * 24 * 3600 * 1000);
+}
+
+// Shortest window `summarize` will annualise — platform_app/portfolio_index.py
+// MIN_ANNUALISE_YEARS, and the note there explains the 0.99. Short version: a
+// calendar year picked off this filter is 01-01 → 12-31, i.e. 364 elapsed days.
+const MIN_ANNUALISE_YEARS = 0.99;
 
 /** Worst peak-to-trough fall, as a non-positive percentage. */
 function maxDrawdownPct(values: number[]): number {
@@ -83,27 +101,29 @@ function maxDrawdownPct(values: number[]): number {
 }
 
 /**
- * Total return, CAGR and max drawdown of a base-100 index.
+ * Total return, CAGR and max drawdown of a base-100 index over `years` of
+ * elapsed calendar time (see yearsBetween — the callers pass the window's own
+ * span, never a session count).
  *
- * A port of platform_app/portfolio_index.summarize — keep the two in step. It
- * lives here because the API can only summarise the window it computed, and the
- * date filter moves that window client-side; showing the full period's figures
- * over a narrowed chart would caption it with numbers it does not contain.
+ * A port of platform_app/portfolio_index.summarize — keep the two in step; the
+ * test below pins them against the same numbers. It lives here because the API
+ * can only summarise the window it computed, and the date filter moves that
+ * window client-side; showing the full period's figures over a narrowed chart
+ * would caption it with numbers it does not contain.
  *
  * `index[-1] / index[0]` is exact on a chained TWR series: the ratio between
  * any two points *is* the return between them, which is why the window can be
  * cut here rather than recomputed by the engine.
  */
-export function summarize(index: number[], nDays: number): RangeMetrics {
+export function summarize(index: number[], years: number): RangeMetrics {
   if (index.length === 0 || !index[0]) {
     return { total_return_pct: null, ann_return_pct: null, max_dd_pct: null };
   }
   const total = index[index.length - 1] / index[0] - 1;
-  const years = nDays / TRADING_DAYS_PER_YEAR;
   return {
     total_return_pct: round(100 * total, 2),
     ann_return_pct:
-      years >= 1 && 1 + total > 0
+      years >= MIN_ANNUALISE_YEARS && 1 + total > 0
         ? round(100 * ((1 + total) ** (1 / years) - 1), 2)
         : null,
     max_dd_pct: maxDrawdownPct(index),

@@ -1,7 +1,7 @@
 // Run: npm test (node --test, native TS — no runner dependency).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rebaseRows, sliceByDate, summarize } from "./chartRange.ts";
+import { rebaseRows, sliceByDate, summarize, yearsBetween } from "./chartRange.ts";
 
 const rows = [
   { date: "2023-01-02", portfolio: 100, ibov: 100 },
@@ -55,11 +55,11 @@ test("a series that is absent from the first row is left untouched", () => {
 });
 
 test("summarize mirrors the engine: total, CAGR withheld under a year, max DD", () => {
-  const short = summarize([100, 110], 60);
+  const short = summarize([100, 110], 0.25);
   assert.equal(short.total_return_pct, 10);
-  assert.equal(short.ann_return_pct, null); // 60 days is not a CAGR
+  assert.equal(short.ann_return_pct, null); // a quarter is not a CAGR
 
-  const long = summarize([100, 121], 504);
+  const long = summarize([100, 121], 2);
   assert.ok(Math.abs((long.ann_return_pct ?? 0) - 10) < 0.05);
 
   // Peak 110 → trough 90 is -18.18%, not -10% off the start.
@@ -69,4 +69,28 @@ test("summarize mirrors the engine: total, CAGR withheld under a year, max DD", 
     ann_return_pct: null,
     max_dd_pct: null,
   });
+});
+
+test("a calendar year picked off the filter gets a CAGR", () => {
+  // The whole reason this annualises over calendar time rather than sessions:
+  // 01-01 → 12-31 is the obvious thing to select and it must not come back
+  // captioned "período < 1 ano".
+  for (const y of ["2025", "2024" /* leap */]) {
+    const span = yearsBetween(`${y}-01-01`, `${y}-12-31`);
+    assert.ok(span >= 0.99 && span <= 1.005, `${y}: ${span}`);
+    assert.notEqual(summarize([100, 110], span).ann_return_pct, null);
+  }
+  // ...while a quarter is still refused.
+  assert.equal(
+    summarize([100, 110], yearsBetween("2025-01-01", "2025-03-31")).ann_return_pct,
+    null,
+  );
+});
+
+test("yearsBetween reads dates as calendar days, not local timestamps", () => {
+  assert.equal(yearsBetween("2025-01-01", "2026-01-01"), 365 / 365.25);
+  // Tolerates the full-ISO form the bench curves use, and a bad value is 0
+  // rather than NaN — NaN would make the CAGR comparison silently false.
+  assert.equal(yearsBetween("2025-01-01T00:00:00", "2026-01-01T12:00:00"), 365 / 365.25);
+  assert.equal(yearsBetween("", ""), 0);
 });

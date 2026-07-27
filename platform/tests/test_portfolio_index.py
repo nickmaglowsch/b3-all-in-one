@@ -18,6 +18,7 @@ import pytest
 from platform_app.portfolio_index import (
     EXCLUDED_MARKETS, PRIMARY_ETF_MARKET, RENDA_FIXA_MARKET, build_index,
     canonical, is_excluded, max_drawdown_pct, rebase, select_tickers, summarize,
+    years_between,
 )
 
 D1, D2, D3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
@@ -229,12 +230,31 @@ def test_rebase_and_drawdown():
 
 
 def test_summarize_withholds_annualised_return_under_a_year():
-    short = summarize([100.0, 110.0], n_days=60)
+    short = summarize([100.0, 110.0], years=0.25)
     assert short["total_return_pct"] == 10.0
-    assert short["ann_return_pct"] is None           # 60 days is not a CAGR
+    assert short["ann_return_pct"] is None           # a quarter is not a CAGR
 
-    full = summarize([100.0, 121.0], n_days=504)     # 2 years, +21%
+    full = summarize([100.0, 121.0], years=2.0)      # 2 years, +21%
     assert full["ann_return_pct"] == pytest.approx(10.0, abs=0.05)
+
+
+def test_picking_a_calendar_year_off_the_filter_gets_a_cagr():
+    """The window a date filter makes trivial to select, and the one the old
+    sessions/252 proxy refused: B3 runs ~250 sessions a year, so twelve real
+    months landed at 0.99 "years" and were captioned "período < 1 ano"."""
+    for year, leap in ((2025, False), (2024, True)):
+        span = years_between(date(year, 1, 1), date(year, 12, 31))
+        assert 0.99 <= span <= 1.005, (year, leap, span)
+        assert summarize([100.0, 110.0], span)["ann_return_pct"] is not None
+
+
+def test_a_short_window_is_still_refused():
+    """The guard exists to stop a quarter being annualised into a headline."""
+    q = years_between(date(2025, 1, 1), date(2025, 3, 31))
+    assert summarize([100.0, 110.0], q)["ann_return_pct"] is None
+    # Eleven months is short enough to still be honest about it.
+    assert summarize([100.0, 110.0], years_between(
+        date(2025, 1, 1), date(2025, 11, 30)))["ann_return_pct"] is None
 
 
 # ── Selecting a subset of the book ────────────────────────────────────────────

@@ -270,9 +270,10 @@ async def get_portfolio_index(
         for row, v in zip(series, values):
             row[key] = v
 
-    metrics = {"portfolio": pidx.summarize(built["index"], len(grid))}
+    span = pidx.years_between(grid[0], grid[-1])
+    metrics = {"portfolio": pidx.summarize(built["index"], span)}
     for key, values in bench.items():
-        metrics[key] = pidx.summarize(values, len(grid))
+        metrics[key] = pidx.summarize(values, span)
 
     return {
         "start": built["dates"][0],

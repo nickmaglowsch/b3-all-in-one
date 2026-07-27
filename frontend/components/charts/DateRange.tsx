@@ -18,7 +18,17 @@ export const isFiltered = (r: Range) => Boolean(r.from || r.to);
  * tree but share one piece of state, and threading a setter through both was
  * the only alternative.
  */
-export function useDateRange(bounds?: { min?: string; max?: string }) {
+export function useDateRange(bounds?: {
+  min?: string;
+  max?: string;
+  /**
+   * Names the chart being filtered, appended to each field's accessible name.
+   * Required wherever a page carries two of these — otherwise a screen reader
+   * listing the form controls hears "Início do período" twice with nothing to
+   * tell the equity curve from the drawdown.
+   */
+  of?: string;
+}) {
   const [range, setRange] = useState<Range>(FULL_RANGE);
   return {
     range,
@@ -46,12 +56,15 @@ export function DateRange({
   onChange,
   min,
   max,
+  of,
 }: {
   value: Range;
   onChange: (r: Range) => void;
   min?: string;
   max?: string;
+  of?: string;
 }) {
+  const named = (side: string) => (of ? `${side} do período — ${of}` : `${side} do período`);
   return (
     <div className="flex flex-wrap items-center gap-2">
       <input
@@ -60,7 +73,7 @@ export function DateRange({
         min={min}
         max={value.to || max}
         onChange={(e) => onChange({ ...value, from: e.target.value })}
-        aria-label="Início do período"
+        aria-label={named("Início")}
         className={field}
       />
       <span aria-hidden className="text-xs text-muted">
@@ -72,7 +85,7 @@ export function DateRange({
         min={value.from || min}
         max={max}
         onChange={(e) => onChange({ ...value, to: e.target.value })}
-        aria-label="Fim do período"
+        aria-label={named("Fim")}
         className={field}
       />
       {/* Rendered only when there is something to clear: a permanently visible
@@ -81,6 +94,9 @@ export function DateRange({
         <button
           type="button"
           onClick={() => onChange(FULL_RANGE)}
+          // Visible text stays short; the accessible name carries the chart, so
+          // two resets on one page are distinguishable out of context.
+          aria-label={of ? `Todo o período — ${of}` : undefined}
           className="rounded-md border border-hairline px-2 py-1 text-xs font-medium text-ink transition-colors hover:bg-hairline/40"
         >
           Todo o período

@@ -55,7 +55,8 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
             excluded_markets.add(t.market)
             continue
         if t.signed_qty:
-            qty_deltas.append((t.date, pidx.canonical(t.ticker), float(t.signed_qty)))
+            qty_deltas.append(
+                (t.date, pidx.canonical(t.ticker, t.market), float(t.signed_qty)))
         if t.amount is not None and t.side in ("Compra", "Venda"):
             kind = "buy" if t.side == "Compra" else "sell"
             flows.append((t.date, kind, abs(float(t.amount))))

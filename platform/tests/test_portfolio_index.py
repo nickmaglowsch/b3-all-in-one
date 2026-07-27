@@ -16,7 +16,8 @@ from datetime import date
 import pytest
 
 from platform_app.portfolio_index import (
-    build_index, canonical, max_drawdown_pct, rebase, summarize,
+    EXCLUDED_MARKETS, PRIMARY_ETF_MARKET, build_index, canonical,
+    max_drawdown_pct, rebase, summarize,
 )
 
 D1, D2, D3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
@@ -158,6 +159,31 @@ def test_canonical_only_strips_the_fractional_suffix():
     assert canonical("SAPR11F") == "SAPR11"
     assert canonical("PETR4") == "PETR4"
     assert canonical("BTLG11") == "BTLG11"   # no round-lot B3 code ends in F
+
+
+def test_etf_subscription_is_the_buy_not_a_duplicate():
+    """Subscribe 50 HASH11 in the primary market (booked as HASH11H), sell them
+    on the exchange months later. Drop the subscription and the sell is an orphan:
+    the index carries -50 shares it never bought and marks them at every close,
+    subtracting a position that does not exist from the NAV forever after."""
+    d1, d2 = date(2021, 4, 22), date(2021, 11, 29)
+    subscribe = (d1, canonical("HASH11H", PRIMARY_ETF_MARKET), 50.0)
+    sell = (d2, canonical("HASH11", "Mercado à Vista"), -50.0)
+    out = build_index(
+        [d1, d2], {"HASH11": {d1: 47.0, d2: 59.9}},
+        [subscribe, sell], [(d1, "buy", 2351.0), (d2, "sell", 2995.0)],
+    )
+    assert out["nav"] == [2350.0, 0.0]     # held then flat — never short
+    assert out["index"][-1] > out["index"][0]   # sold above the mark: a gain
+
+
+def test_primary_etf_market_is_no_longer_excluded():
+    """The subscription is a real acquisition of the ETF, so it belongs in the
+    index rather than in the disclosed-exclusions list."""
+    assert PRIMARY_ETF_MARKET not in EXCLUDED_MARKETS
+    assert canonical("HASH11H", PRIMARY_ETF_MARKET) == "HASH11"
+    # ...and the H strip cannot reach a spot ticker, which is why it is scoped.
+    assert canonical("HASH11H") == "HASH11H"
 
 
 def test_empty_grid_is_not_a_crash():

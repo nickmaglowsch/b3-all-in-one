@@ -24,13 +24,22 @@ import bisect
 import datetime
 
 # Markets with no daily-position meaning, excluded from the index and disclosed:
-#   Futuro                  — WIN/WDO daytrades, no overnight position
-#   Mercado Primário de ETF — receipt bookkeeping that duplicates the real buy
-#   Renda Fixa              — bank/OTC products the market plane has no marks for
+#   Futuro     — WIN/WDO daytrades, no overnight position
+#   Renda Fixa — bank/OTC products the market plane has no marks for
 # ponytail: renda fixa is dropped, not modelled. Valuing it as units of the CDI
 # index (what the taxcore CLI did) is a feature of its own; until then a book
 # with RF shows an equities-only index and says so via `excluded`.
-EXCLUDED_MARKETS = frozenset({"Futuro", "Mercado Primário de ETF", "Renda Fixa"})
+EXCLUDED_MARKETS = frozenset({"Futuro", "Renda Fixa"})
+
+# "Mercado Primário de ETF" used to be excluded here too, as "receipt bookkeeping
+# that duplicates the real buy". It duplicates nothing — it IS the buy: an ETF
+# subscription, booked under a primary-market-only code (HASH11H for HASH11) that
+# never trades on the exchange and so never appears in COTAHIST. Dropping it while
+# keeping the secondary-market sell of the same units left an orphan sell, and an
+# orphan sell is a phantom short: qty goes negative and subtracts qty x close from
+# every later NAV. Latent while the ETF itself was unpriced, real the moment the
+# plane learned to carry ETFs.
+PRIMARY_ETF_MARKET = "Mercado Primário de ETF"
 
 # cash_events that are a return of/on capital — they leave the book, so TWR
 # counts them as return on the day they land.
@@ -44,16 +53,29 @@ EXCLUDED_CATEGORIES = frozenset({"premium", "reembolso"})
 TRADING_DAYS_PER_YEAR = 252
 
 
-def canonical(ticker: str) -> str:
-    """Fold a fractional-market ticker onto its round-lot parent (PETR4F -> PETR4).
+def canonical(ticker: str, market: str | None = None) -> str:
+    """Fold a ticker onto the code the price plane actually carries.
 
-    B3 lists the same security twice — round lot and fractional — and the price
-    plane only carries the round lot (see EQUITY_BDI_CODES). taxcore already does
-    this when it derives positions.csv (load_b3.consolidate_fractional), but the
-    index is reconstructed from raw `trades`, which keep the F, so every
-    fractional trade landed on a ticker the plane could never price. No round-lot
-    B3 code ends in F, so the strip is unambiguous.
+    Two B3 conventions book the same security under a second code, and neither
+    of those codes is in COTAHIST:
+
+      *F, fractional market   PETR4F is PETR4 at a smaller lot
+      *H, ETF primary market  HASH11H is a subscription of HASH11
+
+    A trade left under the suffixed code can never be priced. Worse, when a round
+    trip is booked under both codes — subscribe as HASH11H, sell as HASH11 — the
+    unfolded leg becomes an orphan and the index carries a phantom position for it.
+
+    taxcore already folds the fractional case when it derives positions.csv
+    (load_b3.consolidate_fractional); the index is rebuilt from raw `trades`,
+    which keep both suffixes, so it has to fold them itself.
+
+    The H strip is scoped to `market` because that label identifies the primary
+    leg exactly, so the rule cannot reach a spot ticker even in principle. Checked
+    against the archives: no spot B3 code ends in F or in H.
     """
+    if market == PRIMARY_ETF_MARKET:
+        return ticker[:-1] if ticker.endswith("H") else ticker
     return ticker[:-1] if ticker.endswith("F") else ticker
 
 

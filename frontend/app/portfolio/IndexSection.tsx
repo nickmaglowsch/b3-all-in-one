@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
@@ -43,8 +43,37 @@ function AssetFilter({
   selected: string[] | null;
   onChange: (next: string[] | null) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const box = useRef<HTMLDetailsElement>(null);
+
+  // `<details>` carries the open state, the disclosure semantics and the
+  // keyboard activation on its own; what it does not do is close when you look
+  // away, and a panel that only closes via its own trigger is not a dropdown.
+  useEffect(() => {
+    const close = (e: Event) => {
+      const el = box.current;
+      if (!el?.open) return;
+      if (e.type === "keydown" && (e as KeyboardEvent).key !== "Escape") return;
+      if (e.type === "pointerdown" && el.contains(e.target as Node)) return;
+      el.open = false;
+      // A stale query is a lie about the book: reopen after searching "wege"
+      // and the list shows one ticker, which reads as "this is all you hold".
+      setQuery("");
+      // Escape should hand focus back to the trigger rather than to nothing.
+      if (e.type === "keydown") el.querySelector("summary")?.focus();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, []);
+
   const on = (t: string) => !selected || selected.includes(t);
   const lastOne = selected?.length === 1;
+  const q = query.trim().toUpperCase();
+  const shown = q ? universe.filter((t) => t.includes(q)) : universe;
 
   const toggle = (t: string) => {
     const next = on(t)
@@ -56,46 +85,85 @@ function AssetFilter({
   };
 
   return (
-    <fieldset className="mb-4">
-      <legend className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+    <div className="mb-4">
+      <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
         Ativos no cálculo
-      </legend>
-      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        {universe.map((t) => (
-          <label
-            key={t}
-            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-[4px] border px-2 py-1 font-mono text-[11px] font-medium uppercase leading-none tracking-wide transition-colors ${
-              on(t)
-                ? "border-navy/40 bg-navy/[0.06] text-ink"
-                : "border-hairline bg-paper text-muted"
-            } ${on(t) && lastOne ? "cursor-not-allowed" : "hover:border-navy/40"}`}
-          >
-            <input
-              type="checkbox"
-              checked={on(t)}
-              disabled={on(t) && lastOne}
-              onChange={() => toggle(t)}
-              title={
-                on(t) && lastOne
-                  ? "Ao menos um ativo precisa ficar no cálculo"
-                  : undefined
-              }
-              className="h-3 w-3 cursor-pointer accent-navy disabled:cursor-not-allowed"
-            />
-            {t}
-          </label>
-        ))}
-        {selected && (
-          <button
-            type="button"
-            onClick={() => onChange(null)}
-            className="rounded-md border border-hairline px-2 py-1 text-xs font-medium text-ink transition-colors hover:bg-hairline/40"
-          >
-            Todos
-          </button>
-        )}
-      </div>
-    </fieldset>
+      </p>
+      <details ref={box} className="relative mt-2 inline-block">
+        <summary
+          // The marker is replaced by the count + caret below; `list-none` alone
+          // leaves Safari's own triangle behind, hence the ::-webkit rule.
+          className="flex w-64 cursor-pointer list-none items-center justify-between gap-2 rounded-md border border-hairline bg-paper px-3 py-1.5 text-sm text-ink transition-colors hover:border-navy/40 [&::-webkit-details-marker]:hidden"
+        >
+          <span>
+            {selected
+              ? `${selected.length} de ${universe.length} ativos`
+              : `Todos os ${universe.length} ativos`}
+          </span>
+          <span aria-hidden className="text-muted">
+            ▾
+          </span>
+        </summary>
+
+        <div className="absolute left-0 z-20 mt-1 w-64 rounded-md border border-hairline bg-panel p-2 shadow-lg">
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar ativo"
+            aria-label="Buscar ativo na lista"
+            className="w-full rounded-md border border-hairline bg-paper px-2 py-1 font-mono text-xs text-ink placeholder:text-muted focus:border-navy focus:outline-none"
+          />
+
+          <fieldset className="mt-2 max-h-56 overflow-y-auto">
+            <legend className="sr-only">Ativos incluídos no cálculo</legend>
+            {shown.length === 0 ? (
+              <p className="px-1 py-3 text-center text-xs text-muted">
+                Nenhum ativo com “{query.trim()}”.
+              </p>
+            ) : (
+              shown.map((t) => (
+                <label
+                  key={t}
+                  className={`flex items-center gap-2 rounded px-1 py-1 font-mono text-xs uppercase tracking-wide ${
+                    on(t) && lastOne
+                      ? "cursor-not-allowed text-muted"
+                      : "cursor-pointer text-ink hover:bg-hairline/40"
+                  }`}
+                  title={
+                    on(t) && lastOne
+                      ? "Ao menos um ativo precisa ficar no cálculo"
+                      : undefined
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={on(t)}
+                    disabled={on(t) && lastOne}
+                    onChange={() => toggle(t)}
+                    className="h-3.5 w-3.5 cursor-pointer accent-navy disabled:cursor-not-allowed"
+                  />
+                  {t}
+                </label>
+              ))
+            )}
+          </fieldset>
+
+          {/* Only "todos" — there is deliberately no "limpar". An empty
+              selection has no index to draw, so offering it would be offering
+              a 422. Same reason the last checkbox above disables itself. */}
+          {selected && (
+            <button
+              type="button"
+              onClick={() => onChange(null)}
+              className="mt-2 w-full rounded-md border border-hairline px-2 py-1 text-xs font-medium text-ink transition-colors hover:bg-hairline/40"
+            >
+              Selecionar todos
+            </button>
+          )}
+        </div>
+      </details>
+    </div>
   );
 }
 

@@ -67,7 +67,17 @@ function ShellChrome({
   }, [router, pathname]);
 
   // Drawer is transient: any navigation or Escape closes it.
-  useEffect(() => setOpen(false), [pathname]);
+  //
+  // Adjusted during render rather than in an effect. This is React's documented
+  // "resetting state when a prop changes" pattern: the drawer closes in the same
+  // pass that navigates, so it is never painted open over the new route, and
+  // there is no second render to schedule. An effect would do both.
+  const [lastPath, setLastPath] = useState(pathname);
+  if (lastPath !== pathname) {
+    setLastPath(pathname);
+    setOpen(false);
+  }
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);

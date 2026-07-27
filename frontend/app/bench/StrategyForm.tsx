@@ -215,7 +215,9 @@ function StrategyFormInner({
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) =>
     setF((s) => ({ ...s, [k]: v }));
 
-  const sigList: SignalDef[] = signals.data ?? [];
+  // `?? []` is a fresh array on every render, so a useMemo keyed on it never
+  // hits. Memoise the fallback itself and the ones below actually memoise.
+  const sigList: SignalDef[] = useMemo(() => signals.data ?? [], [signals.data]);
   // Keep an edited strategy's own factor selectable even if it left the catalog.
   const factorOptions = useMemo(() => {
     const names = sigList.map((s) => s.name);

@@ -138,8 +138,6 @@ export function compileRegime(v: RegimeValue): Record<string, unknown> {
 
 // ── UI ────────────────────────────────────────────────────────────────────────
 
-const inputCls =
-  "w-full rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink focus:border-navy focus:outline-none";
 const smallCls =
   "rounded-md border border-hairline bg-paper px-2 py-1.5 text-xs text-ink focus:border-navy focus:outline-none";
 

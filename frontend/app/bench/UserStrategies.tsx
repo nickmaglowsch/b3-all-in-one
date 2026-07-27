@@ -4,7 +4,7 @@
 // Nova/Editar/Clonar form. A saved strategy is just another gallery entry, so
 // "Backtest" only selects it in the run panel above — the existing RunPanel path
 // runs it unchanged.
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Strategy, UserStrategy } from "@/lib/types";
 import { ApiError } from "@/lib/api";
 import { useDeleteUserStrategy, useUserStrategies } from "@/lib/strategies";
@@ -27,27 +27,23 @@ export function UserStrategies({
   const del = useDeleteUserStrategy();
   const rows = (data ?? []).filter((s) => s.kind === "rank_and_hold");
 
-  const [open, setOpen] = useState(false);
+  const [openLocal, setOpenLocal] = useState(false);
   const [editing, setEditing] = useState<UserStrategy | null>(null);
-  const [clone, setClone] = useState<Strategy | null>(null);
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  // Clonar comes from the gallery (a sibling) — open the form on the built-in it
-  // hands us, then release it so re-clicking the same entry re-triggers.
-  useEffect(() => {
-    if (!cloneFrom) return;
-    setEditing(null);
-    setClone(cloneFrom);
-    setWarnings([]);
-    setOpen(true);
-    onConsumeClone();
-  }, [cloneFrom, onConsumeClone]);
+  // Clonar comes from the gallery (a sibling), and the parent already holds that
+  // choice in `cloneFrom`. So the form's open state is DERIVED from it rather
+  // than copied into local state by an effect: mirroring a prop into state means
+  // two sources of truth for one fact, a render with the stale one, and a
+  // cascade to reconcile them. Whoever closes the form clears the parent's copy.
+  const clone = cloneFrom;
+  const open = openLocal || clone !== null;
 
   function close() {
-    setOpen(false);
+    setOpenLocal(false);
     setEditing(null);
-    setClone(null);
+    onConsumeClone();
   }
 
   const delMsg =
@@ -82,9 +78,8 @@ export function UserStrategies({
           type="button"
           onClick={() => {
             setEditing(null);
-            setClone(null);
             setWarnings([]);
-            setOpen(true);
+            setOpenLocal(true);
           }}
           className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy/90"
         >
@@ -139,10 +134,11 @@ export function UserStrategies({
                   <RowBtn onClick={() => onBacktest(s.name)}>Backtest</RowBtn>
                   <RowBtn
                     onClick={() => {
-                      setClone(null);
+                      // No clone to clear: when cloneFrom is set the form is
+                      // already open, so this list is not on screen.
                       setEditing(s);
                       setWarnings([]);
-                      setOpen(true);
+                      setOpenLocal(true);
                     }}
                   >
                     Editar

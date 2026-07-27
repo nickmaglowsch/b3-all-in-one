@@ -194,6 +194,39 @@ INDEX_PRICES_DATE = "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date);
 INDEX_PRICES_TICKER = "CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker);"
 INDEX_PRICES_ISIN = "CREATE INDEX IF NOT EXISTS idx_prices_isin ON prices(isin_code);"
 
+# Marks for instruments COTAHIST does not carry (see external_prices.py). A sibling
+# of `prices` rather than rows inside it, for three reasons, each of which bites:
+#   1. main.py step 6 derives corporate-action roots as `t[:4]` over every ticker
+#      in `prices`. LFTB11 would add the root LFTB, which is no listed company —
+#      it 404s into fetch_failures and gets retried on every run, forever.
+#   2. main.py step 7 infers splits from price ratios across the whole table. That
+#      step reads COTAHIST semantics; a series from another feed is outside its
+#      contract even where it would not fire today.
+#   3. init_db(rebuild=True) drops `prices`. COTAHIST can be re-downloaded, so that
+#      is merely slow. This table cannot: B3's daily file has a ~14-month rolling
+#      window, so a dropped row older than that is gone for good. It is therefore
+#      absent from the rebuild drop list on purpose.
+# A `prices.source` column would fix (3) alone, at the price of making every
+# existing reader — backtests, adjustments, split detection, /price-history —
+# filter on it. One writer's need should not tax every reader.
+SCHEMA_EXTERNAL_PRICES = """
+CREATE TABLE IF NOT EXISTS external_prices (
+    ticker TEXT NOT NULL,
+    isin_code TEXT NOT NULL,
+    date DATE NOT NULL,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    volume REAL,
+    source TEXT NOT NULL,
+    PRIMARY KEY (ticker, date)
+);
+"""
+INDEX_EXTERNAL_PRICES_DATE = (
+    "CREATE INDEX IF NOT EXISTS idx_external_prices_date ON external_prices(date);"
+)
+
 # ── CVM Fundamentals Tables ────────────────────────────────────────────────────
 
 SCHEMA_CVM_COMPANIES = """
@@ -428,6 +461,8 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
         INDEX_PRICES_DATE,
         INDEX_PRICES_TICKER,
         INDEX_PRICES_ISIN,
+        SCHEMA_EXTERNAL_PRICES,
+        INDEX_EXTERNAL_PRICES_DATE,
         SCHEMA_CVM_COMPANIES,
         SCHEMA_CVM_FILINGS,
         SCHEMA_FUNDAMENTALS_PIT,
@@ -631,6 +666,81 @@ def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
 
     logger.info(f"Upserted {len(records):,} price records")
     return len(records)
+
+
+def upsert_external_prices(conn, df: pd.DataFrame) -> int:
+    """Upsert marks from a non-COTAHIST feed into `external_prices`.
+
+    Deliberately does not go through upsert_prices: that one drops rows with zero
+    volume and enforces OHLC containment, both of which assume COTAHIST's fields.
+    This feed publishes no opening price at all, so `open` is NULL by design and a
+    close-outside-[low,high] check is all the validation the shape supports.
+    """
+    if df.empty:
+        logger.warning("No external price records to upsert")
+        return 0
+
+    sql = """
+        INSERT INTO external_prices (ticker, isin_code, date, open, high, low, close, volume, source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(ticker, date) DO UPDATE SET
+            isin_code = excluded.isin_code,
+            open = excluded.open,
+            high = excluded.high,
+            low = excluded.low,
+            close = excluded.close,
+            volume = excluded.volume,
+            source = excluded.source
+    """
+
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
+
+    before = len(df)
+    df = df[df["close"] > 0]
+    bad = df["high"].notna() & df["low"].notna() & (
+        (df["high"] < df["low"]) | (df["close"] < df["low"]) | (df["close"] > df["high"]))
+    df = df[~bad]
+    if before - len(df):
+        logger.warning(f"Dropped {before - len(df):,} external rows with bad prices")
+
+    cols = ["ticker", "isin_code", "date", "open", "high", "low", "close", "volume", "source"]
+    records = df[cols].astype(object).where(pd.notna(df[cols]), None).values.tolist()
+    executemany(conn, sql, records)
+    conn.commit()
+
+    logger.info(f"Upserted {len(records):,} external price records")
+    return len(records)
+
+
+def _as_date(value) -> date:
+    """Postgres hands back a date, SQLite a string."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value)[:10])
+
+
+def max_external_price_date(conn) -> Optional[date]:
+    """Latest date already stored — None when the table is empty."""
+    row = execute(conn, "SELECT MAX(date) FROM external_prices").fetchone()
+    return _as_date(row[0]) if row and row[0] else None
+
+
+def stored_external_dates(conn, start: date) -> set:
+    """Dates from `start` that already have rows.
+
+    The caller fetches the complement rather than everything after the latest
+    stored date. Resuming from the max would step over a day a transient network
+    error skipped, and with a source on a rolling retention window a skipped day
+    becomes permanently unrecoverable — the one failure mode worth extra code.
+    """
+    rows = execute(
+        conn, "SELECT DISTINCT date FROM external_prices WHERE date >= ?",
+        (start.isoformat(),),
+    ).fetchall()
+    return {_as_date(r[0]) for r in rows if r and r[0]}
 
 
 def upsert_corporate_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:

@@ -51,7 +51,7 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
     for t in trades:
         if not t.date or not t.ticker:
             continue
-        if t.market in pidx.EXCLUDED_MARKETS:
+        if pidx.is_excluded(t.ticker, t.market):
             excluded_markets.add(t.market)
             continue
         if t.signed_qty:
@@ -83,12 +83,24 @@ async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:
     pool = await get_engine_pool()
     days = await pool.fetch(
         "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
+    # external_prices carries the instruments COTAHIST does not (listed
+    # fixed-income ETFs — see engine/b3_pipeline/external_prices.py). Unioned into
+    # the closes only, never into the grid above: the grid must stay the exchange
+    # calendar as COTAHIST knows it, and B3's daily file shares that calendar, so
+    # a union there could only add noise. UNION ALL is safe because the two tables
+    # are disjoint by construction — a ticker is in COTAHIST or it is not.
+    #
+    # The table belongs to the engine, which creates it on its next pipeline run,
+    # and the two deploy independently. Selecting it unconditionally would make
+    # every index request 503 in the window between this code shipping and that
+    # run — so the union is added only once the table is actually there.
+    plane = ["SELECT ticker, date, close FROM prices "
+             "WHERE ticker = ANY($1::text[]) AND date >= $2 AND close IS NOT NULL"]
+    if await pool.fetchval("SELECT to_regclass('external_prices')"):
+        plane.append("SELECT ticker, date, close FROM external_prices "
+                     "WHERE ticker = ANY($1::text[]) AND date >= $2 AND close IS NOT NULL")
     rows = await pool.fetch(
-        "SELECT ticker, date, close FROM prices "
-        "WHERE ticker = ANY($1::text[]) AND date >= $2 AND close IS NOT NULL "
-        "ORDER BY ticker, date",
-        tickers, start,
-    )
+        " UNION ALL ".join(plane) + " ORDER BY ticker, date", tickers, start)
 
     closes: dict[str, dict[datetime.date, float]] = {}
     for r in rows:

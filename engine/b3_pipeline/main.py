@@ -18,10 +18,11 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from . import adjustments, b3_corporate_actions, config, downloader, parser, storage
+from . import (adjustments, b3_corporate_actions, config, downloader,
+               external_prices, parser, storage)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -126,6 +127,39 @@ def run_pipeline(
         logger.info("")
         logger.info("Step 5/9: Upserting raw prices to database...")
         storage.upsert_prices(conn, prices)
+
+        # Instruments B3 keeps out of COTAHIST (listed fixed-income ETFs), from
+        # B3's own daily file. Runs here — after prices, before corporate actions —
+        # so the roots step below still derives its company codes from `prices`
+        # alone and never asks B3 about a ticker with no listed company behind it.
+        #
+        # Resumes from the last stored date because B3's window is ~14 months and
+        # rolling: what is missed rolls off permanently, so this is a daily
+        # obligation, not a backfill that can be repeated later.
+        logger.info("")
+        logger.info("Step 5b/9: Fetching external prices (fixed-income ETFs)...")
+        try:
+            today = datetime.now().date()
+            # Fetch the days we are missing, not everything after the newest one:
+            # resuming from the max would step permanently over any day a network
+            # blip skipped. Bounded to a trailing window so old market holidays —
+            # which have no rows and never will — are not re-probed forever.
+            if storage.max_external_price_date(conn) is None:
+                start = config.EXTERNAL_PRICES_START
+            else:
+                start = max(config.EXTERNAL_PRICES_START,
+                            today - timedelta(days=config.EXTERNAL_PRICES_HEAL_DAYS))
+            have = storage.stored_external_dates(conn, start)
+            logger.info(f"Fetching external prices {start} to {today} "
+                        f"({len(have)} sessions already stored)")
+            external = external_prices.backfill(start, today, skip=have)
+            if not external.empty:
+                storage.upsert_external_prices(conn, external)
+        except Exception as e:
+            # A third-party feed must never take the COTAHIST pipeline down with
+            # it; the index degrades to "unpriced and disclosed", which is where
+            # it was before this step existed.
+            logger.error(f"External price fetch failed, continuing: {e}")
 
         if not skip_corporate_actions:
             logger.info("")

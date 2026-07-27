@@ -538,24 +538,55 @@ async def _combined_target(
     today = date.today().isoformat()
     combined: dict[str, float] = {}
     cash_weight = 0.0
-    missing: list[str] = []   # strategies that need fundamentals not yet ingested
+
+    def _key(ref: str) -> tuple:
+        if ref in user_upd:
+            return (ref, today, freq, str(tid), user_upd[ref])
+        return (ref, today, freq)
+
+    # Split cash out first: CASH_CDI is the risk-free sleeve and has nothing to
+    # advise, so it must never reach the engine.
+    equity: list[tuple] = []       # (sleeve_ref, pct, cache_key)
     for s in sleeves:
         pct = float(s.target_pct) / 100.0
         if s.strategy_ref == "CASH_CDI":
             cash_weight += pct
-            continue
-        if s.strategy_ref in user_upd:
-            key = (s.strategy_ref, today, freq, str(tid), user_upd[s.strategy_ref])
         else:
-            key = (s.strategy_ref, today, freq)
+            equity.append((s.strategy_ref, pct, _key(s.strategy_ref)))
+
+    # Each sleeve is a separate engine subprocess that builds its own market
+    # plane, and they are independent — one sleeve's weights depend only on its
+    # own strategy. Awaiting them in a loop made a cold three-sleeve portfolio
+    # pay three full plane builds end to end. Gathered, the wall clock is the
+    # slowest sleeve. Cache hits are resolved before dispatch so a warm sleeve
+    # costs nothing.
+    todo = [(ref, key) for ref, _pct, key in equity if key not in _SLEEVE_WEIGHTS_CACHE]
+    if todo:
+        results = await asyncio.gather(
+            *(_advise_strategy(ref, freq, extra_env or None) for ref, _key_ in todo),
+            return_exceptions=True,
+        )
+        for (ref, key), res in zip(todo, results):
+            if isinstance(res, BaseException):
+                continue          # classified below, so one failure is not fatal here
+            _bounded(_SLEEVE_WEIGHTS_CACHE)[key] = res
+        # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
+        # others mid-flight; anything that is not that is still a real failure.
+        failures = {ref: res for (ref, _k), res in zip(todo, results)
+                    if isinstance(res, BaseException)}
+        for ref, exc in failures.items():
+            if not isinstance(exc, enginerun.EngineNeedsFundamentals):
+                raise exc
+    else:
+        failures = {}
+
+    missing: list[str] = []   # strategies that need fundamentals not yet ingested
+    for ref, pct, key in equity:
         adv = _SLEEVE_WEIGHTS_CACHE.get(key)
         if adv is None:
-            try:
-                adv = await _advise_strategy(s.strategy_ref, freq, extra_env or None)
-            except enginerun.EngineNeedsFundamentals as e:
-                missing.append(e.strategy or s.strategy_ref)
-                continue
-            _bounded(_SLEEVE_WEIGHTS_CACHE)[key] = adv
+            exc = failures.get(ref)
+            missing.append(getattr(exc, "strategy", None) or ref)
+            continue
         for t, w in adv["weights"].items():
             combined[t] = combined.get(t, 0.0) + pct * float(w)
     if missing:

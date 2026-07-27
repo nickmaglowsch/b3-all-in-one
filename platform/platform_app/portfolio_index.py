@@ -105,6 +105,33 @@ def canonical(ticker: str, market: str | None = None) -> str:
     return ticker[:-1] if ticker.endswith("F") else ticker
 
 
+def select_tickers(
+    qty_deltas: list[tuple[datetime.date, str, float]],
+    flows: list[tuple[datetime.date, str, float, str | None]],
+    keep: set[str] | None,
+) -> tuple[list, list]:
+    """Restrict a book to `keep` before it is chained. `None` keeps everything.
+
+    Answers "which of my assets is helping and which is hurting": rebuild the
+    same TWR over a subset and read the difference. Holdings are the obvious
+    half; the cash is the half that is easy to get wrong. A buy of an asset the
+    user just excluded is not an inflow to the book that remains — left in, it
+    inflates that day's denominator and the subset reads as a loss it never had.
+    So flows carry the ticker that caused them, purely so this function can
+    decide whether they survive.
+
+    Returns flows as the 3-tuples `build_index` takes, which is why the ticker
+    rides alongside rather than inside the chaining math.
+    """
+    return (
+        [q for q in qty_deltas if keep is None or q[1] in keep],
+        [(d, kind, amount) for d, kind, amount, ticker in flows
+         # An untickered cash event cannot be attributed to a selected asset, so
+         # a filtered book must not claim it.
+         if keep is None or (ticker is not None and ticker in keep)],
+    )
+
+
 def _snap(d: datetime.date, grid: list[datetime.date]) -> int:
     """Index of the first grid day >= `d`, clamped to the last day.
 

@@ -11,6 +11,7 @@ import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { LineSeries } from "@/components/charts/LineSeries";
 import { AreaSeries } from "@/components/charts/AreaSeries";
+import { useDateRange } from "@/components/charts/DateRange";
 import { formatDate, formatPercent } from "@/lib/format";
 import { ApiError } from "@/lib/api";
 import type { BacktestRun } from "@/lib/types";
@@ -105,6 +106,13 @@ function TearSheet({
   const pre = m.pretax ?? {};
   const aft = m.aftertax ?? {};
 
+  // Per chart, not per page: the tiles above are the engine's figures for the
+  // whole run and cannot follow a window (Sharpe and Calmar are not recoverable
+  // from an equity curve alone). A control sitting on the card it filters says
+  // what it covers; one at the top of the page would claim the tiles too.
+  const equity = useDateRange({ min: m.start, max: m.end });
+  const drawdown = useDateRange({ min: m.start, max: m.end });
+
   const preAnn = pre["Ann. Return (%)"] ?? 0;
   const aftAnn = aft["Ann. Return (%)"] ?? 0;
   const taxDrag = (aftAnn - preAnn) / 100; // fraction, for PctDelta (pós vs pré)
@@ -160,16 +168,19 @@ function TearSheet({
       <Card
         title="Patrimônio: pré vs pós-imposto"
         action={
-          <span className="font-mono text-[11px] text-muted">
-            o diferencial: quanto o imposto corrói o retorno
-          </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-mono text-[11px] text-muted">
+              o diferencial: quanto o imposto corrói o retorno
+            </span>
+            {equity.control}
+          </div>
         }
       >
         {curvesLoading || !curves ? (
           <Skeleton className="h-[300px] w-full" />
         ) : (
           <LineSeries
-            data={curveRows(curves, ["pretax", "aftertax"])}
+            data={equity.slice(curveRows(curves, ["pretax", "aftertax"]))}
             xKey="date"
             height={320}
             series={[
@@ -184,12 +195,12 @@ function TearSheet({
 
       {/* Drawdown + secondary tiles */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <Card title="Drawdown">
+        <Card title="Drawdown" action={drawdown.control}>
           {curvesLoading || !curves ? (
             <Skeleton className="h-[200px] w-full" />
           ) : (
             <AreaSeries
-              data={curveRows(curves, ["drawdown"])}
+              data={drawdown.slice(curveRows(curves, ["drawdown"]))}
               xKey="date"
               yKey="drawdown"
               label="Drawdown"

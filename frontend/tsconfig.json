@@ -11,6 +11,11 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // `npm test` is `node --test` over the .ts files directly (Node 24 strips
+    // the types itself), and Node resolves the specifier literally — so the
+    // test files import "./chartRange.ts". Safe under noEmit: nothing is
+    // written, so there is no extension left to rewrite.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [

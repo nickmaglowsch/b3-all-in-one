@@ -1,13 +1,16 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { IndexMetrics, PortfolioIndex } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
+import { isFiltered, useDateRange } from "@/components/charts/DateRange";
+import { rebaseRows, summarize } from "@/lib/chartRange";
 import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
@@ -19,6 +22,82 @@ const TITLE = "Rentabilidade vs IBOV e CDI";
 // The index is base 100 and unitless — show it as a return off that base, which
 // is what the user actually reads ("+23%"), not "123 pontos".
 const asReturn = (v: number) => formatPercent(v / 100 - 1);
+
+const OVERLAYS = ["portfolio", "ibov", "cdi"] as const;
+
+/**
+ * Which holdings the line is built from. `null` is the whole book — the
+ * unfiltered request, so the common case shares one cache entry instead of
+ * spelling out every ticker.
+ *
+ * The last remaining asset cannot be switched off: an empty selection has no
+ * index to draw and the API answers 422, which is a correct response to a state
+ * the UI should never have let the user reach.
+ */
+function AssetFilter({
+  universe,
+  selected,
+  onChange,
+}: {
+  universe: string[];
+  selected: string[] | null;
+  onChange: (next: string[] | null) => void;
+}) {
+  const on = (t: string) => !selected || selected.includes(t);
+  const lastOne = selected?.length === 1;
+
+  const toggle = (t: string) => {
+    const next = on(t)
+      ? (selected ?? universe).filter((x) => x !== t)
+      : [...(selected ?? []), t];
+    // Back to everything → drop the filter entirely rather than enumerate it,
+    // so the chart returns to the request it started on.
+    onChange(next.length === universe.length ? null : next);
+  };
+
+  return (
+    <fieldset className="mb-4">
+      <legend className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+        Ativos no cálculo
+      </legend>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {universe.map((t) => (
+          <label
+            key={t}
+            className={`inline-flex cursor-pointer items-center gap-1.5 rounded-[4px] border px-2 py-1 font-mono text-[11px] font-medium uppercase leading-none tracking-wide transition-colors ${
+              on(t)
+                ? "border-navy/40 bg-navy/[0.06] text-ink"
+                : "border-hairline bg-paper text-muted"
+            } ${on(t) && lastOne ? "cursor-not-allowed" : "hover:border-navy/40"}`}
+          >
+            <input
+              type="checkbox"
+              checked={on(t)}
+              disabled={on(t) && lastOne}
+              onChange={() => toggle(t)}
+              title={
+                on(t) && lastOne
+                  ? "Ao menos um ativo precisa ficar no cálculo"
+                  : undefined
+              }
+              className="h-3 w-3 cursor-pointer accent-navy disabled:cursor-not-allowed"
+            />
+            {t}
+          </label>
+        ))}
+        {selected && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="rounded-md border border-hairline px-2 py-1 text-xs font-medium text-ink transition-colors hover:bg-hairline/40"
+          >
+            Todos
+          </button>
+        )}
+      </div>
+    </fieldset>
+  );
+}
 
 function Metric({ label, m }: { label: string; m?: IndexMetrics }) {
   if (!m || m.total_return_pct === null) return null;
@@ -41,13 +120,28 @@ function Metric({ label, m }: { label: string; m?: IndexMetrics }) {
 }
 
 export function IndexSection() {
+  // null = the whole book. Only the *asset* filter goes to the API: a subset's
+  // index has to be re-chained from that subset's holdings and cash, which the
+  // one aggregate line in the response cannot be decomposed back into. The date
+  // window is the opposite — the ratio between two points of a chained TWR is
+  // exactly the return between them, so it is a slice of what is already here.
+  const [selected, setSelected] = useState<string[] | null>(null);
+
   const q = useQuery({
-    queryKey: ["portfolio-index"],
+    queryKey: ["portfolio-index", selected?.join(",") ?? null],
     queryFn: () =>
       // This fires on page load, so a 402 must not throw a dialog over a page the
       // user has not read yet. The offer is rendered inline below instead.
-      api<PortfolioIndex>("/portfolio/index", {}, { paywallDialog: false }),
+      api<PortfolioIndex>(
+        `/portfolio/index${selected ? `?tickers=${selected.join(",")}` : ""}`,
+        {},
+        { paywallDialog: false },
+      ),
     retry: false, // 422 (no trades) and 402 (paywall) are answers, not blips
+    // Toggling an asset refetches. Without this the chart unmounts to a skeleton
+    // on every click, so comparing "with" against "without" means holding the
+    // old shape in your head across a blank frame.
+    placeholderData: keepPreviousData,
   });
 
   // Same key as IncomeSection and the page gate, so this is a cache read, not a
@@ -56,6 +150,13 @@ export function IndexSection() {
   const income = useQuery({
     queryKey: ["income"],
     queryFn: () => api<IncomeRow[]>("/portfolio/income"),
+  });
+
+  // Above every early return, where hooks have to live. The bounds only steer
+  // the native picker, so an undefined pair while loading costs nothing.
+  const { range, slice, control } = useDateRange({
+    min: q.data?.start,
+    max: q.data?.end,
   });
 
   // One live region for the section, at a fixed position outside every branch.
@@ -138,8 +239,9 @@ export function IndexSection() {
 
   const data = q.data;
   const hasBench = !data.excluded.benchmarks;
+  const subset = data.tickers.length < data.universe.length;
   const series: Series[] = [
-    { key: "portfolio", label: "Carteira", color: SERIES[0] },
+    { key: "portfolio", label: subset ? "Seleção" : "Carteira", color: SERIES[0] },
     ...(hasBench
       ? [
           { key: "ibov", label: "IBOV", color: SERIES[2] },
@@ -147,6 +249,22 @@ export function IndexSection() {
         ]
       : []),
   ];
+
+  // A narrowed window is a different question, so it gets different numbers.
+  // Rebasing restarts every line at the window's own first day — otherwise the
+  // chart reads "+21%" over a stretch that gained 10%, and the figures above it
+  // would summarise a period nobody is looking at.
+  const windowed = isFiltered(range)
+    ? rebaseRows(slice(data.series))
+    : data.series;
+  const metrics = isFiltered(range)
+    ? Object.fromEntries(
+        OVERLAYS.filter((k) => k in (windowed[0] ?? {})).map((k) => [
+          k,
+          summarize(windowed.map((r) => r[k] as number), windowed.length),
+        ]),
+      )
+    : data.metrics;
 
   // Categories the engine excludes AND this book actually holds cash in, in the
   // same pt-BR labels the Proventos card uses.
@@ -176,24 +294,43 @@ export function IndexSection() {
     excludedHeld.length > 0 &&
       `Fora do retorno: ${excludedHeld.join(", ")} — aparecem em Proventos como caixa, mas não são retorno da carteira.`,
     !hasBench && "IBOV e CDI indisponíveis nesta execução.",
+    // A filter the user set is still something the line does not contain, and
+    // this block is where the chart says what it is missing. The chips show the
+    // state, but the title still promises "sua carteira" — so it is spelled out.
+    subset &&
+      `Você excluiu ${data.universe.filter((t) => !data.tickers.includes(t)).join(", ")} — esta linha é uma seleção de ${data.tickers.length} de ${data.universe.length} ativos, não a carteira inteira.`,
   ].filter(Boolean) as string[];
 
   return shell(
-    <Card title={TITLE}>
+    <Card title={TITLE} action={control}>
       <div className="mb-5 flex flex-wrap gap-x-10 gap-y-4">
-        <Metric label="Carteira" m={data.metrics.portfolio} />
-        <Metric label="IBOV" m={data.metrics.ibov} />
-        <Metric label="CDI" m={data.metrics.cdi} />
+        <Metric label={subset ? "Seleção" : "Carteira"} m={metrics.portfolio} />
+        <Metric label="IBOV" m={metrics.ibov} />
+        <Metric label="CDI" m={metrics.cdi} />
       </div>
 
-      <LineSeries
-        data={data.series}
-        xKey="date"
-        series={series}
-        height={280}
-        valueFormat={asReturn}
-        labelFormat={formatDate}
-      />
+      {data.universe.length > 1 && (
+        <AssetFilter
+          universe={data.universe}
+          selected={selected}
+          onChange={setSelected}
+        />
+      )}
+
+      {windowed.length === 0 ? (
+        <p className="py-16 text-center text-sm text-muted">
+          Nenhum pregão no período selecionado.
+        </p>
+      ) : (
+        <LineSeries
+          data={windowed}
+          xKey="date"
+          series={series}
+          height={280}
+          valueFormat={asReturn}
+          labelFormat={formatDate}
+        />
+      )}
 
       <p className="mt-4 text-sm text-muted">
         Retorno ponderado pelo tempo (TWR): aportes e retiradas mudam o saldo, não

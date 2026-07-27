@@ -8,6 +8,7 @@ import { Money } from "@/components/ui/Money";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LineSeries } from "@/components/charts/LineSeries";
+import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { IconChart } from "@/components/icons";
 import { formatDate } from "@/lib/format";
 import type { BacktestRun } from "@/lib/types";
@@ -108,6 +109,10 @@ export function ComparePanel({
   const overflow = runs.length - capped.length;
   // Hooks stay unconditional: fetch curves for whatever is capped, then branch.
   const curveQueries = useCurvesMany(capped.map((r) => r.id));
+  // Scoped to the overlay, which is why the control sits above the chart rather
+  // than in the card header: the metrics table underneath is the engine's, over
+  // each run's full window, and nothing here can narrow it.
+  const window = useDateRange();
 
   if (runs.length < 2) {
     return (
@@ -223,8 +228,14 @@ export function ComparePanel({
           </p>
         ) : (
           <>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                Período do gráfico
+              </span>
+              {window.control}
+            </div>
             <LineSeries
-              data={chartData}
+              data={window.slice(chartData)}
               xKey="date"
               height={340}
               series={chartSeries}
@@ -245,6 +256,10 @@ export function ComparePanel({
       <DataTable columns={columns} rows={METRICS} getRowKey={(m) => m.key} label="Métricas comparadas" />
       <p className="mt-2 font-mono text-[11px] text-muted">
         ● melhor por linha · métricas pós-imposto
+        {/* Said out loud rather than left to be inferred: a narrowed chart above
+            an unchanged table is exactly the kind of mismatch a reader assumes
+            away. The engine computes these over each run's whole window. */}
+        {isFiltered(window.range) && " · sobre a rodada inteira, não o período do gráfico"}
       </p>
     </Card>
   );

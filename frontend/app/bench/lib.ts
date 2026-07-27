@@ -11,6 +11,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { Dated } from "@/lib/chartRange";
 import type { BacktestCurves, BacktestRun, Strategy } from "@/lib/types";
 
 export function useStrategies() {
@@ -102,14 +103,17 @@ export function compactBRL(v: number): string {
 }
 
 // Column-oriented curves → row-oriented for recharts, keeping only wanted keys.
+// `date` is narrowed to string (the engine emits ISO dates) so the rows satisfy
+// the charts' `Dated` shape and can be windowed by lib/chartRange.
 export function curveRows(
   series: Record<string, (string | number)[]>,
   keys: string[],
-): Record<string, string | number>[] {
+): (Dated & Record<string, string | number>)[] {
   const n = series.date?.length ?? 0;
-  const rows: Record<string, string | number>[] = [];
+  const rows: (Dated & Record<string, string | number>)[] = [];
   for (let i = 0; i < n; i++) {
-    const row: Record<string, string | number> = { date: series.date[i] };
+    const row = { date: String(series.date[i]) } as Dated &
+      Record<string, string | number>;
     for (const k of keys) if (series[k]) row[k] = series[k][i];
     rows.push(row);
   }
@@ -154,8 +158,8 @@ export function runLabels(runs: BacktestRun[]): Record<string, string> {
 export function mergeCurvesByDate(
   inputs: { id: string; series: Record<string, (string | number)[]> }[],
   key: string,
-): Record<string, string | number>[] {
-  const byDate = new Map<string, Record<string, string | number>>();
+): (Dated & Record<string, string | number>)[] {
+  const byDate = new Map<string, Dated & Record<string, string | number>>();
   for (const { id, series } of inputs) {
     const dates = series.date ?? [];
     const vals = series[key] ?? [];
@@ -170,7 +174,5 @@ export function mergeCurvesByDate(
     }
   }
   // ISO dates sort lexicographically.
-  return [...byDate.values()].sort((a, b) =>
-    String(a.date) < String(b.date) ? -1 : 1,
-  );
+  return [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
 }

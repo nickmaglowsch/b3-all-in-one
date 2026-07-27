@@ -37,6 +37,10 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
     Trades carry `signed_qty` (buys +, sells −) and qty_events carry an already
     signed `qty` — both set by taxcore's load_b3, so no side parsing here.
 
+    Flows are 4-tuples here, (date, kind, amount, ticker): the ticker is what
+    `pidx.select_tickers` needs to keep an excluded asset's cash out of a
+    filtered book. It strips the field back off before `build_index` sees it.
+
     Columns, not entities: this reads six fields off trades and five off
     cash_events, and loading whole ORM instances for a multi-year book built an
     object per row to throw all but those away.
@@ -53,7 +57,7 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
     )).all()
 
     qty_deltas: list[tuple[datetime.date, str, float]] = []
-    flows: list[tuple[datetime.date, str, float]] = []
+    flows: list[tuple[datetime.date, str, float, str | None]] = []
     excluded_markets: set[str] = set()
 
     for t_date, ticker, market, signed_qty, amount, side in trades:
@@ -62,12 +66,12 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
         if pidx.is_excluded(ticker, market):
             excluded_markets.add(market)
             continue
+        canon = pidx.canonical(ticker, market)
         if signed_qty:
-            qty_deltas.append(
-                (t_date, pidx.canonical(ticker, market), float(signed_qty)))
+            qty_deltas.append((t_date, canon, float(signed_qty)))
         if amount is not None and side in ("Compra", "Venda"):
             kind = "buy" if side == "Compra" else "sell"
-            flows.append((t_date, kind, abs(float(amount))))
+            flows.append((t_date, kind, abs(float(amount)), canon))
 
     for e_date, category, ticker, qty, amount in events:
         if not e_date:
@@ -75,7 +79,8 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
         if category == "qty_event" and ticker and qty:
             qty_deltas.append((e_date, pidx.canonical(ticker), float(qty)))
         elif category in pidx.INCOME_CATEGORIES and amount is not None:
-            flows.append((e_date, "income", abs(float(amount))))
+            flows.append((e_date, "income", abs(float(amount)),
+                          pidx.canonical(ticker) if ticker else None))
 
     return qty_deltas, flows, sorted(excluded_markets)
 
@@ -215,6 +220,7 @@ async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
 
 @portfolio_index_router.get("")
 async def get_portfolio_index(
+    tickers: str | None = None,
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
@@ -223,16 +229,32 @@ async def get_portfolio_index(
     The window starts at the tenant's first trade or the plane's first price,
     whichever is later — `coverage.clamped` says which, so the UI can explain a
     chart that starts after the user's real history does.
+
+    `tickers` is a comma-separated subset of `universe`; absent means the whole
+    book. Rebuilding the same TWR over a subset is how the user reads which
+    holdings carried the return and which dragged on it.
     """
     _user, tid = tenant
-    qty_deltas, flows, excluded_markets = await _book(session, tid)
-    if not qty_deltas:
+    all_deltas, flows, excluded_markets = await _book(session, tid)
+    if not all_deltas:
         raise HTTPException(422, "no trades to index — import a portfolio first")
 
-    first_trade = min(d for d, _, _ in qty_deltas)
-    tickers = sorted({t for _, t, _ in qty_deltas})
+    universe = sorted({t for _, t, _ in all_deltas})
+    keep = None if tickers is None else {
+        t.strip().upper() for t in tickers.split(",") if t.strip()} & set(universe)
+    qty_deltas, flows = pidx.select_tickers(all_deltas, flows, keep)
+    if not qty_deltas:
+        raise HTTPException(422, "nenhum ativo selecionado tem histórico a indexar")
+
+    # Pinned to the *whole* book, not the selection: toggling an asset has to
+    # change the lines and never the x-axis, or the before and after are not
+    # comparable — and the grid and benchmark caches would miss on every click.
+    # A selection whose first buy lands mid-window simply holds nothing until
+    # then, which build_index already draws flat at the base.
+    first_trade = min(d for d, _, _ in all_deltas)
+    selected = sorted({t for _, t, _ in qty_deltas})
     try:
-        grid, closes = await _plane(tickers, first_trade)
+        grid, closes = await _plane(selected, first_trade)
     except Exception:
         raise HTTPException(503, "market plane unavailable — try again shortly")
     if not grid:
@@ -259,6 +281,9 @@ async def get_portfolio_index(
         "series": series,
         "nav": built["nav"][-1],
         "metrics": metrics,
+        # What is charted, and everything that could be. Equal when unfiltered.
+        "tickers": selected,
+        "universe": universe,
         # Surfaced, not hidden (spec/03): everything the index could not see.
         "excluded": {
             "markets": excluded_markets,

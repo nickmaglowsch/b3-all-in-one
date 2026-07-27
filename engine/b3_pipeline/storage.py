@@ -89,6 +89,23 @@ def executemany(conn, sql: str, rows) -> int:
     return len(rows)
 
 
+def _copy_into_temp(conn, table: str, columns: list[str], coltypes: str, rows) -> None:
+    """COPY `rows` into a fresh temp table, for a set-based statement to join to.
+
+    One statement per row is what makes the price writes linear in the size of
+    the whole table; COPY streams the batch in one round trip and lets the
+    server do the rest in a single pass. Postgres only — callers keep
+    executemany for SQLite, where it is already a prepared-statement loop inside
+    one transaction.
+    """
+    cur = conn.cursor()
+    cur.execute(f"DROP TABLE IF EXISTS {table}")
+    cur.execute(f"CREATE TEMP TABLE {table} ({coltypes}) ON COMMIT DROP")
+    with cur.copy(f"COPY {table} ({', '.join(columns)}) FROM STDIN") as copy:
+        for row in rows:
+            copy.write_row(row)
+
+
 def _pg_ddl(sql: str) -> str:
     """Rewrite the SQLite CREATE statements to valid Postgres DDL.
 
@@ -667,7 +684,41 @@ def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["ticker", "isin_code", "date", "open", "high", "low", "close", "volume", "quotation_factor"]
     records = df[cols].values.tolist()
 
-    executemany(conn, sql, records)
+    if is_postgres(conn):
+        # Stage with COPY, then one INSERT ... ON CONFLICT. executemany issued a
+        # statement per row into the largest table here: 4.3s for 302k rows,
+        # linear in the whole price history.
+        #
+        # The `ord` column and DISTINCT ON reproduce what executemany did when a
+        # batch carried the same (ticker, date) twice — it applied them in order,
+        # so the last one won. Without the dedup a single ON CONFLICT statement
+        # raises "cannot affect row a second time".
+        _copy_into_temp(
+            conn, "_px_stage",
+            [*cols, "ord"],
+            "ticker TEXT, isin_code TEXT, date DATE, open DOUBLE PRECISION,"
+            " high DOUBLE PRECISION, low DOUBLE PRECISION, close DOUBLE PRECISION,"
+            " volume DOUBLE PRECISION, quotation_factor INTEGER, ord BIGINT",
+            ([*r, i] for i, r in enumerate(records)),
+        )
+        collist = ", ".join(cols)
+        value_cols = [c for c in cols if c not in ("ticker", "date")]
+        updates = ", ".join(f"{c} = excluded.{c}" for c in value_cols)
+        # Re-ingesting a year that has not changed should touch nothing; without
+        # this every conflicting row is rewritten to its own current value.
+        unchanged = " OR ".join(
+            f"prices.{c} IS DISTINCT FROM excluded.{c}" for c in value_cols)
+        execute(conn, f"""
+            INSERT INTO prices ({collist})
+            SELECT {collist} FROM (
+                SELECT DISTINCT ON (ticker, date) {collist}
+                FROM _px_stage ORDER BY ticker, date, ord DESC
+            ) deduped
+            ON CONFLICT (ticker, date) DO UPDATE SET {updates}
+            WHERE ({unchanged})
+        """)
+    else:
+        executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} price records")
@@ -898,7 +949,39 @@ def update_adjusted_columns(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     cols = ["split_adj_open", "split_adj_high", "split_adj_low", "split_adj_close", "adj_close", "volume", "ticker", "isin_code", "date"]
     records = df[cols].values.tolist()
 
-    executemany(conn, sql, records)
+    if is_postgres(conn):
+        # Same story as upsert_prices, and worse: this one UPDATEs essentially
+        # every row in the table on every pipeline run — 7.9s for 302k rows.
+        # COPY the batch, then one UPDATE ... FROM.
+        #
+        # No dedup here: an UPDATE ... FROM with duplicate keys picks one matching
+        # staged row non-deterministically, but the frame this receives is
+        # adjusted prices keyed by (ticker, isin_code, date), which is unique by
+        # construction — it comes straight from get_all_prices.
+        _copy_into_temp(
+            conn, "_adj_stage", cols,
+            "split_adj_open DOUBLE PRECISION, split_adj_high DOUBLE PRECISION,"
+            " split_adj_low DOUBLE PRECISION, split_adj_close DOUBLE PRECISION,"
+            " adj_close DOUBLE PRECISION, volume DOUBLE PRECISION,"
+            " ticker TEXT, isin_code TEXT, date DATE",
+            records,
+        )
+        value_cols = [c for c in cols if c not in ("ticker", "isin_code", "date")]
+        setters = ", ".join(f"{c} = s.{c}" for c in value_cols)
+        # Skip rows whose adjusted values already match. A nightly run recomputes
+        # adjustments for the whole history but only recent dates and tickers with
+        # a new corporate action actually move; rewriting the rest costs a tuple
+        # version, a WAL record and vacuum work for each, to store what is
+        # already there. IS DISTINCT FROM so NULL vs NULL counts as unchanged.
+        changed = " OR ".join(f"p.{c} IS DISTINCT FROM s.{c}" for c in value_cols)
+        execute(conn, f"""
+            UPDATE prices p SET {setters}
+            FROM _adj_stage s
+            WHERE p.ticker = s.ticker AND p.isin_code = s.isin_code AND p.date = s.date
+              AND ({changed})
+        """)
+    else:
+        executemany(conn, sql, records)
     conn.commit()
 
     logger.info(f"Updated adjusted columns for {len(records):,} records")

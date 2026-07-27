@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { api } from "@/lib/api";
 import type { IncomeRow, Position, TradesPage } from "@/lib/types";
 import { useActiveBook } from "@/lib/hooks";
@@ -13,7 +12,7 @@ import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { ChartTooltip } from "@/components/charts/ChartTooltip";
+import { AllocationDonut } from "@/components/charts/AllocationDonut";
 import { SERIES } from "@/components/charts/theme";
 import { IconWallet } from "@/components/icons";
 import { formatInt, formatMoney, formatPercent } from "@/lib/format";
@@ -317,35 +316,7 @@ export default function PortfolioPage() {
               <Card title="Alocação">
                 <div className="flex flex-col items-center gap-6 sm:flex-row">
                   <div className="h-[200px] w-full sm:w-[220px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart
-                        role="img"
-                        aria-label={`Alocação por mercado: ${markets
-                          .map(
-                            (m) =>
-                              `${m.name} ${formatPercent(allocTotal > 0 ? m.value / allocTotal : 0)}`,
-                          )
-                          .join(", ")}`}
-                      >
-                        <Pie
-                          data={markets}
-                          dataKey="value"
-                          nameKey="name"
-                          innerRadius="58%"
-                          outerRadius="88%"
-                          paddingAngle={1}
-                          stroke="var(--panel)"
-                          isAnimationActive={false}
-                        >
-                          {markets.map((m, i) => (
-                            <Cell key={m.name} fill={SERIES[i % SERIES.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip
-                          content={<ChartTooltip valueFormat={(v) => formatMoney(v)} />}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
+                    <AllocationDonut slices={markets} total={allocTotal} />
                   </div>
                   <ul className="w-full space-y-2 text-sm">
                     {markets.map((m, i) => (

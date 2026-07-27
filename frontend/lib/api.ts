@@ -223,6 +223,11 @@ function errorMessage(detail: unknown, res: Response): string {
 export async function googleLogin(): Promise<void> {
   const res = await fetch(
     `${API_URL}/auth/google/authorize?scopes=openid%20email%20profile`,
+    // credentials: the API answers with the oauth_state cookie that binds this
+    // browser to the state it just issued. Without this the default
+    // "same-origin" drops it (pages.dev → duckdns.org is cross-site) and the
+    // callback always 400s with INVALID_STATE_TOKEN.
+    { credentials: "include" },
   );
   if (!res.ok) {
     const detail = await errorDetail(res);

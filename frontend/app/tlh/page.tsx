@@ -83,7 +83,9 @@ export default function TlhPage() {
       }),
   });
 
-  const held = positions.data ?? [];
+  // Same reason as StrategyForm's sigList: a fresh `[]` each render defeats the
+  // memo that depends on it.
+  const held = useMemo(() => positions.data ?? [], [positions.data]);
   const heldQty = useMemo(
     () => Object.fromEntries(held.map((p) => [p.ticker, p.qty])),
     [held],

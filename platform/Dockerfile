@@ -23,8 +23,8 @@ COPY taxcore/methodologies ./methodologies
 
 # --- engine: backtest bench CODE + its own venv (/opt/engine/.venv), deps from
 # requirements-bench.txt (slim set — the backtest path needs no research/ui deps).
-# NO b3_pipeline_rs (Rust is ingestion-only; backtests read the DB and fall back
-# to the Python pivot), NO tests, NO ui — see the dockerignore.
+# NO tests, NO data/db — backtests read the market plane from Postgres, not from
+# files in the image. See the dockerignore.
 WORKDIR /opt/engine
 COPY engine/requirements-bench.txt ./
 RUN uv venv .venv --python 3.12 \

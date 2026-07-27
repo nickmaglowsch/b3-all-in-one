@@ -33,9 +33,8 @@ separate venv at `/opt/taxcore`, plus the backtest engine's code (`b3_pipeline/`
 `backtests/`, `scripts/`) and its deps at `/opt/engine`, so the import → portfolio →
 IRPF loop AND the backtest bench run entirely inside the containers — no host
 `../taxcore`/`../engine` checkout needed. taxcore's **data** (`b3_imports/`, `data/`,
-`reports/`, `tests/`) and the engine's **data/db/tests/ui/Rust parser**
-(`b3_pipeline_rs/`) are deliberately kept out of the image — backtests read the market
-plane from Postgres, not from files.
+`reports/`, `tests/`) and the engine's **data/db/tests** are deliberately kept out of
+the image — backtests read the market plane from Postgres, not from files.
 
 ### Backtest bench
 

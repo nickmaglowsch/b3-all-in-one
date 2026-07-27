@@ -2,7 +2,8 @@
 Mean-Reversion Composite Strategy Helpers
 ==========================================
 Helper functions for the 4-layer mean-reversion composite alpha strategy.
-Separated from the strategy plugin for reuse in strategy_returns.py.
+Separated from the strategy plugin so build_shared_data() can precompute the
+features once for every strategy that wants them.
 
 compute_mean_rev_features()        -- shared feature computation (used by both data paths)
 Layer 1: compute_regime_filter()   -- CDI/IBOV macro regime gating

@@ -386,8 +386,8 @@ def infer_volume_scale(fin_vol: pd.DataFrame) -> float:
     """Detect the fin_vol unit convention empirically.
 
     core/data.py returns fin_vol = prices.volume / 100 (legacy convention from
-    the original parser that stored raw VOLTOT centavos). The CURRENT parsers
-    (b3_pipeline_rs/src/parser.rs and b3_pipeline/parser.py) already divide
+    the original parser that stored raw VOLTOT centavos). The CURRENT parser
+    (b3_pipeline/parser.py) already divides
     VOLTOT by 100 when storing, so on a freshly rebuilt DB fin_vol comes back
     understated 100x.
 

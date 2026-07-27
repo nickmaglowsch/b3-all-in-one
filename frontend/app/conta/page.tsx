@@ -21,7 +21,6 @@ const LABELS: Record<string, string> = {
   cash_events: "Eventos de caixa (proventos, amortizações)",
   positions: "Posições consolidadas",
   cost_basis_overrides: "Ajustes de custo",
-  darf_payments: "DARFs",
   backtest_runs: "Backtests",
   portfolio_sleeves: "Sleeves da carteira",
   asset_class_overrides: "Marcações de classe de ativo",

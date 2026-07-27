@@ -10,7 +10,6 @@ results/
 .claude/agent-memory/
 tasks/
 .claude/auth.local.md
-b3_pipeline_rs/target/
 __pycache__/
 .cache/
 *.log

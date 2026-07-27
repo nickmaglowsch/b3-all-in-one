@@ -1,9 +1,7 @@
 """
 Parse COTAHIST fixed-width files from B3.
 
-Delegates to the compiled Rust extension `cotahist_rs` for performance when available.
-Falls back to a pure-Python implementation if the extension is not compiled.
-Run `make dev-rust` (or `cd b3_pipeline_rs && maturin develop`) to build the extension.
+Fixed-width record parsing over the COTAHIST ZIPs B3 publishes.
 """
 
 import logging
@@ -19,19 +17,7 @@ from . import config
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Rust fast-path helpers
-# ---------------------------------------------------------------------------
-
-def _get_cotahist_rs():
-    try:
-        import cotahist_rs
-        return cotahist_rs
-    except ModuleNotFoundError:
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Pure-Python fallback helpers
+# Record parsing helpers
 # ---------------------------------------------------------------------------
 
 def _parse_price(value: str) -> float:
@@ -147,9 +133,6 @@ def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
     """
     Parse a single COTAHIST ZIP file.
 
-    Tries the compiled Rust extension first; falls back to pure Python if
-    the extension is not available.
-
     Args:
         zip_path: Path to COTAHIST ZIP file
 
@@ -163,28 +146,12 @@ def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
         logger.error(f"File not found: {zip_path}")
         return pd.DataFrame()
 
-    cotahist_rs = _get_cotahist_rs()
-    if cotahist_rs is not None:
-        try:
-            batch = cotahist_rs.parse_zip(str(zip_path))
-            if batch.num_rows == 0:
-                return pd.DataFrame()
-            df = batch.to_pandas()
-            df["date"] = pd.to_datetime(df["date"])
-            logger.debug(f"Parsed {len(df)} records from {zip_path.name}")
-            return df
-        except Exception as e:
-            logger.warning(f"Rust parser failed for {zip_path}, falling back to Python: {e}")
-
     return _parse_cotahist_file_python(zip_path)
 
 
 def parse_all_cotahist_files(directory: Path) -> pd.DataFrame:
     """
     Parse all COTAHIST ZIP files in a directory.
-
-    Tries the compiled Rust extension first (processes all files concurrently via rayon);
-    falls back to pure-Python serial processing if the extension is not available.
 
     Args:
         directory: Path to directory containing COTAHIST_*.ZIP files
@@ -200,24 +167,6 @@ def parse_all_cotahist_files(directory: Path) -> pd.DataFrame:
 
     logger.info(f"Found {len(zip_files)} COTAHIST files to parse")
 
-    cotahist_rs = _get_cotahist_rs()
-    if cotahist_rs is not None:
-        try:
-            batch = cotahist_rs.parse_multiple_zips([str(p) for p in zip_files])
-            if batch.num_rows == 0:
-                return pd.DataFrame()
-            combined = batch.to_pandas()
-            combined["date"] = pd.to_datetime(combined["date"])
-            combined = combined.drop_duplicates(subset=["ticker", "date"], keep="last")
-            combined = combined.sort_values(["ticker", "date"]).reset_index(drop=True)
-            logger.info(f"Total parsed records: {len(combined):,}")
-            logger.info(f"Unique tickers: {combined['ticker'].nunique():,}")
-            logger.info(f"Date range: {combined['date'].min()} to {combined['date'].max()}")
-            return combined
-        except Exception as e:
-            logger.warning(f"Rust parser failed, falling back to Python: {e}")
-
-    # Python fallback: serial per-file parsing
     all_dfs = []
     for i, zip_path in enumerate(zip_files, 1):
         logger.info(f"Parsing {zip_path.name} ({i}/{len(zip_files)})")

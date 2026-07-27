@@ -45,11 +45,6 @@ def max_dd(ret: pd.Series) -> float:
     return (cum / cum.cummax() - 1).min()
 
 
-def calmar(ret: pd.Series, periods_per_year: int = 12) -> float:
-    mdd = abs(max_dd(ret))
-    return ann_return(ret, periods_per_year) / mdd if mdd != 0 else 0.0
-
-
 def reconstruct_daily_values(
     target_weights: pd.DataFrame,
     daily_ret: pd.DataFrame,

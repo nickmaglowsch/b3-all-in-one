@@ -12,6 +12,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from platform_app import subprocs
 from platform_app.config import settings
 
 # Host default: platform/platform_app/enginerun.py -> b3-all-in-one/engine.
@@ -22,8 +23,8 @@ ENGINE = Path(settings.engine_dir) if settings.engine_dir else _DEFAULT_ENGINE
 # Mirror of advise_weights.NEEDS_FUNDAMENTALS_EXIT: the strategy needs CVM
 # fundamentals but fundamentals_pit is empty in the active engine DB.
 NEEDS_FUNDAMENTALS_EXIT = 3
-# Synthetic exit code for a subprocess we killed on the timeout (shell convention).
-TIMEOUT_EXIT = 124
+# Re-exported: callers branch on enginerun.TIMEOUT_EXIT.
+TIMEOUT_EXIT = subprocs.TIMEOUT_EXIT
 
 
 class EngineNeedsFundamentals(RuntimeError):
@@ -39,13 +40,7 @@ class EngineNeedsFundamentals(RuntimeError):
 
 def _engine_python() -> list[str]:
     """The interpreter that has the engine's deps (pandas, psycopg, yaml)."""
-    if settings.engine_python:
-        return [settings.engine_python]
-    venv = ENGINE / ".venv" / "bin" / "python"
-    if venv.exists():
-        return [str(venv)]
-    # ponytail: fallback for CI/fresh checkouts without a prebuilt engine venv.
-    return ["uv", "run", "--directory", str(ENGINE), "python"]
+    return subprocs.interpreter(settings.engine_python, ENGINE)
 
 
 def _env(extra_env: dict | None = None) -> dict:
@@ -70,17 +65,13 @@ def run_script(
     ``if proc.returncode != 0`` caller reports it as an engine failure with no
     new error handling — and no request or job can pin a thread forever.
     """
-    argv = [*_engine_python(), str(ENGINE / "scripts" / script), *args]
-    try:
-        return subprocess.run(
-            argv, cwd=ENGINE, env=_env(extra_env), capture_output=True, text=True,
-            timeout=settings.subprocess_timeout_s,
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            argv, TIMEOUT_EXIT, stdout="",
-            stderr=f"{script} timed out after {settings.subprocess_timeout_s}s",
-        )
+    return subprocs.run(
+        [*_engine_python(), str(ENGINE / "scripts" / script), *args],
+        cwd=ENGINE,
+        env=_env(extra_env),
+        timeout_s=settings.subprocess_timeout_s,
+        label=script,
+    )
 
 
 def run_module(
@@ -94,17 +85,13 @@ def run_module(
     but still a bounded one, so a wedged download can't hold a worker slot for a
     week. Timeout maps to exit 124 like the other runners.
     """
-    argv = [*_engine_python(), "-m", *module_args]
-    limit = timeout_s if timeout_s is not None else settings.ingest_timeout_s
-    try:
-        return subprocess.run(
-            argv, cwd=ENGINE, env=_env(), capture_output=True, text=True, timeout=limit,
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(
-            argv, TIMEOUT_EXIT, stdout="",
-            stderr=f"{module_args[0]} timed out after {limit}s",
-        )
+    return subprocs.run(
+        [*_engine_python(), "-m", *module_args],
+        cwd=ENGINE,
+        env=_env(),
+        timeout_s=timeout_s if timeout_s is not None else settings.ingest_timeout_s,
+        label=module_args[0],
+    )
 
 
 def _last_json(text: str) -> dict:

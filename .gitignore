@@ -29,3 +29,10 @@ artifacts/
 # Generated reports hold real portfolio figures. Keep the dir, never the contents.
 taxcore/reports/*
 !taxcore/reports/.gitkeep
+
+# Agent scratch output. Both are append-only logs of a tool's runs against this
+# tree — three of the five committed critiques were the same file at three
+# timestamps. git history already records what changed and why; these only
+# record what a tool said on the way there. The live config stays tracked.
+.impeccable/critique/
+.claude/agent-memory/

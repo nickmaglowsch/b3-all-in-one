@@ -163,7 +163,7 @@ existing Streamlit UI is a reference for flows, not shipped.
   `b3_remote_mcp` container (the b3-portfolio MCP prototype, already live behind Caddy on
   this box) gets repointed at the new API in Phase 4 instead of redeployed from scratch.
 - **Images**: built for linux/arm64 (the box is aarch64) — CI cross-build or build on the
-  VPS. The Rust wheel (`maturin`) needs an aarch64 build in the image.
+  VPS. Pure-Python images, so no per-arch native build step.
 - **Logs/monitoring**: stdout JSON logs — `infra_alloy` already ships all container logs
   to Grafana Cloud; no logging stack to build. Alerting on job-queue depth and ingestion
   freshness via Grafana.

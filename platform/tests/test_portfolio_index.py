@@ -16,7 +16,7 @@ from datetime import date
 import pytest
 
 from platform_app.portfolio_index import (
-    build_index, max_drawdown_pct, rebase, summarize,
+    build_index, canonical, max_drawdown_pct, rebase, summarize,
 )
 
 D1, D2, D3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
@@ -140,6 +140,24 @@ def test_unpriced_tickers_are_reported_not_swallowed():
         [(D1, "buy", 1000.0)],
     )
     assert out["unpriced"] == ["NOPE11"]
+
+
+def test_fractional_trades_fold_onto_the_round_lot():
+    """PETR4F is PETR4 at a smaller lot, and the plane only carries the round lot.
+    Left raw, every fractional trade lands on a ticker that can never be priced:
+    the shares vanish from NAV and the ticker is disclosed as unpriced. This is
+    what put half a real book in the "sem cotação na base" list."""
+    deltas = [(D1, canonical(t), q) for t, q in (("PETR4", 100.0), ("PETR4F", 7.0))]
+    out = build_index([D1], {"PETR4": {D1: 10.0}}, deltas, [(D1, "buy", 1070.0)])
+    assert out["unpriced"] == []
+    assert out["nav"] == [1070.0]      # all 107 shares valued, not just the 100
+
+
+def test_canonical_only_strips_the_fractional_suffix():
+    assert canonical("VALE3F") == "VALE3"
+    assert canonical("SAPR11F") == "SAPR11"
+    assert canonical("PETR4") == "PETR4"
+    assert canonical("BTLG11") == "BTLG11"   # no round-lot B3 code ends in F
 
 
 def test_empty_grid_is_not_a_crash():

@@ -141,4 +141,4 @@ You can override weights per-call. To change defaults permanently, edit `methodo
 
 ## Adding your own methodology
 
-Drop a new file in `methodologies/`, e.g. `dividend.py`, exposing a `score(df, weights=None) -> pd.DataFrame` function the same way `mixed.py` does. Then either ask Claude to use it (`"rank using the dividend methodology"`) or pass it via a flag if you wire it into `rank.py`.
+Drop a new file in `methodologies/`, e.g. `dividend.py`, exposing a `score(df, weights=None) -> pd.DataFrame` function the same way `mixed.py` does. Then either ask Claude to use it (`"rank using the dividend methodology"`) or pass it via a flag if you wire it into a script.

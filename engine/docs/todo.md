@@ -77,6 +77,22 @@ For stocks with `quotedPerSharSince` dates from B3's API, only apply corporate a
 
 # TODO: Rust + Polars Performance Overhaul
 
+> **Status: Part 1 was built, then removed. Not currently planned.**
+>
+> The `cotahist_rs` crate described below was implemented and lived at
+> `b3_pipeline_rs/` for a while. It was deleted because nothing shipped ever
+> reached it: the container image excluded the crate, CI installed from
+> `requirements-bench.txt`, and every production call resolves the interpreter to
+> `engine/.venv`, which never had it built. Its parity tests skipped in CI for the
+> same reason, so the fast path was unbuilt, untested and unused.
+>
+> The motivation below is still real — parsing is genuinely CPU-bound. If this is
+> picked up again, the thing that made the first attempt worthless was packaging,
+> not the Rust: the build has to run *in the image*, and the parity tests have to
+> run *in CI*, or the fallback silently becomes the only path. See
+> `tests/test_ingestion_math_characterization.py` for the numbers any
+> reimplementation has to reproduce.
+
 ## Motivation
 
 The pipeline is well-architected but has two structural performance ceilings that Python cannot overcome without algorithmic workarounds:

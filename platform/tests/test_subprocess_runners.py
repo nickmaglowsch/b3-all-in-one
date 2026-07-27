@@ -69,6 +69,51 @@ def test_enginerun_module_timeout_is_exit_124_not_an_exception(
     assert "timed out" in proc.stderr
 
 
+def test_ingestion_gets_the_long_timeout_not_the_request_one(
+    monkeypatch, tmp_path, this_interpreter
+):
+    """run_module defaults to ingest_timeout_s (6h), not subprocess_timeout_s (600s).
+
+    The difference is the whole reason run_module exists separately: b3_pipeline.main
+    and cvm_main download years of history and legitimately run for hours, while a
+    request-path subprocess must not hold a worker slot for more than minutes. Wiring
+    run_module to the request timeout would kill every ingestion at 10 minutes — with
+    a *successful-looking* exit 124 that the caller reports as an engine failure.
+
+    Only ingest_timeout_s is squeezed here; subprocess_timeout_s stays long, so this
+    fails if the default is ever sourced from the wrong setting.
+    """
+    _write_sleeper(tmp_path)
+    monkeypatch.setattr(enginerun, "ENGINE", tmp_path)
+    monkeypatch.setattr(settings, "ingest_timeout_s", 1)
+    monkeypatch.setattr(settings, "subprocess_timeout_s", 600)
+
+    proc = enginerun.run_module(SLEEPER)  # no timeout_s — exercise the default
+
+    assert proc.returncode == 124, (
+        "run_module did not use ingest_timeout_s for its default timeout"
+    )
+    assert "after 1s" in proc.stderr, (
+        f"timed out against the wrong setting: {proc.stderr!r}"
+    )
+
+
+def test_request_path_runners_get_the_short_timeout(
+    monkeypatch, tmp_path, this_interpreter
+):
+    """The mirror of the above: run_module's siblings must NOT pick up the 6h value."""
+    _write_sleeper(tmp_path)
+    monkeypatch.setattr(settings, "subprocess_timeout_s", 1)
+    monkeypatch.setattr(settings, "ingest_timeout_s", 6 * 60 * 60)
+
+    proc = b3run.run_module(tmp_path, SLEEPER)
+
+    assert proc.returncode == 124
+    assert "after 1s" in proc.stderr, (
+        f"b3run used the ingestion timeout instead of the request one: {proc.stderr!r}"
+    )
+
+
 def test_enginerun_script_timeout_is_exit_124_not_an_exception(
     monkeypatch, tmp_path, instant_timeout, this_interpreter
 ):
@@ -102,13 +147,13 @@ def test_a_normal_exit_is_passed_through_untouched(tmp_path, this_interpreter):
 
 
 @pytest.mark.parametrize(
-    "resolver, dir_attr, setting",
+    "resolver, setting",
     [
-        (b3run._taxcore_python, "TAXCORE", "taxcore_python"),
-        (enginerun._engine_python, "ENGINE", "engine_python"),
+        (b3run._taxcore_python, "taxcore_python"),
+        (enginerun._engine_python, "engine_python"),
     ],
 )
-def test_explicit_interpreter_setting_wins(monkeypatch, resolver, dir_attr, setting):
+def test_explicit_interpreter_setting_wins(monkeypatch, resolver, setting):
     monkeypatch.setattr(settings, setting, "/custom/python")
     assert resolver() == ["/custom/python"]
 

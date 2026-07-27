@@ -1,10 +1,9 @@
 """The bit b3run and enginerun were each doing their own copy of.
 
 Both shell out to a sibling project that has its own interpreter and its own
-dependency set, and both need the same two behaviours. Keeping one copy means a
-fix to either lands in both — the duplicated versions had already drifted in
-their timeout messages, which is how a worker log ends up saying something timed
-out without saying what.
+dependency set, and both need the same two behaviours. Three near-identical
+copies of the same try/except and the same venv-or-uv ladder is three places to
+fix a bug in it, and three chances for one of them to be missed.
 
 Nothing here knows about taxcore or the engine; the callers own their paths,
 env and timeouts.

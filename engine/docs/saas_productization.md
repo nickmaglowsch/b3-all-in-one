@@ -106,7 +106,7 @@ accounts. Do this first.
 - **Acceptance:** a simulated stale/failed run fires an alert.
 
 ### 0.5 Containerize
-- **Target:** reproducible image including the Rust extension build (`make dev-rust` / maturin must run in-image; see `b3_pipeline_rs/`).
+- **Target:** reproducible image. Pure Python — nothing to compile in-image.
 - **Files:** new `Dockerfile`, `.dockerignore`.
 - **Acceptance:** `docker run` executes an ingestion CLI end-to-end against Postgres.
 

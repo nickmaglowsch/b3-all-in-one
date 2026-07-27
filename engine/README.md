@@ -225,7 +225,7 @@ fixed ETF/CDI blends.
 | `signal_dsl.py` | Safe `ast`-parsed expression interpreter for factor signals |
 | `config_strategy.py` | YAML `rank_and_hold` / `fixed_weight` engines |
 | `strategy_base.py` / `strategy_registry.py` | Plugin base class + auto-discovery registry (plugin classes *and* `specs/*.yaml`) |
-| `metrics.py` | Sharpe, max drawdown, annualised return/vol at any frequency |
+| `metrics.py` | Sharpe, Calmar, max drawdown, annualised return/vol at any frequency |
 
 ## Testing
 

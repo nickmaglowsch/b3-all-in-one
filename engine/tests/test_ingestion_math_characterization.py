@@ -2,10 +2,15 @@
 
 Split detection and split adjustment decide what every historical price in the
 database is worth. They used to have two implementations — a Python one and a
-Rust extension that was tried first and silently fell back — and the Rust half
-was never built anywhere: not in the image (platform/Dockerfile installs no
-crate), not in CI, not in the local venv, so all 18 of its parity tests skipped
-and only the Python path ever ran.
+Rust extension that was tried first and silently fell back — and no shipped path
+ever reached the Rust half: the image excluded the crate outright, CI installs
+from requirements-bench.txt, and every production call resolves the interpreter
+to engine/.venv (3.12), which never had it.
+
+(A locally-built cotahist_rs could still be importable under an ambient
+interpreter, so "the parity tests always skipped" was too strong a claim — on a
+dev box that ran `maturin develop` under a different python, they ran. That
+changes nothing about which code shipped, which is what these tests pin.)
 
 Removing the unused half is only safe if the surviving numbers are provably
 unchanged. These assertions are written against the *results*, not the code
@@ -16,15 +21,18 @@ just enshrines the regression.
 from __future__ import annotations
 
 import datetime
+import sqlite3
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from b3_pipeline import storage
 from b3_pipeline.adjustments import (
     compute_split_adjustment_factors,
     detect_splits_from_prices,
 )
+from backtests.core.data import load_b3_data
 
 NO_EXISTING = pd.DataFrame(columns=["isin_code", "ex_date", "action_type", "factor"])
 
@@ -172,27 +180,66 @@ class TestSplitAdjustment:
 
 
 class TestWidePivot:
-    """The pivot the backtest loader runs on every price row it reads."""
+    """The pivot inside load_b3_data — the third function whose Rust branch went.
 
-    def test_pivot_forward_fills_prices_but_never_volume(self):
-        from backtests.core.data import load_b3_data  # noqa: F401  import guard
+    Drives the real loader over a temp SQLite DB (same fixture shape as
+    test_load_b3_data_pivot.py). An earlier version of this test re-implemented
+    the pivot inline and asserted on that, which tested pandas rather than
+    data.py: deleting the .ffill() from load_b3_data left it green.
+    """
 
-        df = pd.DataFrame({
-            "date": pd.to_datetime(
-                ["2024-01-01", "2024-01-01", "2024-01-02", "2024-01-03", "2024-01-03"]
-            ),
-            "ticker": ["AAAA3", "BBBB4", "AAAA3", "AAAA3", "BBBB4"],
-            "close": [10.0, 20.0, 11.0, 12.0, 22.0],
-            "adj_close": [10.0, 20.0, 11.0, 12.0, 22.0],
-            "fin_volume": [1e6, 2e6, 1.1e6, 1.2e6, 2.2e6],
-        })
+    @staticmethod
+    def _db_with(tmp_path, rows) -> str:
+        db_path = str(tmp_path / "pivot.sqlite")
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA foreign_keys = OFF")
+        storage.init_db(conn)
+        for ticker, date_str, close, volume in rows:
+            conn.execute(
+                """INSERT INTO prices (ticker, isin_code, date, open, high, low,
+                                       close, adj_close, split_adj_high,
+                                       split_adj_low, split_adj_close, volume)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (ticker, "UNKNOWN", date_str, close, close, close, close,
+                 close, close, close, close, volume),
+            )
+        conn.commit()
+        conn.close()
+        return db_path
 
-        adj = df.pivot(index="date", columns="ticker", values="adj_close").ffill()
-        vol = df.pivot(index="date", columns="ticker", values="fin_volume")
+    def test_pivot_forward_fills_prices_but_never_volume(self, tmp_path):
+        # BBBB4 does not trade on the 2nd — the gap is the whole point.
+        db_path = self._db_with(tmp_path, [
+            ("AAAA3", "2024-01-01", 10.0, 100_000),
+            ("BBBB4", "2024-01-01", 20.0, 200_000),
+            ("AAAA3", "2024-01-02", 11.0, 110_000),
+            ("AAAA3", "2024-01-03", 12.0, 120_000),
+            ("BBBB4", "2024-01-03", 22.0, 220_000),
+        ])
 
-        # BBBB4 did not trade on the 2nd: its price carries, its volume does not.
-        assert adj.loc[pd.Timestamp("2024-01-02"), "BBBB4"] == pytest.approx(20.0)
-        assert np.isnan(vol.loc[pd.Timestamp("2024-01-02"), "BBBB4"]), (
+        adj_close, close_px, fin_vol = load_b3_data(db_path, "2024-01-01", "2024-01-31")
+
+        gap = pd.Timestamp("2024-01-02")
+        assert adj_close.loc[gap, "BBBB4"] == pytest.approx(20.0), (
+            "a price must carry across a non-trading day, or every gap reads as a "
+            "crash to the return series"
+        )
+        assert close_px.loc[gap, "BBBB4"] == pytest.approx(20.0)
+        assert np.isnan(fin_vol.loc[gap, "BBBB4"]), (
             "a non-trading day must stay NaN in volume, or ADTV averages are wrong "
             "and illiquid names pass the liquidity filter"
         )
+
+    def test_traded_days_keep_their_own_values(self, tmp_path):
+        """The ffill must not overwrite a real observation."""
+        db_path = self._db_with(tmp_path, [
+            ("AAAA3", "2024-01-01", 10.0, 100_000),
+            ("AAAA3", "2024-01-02", 11.0, 110_000),
+            ("AAAA3", "2024-01-03", 12.0, 120_000),
+        ])
+
+        adj_close, _, fin_vol = load_b3_data(db_path, "2024-01-01", "2024-01-31")
+
+        assert adj_close["AAAA3"].tolist() == pytest.approx([10.0, 11.0, 12.0])
+        # volume is stored in reais already; the loader passes it through
+        assert fin_vol["AAAA3"].notna().all()

@@ -1,21 +1,192 @@
 import Link from "next/link";
 import { Brand } from "@/components/Brand";
-import { Sparkline } from "@/components/charts/Sparkline";
-import { CountUp, Reveal } from "@/components/landing/Motion";
+import { Reveal } from "@/components/landing/Motion";
+import { formatMoney, formatPercent } from "@/lib/format";
 import { PLANS } from "@/lib/plans";
-import {
-  IconCheck,
-  IconClock,
-  IconScissors,
-  IconUpload,
-  IconWallet,
-} from "@/components/icons";
+import { IconCheck } from "@/components/icons";
 
-// Public marketing page. Renders standalone — AppShell bypasses chrome/guard for "/".
-// All numbers here are illustrative product mockups, not live data.
+// ── Direction contract ────────────────────────────────────────────────────────
+// THESIS: one tax engine, shown in cross-section. Refuses the SaaS stack this
+//   page used to be — hero + icon-card grid + alternating showcase + pricing —
+//   which claimed the loop in an h2 and then demonstrated three separate tools.
+// OWN-WORLD: unchanged Quantax Instrument Panel (frontend/DESIGN.md). Bench
+//   Paper ground, Panel White surfaces, Etched Rule hairlines doing all
+//   separation, Archivo 800 / Plex Sans 14 / Plex Mono tnum, scarce navy.
+// STORY: a B3 investor arrives believing backtest, carteira and IRPF are three
+//   products. They read down one machine and watch a single apurado figure
+//   surface identically in all three outlets. The loop is one calculation.
+// FIRST VIEWPORT: thesis headline left at display scale over open paper, both
+//   actions under it; the B3 extract — the engine's real intake — spanning the
+//   full column beneath and bleeding off the right edge as a continuing sheet.
+// FORM: "the engine in cross-section", candidate 6 of the grounded structural
+//   list, staged on a vertical signal path. Seed key b8b693da, scope surface.
+//   The dealt staging (first-viewport-live-mirror) was weighed and dropped: it
+//   foregrounds deadline anxiety over the mechanism, losing on product clarity.
+//
+// Every figure below is either traceable to the parser (2 report kinds, 16
+// MOV_CATEGORY labels, the real Negociação column names) or synthetic demo data
+// labelled "exemplo". The apuração chain is arithmetically closed on purpose —
+// it is the page's argument, so it has to survive being checked.
 
-// ── chart helper ──────────────────────────────────────────────────────────────
-// values → SVG line + area paths over a 100×40 viewBox (stretched by the parent).
+// ── the engine's signal path ──────────────────────────────────────────────────
+// Stages clamp onto one continuous rule: a fixed-width gutter whose right
+// border is contiguous across stacked stages, so the spine needs no absolute
+// positioning. The marker names a position in the path, and the order is the
+// information — extract before apuração before outlet.
+function Stage({
+  id,
+  marker,
+  children,
+}: {
+  id?: string;
+  marker: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Reveal>
+      <section id={id} className="scroll-mt-20 grid grid-cols-[2rem_1fr] md:grid-cols-[7rem_1fr]">
+        <div className="relative border-r border-hairline">
+          {/* Sits on the rule, centred on the marker's line — the signal
+              arriving at this stage. */}
+          <span
+            aria-hidden
+            className="stage-node absolute -right-[4.5px] top-[4.4rem] h-2 w-2 rounded-full border border-hairline bg-paper md:top-[6.45rem]"
+          />
+        </div>
+        <div className="min-w-0 py-16 pl-5 pr-4 md:py-24 md:pl-12 md:pr-8">
+          <p className="mb-4 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+            {marker}
+          </p>
+          {children}
+        </div>
+      </section>
+    </Reveal>
+  );
+}
+
+// ── stage 1 · the intake ──────────────────────────────────────────────────────
+// Real Negociação column names, verbatim from taxcore/scripts/load_b3.py. The
+// four vendas sum to exactly the R$ 24.310,00 the apuração opens on below.
+const EXTRACT_COLS = [
+  "Data do Negócio",
+  "Tipo de Movimentação",
+  "Mercado",
+  "Prazo/Vencimento",
+  "Instituição",
+  "Código de Negociação",
+  "Quantidade",
+  "Preço",
+  "Valor",
+];
+
+const EXTRACT_ROWS: [string, string, string, string, string, string, number, number, number][] = [
+  ["15/07/2026", "Venda", "Mercado à Vista", "—", "XP INVESTIMENTOS CCTVM S.A.", "PETR4", 400, 38.42, 15368],
+  ["15/07/2026", "Venda", "Mercado à Vista", "—", "XP INVESTIMENTOS CCTVM S.A.", "VALE3", 100, 61.1, 6110],
+  ["14/07/2026", "Compra", "Mercado à Vista", "—", "CLEAR CORRETORA LTDA", "ITUB4", 300, 33.05, 9915],
+  ["10/07/2026", "Venda", "Mercado Fracionário", "—", "XP INVESTIMENTOS CCTVM S.A.", "BBAS3", 60, 27.8, 1668],
+  ["03/07/2026", "Venda", "Mercado à Vista", "—", "CLEAR CORRETORA LTDA", "WEGE3", 20, 58.2, 1164],
+];
+
+// A sample of the 16 MOV_CATEGORY labels — these strings are the parser's keys.
+const MOV_LABELS = [
+  "Dividendo",
+  "Juros Sobre Capital Próprio",
+  "Rendimento",
+  "Amortização",
+  "Desdobro",
+  "Bonificação em Ativos",
+  "Fração em Ativos",
+  "Transferência - Liquidação",
+];
+
+function ExtractSheet() {
+  return (
+    <div className="overflow-hidden rounded-lg border border-hairline bg-panel">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-hairline px-4 py-2.5">
+        <div className="flex items-end gap-px">
+          <span className="rounded-t-[4px] border border-b-0 border-hairline bg-paper px-3 py-1.5 font-mono text-[11px] font-medium text-ink">
+            Negociação
+          </span>
+          <span className="rounded-t-[4px] border border-b-0 border-transparent px-3 py-1.5 font-mono text-[11px] font-medium text-muted">
+            Movimentação
+          </span>
+        </div>
+        <span className="shrink-0 rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
+          exemplo
+        </span>
+      </div>
+
+      {/* Bleeds right: a spreadsheet does not stop at the content column. */}
+      <div className="overflow-x-auto">
+        <table className="w-max min-w-full border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-hairline">
+              {EXTRACT_COLS.map((c) => (
+                <th
+                  key={c}
+                  scope="col"
+                  className="whitespace-nowrap px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-muted"
+                >
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {EXTRACT_ROWS.map(([data, tipo, mercado, prazo, inst, tick, qtd, preco, valor], i) => (
+              <tr key={i} className="border-b border-hairline/70 last:border-0">
+                <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-ink tnum">{data}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-ink">{tipo}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-muted">{mercado}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-center text-muted">{prazo}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-muted">{inst}</td>
+                <td className="whitespace-nowrap px-3 py-2">
+                  <span className="rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-tight text-ink">
+                    {tick}
+                  </span>
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-ink tnum">{qtd}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-ink tnum">
+                  {preco.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-right font-mono text-ink tnum">
+                  {valor.toLocaleString("pt-BR", { minimumFractionDigits: 2 })}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── stage 2 · the core ────────────────────────────────────────────────────────
+// The chain is closed: 24310 − 22028.80 = 2281.20 − 640 = 1641.20 × 15% = 246.18.
+const VENDAS = 24310;
+const CUSTO = 22028.8;
+const GANHO = VENDAS - CUSTO;
+const PREJUIZO = 640;
+const BASE = GANHO - PREJUIZO;
+const ALIQUOTA = 0.15;
+const DARF = Math.round(BASE * ALIQUOTA * 100) / 100;
+
+const APURACAO: {
+  label: string;
+  note?: string;
+  value: string;
+  strong?: boolean;
+}[] = [
+  { label: "Vendas de ações no mês", note: "4 operações, dos extratos", value: formatMoney(VENDAS) },
+  { label: "Isenção mensal de R$ 20.000", note: "excedida — o mês é tributável", value: "não se aplica" },
+  { label: "Custo pelo preço médio", note: "ajustado por desdobros e amortizações", value: `− ${formatMoney(CUSTO)}` },
+  { label: "Ganho apurado", value: formatMoney(GANHO, true), strong: true },
+  { label: "Prejuízo a compensar", note: "saldo acumulado da mesma classe", value: `− ${formatMoney(PREJUIZO)}` },
+  { label: "Base de cálculo", value: formatMoney(BASE) },
+  { label: "Alíquota", note: "ações, operação comum", value: formatPercent(ALIQUOTA) },
+];
+
+// ── stage 3 · the three outlets ───────────────────────────────────────────────
 function areaLine(values: number[], lo?: number, hi?: number) {
   const min = lo ?? Math.min(...values);
   const max = hi ?? Math.max(...values);
@@ -28,245 +199,42 @@ function areaLine(values: number[], lo?: number, hi?: number) {
     P + i * step,
     H - P - ((v - min) / rng) * (H - P * 2),
   ]);
-  const line = xy
+  return xy
     .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`)
     .join(" ");
-  const area = `${line} L ${xy[xy.length - 1][0].toFixed(1)} ${H} L ${xy[0][0].toFixed(1)} ${H} Z`;
-  return { line, area };
 }
 
-function AreaChart({
-  values,
-  id,
-  color = "var(--series-1)",
-}: {
-  values: number[];
-  id: string;
-  color?: string;
-}) {
-  const { line, area } = areaLine(values);
+// The shared figure, marked wherever it surfaces. Navy tint at 6% is the same
+// "you are here" treatment the active nav item uses — the accent marking a
+// location, not colouring data.
+function Same({ children }: { children: React.ReactNode }) {
   return (
-    <svg
-      viewBox="0 0 100 40"
-      preserveAspectRatio="none"
-      className="h-full w-full"
-      aria-hidden
-    >
-      <defs>
-        <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor={color} stopOpacity="0.20" />
-          <stop offset="1" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <path d={area} fill={`url(#${id})`} />
-      <path
-        d={line}
-        fill="none"
-        stroke={color}
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        vectorEffect="non-scaling-stroke"
-        pathLength={1}
-        className="draw-line"
-      />
-    </svg>
+    <mark className="rounded-[4px] bg-navy/[0.08] px-1 font-medium text-ink">
+      {children}
+    </mark>
   );
 }
 
-// ── ticker tape ───────────────────────────────────────────────────────────────
-const QUOTES = [
-  ["PETR4", "38,42", 1.2],
-  ["VALE3", "61,10", -0.8],
-  ["ITUB4", "33,05", 0.5],
-  ["BBAS3", "27,80", 2.1],
-  ["WEGE3", "52,30", -0.3],
-  ["MGLU3", "12,15", 3.4],
-  ["BBDC4", "15,90", -1.1],
-  ["ABEV3", "13,45", 0.7],
-  ["B3SA3", "12,88", 0.4],
-  ["PRIO3", "44,20", 1.8],
-  ["ITSA4", "10,32", 0.9],
-  ["RENT3", "58,70", -0.6],
-] as const;
-
-function TickerTape() {
-  const row = [...QUOTES, ...QUOTES]; // duplicated for a seamless -50% loop
-  return (
-    // Purely decorative, and the track is duplicated for the loop — without
-    // this a screen reader announces 24 ticker/price/delta triplets twice.
-    <div
-      aria-hidden
-      className="ticker overflow-hidden border-b border-hairline bg-panel/50"
-    >
-      <div className="marquee-track flex w-max items-center gap-8 py-2.5">
-        {row.map(([sym, px, chg], i) => (
-          <span key={`${sym}-${i}`} className="flex items-center gap-2 text-sm">
-            <span className="font-mono font-medium text-ink">{sym}</span>
-            <span className="tnum text-muted">{px}</span>
-            <span
-              className={`tnum text-xs font-medium ${chg >= 0 ? "text-gain" : "text-loss"}`}
-            >
-              {chg >= 0 ? "▲" : "▼"} {Math.abs(chg).toString().replace(".", ",")}%
-            </span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── product peeks ─────────────────────────────────────────────────────────────
-const POSITIONS = [
-  { t: "PETR4", v: "R$ 18.240", p: "+2,1%", up: true, s: [3, 4, 3.6, 5, 4.8, 6, 6.4] },
-  { t: "ITUB4", v: "R$ 12.980", p: "−0,8%", up: false, s: [6, 5.6, 6, 5, 4.7, 4.9, 4.4] },
-  { t: "VALE3", v: "R$ 9.510", p: "+1,3%", up: true, s: [4, 3.8, 4.4, 4.2, 5, 4.9, 5.5] },
-  { t: "HGLG11", v: "R$ 7.300", p: "+0,4%", up: true, s: [5, 5.1, 5, 5.2, 5.3, 5.2, 5.4] },
-];
-
-function DashboardPeek() {
-  return (
-    <div className="animate-in animate-float rounded-xl border border-hairline bg-panel p-5 shadow-xl shadow-navy/5">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-            Patrimônio
-          </p>
-          <p className="mt-1 font-display text-3xl font-extrabold tracking-tight text-ink">
-            <CountUp to={128430} prefix="R$ " />
-          </p>
-        </div>
-        {/* Says what it is. These are mock figures (see note at top of file);
-            claiming "ao vivo" over them was the page asserting data it has not
-            got — the one thing this product's principles forbid. */}
-        <span className="rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
-          exemplo
-        </span>
-      </div>
-
-      <div className="mt-1 flex items-center gap-2 text-sm">
-        <span className="rounded-md bg-gain/10 px-1.5 py-0.5 font-medium text-gain tnum">
-          +12,4%
-        </span>
-        <span className="text-muted tnum">+R$ 14.190 no ano</span>
-      </div>
-
-      <div className="mt-4 h-24">
-        <AreaChart
-          id="peek-hero"
-          values={[100, 103, 101, 106, 110, 108, 113, 111, 117, 120, 124, 128]}
-        />
-      </div>
-
-      <div className="mt-4 space-y-2.5 border-t border-hairline pt-4">
-        {POSITIONS.slice(0, 3).map((r) => (
-          <div key={r.t} className="flex items-center gap-3 text-sm">
-            <span className="w-16 font-mono text-xs font-medium text-ink">
-              {r.t}
-            </span>
-            <span aria-hidden>
-              <Sparkline values={r.s} width={48} height={16} />
-            </span>
-            <span className="ml-auto tnum text-ink">{r.v}</span>
-            <span className={`w-12 text-right tnum ${r.up ? "text-gain" : "text-loss"}`}>
-              {r.p}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AllocPeek() {
-  const bars = [
-    { label: "Ações", pct: 55, color: "var(--series-1)" },
-    { label: "FIIs", pct: 25, color: "var(--series-3)" },
-    { label: "Renda fixa", pct: 15, color: "var(--series-4)" },
-    { label: "Caixa", pct: 5, color: "var(--series-2)" },
-  ];
-  return (
-    <div className="rounded-xl border border-hairline bg-panel p-5">
-      <p className="text-sm font-semibold text-ink">Alocação-alvo</p>
-      <div className="mt-4 space-y-3">
-        {bars.map((b) => (
-          <div key={b.label}>
-            <div className="mb-1 flex justify-between text-xs">
-              <span className="text-muted">{b.label}</span>
-              <span className="tnum text-ink">{b.pct}%</span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-hairline/60">
-              <div
-                className="h-full rounded-full"
-                style={{ width: `${b.pct}%`, backgroundColor: b.color }}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="mt-5 border-t border-hairline pt-4">
-        <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-          Ordens sugeridas
-        </p>
-        <div className="space-y-2 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-ink">
-              <span className="text-gain">Comprar</span> HGLG11
-            </span>
-            <span className="tnum text-muted">+R$ 2.100</span>
-          </div>
-          <div className="flex items-center justify-between">
-            <span className="text-ink">
-              <span className="text-loss">Vender</span> PETR4
-            </span>
-            <span className="tnum text-muted">−R$ 1.400</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BenchPeek() {
-  const cdi = [100, 101, 102, 103.5, 105, 106, 107.5, 109, 110.7];
-  const port = [100, 102, 101, 105, 108, 107, 112, 115, 118.2];
-  const all = [...cdi, ...port];
+function OutletBench() {
+  const bruto = [100, 102, 101, 105, 108, 107, 112, 115, 118.2];
+  const liquido = bruto.map((v) => 100 + (v - 100) * (1 - ALIQUOTA));
+  const all = [...bruto, ...liquido];
   const lo = Math.min(...all);
   const hi = Math.max(...all);
-  const p = areaLine(port, lo, hi);
-  const c = areaLine(cdi, lo, hi);
   return (
-    <div className="rounded-xl border border-hairline bg-panel p-5">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-ink">Carteira vs. CDI</p>
-        <span className="rounded-md border border-hairline bg-paper px-1.5 py-0.5 text-xs font-medium text-muted">
-          12 meses
-        </span>
-      </div>
-      <div className="mt-4 h-32">
-        <svg
-          viewBox="0 0 100 40"
-          preserveAspectRatio="none"
-          className="h-full w-full"
-          aria-hidden
-        >
-          <defs>
-            <linearGradient id="benchgrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="var(--series-1)" stopOpacity="0.18" />
-              <stop offset="1" stopColor="var(--series-1)" stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          <path d={p.area} fill="url(#benchgrad)" />
+    <>
+      <div className="mt-5 h-28">
+        <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="h-full w-full" aria-hidden>
           <path
-            d={c.line}
+            d={areaLine(bruto, lo, hi)}
             fill="none"
-            stroke="var(--muted)"
+            stroke="var(--axis)"
             strokeWidth={1.4}
             strokeDasharray="3 3"
             vectorEffect="non-scaling-stroke"
           />
           <path
-            d={p.line}
+            d={areaLine(liquido, lo, hi)}
             fill="none"
             stroke="var(--series-1)"
             strokeWidth={1.8}
@@ -278,123 +246,132 @@ function BenchPeek() {
           />
         </svg>
       </div>
-      <div className="mt-4 flex gap-6 border-t border-hairline pt-4 text-sm">
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-4 rounded-full bg-series-1" />
-          <span className="text-muted">Carteira</span>
-          <span className="font-medium text-gain tnum">+18,2%</span>
+      <dl className="mt-5 space-y-2 border-t border-hairline pt-4 text-sm">
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="flex items-center gap-2 text-muted">
+            <span aria-hidden className="h-0.5 w-4 rounded-full bg-axis" />
+            Retorno bruto
+          </dt>
+          <dd className="tnum text-muted">+18,2%</dd>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="h-0.5 w-4 rounded-full bg-muted" />
-          <span className="text-muted">CDI</span>
-          <span className="text-muted tnum">+10,7%</span>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="flex items-center gap-2 text-muted">
+            <span aria-hidden className="h-0.5 w-4 rounded-full bg-series-1" />
+            Depois do imposto
+          </dt>
+          <dd className="tnum font-medium text-ink">+15,5%</dd>
         </div>
-      </div>
-    </div>
+      </dl>
+      <p className="mt-4 text-sm leading-relaxed text-muted">
+        A distância entre as duas curvas é a <Same>mesma alíquota de 15%</Same> —
+        descontada operação a operação, não estimada no fim.
+      </p>
+    </>
   );
 }
 
-function IrpfPeek() {
+function OutletCarteira() {
+  const ordens = [
+    { acao: "Vender", ticker: "PETR4", valor: -1400, motivo: "acima do alvo" },
+    { acao: "Comprar", ticker: "HGLG11", valor: 2100, motivo: "abaixo do alvo" },
+  ];
   return (
-    <div className="rounded-xl border border-hairline bg-panel p-5">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-semibold text-ink">IRPF 2026</p>
-        <span className="inline-flex items-center gap-1 rounded-md bg-status-done/10 px-1.5 py-0.5 text-xs font-medium text-status-done">
-          <IconCheck size={13} />
-          Concluído
-        </span>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-navy/20 bg-navy/[0.04] p-4">
-        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-          DARF · abril
-        </p>
-        <p className="mt-1 font-display text-2xl font-extrabold text-ink tnum">
-          R$ 342,18
-        </p>
-        <p className="mt-1 text-xs text-muted">
-          Código 6015 · vencimento 31/05
-        </p>
-      </div>
-
-      <div className="mt-4 space-y-2.5 text-sm">
-        <div className="flex justify-between">
-          <span className="text-muted">Ganho apurado (ações)</span>
-          <span className="tnum text-gain">+R$ 2.281,20</span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-muted">Prejuízo a compensar</span>
-          <span className="tnum text-loss">−R$ 640,00</span>
-        </div>
-        <div className="flex justify-between border-t border-hairline pt-2.5">
-          <span className="text-ink">Alíquota</span>
-          <span className="tnum text-ink">15%</span>
-        </div>
-      </div>
-    </div>
+    <>
+      <dl className="mt-5 space-y-3">
+        {[
+          { label: "Ações", pct: 0.55, color: "var(--series-1)" },
+          { label: "FIIs", pct: 0.25, color: "var(--series-3)" },
+          { label: "Renda fixa", pct: 0.15, color: "var(--series-4)" },
+          { label: "Caixa", pct: 0.05, color: "var(--series-2)" },
+        ].map((b) => (
+          <div key={b.label}>
+            <div className="mb-1 flex justify-between text-xs">
+              <dt className="text-muted">{b.label}</dt>
+              <dd className="tnum text-ink">{formatPercent(b.pct)}</dd>
+            </div>
+            <div aria-hidden className="h-1.5 overflow-hidden rounded-full bg-hairline/60">
+              <div className="h-full rounded-full" style={{ width: `${b.pct * 100}%`, backgroundColor: b.color }} />
+            </div>
+          </div>
+        ))}
+      </dl>
+      <ul className="mt-5 space-y-2 border-t border-hairline pt-4 text-sm">
+        {ordens.map((o) => (
+          <li key={o.ticker} className="flex items-baseline justify-between gap-3">
+            <span className="text-ink">
+              <span className={o.valor > 0 ? "text-gain" : "text-loss"}>{o.acao}</span>{" "}
+              <span className="font-mono text-xs uppercase">{o.ticker}</span>{" "}
+              <span className="text-muted">· {o.motivo}</span>
+            </span>
+            <span className="shrink-0 tnum text-muted">{formatMoney(o.valor, true)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-4 text-sm leading-relaxed text-muted">
+        O plano já sabe que essa venda realiza{" "}
+        <Same>{formatMoney(GANHO)}</Same> e o que isso custa em imposto antes de
+        sugerir a ordem.
+      </p>
+    </>
   );
 }
 
-// ── static content ────────────────────────────────────────────────────────────
-// Four, not six: IRPF and Bench used to sit here too, then got deep-dived in
-// the showcase 60 lines below. Saying them twice made the grid filler and blew
-// the ≤4-per-group budget. These four are the ones the showcase does not cover.
-const FEATURES = [
+function OutletIrpf() {
+  return (
+    <>
+      <div className="mt-5 rounded-lg border border-hairline bg-paper p-4">
+        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+          DARF · código 6015
+        </p>
+        <p className="mt-1 font-display text-3xl font-extrabold text-ink tnum">
+          {formatMoney(DARF)}
+        </p>
+        <p className="mt-1 text-xs text-muted">Vencimento 31/08/2026</p>
+      </div>
+      <dl className="mt-5 space-y-2 border-t border-hairline pt-4 text-sm">
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-muted">Renda variável · julho</dt>
+          <dd className="tnum text-ink">
+            <Same>{formatMoney(GANHO, true)}</Same>
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <dt className="text-muted">Bens e Direitos</dt>
+          <dd className="tnum text-ink">12 linhas</dd>
+        </div>
+      </dl>
+      <p className="mt-4 text-sm leading-relaxed text-muted">
+        O mesmo ganho entra na ficha de renda variável do mês, pronto para
+        conferir contra o informe e copiar na declaração.
+      </p>
+    </>
+  );
+}
+
+const OUTLETS = [
   {
-    Icon: IconWallet,
-    title: "Carteira consolidada",
-    body: "Posições, preço médio e proventos de todas as suas contas, direto dos extratos.",
+    tag: "Bench",
+    title: "O backtest desconta o imposto",
+    Body: OutletBench,
   },
   {
-    Icon: IconUpload,
-    title: "Importação dos extratos",
-    body: "Suba os extratos .xlsx da B3. A gente lê negociações e movimentações — nada à mão.",
+    tag: "Carteira",
+    title: "O rebalanceamento conta o imposto",
+    Body: OutletCarteira,
   },
   {
-    Icon: IconScissors,
-    title: "Colheita de prejuízo",
-    body: "O TLH aponta o que vender para compensar ganhos e pagar menos imposto.",
-  },
-  {
-    Icon: IconClock,
-    title: "Simulação",
-    body: "Teste um aporte ou uma venda e veja o efeito na carteira e no imposto antes.",
+    tag: "IRPF",
+    title: "A declaração recebe o imposto",
+    Body: OutletIrpf,
   },
 ];
 
-const SHOWCASE = [
-  {
-    eyebrow: "Estratégia",
-    title: "Saiba exatamente o que comprar e vender",
-    body: "Defina uma alocação-alvo e regras de rebalanceamento. O app calcula o desvio e sugere as ordens para voltar ao rumo — sem chute.",
-    Peek: AllocPeek,
-  },
-  {
-    eyebrow: "Performance",
-    title: "Você está batendo o CDI?",
-    body: "Compare sua carteira com benchmarks no período que quiser e teste estratégias em dados históricos antes de arriscar dinheiro de verdade.",
-    Peek: BenchPeek,
-  },
-  {
-    eyebrow: "Imposto",
-    title: "O imposto de renda, resolvido",
-    body: "DARF calculada mês a mês, prejuízos compensados automaticamente e a ficha de bens pronta para copiar na declaração.",
-    Peek: IrpfPeek,
-  },
-];
-
-const STEPS = [
-  { n: "1", title: "Importe seus extratos", body: "Baixe os extratos .xlsx na Área do Investidor da B3 e arraste para dentro do app." },
-  { n: "2", title: "Veja tudo consolidado", body: "Carteira, proventos e resultado, atualizados com o mercado." },
-  { n: "3", title: "Declare e rebalanceie", body: "IRPF pronto, imposto otimizado e ordens para manter a alocação." },
-];
+// ── stage 4 · the fiscal year ─────────────────────────────────────────────────
+const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
 
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-paper">
-      <TickerTape />
-
-      {/* Header */}
       <header className="sticky top-0 z-20 border-b border-hairline bg-paper/85 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 md:px-8">
           <Brand className="text-lg" />
@@ -402,10 +379,10 @@ export default function LandingPage() {
               account yet. "Entrar" stays available as a quiet text link. */}
           <nav className="flex items-center gap-4 sm:gap-6">
             <a
-              href="#recursos"
+              href="#motor"
               className="hidden py-2 text-sm font-medium text-muted transition-colors hover:text-ink sm:block"
             >
-              Recursos
+              Como funciona
             </a>
             <a
               href="#planos"
@@ -429,211 +406,284 @@ export default function LandingPage() {
         </div>
       </header>
 
-      <main>
-      {/* Hero */}
-      <section className="relative overflow-hidden">
-        <div className="relative mx-auto grid max-w-6xl items-center gap-12 px-4 pt-16 pb-20 md:px-8 md:pt-24 lg:grid-cols-[1.1fr_0.9fr]">
-          <div>
-            <p className="animate-fade-up mb-4 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-              Para investidores da B3
-            </p>
-            <h1 className="animate-fade-up font-display text-4xl font-extrabold leading-[1.05] tracking-tight text-ink md:text-6xl">
-              Do extrato da B3 ao imposto de renda, tudo em um só lugar.
-            </h1>
-            <p
-              className="animate-fade-up mt-6 max-w-xl text-lg leading-relaxed text-muted"
-              style={{ animationDelay: "80ms" }}
+      <main className="mx-auto max-w-6xl px-4 md:px-8">
+        {/* ── Stage 1 · intake ─────────────────────────────────────────────── */}
+        <Stage marker="Entrada · o extrato da B3">
+          <h1 className="max-w-3xl font-display text-4xl font-extrabold leading-[1.05] tracking-tight text-ink md:text-6xl">
+            Um motor de imposto. Três saídas.
+          </h1>
+          <p className="mt-6 max-w-[65ch] text-lg leading-relaxed text-muted">
+            O mesmo cálculo que pontua um backtest apura sua carteira e emite sua
+            DARF. Você sobe os extratos da B3 — daí em diante é um número só,
+            seguido até a declaração.
+          </p>
+          <div className="mt-8 flex flex-wrap items-center gap-3">
+            <Link
+              href="/login"
+              className="rounded-md bg-navy px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
             >
-              Importe seus extratos e tenha carteira consolidada, IRPF pronto,
-              colheita de prejuízo e rebalanceamento — sem planilha e sem digitar
-              nota por nota.
-            </p>
-            <div
-              className="animate-fade-up mt-8 flex flex-wrap items-center gap-3"
-              style={{ animationDelay: "160ms" }}
+              Começar grátis
+            </Link>
+            <a
+              href="#motor"
+              className="rounded-md border border-hairline bg-panel px-5 py-3 text-sm font-semibold text-ink transition-colors hover:bg-hairline/40"
             >
-              <Link
-                href="/login"
-                className="rounded-md bg-navy px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
-              >
-                Começar grátis
-              </Link>
-              <a
-                href="#planos"
-                className="rounded-md border border-hairline bg-panel px-5 py-3 text-sm font-semibold text-ink transition-colors hover:bg-hairline/40"
-              >
-                Ver planos
-              </a>
-            </div>
-            <p
-              className="animate-fade-up mt-4 text-sm text-muted"
-              style={{ animationDelay: "240ms" }}
-            >
-              Sem cartão de crédito. Só leitura dos seus extratos — nada executa
-              na sua corretora.
-            </p>
+              Ver o cálculo
+            </a>
+          </div>
+          <p className="mt-4 text-sm text-muted">
+            Sem cartão de crédito. Só leitura dos seus extratos — nada executa na
+            sua corretora.
+          </p>
+
+          {/* The intake itself, at full width. */}
+          <div className="mt-14 md:-mr-8">
+            <ExtractSheet />
           </div>
 
-          <div
-            className="animate-fade-up"
-            style={{ animationDelay: "200ms" }}
-          >
-            <DashboardPeek />
-          </div>
-        </div>
-      </section>
-
-      {/* Stats band */}
-      <section className="border-y border-hairline bg-panel/40">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-8 px-4 py-10 text-center sm:grid-cols-3 sm:gap-4 md:px-8">
-          {[
-            // Every figure here is verifiable in the parser: 2 report kinds
-            // (load_b3.py sniff_kind), 16 movement labels (MOV_CATEGORY), and
-            // the 3 documented steps. Nothing here is a measured usage metric.
-            { top: <CountUp to={2} />, label: "relatórios da B3: negociação e movimentação" },
-            { top: <CountUp to={16} />, label: "tipos de movimentação reconhecidos" },
-            { top: <CountUp to={3} />, label: "passos do extrato ao IRPF" },
-          ].map((s, i) => (
-            <div key={i}>
-              <p className="font-display text-3xl font-extrabold text-navy md:text-4xl">
-                {s.top}
+          <div className="mt-6 grid gap-6 md:grid-cols-[auto_1fr] md:gap-10">
+            <p className="max-w-xs text-sm leading-relaxed text-muted">
+              <span className="text-ink">Dois relatórios</span> da Área do
+              Investidor entram inteiros: negociação e movimentação. O parser
+              reconhece a planilha pelas colunas, não pelo nome do arquivo.
+            </p>
+            <div>
+              <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+                16 tipos de movimentação reconhecidos
               </p>
-              <p className="mt-1 text-xs text-muted md:text-sm">{s.label}</p>
+              <ul className="flex flex-wrap gap-1.5">
+                {MOV_LABELS.map((m) => (
+                  <li
+                    key={m}
+                    className="rounded-[4px] border border-hairline bg-panel px-1.5 py-0.5 font-mono text-[11px] leading-tight text-muted"
+                  >
+                    {m}
+                  </li>
+                ))}
+                <li className="px-1.5 py-0.5 font-mono text-[11px] leading-tight text-muted">
+                  e mais 8
+                </li>
+              </ul>
             </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Features */}
-      <section id="recursos" className="scroll-mt-24">
-        <div className="mx-auto max-w-6xl px-4 py-16 md:px-8 md:py-24">
-          <Reveal>
-            <p className="mb-3 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-              Recursos
-            </p>
-            <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
-              Um app para todo o ciclo da sua carteira
-            </h2>
-          </Reveal>
-          {/* No hover-lift: it was an undocumented third shadow and a transform
-              the reduced-motion block never covered. The border carries it. */}
-          <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            {FEATURES.map(({ Icon, title, body }, i) => (
-              <Reveal key={title} delay={(i % 4) * 80}>
-                <div className="group h-full rounded-lg border border-hairline bg-panel p-5 transition-colors hover:border-navy/40">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-md bg-navy/[0.06] text-navy transition-colors group-hover:bg-navy group-hover:text-white">
-                    <Icon size={20} />
-                  </div>
-                  <h3 className="mt-4 text-base font-semibold text-ink">{title}</h3>
-                  <p className="mt-2 text-sm leading-relaxed text-muted">{body}</p>
-                </div>
-              </Reveal>
-            ))}
           </div>
-        </div>
-      </section>
+        </Stage>
 
-      {/* Feature showcases (alternating text / peek).
-          The h2 below is the page's argument: without it these read as three
-          separate tools, which is exactly what competitors already sell one of
-          each. It also gives the section the heading its outline was missing. */}
-      <section className="border-t border-hairline bg-panel/40">
-        <div className="mx-auto max-w-6xl px-4 py-20 md:px-8 md:py-28">
-          <Reveal>
-            <p className="mb-3 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-              Por que tudo junto
-            </p>
-            <h2 className="max-w-3xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
-              O mesmo motor de imposto que pontua o backtest calcula sua DARF.
-            </h2>
-            <p className="mt-4 max-w-xl leading-relaxed text-muted">
-              Estratégia, acompanhamento e imposto não são três ferramentas
-              soltas aqui — são o mesmo cálculo, do teste à declaração.
-            </p>
-          </Reveal>
+        {/* ── Stage 2 · the core ───────────────────────────────────────────── */}
+        <Stage id="motor" marker="Apuração · o núcleo">
+          <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
+            Um número, calculado uma vez.
+          </h2>
+          <p className="mt-4 max-w-[65ch] leading-relaxed text-muted">
+            É aqui que a isenção de R$ 20.000, o prejuízo acumulado e a alíquota
+            se encontram. Nada disso roda três vezes em três lugares — roda uma,
+            e as três telas leem o resultado.
+          </p>
 
-          <div className="mt-16 space-y-20">
-          {SHOWCASE.map(({ eyebrow, title, body, Peek }, i) => (
-            <Reveal key={title}>
+          <div className="mt-10 max-w-3xl overflow-hidden rounded-lg border border-hairline bg-panel">
+            <div className="flex items-center justify-between gap-4 border-b border-hairline px-4 py-3">
+              <p className="text-sm font-semibold text-ink">
+                Apuração de julho de 2026
+              </p>
+              <span className="shrink-0 rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
+                exemplo
+              </span>
+            </div>
+            <dl>
+              {APURACAO.map((r) => (
+                <div
+                  key={r.label}
+                  className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-hairline/70 px-4 py-3"
+                >
+                  <dt className="min-w-0">
+                    <span className={r.strong ? "font-semibold text-ink" : "text-ink"}>
+                      {r.label}
+                    </span>
+                    {r.note && (
+                      <span className="ml-2 font-mono text-[11px] text-muted">{r.note}</span>
+                    )}
+                  </dt>
+                  <dd
+                    className={`shrink-0 tnum ${
+                      r.strong ? "font-semibold text-gain" : "text-ink"
+                    }`}
+                  >
+                    {r.value}
+                  </dd>
+                </div>
+              ))}
+              <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 bg-paper px-4 py-4">
+                <dt className="font-display text-lg font-extrabold tracking-tight text-ink">
+                  DARF a pagar
+                  <span className="ml-2 font-mono text-[11px] font-medium tracking-normal text-muted">
+                    código 6015 · vence 31/08
+                  </span>
+                </dt>
+                <dd className="shrink-0 font-display text-2xl font-extrabold text-ink tnum">
+                  {formatMoney(DARF)}
+                </dd>
+              </div>
+            </dl>
+          </div>
+
+          {/* TLH and simulação are not two more features — they are the two
+              places you can reach into this calculation before it closes. */}
+          <div className="mt-8 max-w-3xl">
+            <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+              Duas portas antes de o mês fechar
+            </p>
+            <dl className="mt-4 grid gap-6 sm:grid-cols-2">
+              <div>
+                <dt className="text-sm font-semibold text-ink">
+                  Colheita de prejuízo
+                </dt>
+                <dd className="mt-1 text-sm leading-relaxed text-muted">
+                  O TLH procura perdedores que derrubam essa base de{" "}
+                  <span className="tnum">{formatMoney(BASE)}</span> — e a DARF
+                  junto com ela.
+                </dd>
+              </div>
+              <div>
+                <dt className="text-sm font-semibold text-ink">Simulação</dt>
+                <dd className="mt-1 text-sm leading-relaxed text-muted">
+                  Passa um aporte ou uma venda pelo mesmo cálculo e mostra o
+                  imposto antes de você executar na corretora.
+                </dd>
+              </div>
+            </dl>
+          </div>
+        </Stage>
+
+        {/* ── Stage 3 · the outlets ────────────────────────────────────────── */}
+        <Stage marker="Saídas · o mesmo número, três vezes">
+          <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
+            Onde {formatMoney(GANHO)} reaparece.
+          </h2>
+          <p className="mt-4 max-w-[65ch] leading-relaxed text-muted">
+            Concorrentes vendem uma dessas três telas cada um. Elas só podem
+            concordar entre si se vierem do mesmo cálculo — e é isso que nenhum
+            deles pode copiar sem rodar um simulador e um motor de IRPF no mesmo
+            código.
+          </p>
+
+          {/* One instrument divided by hairlines, not three floating cards. */}
+          <div className="mt-10 grid overflow-hidden rounded-lg border border-hairline bg-panel md:grid-cols-3">
+            {OUTLETS.map(({ tag, title, Body }, i) => (
               <div
-                className={`grid items-center gap-10 lg:grid-cols-2 ${
-                  i % 2 ? "lg:[&>*:first-child]:order-2" : ""
+                key={tag}
+                className={`p-5 ${
+                  i > 0 ? "border-t border-hairline md:border-l md:border-t-0" : ""
                 }`}
               >
-                <div>
-                  <p className="mb-3 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-                    {eyebrow}
-                  </p>
-                  <h3 className="font-display text-2xl font-extrabold tracking-tight text-ink md:text-3xl">
-                    {title}
-                  </h3>
-                  <p className="mt-4 max-w-md leading-relaxed text-muted">{body}</p>
-                </div>
-                <Peek />
+                <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+                  {tag}
+                </p>
+                <h3 className="mt-2 text-base font-semibold leading-snug text-ink">
+                  {title}
+                </h3>
+                <Body />
               </div>
-            </Reveal>
-          ))}
+            ))}
           </div>
-        </div>
-      </section>
+        </Stage>
 
-      {/* How it works */}
-      <section className="mx-auto max-w-6xl px-4 py-16 md:px-8 md:py-24">
-        <Reveal>
-          <p className="mb-3 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-            Como funciona
-          </p>
+        {/* ── Stage 4 · the fiscal year ────────────────────────────────────── */}
+        <Stage marker="Ciclo · o ano fiscal">
           <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
-            Do extrato ao imposto em três passos
+            O motor roda o ano inteiro.
           </h2>
-        </Reveal>
-        <div className="mt-10 grid gap-6 md:grid-cols-3">
-          {STEPS.map(({ n, title, body }, i) => (
-            <Reveal key={n} delay={i * 100}>
-              <div>
-                <span className="font-display text-3xl font-extrabold text-navy tnum">
-                  {n}
-                </span>
-                <h3 className="mt-3 text-base font-semibold text-ink">{title}</h3>
-                <p className="mt-2 text-sm leading-relaxed text-muted">{body}</p>
-              </div>
-            </Reveal>
-          ))}
-        </div>
-      </section>
+          <p className="mt-4 max-w-[65ch] leading-relaxed text-muted">
+            A apuração é mensal e a DARF vence no mês seguinte. Quem só abre o
+            app em abril já perdeu onze apurações — e o prejuízo que elas
+            compensariam.
+          </p>
 
-      {/* Pricing */}
-      <section id="planos" className="scroll-mt-24 border-t border-hairline bg-panel/40">
-        <div className="mx-auto max-w-6xl px-4 py-16 md:px-8 md:py-24">
+          {/* A ruler, not a checklist: what varies across the year is the
+              declaração window and the one-month offset between an apuração and
+              its DARF. "Every month" is a sentence, not twelve identical dots. */}
+          <div className="mt-12 overflow-x-auto pb-2">
+            <div className="min-w-[44rem]">
+              <ol className="grid grid-cols-12 border-b border-hairline pb-2">
+                {MESES.map((m, i) => (
+                  <li
+                    key={m}
+                    className={`text-center font-mono text-[11px] font-medium uppercase tracking-wide ${
+                      i === 6 || i === 7 ? "text-ink" : "text-muted"
+                    }`}
+                  >
+                    {m}
+                  </li>
+                ))}
+              </ol>
+
+              {/* The one-month offset, on the same July the apuração above ran. */}
+              <div className="grid grid-cols-12 items-center pt-4">
+                <div className="col-start-7 col-span-2 flex items-center">
+                  <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-navy" />
+                  <span aria-hidden className="h-px flex-1 bg-navy/40" />
+                  <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-navy" />
+                </div>
+              </div>
+              <div className="grid grid-cols-12 pt-2">
+                <p className="col-start-7 col-span-3 -ml-6 text-sm leading-snug text-ink">
+                  Apuração de julho
+                  <span className="block font-mono text-[11px] text-muted">
+                    DARF vence 31/08 — um mês de folga, todo mês
+                  </span>
+                </p>
+              </div>
+
+              {/* The window that actually opens and closes. */}
+              <div className="mt-8 grid grid-cols-12">
+                <div className="col-start-1 col-span-5 rounded-[4px] border border-hairline bg-navy/[0.05] px-3 py-2">
+                  <p className="text-sm text-ink">Declaração do IRPF</p>
+                  <p className="font-mono text-[11px] text-muted">
+                    janeiro a maio, sobre o ano-base anterior
+                  </p>
+                </div>
+                <p className="col-start-6 col-span-7 self-center pl-4 text-sm leading-snug text-muted">
+                  Nos outros sete meses o concorrente sazonal fecha. A apuração
+                  não.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-8 max-w-[65ch] text-sm leading-relaxed text-muted">
+            Isenção de R$ 20.000/mês em ações, prejuízo compensável por classe e
+            gross-up de JCP são regras estruturais de todo mês — não exceções.
+          </p>
+        </Stage>
+
+        {/* ── Access ───────────────────────────────────────────────────────── */}
+        <section id="planos" className="scroll-mt-20 border-t border-hairline py-16 md:py-24">
           <Reveal>
-            <p className="mb-3 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-              Planos
-            </p>
             <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
               Preço simples, em reais
             </h2>
-            <p className="mt-3 max-w-2xl text-muted">
+            <p className="mt-3 max-w-[65ch] text-muted">
               Comece de graça e assine quando precisar de imposto e estratégia.
               Cancele quando quiser.
             </p>
-          </Reveal>
 
-          <div className="mt-10 grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-            {PLANS.map((plan, i) => (
-              <Reveal key={plan.name} delay={i * 90} className="h-full">
+            {/* One access panel divided by hairlines. */}
+            <div className="mt-10 grid overflow-hidden rounded-lg border border-hairline bg-panel md:grid-cols-2 xl:grid-cols-4">
+              {PLANS.map((plan, i) => (
                 <div
-                  className={`relative flex h-full flex-col rounded-lg border bg-panel p-6 transition-colors ${
-                    plan.featured
-                      ? "border-navy ring-1 ring-navy"
-                      : "border-hairline"
-                  }`}
+                  key={plan.id}
+                  className={`flex flex-col p-6 ${
+                    i > 0 ? "border-t border-hairline md:border-t-0 xl:border-l" : ""
+                  } ${i === 1 ? "md:border-l" : ""} ${i >= 2 ? "md:border-t" : ""} ${
+                    i === 3 ? "md:border-l" : ""
+                  } ${plan.featured ? "bg-navy/[0.03]" : ""}`}
                 >
-                  {plan.featured && (
-                    <span className="absolute -top-3 left-6 rounded-full bg-navy px-3 py-1 font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-white">
-                      Mais popular
-                    </span>
-                  )}
-                  <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
+                    {plan.featured && (
+                      <span className="shrink-0 font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-navy">
+                        Mais popular
+                      </span>
+                    )}
+                  </div>
                   <p className="mt-1 text-sm text-muted">{plan.tagline}</p>
                   <p className="mt-5 flex items-baseline gap-1">
                     <span className="font-display text-4xl font-extrabold tracking-tight text-ink tnum">
@@ -662,38 +712,37 @@ export default function LandingPage() {
                     {plan.cta}
                   </Link>
                 </div>
-              </Reveal>
-            ))}
-          </div>
-        </div>
-      </section>
+              ))}
+            </div>
+          </Reveal>
+        </section>
 
-      {/* Closing CTA */}
-      <section className="mx-auto max-w-6xl px-4 py-20 text-center md:px-8 md:py-28">
-        <Reveal>
-          <h2 className="mx-auto max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
-            Sua carteira da B3, sem planilha.
-          </h2>
-          <p className="mx-auto mt-4 max-w-xl text-muted">
-            Leva um minuto para importar o primeiro extrato.
-          </p>
-          <Link
-            href="/login"
-            className="mt-8 inline-block rounded-md bg-navy px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
-          >
-            Começar grátis
-          </Link>
-        </Reveal>
-      </section>
+        {/* ── Close ────────────────────────────────────────────────────────── */}
+        <section className="border-t border-hairline py-20 md:py-28">
+          <Reveal>
+            <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
+              Sua carteira da B3, sem planilha.
+            </h2>
+            <p className="mt-4 max-w-xl text-muted">
+              Leva um minuto para importar o primeiro extrato.
+            </p>
+            <Link
+              href="/login"
+              className="mt-8 inline-block rounded-md bg-navy px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
+            >
+              Começar grátis
+            </Link>
+          </Reveal>
+        </section>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-hairline">
         <div className="mx-auto flex max-w-6xl flex-col gap-4 px-4 py-8 md:flex-row md:items-center md:justify-between md:px-8">
           <Brand className="text-base" />
           <p className="max-w-md text-xs leading-relaxed text-muted">
             Ferramenta de organização de carteira e apuração. Não é recomendação
-            de investimento nem serviço de contabilidade.
+            de investimento nem serviço de contabilidade. Os números desta página
+            são exemplos.
           </p>
           <Link
             href="/privacidade"

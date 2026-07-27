@@ -191,8 +191,14 @@ CREATE TABLE IF NOT EXISTS fetch_failures (
 """
 
 INDEX_PRICES_DATE = "CREATE INDEX IF NOT EXISTS idx_prices_date ON prices(date);"
-INDEX_PRICES_TICKER = "CREATE INDEX IF NOT EXISTS idx_prices_ticker ON prices(ticker);"
 INDEX_PRICES_ISIN = "CREATE INDEX IF NOT EXISTS idx_prices_isin ON prices(isin_code);"
+# `prices` is PRIMARY KEY (ticker, date), whose leading column already serves
+# every ticker-first access: an equality probe, a range within one ticker, an
+# ORDER BY ticker. A separate index on (ticker) answered nothing the PK could
+# not, and every bulk write into the biggest table here paid to maintain it.
+# Dropped rather than merely un-created, so databases that ran the old schema
+# stop carrying it too.
+DROP_INDEX_PRICES_TICKER = "DROP INDEX IF EXISTS idx_prices_ticker;"
 
 # Marks for instruments COTAHIST does not carry (see external_prices.py). A sibling
 # of `prices` rather than rows inside it, for three reasons, each of which bites:
@@ -459,8 +465,8 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
         SCHEMA_SKIPPED_EVENTS,
         SCHEMA_FETCH_FAILURES,
         INDEX_PRICES_DATE,
-        INDEX_PRICES_TICKER,
         INDEX_PRICES_ISIN,
+        DROP_INDEX_PRICES_TICKER,
         SCHEMA_EXTERNAL_PRICES,
         INDEX_EXTERNAL_PRICES_DATE,
         SCHEMA_CVM_COMPANIES,

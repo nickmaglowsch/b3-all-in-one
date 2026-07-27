@@ -228,7 +228,7 @@ Density is set by the components, not by a global scale: card padding is 16px, c
 
 The application is flat. Depth comes entirely from tonal layering and hairlines: Bench Paper is the page, Panel White is the surface above it, and an Etched Rule border marks the boundary. There are no shadows on cards, on the sidebar, on inputs, or on the paywall dialog — the dialog separates itself with an ink scrim at 30% instead.
 
-Two shadows exist in the codebase. The chart tooltip uses `shadow-sm`, and one landing hero card uses `shadow-xl shadow-navy/5` combined with a 6-second float animation. Both are recorded here as observation, not as sanctioned exceptions — the elevation question is deliberately left open, so future work may introduce depth where it earns its place rather than working around a prohibition.
+One shadow exists in the codebase: the chart tooltip's `shadow-sm`. It is recorded here as observation, not as a sanctioned exception — the elevation question is deliberately left open, so future work may introduce depth where it earns its place rather than working around a prohibition. The landing page's floating hero card (`shadow-xl shadow-navy/5` plus a 6-second float) went away when that page was rebuilt as the engine cross-section; the page is now flat like the rest of the app.
 
 ## Shapes
 

@@ -46,6 +46,56 @@ def _normalize_date(val) -> Optional[date]:
     return None
 
 
+def _normalize_date_series(s: pd.Series) -> pd.Series:
+    """_normalize_date applied to a whole column at once.
+
+    The scalar version ran per row through .apply() over the entire prices table
+    — millions of Python calls per pipeline run, in two places.
+
+    The string case collapses to one parse: the scalar version's two branches
+    (fromisoformat for anything containing a "T", strptime over the first ten
+    characters otherwise) always agreed, because a timezone suffix never shifts
+    the wall-clock date that .date() returns. Pinned by
+    test_iso_string_with_a_timezone_keeps_its_wall_clock_date.
+
+    Anything whose element types are not a clean set of str, or of
+    date/datetime/Timestamp, falls back to the scalar path rather than letting
+    pandas guess a format — a column of "15/01/2020" must keep parsing as None,
+    not become a day-first date.
+    """
+    if s.empty:
+        return pd.Series([], dtype=object, index=s.index)
+
+    present = s.dropna()
+    if present.empty:
+        return pd.Series([None] * len(s), dtype=object, index=s.index)
+
+    # infer_dtype is a C-level pass; mapping type() over the column would put a
+    # Python call back on every row, which is the whole cost being removed here.
+    kind = pd.api.types.infer_dtype(present, skipna=True)
+
+    if kind == "date":
+        # Postgres hands back datetime.date, which is already the return type —
+        # the scalar version passed these straight through. Routing them via
+        # to_datetime and back measured *slower* than the .apply() it replaced
+        # (46ms vs 26ms over 300k rows), so the only work left is nulls -> None.
+        return s.where(s.notna(), None).astype(object)
+
+    if kind == "string":
+        # SQLite's path, and the one that actually hurt: 687ms -> 57ms over 300k.
+        parsed = pd.to_datetime(
+            present.str.slice(0, 10), format="%Y-%m-%d", errors="coerce")
+    elif kind in ("datetime", "datetime64"):
+        parsed = pd.to_datetime(present, errors="coerce")
+    else:
+        return s.apply(_normalize_date)
+
+    out = pd.Series([None] * len(s), dtype=object, index=s.index)
+    good = parsed.notna()
+    out.loc[parsed.index[good]] = parsed[good].dt.date
+    return out
+
+
 def convert_stock_actions_to_splits(stock_actions: pd.DataFrame) -> pd.DataFrame:
     """
     Convert B3 stock actions to the format needed for split adjustments.
@@ -390,9 +440,9 @@ def detect_splits_from_prices(
             columns=["isin_code", "ex_date", "action_type", "factor", "source"]
         )
 
-    # Normalize date column
+    # Normalize date column (vectorised — this runs over the whole price table)
     prices = prices.copy()
-    prices["date"] = prices["date"].apply(_normalize_date)
+    prices["date"] = _normalize_date_series(prices["date"])
 
     # Build a lookup set of (isin_code, ex_date) for existing actions
     existing_keys: set = set()
@@ -587,8 +637,19 @@ def filter_fatcot_redundant_splits(
     if not b3_mask.any():
         return stock_actions
 
-    prices_copy = prices.copy()
-    prices_copy["date"] = prices_copy["date"].apply(_normalize_date)
+    # Only the three columns this needs, normalised once. Copying the full price
+    # frame duplicated fourteen columns of the largest table the pipeline holds.
+    slim = prices[["isin_code", "date", "quotation_factor"]].copy()
+    slim["date"] = _normalize_date_series(slim["date"])
+
+    # Group once. This used to re-filter and re-sort the entire price frame for
+    # every B3 action — O(actions x rows), the pipeline's worst scaling. The
+    # sibling check below (validate_split_actions_against_prices) already builds
+    # exactly this dict; the two are now consistent.
+    prices_by_isin = {
+        isin: grp.sort_values("date")
+        for isin, grp in slim.groupby("isin_code", sort=False)
+    }
 
     redundant_indices = []
 
@@ -602,8 +663,8 @@ def filter_fatcot_redundant_splits(
             continue
 
         # Get prices for this ISIN around the ex_date
-        isin_prices = prices_copy[prices_copy["isin_code"] == isin].sort_values("date")
-        if len(isin_prices) < 2:
+        isin_prices = prices_by_isin.get(isin)
+        if isin_prices is None or len(isin_prices) < 2:
             continue
 
         # Look for a fatcot transition within the date window

@@ -34,7 +34,20 @@ def get_current_year() -> int:
 
 CURRENT_YEAR = get_current_year()  # Keep backward compat; prefer get_current_year() in new code
 
-EQUITY_BDI_CODES = {"02"}
+# COTAHIST CODBDI codes kept from the spot market (TPMERC 010):
+#   02 lote padrão (ações e units)   10 direitos e recibos
+#   12 fundos imobiliários            13 FIAGRO        14 ETF / cert. de investimento
+# This was {"02"} alone, which silently left every FII, FIAGRO and ETF out of the
+# price plane — a book holding BTLG11 or IVVB11 had them reported as "sem cotação
+# na base" forever, since no other feed backfills them. 13 and 14 are both needed:
+# a fund can migrate between them (KNCA11 was 13 through 2025, 14 from 2026).
+#
+# 96 (fracionário, TPMERC 020) is deliberately NOT here. PETR4F is the same
+# security as PETR4 at a smaller lot and closes identically, so storing it would
+# duplicate the plane for no new information; it is folded onto the round-lot
+# ticker at read time instead (taxcore load_b3.consolidate_fractional for
+# positions, platform_app.portfolio_index.canonical for the index).
+EQUITY_BDI_CODES = {"02", "10", "12", "13", "14"}
 
 # ── CVM open data portal ──────────────────────────────────────────────────────
 CVM_DFP_BASE_URL = "https://dados.cvm.gov.br/dados/CIA_ABERTA/DOC/DFP/DADOS/"

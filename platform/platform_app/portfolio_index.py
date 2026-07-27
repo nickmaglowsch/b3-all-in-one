@@ -44,6 +44,19 @@ EXCLUDED_CATEGORIES = frozenset({"premium", "reembolso"})
 TRADING_DAYS_PER_YEAR = 252
 
 
+def canonical(ticker: str) -> str:
+    """Fold a fractional-market ticker onto its round-lot parent (PETR4F -> PETR4).
+
+    B3 lists the same security twice — round lot and fractional — and the price
+    plane only carries the round lot (see EQUITY_BDI_CODES). taxcore already does
+    this when it derives positions.csv (load_b3.consolidate_fractional), but the
+    index is reconstructed from raw `trades`, which keep the F, so every
+    fractional trade landed on a ticker the plane could never price. No round-lot
+    B3 code ends in F, so the strip is unambiguous.
+    """
+    return ticker[:-1] if ticker.endswith("F") else ticker
+
+
 def _snap(d: datetime.date, grid: list[datetime.date]) -> int:
     """Index of the first grid day >= `d`, clamped to the last day.
 

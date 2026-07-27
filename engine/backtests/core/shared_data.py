@@ -42,8 +42,14 @@ def _expanding_pctrank(s: pd.Series) -> pd.Series:
       · it divides by the window *length*, not the non-NaN count, so leading gaps
         drag the rank down. Hence `/ arange`, not `rank(pct=True)`.
       · on a period with no observation, `NaN >= x` is all-False and the mean is
-        0.0, not NaN — a missing month reads as "calmest ever". Preserved here;
-        changing it is a signal change, not a refactor.
+        0.0, not NaN — a missing month would read as "calmest ever". Preserved
+        here; changing it is a signal change, not a refactor.
+
+        That second branch turns out to be unreachable with real data: checked
+        against 21 years of ^BVSP (2005-2026), `ibov_vol_20d` resampled to ME, QE
+        and W-FRI has no post-warmup gaps at any of the three, because B3 never
+        goes a whole month, quarter or Mon-Fri week without trading. It is kept
+        as defensive behaviour, not because anything depends on it.
     """
     ranked = s.expanding(min_periods=12).rank(method="max")
     out = ranked / np.arange(1, len(s) + 1)

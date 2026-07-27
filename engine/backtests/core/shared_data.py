@@ -29,6 +29,98 @@ _SPLIT_TOLERANCE = 0.04  # 4% tolerance for ratio matching
 _VOLUME_SPIKE = 3.0      # event-day BRL volume >= 3x trailing median => crash, not split
 
 
+def _find_split_events(
+    adj_s: pd.Series, raw_s: pd.Series, vol_s: pd.Series | None
+) -> list[tuple]:
+    """Dates where an unrecorded split is the only reading left, as
+    [(date, N, "forward"|"reverse"), ...] in ascending date order.
+
+    Every test below is applied to the whole series at once. It used to be a
+    per-bar Python loop doing `adj_ratio.iloc[i]` — roughly 700 tickers x 5 000
+    bars of pandas scalar indexing on every backtest and every advise call,
+    which is the single hottest thing build_shared_data did. The decisions are
+    unchanged and pinned bar-for-bar by tests/test_unrecorded_split_detector.py;
+    only the loop is gone.
+
+    `raw_s` and `adj_s` share one gap-free index (the caller drops NaNs and
+    intersects), so "position i" here is a real trading bar, not a calendar day.
+    """
+    adj_ratio = (adj_s / adj_s.shift(1)).iloc[1:]
+    raw_ratio = (raw_s / raw_s.shift(1)).iloc[1:]
+    if adj_ratio.empty:
+        return []
+
+    ar = adj_ratio.to_numpy(dtype=float)
+    rr = raw_ratio.to_numpy(dtype=float)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ok = np.isfinite(ar) & np.isfinite(rr) & (rr != 0)
+        # Both adj and raw must show nearly the same ratio — that is what says
+        # no adjustment was applied. Where they disagree, the split is already in.
+        ok &= np.abs(ar - rr) / np.maximum(np.abs(rr), 0.001) <= 0.05
+
+    # Forward splits sit at ratio ~ 1/N, reverse at ~ N. The scan order matters
+    # and is preserved: ascending N, forward before reverse at each N, first hit
+    # wins — the old loop's `break`.
+    n_hit = np.zeros(ar.shape, dtype=np.int64)
+    is_forward = np.zeros(ar.shape, dtype=bool)
+    unmatched = ok.copy()
+    with np.errstate(invalid="ignore"):
+        for n in _SPLIT_RATIOS:
+            target = 1.0 / n
+            hit = unmatched & (np.abs(ar - target) / target < _SPLIT_TOLERANCE)
+            n_hit[hit], is_forward[hit], unmatched = n, True, unmatched & ~hit
+            hit = unmatched & (np.abs(ar - float(n)) / n < _SPLIT_TOLERANCE)
+            n_hit[hit], is_forward[hit], unmatched = n, False, unmatched & ~hit
+    keep = ok & (n_hit > 0)
+    if not keep.any():
+        return []
+
+    # Persistence: the following days must stay in the new regime, and the
+    # preceding days must have been in the old regime. A one-day data error
+    # fails one of the two (either it reverts the next day, or the "old level"
+    # was itself the single glitch day) — rewriting all prior history off a
+    # glitch would be catastrophic.
+    #
+    # Both windows are rolling medians in disguise. The event sits at position
+    # `pos` in raw_s, one ahead of its position in the ratio series:
+    #   forward window  raw_s[pos+1 : pos+6]  -> reversed rolling(5), shifted back 1
+    #   backward window raw_s[pos-6 : pos-1]  -> rolling(5), shifted forward 2
+    # min_periods=1 reproduces the short windows at either end, and the NaN the
+    # shift leaves behind is exactly where the old slice came back empty and the
+    # check was skipped.
+    fwd_med = raw_s.iloc[::-1].rolling(5, min_periods=1).median().iloc[::-1].shift(-1)
+    bwd_med = raw_s.rolling(5, min_periods=1).median().shift(2)
+
+    at = adj_ratio.index
+    cur = raw_s.reindex(at).to_numpy(dtype=float)            # raw_s.iloc[pos]
+    prev = raw_s.shift(1).reindex(at).to_numpy(dtype=float)  # raw_s.iloc[pos - 1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        lvl = fwd_med.reindex(at).to_numpy(dtype=float) / cur
+        lvl_prv = bwd_med.reindex(at).to_numpy(dtype=float) / prev
+        # NaN == the window was empty == check skipped. A zero denominator gives
+        # inf, which falls outside the band and rejects, as it did before.
+        keep &= np.isnan(lvl) | ((lvl >= 0.6) & (lvl <= 1.5))
+        keep &= np.isnan(lvl_prv) | ((lvl_prv >= 0.6) & (lvl_prv <= 1.5))
+
+    # Volume corroboration: a real crash/repricing prints anomalous financial
+    # volume; a genuine split trades near normal BRL volume (price/N x shares*N
+    # cancels). Computed on the full column, then looked up by date — a ticker
+    # absent from the volume frame simply skips the check.
+    if vol_s is not None:
+        vol_med = vol_s.rolling(20, min_periods=5).median().shift(1)
+        v = vol_s.reindex(at).to_numpy(dtype=float)
+        m = vol_med.reindex(at).to_numpy(dtype=float)
+        with np.errstate(invalid="ignore"):
+            spike = ~np.isnan(v) & ~np.isnan(m) & (m > 0) & (v >= _VOLUME_SPIKE * m)
+        keep &= ~spike
+
+    return [
+        (at[i], int(n_hit[i]), "forward" if is_forward[i] else "reverse")
+        for i in np.flatnonzero(keep)
+    ]
+
+
 def _detect_and_fix_unrecorded_splits(
     adj_close: pd.DataFrame,
     close_px: pd.DataFrame,
@@ -67,79 +159,16 @@ def _detect_and_fix_unrecorded_splits(
         raw_s = close_px[col].reindex(adj_s.index).dropna()
 
         vol_s = None
-        vol_med = None
         if fin_vol is not None and col in fin_vol.columns:
             vol_s = fin_vol[col]
-            vol_med = vol_s.rolling(20, min_periods=5).median().shift(1)
 
         common_idx = adj_s.index.intersection(raw_s.index)
         if len(common_idx) < 2:
             continue
 
-        adj_s = adj_s.loc[common_idx]
-        raw_s = raw_s.loc[common_idx]
-
-        # Daily ratio: today / yesterday
-        adj_ratio = (adj_s / adj_s.shift(1)).iloc[1:]
-        raw_ratio = (raw_s / raw_s.shift(1)).iloc[1:]
-
-        # Find unrecorded split dates
-        split_events = []  # list of (date, split_ratio_N)
-
-        for i in range(len(adj_ratio)):
-            ar = adj_ratio.iloc[i]
-            rr = raw_ratio.iloc[i]
-
-            if pd.isna(ar) or pd.isna(rr) or not np.isfinite(ar) or not np.isfinite(rr) or rr == 0:
-                continue
-
-            # Both adj and raw must show nearly identical ratio
-            # (confirms no adjustment was applied)
-            if abs(ar - rr) / max(abs(rr), 0.001) > 0.05:
-                continue
-
-            # Check forward splits: ratio ≈ 1/N; reverse splits: ratio ≈ N
-            match = None
-            for n in _SPLIT_RATIOS:
-                target = 1.0 / n
-                if abs(ar - target) / target < _SPLIT_TOLERANCE:
-                    match = (n, "forward")
-                    break
-                if abs(ar - float(n)) / n < _SPLIT_TOLERANCE:
-                    match = (n, "reverse")
-                    break
-            if match is None:
-                continue
-
-            dt = adj_ratio.index[i]
-            pos = i + 1  # position of the event day in raw_s
-
-            # Persistence: the following days must stay in the new regime, and
-            # the preceding days must have been in the old regime. A one-day
-            # data error fails one of the two (either it reverts the next day,
-            # or the "old level" was itself the single glitch day) — rewriting
-            # all prior history off a glitch would be catastrophic.
-            nxt = raw_s.iloc[pos + 1 : pos + 6]
-            if len(nxt):
-                lvl = float(nxt.median()) / float(raw_s.iloc[pos])
-                if not (0.6 <= lvl <= 1.5):
-                    continue
-            prv = raw_s.iloc[max(0, pos - 6) : pos - 1]
-            if len(prv):
-                lvl_prv = float(prv.median()) / float(raw_s.iloc[pos - 1])
-                if not (0.6 <= lvl_prv <= 1.5):
-                    continue
-
-            # Volume corroboration: a real crash/repricing prints anomalous
-            # financial volume; a genuine split trades near normal BRL volume.
-            if vol_med is not None:
-                v = vol_s.get(dt)
-                m = vol_med.get(dt)
-                if pd.notna(v) and pd.notna(m) and m > 0 and float(v) >= _VOLUME_SPIKE * float(m):
-                    continue
-
-            split_events.append((dt, match[0], match[1]))
-
+        split_events = _find_split_events(
+            adj_s.loc[common_idx], raw_s.loc[common_idx], vol_s
+        )
         if not split_events:
             continue
 

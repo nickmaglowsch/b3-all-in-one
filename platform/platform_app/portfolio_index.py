@@ -22,15 +22,50 @@ from __future__ import annotations
 
 import bisect
 import datetime
+import re
 
-# Markets with no daily-position meaning, excluded from the index and disclosed:
-#   Futuro                  — WIN/WDO daytrades, no overnight position
-#   Mercado Primário de ETF — receipt bookkeeping that duplicates the real buy
-#   Renda Fixa              — bank/OTC products the market plane has no marks for
-# ponytail: renda fixa is dropped, not modelled. Valuing it as units of the CDI
-# index (what the taxcore CLI did) is a feature of its own; until then a book
-# with RF shows an equities-only index and says so via `excluded`.
-EXCLUDED_MARKETS = frozenset({"Futuro", "Mercado Primário de ETF", "Renda Fixa"})
+# Markets with no daily-position meaning, excluded from the index and disclosed.
+# Futuro is WIN/WDO daytrading: the contracts net to zero every session, so there
+# is never an overnight position to mark at a close.
+EXCLUDED_MARKETS = frozenset({"Futuro"})
+
+# "Renda Fixa" is deliberately NOT in the set above, because it is not one thing.
+# B3 files two unrelated kinds of row under that single label — the label names
+# the underlying, not where the instrument trades:
+#   - real OTC contracts (CDB, LCI, LCA): long alphanumeric codes, no listed price
+#     anywhere, genuinely outside any market plane;
+#   - exchange-listed fixed-income ETFs (LFTB11, IMAB11, IRFM11, B5P211, ...):
+#     ordinary B3 tickers that trade all day like any other.
+# Excluding the label wholesale threw the ETFs out along with the contracts. taxcore
+# has always kept them (load_b3's `is_rf_etf`), so the two layers disagreed about
+# the same book: `positions` held 1260 cotas of LFTB11 while the index reported its
+# market as nonexistent. The ticker's shape is what separates the two — the same
+# predicate as taxcore/scripts/load_b3.py:179, copied rather than imported because
+# the platform venv has no taxcore on its path. Keep them in step.
+RENDA_FIXA_MARKET = "Renda Fixa"
+_LISTED_TICKER_RE = re.compile(r"^[A-Z][A-Z0-9]{3}\d{1,2}$")
+
+# "Mercado Primário de ETF" used to be excluded here too, as "receipt bookkeeping
+# that duplicates the real buy". It duplicates nothing — it IS the buy: an ETF
+# subscription, booked under a primary-market-only code (HASH11H for HASH11) that
+# never trades on the exchange and so never appears in COTAHIST. Dropping it while
+# keeping the secondary-market sell of the same units left an orphan sell, and an
+# orphan sell is a phantom short: qty goes negative and subtracts qty x close from
+# every later NAV. Latent while the ETF itself was unpriced, real the moment the
+# plane learned to carry ETFs.
+PRIMARY_ETF_MARKET = "Mercado Primário de ETF"
+
+
+def is_excluded(ticker: str, market: str | None) -> bool:
+    """True when a trade has no place in the index at all.
+
+    Kept as a predicate rather than a set membership test because "Renda Fixa"
+    needs the ticker to decide — see RENDA_FIXA_MARKET above.
+    """
+    if market in EXCLUDED_MARKETS:
+        return True
+    return (market == RENDA_FIXA_MARKET
+            and not _LISTED_TICKER_RE.match(ticker or ""))
 
 # cash_events that are a return of/on capital — they leave the book, so TWR
 # counts them as return on the day they land.
@@ -44,16 +79,29 @@ EXCLUDED_CATEGORIES = frozenset({"premium", "reembolso"})
 TRADING_DAYS_PER_YEAR = 252
 
 
-def canonical(ticker: str) -> str:
-    """Fold a fractional-market ticker onto its round-lot parent (PETR4F -> PETR4).
+def canonical(ticker: str, market: str | None = None) -> str:
+    """Fold a ticker onto the code the price plane actually carries.
 
-    B3 lists the same security twice — round lot and fractional — and the price
-    plane only carries the round lot (see EQUITY_BDI_CODES). taxcore already does
-    this when it derives positions.csv (load_b3.consolidate_fractional), but the
-    index is reconstructed from raw `trades`, which keep the F, so every
-    fractional trade landed on a ticker the plane could never price. No round-lot
-    B3 code ends in F, so the strip is unambiguous.
+    Two B3 conventions book the same security under a second code, and neither
+    of those codes is in COTAHIST:
+
+      *F, fractional market   PETR4F is PETR4 at a smaller lot
+      *H, ETF primary market  HASH11H is a subscription of HASH11
+
+    A trade left under the suffixed code can never be priced. Worse, when a round
+    trip is booked under both codes — subscribe as HASH11H, sell as HASH11 — the
+    unfolded leg becomes an orphan and the index carries a phantom position for it.
+
+    taxcore already folds the fractional case when it derives positions.csv
+    (load_b3.consolidate_fractional); the index is rebuilt from raw `trades`,
+    which keep both suffixes, so it has to fold them itself.
+
+    The H strip is scoped to `market` because that label identifies the primary
+    leg exactly, so the rule cannot reach a spot ticker even in principle. Checked
+    against the archives: no spot B3 code ends in F or in H.
     """
+    if market == PRIMARY_ETF_MARKET:
+        return ticker[:-1] if ticker.endswith("H") else ticker
     return ticker[:-1] if ticker.endswith("F") else ticker
 
 
@@ -121,7 +169,16 @@ def build_index(
             continue
         bucket[kind][_snap(d, grid)] += abs(amount)
 
-    last_close: dict[str, float] = {}
+    # Seed every series at its own earliest close, before the walk starts. A ticker
+    # whose marks begin after the window opens would otherwise be worth 0 until its
+    # first mark lands and then jump to full value in one session — and that jump is
+    # a fabricated return, because NAV steps up with no matching `buys` flow to
+    # divide it out, so the chain books it as profit. Carrying it flat at its first
+    # known price is wrong by however much the price moved before the plane was
+    # watching, which is bounded and disclosable; the jump is unbounded and silent.
+    last_close: dict[str, float] = {
+        t: series[min(series)] for t, series in closes.items() if series
+    }
     held: set[str] = set(qty)
     nav: list[float] = []
     for i, day in enumerate(grid):

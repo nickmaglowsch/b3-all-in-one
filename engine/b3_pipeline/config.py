@@ -18,6 +18,41 @@ B3_COMPANY_LIST_URL = (
     "CompanyCall/GetInitialCompanies/{payload}"
 )
 
+# B3's bulk "Arquivos" portal — a two-step download (ask for a token, then spend
+# it) with no authentication. It serves the daily consolidated trade file, which
+# is where the instruments COTAHIST does not carry live.
+B3_FILE_TOKEN_URL = (
+    "https://arquivos.b3.com.br/api/download/requestname"
+    "?fileName={name}&date={date:%Y-%m-%d}"
+)
+B3_FILE_DOWNLOAD_URL = "https://arquivos.b3.com.br/api/download/?token={token}"
+B3_TRADE_INFO_FILE = "TradeInformationConsolidated"
+
+# Exchange-listed fixed-income ETFs. COTAHIST covers only the BOVESPA segment, and
+# B3 books these under RendaFixaPrivada, so they appear in no COTAHIST year at all
+# — verified across 2023-2026 with no BDI or market filter. They are ordinary B3
+# tickers that trade all day, so a book holding them has a real position the price
+# plane simply cannot see; the daily file above is where their marks come from.
+#
+# ponytail: an explicit list, not a rule. The file's own SgmtNm distinguishes them
+# ("FORWARD" vs "CASH"), but that enum is undocumented and not worth keying
+# production on for seven tickers. If these proliferate, derive from SgmtNm.
+RENDA_FIXA_ETFS = frozenset({
+    "LFTB11", "LFTS11", "IMAB11", "IRFM11", "IB5M11", "FIXA11", "B5P211",
+})
+
+# B3's daily file has a rolling retention window of roughly 14 months — older
+# dates answer 200 with an empty body. Anything not ingested before it rolls off
+# is unrecoverable, which is what makes this a daily obligation rather than a
+# backfill we can repeat. Bracketed by probe: 2025-05-02 empty, 2025-06-10 present.
+EXTERNAL_PRICES_START = datetime(2025, 6, 1).date()
+
+# How far back each run re-checks for gaps. A day skipped by a transient error is
+# only recoverable while B3 still serves it, so runs heal recent holes rather than
+# resuming from the newest row. Not unbounded: market holidays never have rows, so
+# an infinite window would re-probe every past holiday on every run.
+EXTERNAL_PRICES_HEAL_DAYS = 45
+
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "raw"
 DB_PATH = PROJECT_ROOT / "b3_market_data.sqlite"

@@ -202,30 +202,47 @@ async def process_imports(tenant_id: str) -> dict:
         ).all()
         await session.commit()
 
-        ws = Path(tempfile.mkdtemp(prefix="b3import-", dir=b3run.workspace_root(tid)))
-        try:
-            b3run.seed_workspace(ws)
+        extracts = [(imp.stored_path, imp.filename) for imp in imports]
+        override_rows = _override_rows(overrides)
+
+        def _work():
+            """Workspace build, load_b3, and reading its three CSVs back — all in
+            one thread hop.
+
+            Only the subprocess used to be offloaded. Procrastinate runs async
+            tasks on the worker's event loop with two slots, so the copytree, the
+            extract copies, the CSV writes, the reads and the rmtree blocked the
+            other slot and the worker's own bookkeeping for the duration.
+            """
+            ws = Path(tempfile.mkdtemp(prefix="b3import-", dir=b3run.workspace_root(tid)))
+            try:
+                b3run.seed_workspace(ws)
+                for stored_path, filename in extracts:
+                    shutil.copy(stored_path, ws / "b3_imports" / filename)
+                b3run.write_csv(
+                    ws / "data" / "cost_basis_overrides.csv",
+                    _OVERRIDE_HEADER, override_rows,
+                )
+                proc = b3run.run_module(ws, ["scripts.load_b3"])
+                if proc.returncode != 0:
+                    return proc, None, None, None
+                return (
+                    proc,
+                    b3run.read_csv_rows(ws / "data" / "trades.csv"),
+                    b3run.read_csv_rows(ws / "data" / "cash_events.csv"),
+                    b3run.read_csv_rows(ws / "data" / "positions.csv"),
+                )
+            finally:
+                shutil.rmtree(ws, ignore_errors=True)
+
+        proc, trades, events, positions = await asyncio.to_thread(_work)
+        if proc.returncode != 0:
+            msg = (proc.stderr or proc.stdout)[-2000:]
             for imp in imports:
-                shutil.copy(imp.stored_path, ws / "b3_imports" / imp.filename)
-            b3run.write_csv(
-                ws / "data" / "cost_basis_overrides.csv",
-                _OVERRIDE_HEADER, _override_rows(overrides),
-            )
-
-            proc = await asyncio.to_thread(b3run.run_module, ws, ["scripts.load_b3"])
-            if proc.returncode != 0:
-                msg = (proc.stderr or proc.stdout)[-2000:]
-                for imp in imports:
-                    imp.status = "error"
-                    imp.error = msg
-                await session.commit()
-                return {"tenant_id": tenant_id, "status": "error", "error": msg}
-
-            trades = b3run.read_csv_rows(ws / "data" / "trades.csv")
-            events = b3run.read_csv_rows(ws / "data" / "cash_events.csv")
-            positions = b3run.read_csv_rows(ws / "data" / "positions.csv")
-        finally:
-            shutil.rmtree(ws, ignore_errors=True)
+                imp.status = "error"
+                imp.error = msg
+            await session.commit()
+            return {"tenant_id": tenant_id, "status": "error", "error": msg}
 
         # load_b3 runs for minutes with the extracts already copied to a temp dir,
         # so the book can be offboarded underneath it. Writing anyway would restore

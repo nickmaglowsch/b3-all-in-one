@@ -93,35 +93,102 @@ def _exit_needs_fundamentals(strategy: str) -> None:
     raise SystemExit(NEEDS_FUNDAMENTALS_EXIT)
 
 
-def _latest_prices(raw_close: pd.DataFrame, tickers: set[str]) -> dict[str, float]:
-    """Last non-NaN raw (unadjusted) close per requested ticker; drops unpriced
-    names (special sleeves like CDI_ASSET have no share price)."""
+def _latest_prices(raw_close: pd.DataFrame) -> dict[str, float]:
+    """Last non-NaN raw (unadjusted) close per ticker; drops unpriced names
+    (special sleeves like CDI_ASSET have no share price)."""
     if raw_close is None or raw_close.empty:
         return {}
     last = raw_close.ffill().iloc[-1]
-    out: dict[str, float] = {}
-    for t in tickers:
-        if t in last.index:
-            v = last[t]
-            if pd.notna(v) and float(v) > 0:
-                out[t] = float(v)
-    return out
+    return {str(t): float(v) for t, v in last.items()
+            if pd.notna(v) and float(v) > 0}
+
+
+# Standard-lot universe, character-for-character the predicate in
+# load_b3_data / load_b3_hlc_data. Duplicated rather than imported because
+# importing that module is what this path exists to avoid; if one moves the
+# other has to move with it, or the two will disagree about which names exist.
+_STANDARD_LOT_SQL = (
+    "((LENGTH(ticker) = 5 AND SUBSTR(ticker, 5, 1) IN ('3', '4', '5', '6'))"
+    " OR (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11'))"
+)
+
+
+def _latest_plane_close(
+    db_path: str, start: str, end: str
+) -> tuple["pd.Timestamp | None", dict[str, float]]:
+    """(as_of, {ticker: latest raw close}) read straight from the market plane.
+
+    --weights is a valuation, not a backtest: it needs one number per ticker and
+    the date those numbers are as of. It used to obtain them by building the
+    entire shared-data plane — 20 years of HLC for every listed name, the split
+    detector, MA200, ATR, the mean-reversion feature set — and then reading
+    ``raw_close.ffill().iloc[-1]`` out of it. Both platform surfaces that value a
+    book sit on this path and neither caches it.
+
+    Equivalence with that row is the contract, and it rests on two properties of
+    the frame this replaces (pinned by test_weights_mode_prices_match_the_full_plane):
+
+      · ``raw_close`` is ``close_px`` resampled to month end, so ``as_of`` is the
+        *label* of the final bucket — the last calendar day of the plane's last
+        month. That is why it can legitimately fall a few days after the last
+        close, and why rolling the max date forward with MonthEnd(0) is the
+        reproduction rather than the max date itself.
+      · ``.ffill()`` carries each name's last known close into that final bucket,
+        so the per-ticker answer is just its most recent close in the window. A
+        name that stopped trading years ago keeps its last mark, as before.
+
+    Window filtering is kept even though only the newest row survives: `start`
+    bounds nothing in practice but `end` does — it is what makes an as-of-a-past
+    -date valuation reproducible instead of silently using today's plane.
+    """
+    from b3_pipeline import storage
+
+    ranked = f"""
+        SELECT ticker, close FROM (
+            SELECT ticker, close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM prices
+            WHERE date >= ? AND date <= ? AND close IS NOT NULL
+              AND {_STANDARD_LOT_SQL}
+        ) latest
+        WHERE rn = 1
+    """
+    with storage.get_connection(db_path) as conn:
+        rows = storage.read_sql(ranked, conn, params=[start, end])
+        max_date = storage.read_sql(
+            "SELECT MAX(date) AS d FROM prices "
+            f"WHERE date >= ? AND date <= ? AND {_STANDARD_LOT_SQL}",
+            conn, params=[start, end],
+        ).iloc[0]["d"]
+
+    if max_date is None or pd.isna(max_date) or rows.empty:
+        return None, {}
+    as_of = pd.Timestamp(max_date) + pd.offsets.MonthEnd(0)
+    prices = {
+        str(t): float(c) for t, c in zip(rows["ticker"], rows["close"])
+        if pd.notna(c) and float(c) > 0
+    }
+    return as_of, prices
 
 
 def _build_trades(
-    positions_in: dict, cash: float, target_row: pd.Series, raw_close: pd.DataFrame
+    positions_in: dict, cash: float, target_row: pd.Series, all_prices: dict[str, float]
 ) -> dict:
     """Integer-share trade list to move `positions_in` (+cash) to target_row.
 
     NAV = Σ qty×price + cash. compute_trades gives BRL diffs; convert to whole
     shares: floor for buys (don't overspend), ceil-capped-at-held for sells
     (round up to fully raise the cash, but never sell more than you hold).
+
+    `all_prices` is {ticker: latest close} for the whole plane; the two callers
+    source it differently (a built shared frame vs. a direct query) and this
+    narrows it to the names actually in play.
     """
     from backtests.core.simulation import compute_trades
 
     pos_tickers = set(positions_in)
     tgt_tickers = set(target_row[target_row != 0].index)
-    prices = _latest_prices(raw_close, pos_tickers | tgt_tickers)
+    prices = {t: all_prices[t] for t in (pos_tickers | tgt_tickers) if t in all_prices}
 
     eng_pos: dict[str, dict] = {}
     held_qty: dict[str, float] = {}
@@ -229,22 +296,24 @@ def _advise_from_strategy(args) -> dict:
     }
     if args.positions:
         out["trades"] = _build_trades(
-            json.loads(args.positions), args.nav_cash, row, shared["raw_close"])
+            json.loads(args.positions), args.nav_cash, row,
+            _latest_prices(shared["raw_close"]))
     return out
 
 
 def _advise_from_weights(args) -> dict:
-    """Fixed-weight mode: no signals. Price the given tickers from latest raw_close
-    and (with --positions) emit the trade list. CASH_CDI is the cash sleeve — kept
-    out of the tradeable target so its share of NAV just stays as BRL."""
+    """Fixed-weight mode: no signals, and — since nothing here reads a return
+    series, a rolling window or a benchmark — no shared-data build either. The
+    latest close per ticker comes straight out of the plane. CASH_CDI is the cash
+    sleeve, kept out of the tradeable target so its share of NAV just stays BRL."""
     weights_in = json.loads(args.weights)
-    start, end, freq = "2005-01-01", datetime.today().strftime("%Y-%m-%d"), "ME"
-    shared = _build_shared(start, end, freq, needs_funds=False)
-    raw_close = shared["raw_close"]
-    if raw_close is None or raw_close.empty:
+    start, end = "2005-01-01", datetime.today().strftime("%Y-%m-%d")
+    db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
+
+    as_of, prices = _latest_plane_close(db_path, start, end)
+    if as_of is None:
         raise SystemExit("no price data available to value --weights")
 
-    as_of = raw_close.index[-1]
     row = pd.Series(
         {t: float(w) for t, w in weights_in.items() if t != "CASH_CDI"}, dtype=float)
 
@@ -256,7 +325,7 @@ def _advise_from_weights(args) -> dict:
     }
     if args.positions:
         out["trades"] = _build_trades(
-            json.loads(args.positions), args.nav_cash, row, raw_close)
+            json.loads(args.positions), args.nav_cash, row, prices)
     return out
 
 

@@ -162,3 +162,67 @@ class TestLoadB3DataPivot:
         assert adj_close.empty
         assert close_px.empty
         assert fin_vol.empty
+
+
+# ── One reshape, not three (load_b3_data) or six (load_b3_hlc_data) ──────────
+# Both loaders used to call df.pivot() once per value column, reshaping the same
+# rows over and over. Collapsing that into a single multi-value pivot has to
+# leave every frame — values, dtypes, index and column labels — untouched.
+
+def _pivot_by_hand(df: pd.DataFrame, values: list[str]) -> dict:
+    return {v: df.pivot(index="date", columns="ticker", values=v) for v in values}
+
+
+class TestSingleMultiValuePivot:
+    def _frame(self):
+        rows = []
+        for i, d in enumerate(["2024-01-02", "2024-01-03", "2024-01-04"]):
+            for t, base in (("PETR4", 30.0), ("VALE3", 60.0), ("HGLG11", 150.0)):
+                rows.append({
+                    "date": pd.Timestamp(d), "ticker": t,
+                    "adj_close": base + i, "close": base + i * 2,
+                    "split_adj_high": base + 3, "split_adj_low": base - 3,
+                    "split_adj_close": base, "fin_volume": 1e6 * (i + 1),
+                })
+        # A hole, so the ffill paths are exercised rather than a dense grid.
+        return pd.DataFrame(rows).drop(index=4).reset_index(drop=True)
+
+    def test_multi_value_pivot_matches_per_value_pivots(self):
+        df = self._frame()
+        cols = ["adj_close", "close", "split_adj_high", "split_adj_low",
+                "split_adj_close", "fin_volume"]
+        one = df.pivot(index="date", columns="ticker", values=cols)
+        by_hand = _pivot_by_hand(df, cols)
+        for c in cols:
+            pd.testing.assert_frame_equal(one[c], by_hand[c])
+
+    def test_sliced_frames_keep_the_ticker_column_name(self):
+        # Downstream code reads .columns as plain ticker labels; a leftover
+        # MultiIndex level here would silently break every strategy's join.
+        df = self._frame()
+        one = df.pivot(index="date", columns="ticker", values=["adj_close", "close"])
+        assert one["adj_close"].columns.name == "ticker"
+        assert not isinstance(one["adj_close"].columns, pd.MultiIndex)
+
+
+class TestHlcLoaderShape:
+    """load_b3_hlc_data over a seeded DB: the six frames it returns must line up
+    on one index and one ticker set, whichever way the reshape is done."""
+
+    def test_hlc_frames_are_mutually_aligned(self, tmp_path):
+        from backtests.core.data import load_b3_hlc_data
+
+        db_path = _setup_db(tmp_path)
+        conn = sqlite3.connect(db_path)
+        for d in ("2024-01-02", "2024-01-03", "2024-01-04"):
+            _insert_price(conn, "PETR4", d, close=30.0)
+            _insert_price(conn, "VALE3", d, close=60.0)
+        conn.close()
+
+        frames = load_b3_hlc_data(db_path, "2024-01-01", "2024-12-31")
+        assert len(frames) == 6
+        first = frames[0]
+        for f in frames[1:]:
+            assert list(f.index) == list(first.index)
+            assert list(f.columns) == list(first.columns)
+            assert f.columns.name == "ticker"

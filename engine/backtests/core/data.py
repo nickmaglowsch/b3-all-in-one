@@ -225,6 +225,29 @@ def _apply_delisted_filter(
     return tuple(result)
 
 
+def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
+    """One (date x ticker) reshape covering every value column.
+
+    Pivoting per value column rebuilt the same grid once per frame — three times
+    in load_b3_data, six in load_b3_hlc_data, over the whole price history on
+    every backtest.
+
+    An empty input is special-cased: a multi-value pivot of no rows produces a
+    column MultiIndex whose value level exists but is unused, so `wide[v]` raises
+    KeyError where the single-value pivot returned an empty frame. A fresh
+    database with no prices yet is a real state (it is what CI runs against), so
+    it gets the empty frames it used to get.
+    """
+    if df.empty:
+        return [
+            pd.DataFrame(index=pd.Index([], name="date"),
+                         columns=pd.Index([], name="ticker"), dtype=float)
+            for _ in values
+        ]
+    wide = df.pivot(index="date", columns="ticker", values=values)
+    return [wide[v] for v in values]
+
+
 def load_b3_data(
     db_path: str, start: str, end: str, filter_delisted: bool = False
 ) -> tuple:
@@ -269,9 +292,8 @@ def load_b3_data(
     df["fin_volume"] = df["volume"].astype(float)
 
     print("🔄  Pivoting data to wide format...")
-    adj_close = df.pivot(index="date", columns="ticker", values="adj_close")
-    close_px = df.pivot(index="date", columns="ticker", values="close")
-    fin_vol = df.pivot(index="date", columns="ticker", values="fin_volume")
+    adj_close, close_px, fin_vol = _pivot_wide(
+        df, ["adj_close", "close", "fin_volume"])
 
     # Forward fill prices to handle missing days, but leave volume as NaN/0
     # to accurately calculate averages
@@ -354,12 +376,11 @@ def load_b3_hlc_data(
     df["fin_volume"] = df["volume"].astype(float)
 
     print("🔄  Pivoting HLC data to wide format...")
-    adj_close = df.pivot(index="date", columns="ticker", values="adj_close")
-    split_high = df.pivot(index="date", columns="ticker", values="split_adj_high")
-    split_low = df.pivot(index="date", columns="ticker", values="split_adj_low")
-    split_close = df.pivot(index="date", columns="ticker", values="split_adj_close")
-    close_px = df.pivot(index="date", columns="ticker", values="close")
-    fin_vol = df.pivot(index="date", columns="ticker", values="fin_volume")
+    # Six frames, one reshape. This is the loader every backtest goes through.
+    adj_close, split_high, split_low, split_close, close_px, fin_vol = _pivot_wide(
+        df, ["adj_close", "split_adj_high", "split_adj_low",
+             "split_adj_close", "close", "fin_volume"],
+    )
 
     # Forward fill prices to handle missing days, leave volume as-is
     adj_close = adj_close.ffill()
@@ -462,17 +483,107 @@ _FUNDAMENTALS_MONTHLY_METRICS = set(_FUNDAMENTALS_METRICS)
 
 
 def _get_rebalance_dates(db_path: str, start: str, end: str, freq: str) -> pd.DatetimeIndex:
-    """Build the rebalance date grid by sampling the prices table."""
+    """Build the rebalance date grid from the span the prices table covers.
+
+    Only the first and last traded day are used, so ask the database for those
+    two rather than for every distinct date in the window — the old query read
+    the whole table (through idx_prices_date, but still every row) and threw all
+    of it away except min() and max(), once per fundamentals metric.
+    """
     with storage.get_connection(db_path) as conn:
-        dates_df = storage.read_sql(
-            "SELECT DISTINCT date FROM prices WHERE date >= ? AND date <= ? ORDER BY date",
+        span = storage.read_sql(
+            "SELECT MIN(date) AS lo, MAX(date) AS hi FROM prices "
+            "WHERE date >= ? AND date <= ?",
             conn,
             params=[start, end],
         )
-    if dates_df.empty:
+    lo, hi = (span.iloc[0]["lo"], span.iloc[0]["hi"]) if not span.empty else (None, None)
+    if lo is None or hi is None or pd.isna(lo) or pd.isna(hi):
         return pd.date_range(start=start, end=end, freq=freq)
-    daily_idx = pd.to_datetime(dates_df["date"])
-    return pd.date_range(start=daily_idx.min(), end=daily_idx.max(), freq=freq)
+    return pd.date_range(start=pd.to_datetime(lo), end=pd.to_datetime(hi), freq=freq)
+
+
+def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str) -> pd.DataFrame:
+    """Long-format fundamentals_pit rows for `metrics`, filed on or before `end`.
+
+    One query for every metric the caller wants. Per-metric loading ran this
+    scan once per metric and each carried its own `AND {metric} IS NOT NULL`;
+    that predicate moves to a per-metric dropna in _pit_frame, which selects the
+    same rows.
+    """
+    cols = ", ".join(f"f.{m}" for m in metrics)
+    sql = f"""
+        SELECT
+            f.ticker,
+            f.filing_date,
+            f.period_end,
+            f.filing_version,
+            {cols}
+        FROM fundamentals_pit f
+        WHERE f.ticker IS NOT NULL
+          AND f.filing_date <= :end
+        ORDER BY f.ticker, f.filing_date, f.filing_version
+    """
+    with storage.get_connection(db_path) as conn:
+        return storage.read_sql(sql, conn, params={"end": end})
+
+
+def _pit_frame(
+    df: pd.DataFrame,
+    metric: str,
+    rebal_dates: pd.DatetimeIndex,
+    start: str,
+    staleness_days: int,
+) -> pd.DataFrame:
+    """Long fundamentals rows -> wide point-in-time frame on the rebalance grid.
+
+    Split out of load_fundamentals_pit so the single-metric entry point and the
+    batched one share one implementation and cannot drift.
+    """
+    sub = df.dropna(subset=[metric]) if not df.empty else df
+    if sub.empty:
+        return pd.DataFrame(index=rebal_dates, dtype=float)
+
+    # Pivot: index = filing_date, columns = ticker.
+    # aggfunc="last" picks the highest version when multiple versions share
+    # the same filing_date (rare, but possible) — the caller sorted by
+    # (ticker, filing_date, filing_version) so "last" is "highest version".
+    wide = sub.pivot_table(
+        index="filing_date",
+        columns="ticker",
+        values=metric,
+        aggfunc="last",
+        sort=False,
+    )
+    wide = wide.sort_index()
+    wide.index = pd.to_datetime(wide.index)
+    wide.columns.name = None
+    wide = wide.reindex(columns=sorted(wide.columns))
+
+    # Reindex to the rebalance calendar and forward-fill.
+    # To allow pre-period filings to seed the forward-fill, we first reindex
+    # to the union of the filing dates and the rebalance calendar, then ffill,
+    # then slice to only the rebalance calendar dates within [start, end].
+    extended_index = wide.index.union(rebal_dates).sort_values()
+    wide = wide.reindex(extended_index)
+
+    # Track the filing date behind each forward-filled cell so we can blank
+    # values once they exceed the staleness cutoff.
+    obs_date = pd.DataFrame(
+        np.where(wide.notna(), wide.index.values[:, None], np.datetime64("NaT")),
+        index=wide.index,
+        columns=wide.columns,
+    )
+    wide = wide.ffill()
+    obs_date = obs_date.ffill()
+    stale = (wide.index.values[:, None] - obs_date.values) > np.timedelta64(
+        staleness_days, "D"
+    )
+    wide = wide.mask(stale)
+
+    # Slice to only the rebalance calendar dates within the requested window
+    wide = wide.reindex(rebal_dates)
+    return wide.loc[wide.index >= pd.Timestamp(start)]
 
 
 def load_fundamentals_pit(
@@ -508,72 +619,14 @@ def load_fundamentals_pit(
     if metric not in _FUNDAMENTALS_METRICS:
         raise ValueError(f"Unknown metric {metric!r}. Choose from: {_FUNDAMENTALS_METRICS}")
 
-    sql = f"""
-        SELECT
-            f.ticker,
-            f.filing_date,
-            f.period_end,
-            f.filing_version,
-            f.{metric}
-        FROM fundamentals_pit f
-        WHERE f.ticker IS NOT NULL
-          AND f.filing_date <= :end
-          AND f.{metric} IS NOT NULL
-        ORDER BY f.ticker, f.filing_date, f.filing_version
-    """
-
-    with storage.get_connection(db_path) as conn:
-        df = storage.read_sql(sql, conn, params={"end": end})
-
-    if df.empty:
-        rebal_dates = _get_rebalance_dates(db_path, start, end, freq)
-        return pd.DataFrame(index=rebal_dates, dtype=float)
-
-    # Sort so that within a given filing_date, the highest version wins.
-    # Do NOT deduplicate across all time — each version must retain its own
-    # filing_date so that forward-fill preserves strict point-in-time semantics:
-    # a restatement only becomes visible after its own filing_date.
-    df = df.sort_values(["ticker", "filing_date", "filing_version"])
-
-    # Pivot: index = filing_date, columns = ticker.
-    # aggfunc="last" picks the highest version when multiple versions share
-    # the same filing_date (rare, but possible).
-    wide = df.pivot_table(
-        index="filing_date",
-        columns="ticker",
-        values=metric,
-        aggfunc="last",
-    )
-    wide.index = pd.to_datetime(wide.index)
-    wide.columns.name = None
-
-    # Reindex to the rebalance calendar and forward-fill.
-    # To allow pre-period filings to seed the forward-fill, we first reindex
-    # to the union of the filing dates and the rebalance calendar, then ffill,
-    # then slice to only the rebalance calendar dates within [start, end].
+    # Sorted by (ticker, filing_date, filing_version) in SQL, so that within a
+    # given filing_date the highest version is last and wins the aggfunc below.
+    # Versions are NOT deduplicated across time — each keeps its own filing_date
+    # so forward-fill preserves strict point-in-time semantics: a restatement
+    # only becomes visible after its own filing_date.
+    df = _query_fundamentals_pit(db_path, [metric], end)
     rebal_dates = _get_rebalance_dates(db_path, start, end, freq)
-    extended_index = wide.index.union(rebal_dates).sort_values()
-    wide = wide.reindex(extended_index)
-
-    # Track the filing date behind each forward-filled cell so we can blank
-    # values once they exceed the staleness cutoff.
-    obs_date = pd.DataFrame(
-        np.where(wide.notna(), wide.index.values[:, None], np.datetime64("NaT")),
-        index=wide.index,
-        columns=wide.columns,
-    )
-    wide = wide.ffill()
-    obs_date = obs_date.ffill()
-    stale = (wide.index.values[:, None] - obs_date.values) > np.timedelta64(
-        staleness_days, "D"
-    )
-    wide = wide.mask(stale)
-
-    # Slice to only the rebalance calendar dates within the requested window
-    wide = wide.reindex(rebal_dates)
-    wide = wide.loc[wide.index >= pd.Timestamp(start)]
-
-    return wide
+    return _pit_frame(df, metric, rebal_dates, start, staleness_days)
 
 
 def _broadcast_roots_to_tickers(df: pd.DataFrame, tickers) -> pd.DataFrame:
@@ -613,16 +666,27 @@ def load_all_fundamentals(
          "equity": df, "net_debt": df, "shares_outstanding": df}
         Ratio columns (pe_ratio, pb_ratio, ev_ebitda) are excluded — compute dynamically.
     """
+    # One scan of fundamentals_pit and one of prices for the whole set. Looping
+    # load_fundamentals_pit meant eight of each — sixteen passes over two large
+    # tables to fill one dict, on every backtest that needs fundamentals.
+    try:
+        df = _query_fundamentals_pit(db_path, _FUNDAMENTALS_METRICS, end)
+        rebal_dates = _get_rebalance_dates(db_path, start, end, freq)
+    except Exception as e:
+        import warnings
+        warnings.warn(f"Failed to load fundamentals: {e}")
+        df, rebal_dates = pd.DataFrame(), _get_rebalance_dates(db_path, start, end, freq)
+
     result = {}
     for metric in _FUNDAMENTALS_METRICS:
         try:
-            result[metric] = load_fundamentals_pit(db_path, metric, start, end, freq=freq)
+            result[metric] = _pit_frame(df, metric, rebal_dates, start, 400)
         except Exception as e:
             import warnings
             warnings.warn(f"Failed to load fundamentals metric '{metric}': {e}")
             result[metric] = pd.DataFrame()
     if tickers is not None:
-        result = {m: _broadcast_roots_to_tickers(df, tickers) for m, df in result.items()}
+        result = {m: _broadcast_roots_to_tickers(df_m, tickers) for m, df_m in result.items()}
     return result
 
 

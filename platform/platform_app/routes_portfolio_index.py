@@ -36,40 +36,89 @@ async def _book(session: AsyncSession, tid) -> tuple[list, list, list[str]]:
 
     Trades carry `signed_qty` (buys +, sells −) and qty_events carry an already
     signed `qty` — both set by taxcore's load_b3, so no side parsing here.
+
+    Columns, not entities: this reads six fields off trades and five off
+    cash_events, and loading whole ORM instances for a multi-year book built an
+    object per row to throw all but those away.
     """
-    trades = (await session.scalars(
-        select(Trade).where(Trade.tenant_id == tid)
+    trades = (await session.execute(
+        select(Trade.date, Trade.ticker, Trade.market,
+               Trade.signed_qty, Trade.amount, Trade.side)
+        .where(Trade.tenant_id == tid)
     )).all()
-    events = (await session.scalars(
-        select(CashEvent).where(CashEvent.tenant_id == tid)
+    events = (await session.execute(
+        select(CashEvent.date, CashEvent.event_category, CashEvent.ticker,
+               CashEvent.qty, CashEvent.amount)
+        .where(CashEvent.tenant_id == tid)
     )).all()
 
     qty_deltas: list[tuple[datetime.date, str, float]] = []
     flows: list[tuple[datetime.date, str, float]] = []
     excluded_markets: set[str] = set()
 
-    for t in trades:
-        if not t.date or not t.ticker:
+    for t_date, ticker, market, signed_qty, amount, side in trades:
+        if not t_date or not ticker:
             continue
-        if pidx.is_excluded(t.ticker, t.market):
-            excluded_markets.add(t.market)
+        if pidx.is_excluded(ticker, market):
+            excluded_markets.add(market)
             continue
-        if t.signed_qty:
+        if signed_qty:
             qty_deltas.append(
-                (t.date, pidx.canonical(t.ticker, t.market), float(t.signed_qty)))
-        if t.amount is not None and t.side in ("Compra", "Venda"):
-            kind = "buy" if t.side == "Compra" else "sell"
-            flows.append((t.date, kind, abs(float(t.amount))))
+                (t_date, pidx.canonical(ticker, market), float(signed_qty)))
+        if amount is not None and side in ("Compra", "Venda"):
+            kind = "buy" if side == "Compra" else "sell"
+            flows.append((t_date, kind, abs(float(amount))))
 
-    for e in events:
-        if not e.date:
+    for e_date, category, ticker, qty, amount in events:
+        if not e_date:
             continue
-        if e.event_category == "qty_event" and e.ticker and e.qty:
-            qty_deltas.append((e.date, pidx.canonical(e.ticker), float(e.qty)))
-        elif e.event_category in pidx.INCOME_CATEGORIES and e.amount is not None:
-            flows.append((e.date, "income", abs(float(e.amount))))
+        if category == "qty_event" and ticker and qty:
+            qty_deltas.append((e_date, pidx.canonical(ticker), float(qty)))
+        elif category in pidx.INCOME_CATEGORIES and amount is not None:
+            flows.append((e_date, "income", abs(float(amount))))
 
     return qty_deltas, flows, sorted(excluded_markets)
+
+
+# The trading calendar and the benchmark series are facts about the market, not
+# about a tenant: every book asking about the same window gets the same answer,
+# and the plane only moves when the ingestion pipeline runs. Both are keyed by
+# the calendar day so an entry is never reused past the day it was written.
+# ponytail: process-lifetime dicts, same lifecycle as routes._STRATEGIES_CACHE.
+_GRID_CACHE: dict[tuple, list[datetime.date]] = {}
+_BENCH_CACHE: dict[tuple, dict[str, list[float]]] = {}
+_CACHE_MAX = 256
+
+
+def _bounded(cache: dict) -> dict:
+    """Every key carries a date, so entries are never reused past their day —
+    without a bound the dict just grows by one entry per distinct window per day.
+    Dropping the lot on overflow is fine; the next call refills what it needs."""
+    if len(cache) > _CACHE_MAX:
+        cache.clear()
+    return cache
+
+
+async def _fetch_grid(pool, start: datetime.date) -> list[datetime.date]:
+    """Every date the plane has any price for, from `start`."""
+    rows = await pool.fetch(
+        "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
+    return [r["date"] for r in rows]
+
+
+async def _trading_grid(start: datetime.date) -> list[datetime.date]:
+    """The exchange calendar from `start`, cached for the day.
+
+    `SELECT DISTINCT date FROM prices` is an index-only scan over most of the
+    table (Postgres has no loose index scan before 18), and it was run on every
+    page load to rediscover a calendar that changes once a day at most.
+    """
+    key = (start, datetime.date.today())
+    grid = _GRID_CACHE.get(key)
+    if grid is None:
+        grid = await _fetch_grid(await get_engine_pool(), start)
+        _bounded(_GRID_CACHE)[key] = grid
+    return grid
 
 
 async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:
@@ -81,8 +130,7 @@ async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:
     exists. Raises so the caller can turn an unreachable plane into a 503.
     """
     pool = await get_engine_pool()
-    days = await pool.fetch(
-        "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
+    grid = await _trading_grid(start)
     # external_prices carries the instruments COTAHIST does not (listed
     # fixed-income ETFs — see engine/b3_pipeline/external_prices.py). Unioned into
     # the closes only, never into the grid above: the grid must stay the exchange
@@ -105,7 +153,7 @@ async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:
     closes: dict[str, dict[datetime.date, float]] = {}
     for r in rows:
         closes.setdefault(r["ticker"], {})[r["date"]] = float(r["close"])
-    return [d["date"] for d in days], closes
+    return grid, closes
 
 
 def _run_bench(start: str, end: str) -> dict:
@@ -126,18 +174,27 @@ async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
     """
     if not grid:
         return {}
+
+    # IBOV and CDI over a window are the same numbers for every tenant, and the
+    # subprocess that fetches them imports pandas and hits Yahoo/BCB. Cached on
+    # (window, today) so it is paid once a day rather than once a page load.
+    key = (grid[0], grid[-1], datetime.date.today())
+    hit = _BENCH_CACHE.get(key)
+    if hit is not None:
+        return hit
+
     try:
         raw = await asyncio.to_thread(
             _run_bench, grid[0].isoformat(), grid[-1].isoformat())
     except Exception:
-        return {}
+        return {}          # deliberately not cached — see below
     if raw.get("offline"):
-        return {}
+        return {}          # "we did not fetch", not "the benchmark was flat"
 
     out: dict[str, list[float]] = {}
-    for key in ("ibov", "cdi"):
+    for name in ("ibov", "cdi"):
         parsed = {datetime.date.fromisoformat(d): v
-                  for d, v in (raw.get(key) or {}).items()}
+                  for d, v in (raw.get(name) or {}).items()}
         if not parsed:
             continue
         # Forward-fill onto our grid: the benchmark calendars (Yahoo sessions,
@@ -147,7 +204,12 @@ async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
         for day in grid:
             last = parsed.get(day, last)
             series.append(last)
-        out[key] = pidx.rebase(series)
+        out[name] = pidx.rebase(series)
+    # Only a real answer is cached. A failed subprocess or an offline window
+    # would otherwise pin "no benchmarks" for the rest of the day over what may
+    # be a momentary outage — the same posture market_status takes with an
+    # unreachable plane.
+    _bounded(_BENCH_CACHE)[key] = out
     return out
 
 

@@ -59,7 +59,7 @@ export default function ImportsPage() {
       (query.state.data ?? []).some(isBusy) ? 2000 : false,
   });
 
-  const rows = [...(q.data ?? [])].reverse(); // newest first
+  const rows = q.data ?? []; // already newest-first: GET /imports orders desc
 
   return (
     <>

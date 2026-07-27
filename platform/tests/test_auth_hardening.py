@@ -41,6 +41,24 @@ async def test_oauth_callback_rejects_mismatched_cookie(client):
     assert r.status_code == 400
 
 
+def test_state_cookie_is_storable_from_a_cross_site_fetch():
+    """The SPA is on another site (pages.dev → duckdns.org), so /authorize is a
+    cross-site fetch and a SameSite=Lax Set-Cookie is discarded on arrival — the
+    callback then 400s on every single login. Production must issue the cookie
+    as SameSite=None; Secure, or the flow is broken for everyone."""
+    out = subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            from platform_app.main import _COOKIE_SITE
+            print(_COOKIE_SITE)
+        """)],
+        env={**os.environ, "ENVIRONMENT": "production", "SECRET_KEY": "x" * 64},
+        capture_output=True, text=True, timeout=120,
+    )
+    assert out.returncode == 0, out.stderr
+    assert "'samesite': 'none'" in out.stdout
+    assert "'secure': True" in out.stdout  # None without Secure is rejected too
+
+
 def test_password_and_dev_routes_are_not_mounted_in_production():
     """`/auth/register` + `associate_by_email` let anyone claim a stranger's email
     and inherit the account when that person later signs in with Google — with no

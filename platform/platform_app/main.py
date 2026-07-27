@@ -59,9 +59,21 @@ app.add_middleware(
 # the state we just issued into an HttpOnly cookie on /authorize, and on
 # /callback require the presented state to hash to that cookie. No change to the
 # upstream router or the token payload.
+#
+# The SPA lives on another *site* (pages.dev → duckdns.org, both on the public
+# suffix list), so /authorize is a cross-site fetch: a SameSite=Lax Set-Cookie
+# is dropped on arrival and every callback then 400s. None+Secure is what lets
+# the cookie be stored at all; it costs nothing here, because the value is a
+# digest of a state only the server can mint — an attacker who forces the fetch
+# still never learns the state that cookie commits the browser to. Dev is
+# same-site on localhost, where Secure would be dropped over plain http.
 _OAUTH_STATE_COOKIE = "oauth_state"
 _AUTHORIZE_PATH = "/auth/google/authorize"
 _CALLBACK_PATH = "/auth/google/callback"
+_COOKIE_SITE = (
+    {"samesite": "lax", "secure": False} if settings.is_dev
+    else {"samesite": "none", "secure": True}
+)
 
 
 def _state_digest(state: str) -> str:
@@ -78,7 +90,7 @@ async def bind_oauth_state(request: Request, call_next):
             return JSONResponse(
                 {"detail": "INVALID_STATE_TOKEN"}, status_code=400)
         response = await call_next(request)
-        response.delete_cookie(_OAUTH_STATE_COOKIE, path="/")
+        response.delete_cookie(_OAUTH_STATE_COOKIE, path="/", **_COOKIE_SITE)
         return response
 
     response = await call_next(request)
@@ -99,10 +111,7 @@ async def bind_oauth_state(request: Request, call_next):
         return out  # nothing to bind — let the response through unchanged
     out.set_cookie(
         _OAUTH_STATE_COOKIE, _state_digest(state),
-        max_age=600, httponly=True, samesite="lax",
-        # Lax still rides the top-level GET redirect back from Google. Secure is
-        # off in dev only, where the stack is plain http on loopback.
-        secure=not settings.is_dev, path="/",
+        max_age=600, httponly=True, path="/", **_COOKIE_SITE,
     )
     return out
 

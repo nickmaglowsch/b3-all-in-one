@@ -18,6 +18,10 @@ import pytest
 
 from b3_pipeline import storage
 
+# Targets the Postgres plane: conftest's isolate_engine_dsn keeps
+# ENGINE_DATABASE_URL in place for anything marked `postgres`.
+pytestmark = pytest.mark.postgres
+
 PRICE_COLS = ["ticker", "isin_code", "date", "open", "high", "low", "close",
               "volume", "quotation_factor"]
 
@@ -192,18 +196,17 @@ def test_empty_frames_are_no_ops(conn_fixture, request):
 def test_both_backends_store_the_same_thing(sqlite_conn, request):
     """Parity: the COPY path and the executemany path must be interchangeable.
 
-    Volumes here are whole numbers on purpose. `prices.volume` is declared
-    INTEGER, which _pg_ddl widens to BIGINT, so Postgres rounds a fractional
-    volume while SQLite's dynamic typing keeps it — a pre-existing divergence
-    that has nothing to do with how the rows are written, and one this test
-    would otherwise fail on for the wrong reason.
+    The fractional volume is deliberate. It used to have to be a whole number
+    here, because prices.volume was declared INTEGER and Postgres rounded what
+    SQLite kept; that divergence is fixed (see test_volume_precision.py), so the
+    parity this asserts is now the real one.
     """
     if not storage.using_postgres():
         pytest.skip("ENGINE_DATABASE_URL is not a postgresql:// DSN")
     pg = request.getfixturevalue("pg_conn")
     df = _rows(
         _row("PETR4", "2024-01-02", 30.0),
-        _row("VALE3", "2024-01-03", 60.5, volume=1234.0),
+        _row("VALE3", "2024-01-03", 60.5, volume=1234.56),
         _row("HGLG11", "2024-01-04", 150.25, qf=1000),
     )
     for conn in (sqlite_conn, pg):

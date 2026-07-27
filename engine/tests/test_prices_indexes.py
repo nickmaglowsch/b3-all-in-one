@@ -17,6 +17,10 @@ import pytest
 
 from b3_pipeline import storage
 
+# Targets the Postgres plane: conftest's isolate_engine_dsn keeps
+# ENGINE_DATABASE_URL in place for anything marked `postgres`.
+pytestmark = pytest.mark.postgres
+
 
 def _indexes(conn) -> set[str]:
     cur = conn.cursor()

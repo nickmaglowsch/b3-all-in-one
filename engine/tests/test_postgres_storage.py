@@ -25,10 +25,12 @@ from pandas.testing import assert_frame_equal
 from b3_pipeline import cvm_storage, storage
 from backtests.core import data as bt_data
 
-pytestmark = pytest.mark.skipif(
+# Targets the Postgres plane: conftest's isolate_engine_dsn keeps
+# ENGINE_DATABASE_URL in place for anything marked `postgres`.
+pytestmark = [pytest.mark.postgres, pytest.mark.skipif(
     not storage.using_postgres(),
     reason="ENGINE_DATABASE_URL is not a postgresql:// DSN",
-)
+)]
 
 _DATES = pd.date_range("2020-01-31", "2020-06-30", freq="ME")
 

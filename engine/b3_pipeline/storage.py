@@ -139,7 +139,13 @@ CREATE TABLE IF NOT EXISTS prices (
     high REAL,
     low REAL,
     close REAL,
-    volume INTEGER,
+    -- Financial volume in BRL, not a share count: COTAHIST's VOLTOT carries two
+    -- implied decimals and parser._parse_price divides by 100, so this is
+    -- reais-and-centavos. Declared INTEGER until now, which _pg_ddl widened to
+    -- BIGINT, so Postgres rounded every volume while SQLite's dynamic typing
+    -- kept it — one pipeline storing two different numbers depending on the
+    -- backend. external_prices.volume, the same quantity, was already REAL.
+    volume REAL,
     quotation_factor INTEGER DEFAULT 1,
     split_adj_open REAL,
     split_adj_high REAL,
@@ -545,6 +551,26 @@ def _migrate_schema_pg(conn) -> None:
     ]
     for stmt in additive:
         cursor.execute(stmt)
+
+    # Widen prices.volume from the BIGINT an older schema created. Unlike the
+    # additive statements above this is a rewriting ALTER that takes an ACCESS
+    # EXCLUSIVE lock on the biggest table here, and init_db runs at the start of
+    # every pipeline run — so it is probed first and issued only when it would
+    # actually change something.
+    #
+    # Values already stored were rounded on the way in; widening the column
+    # cannot recover the centavos. They come back on the next re-ingest of the
+    # affected years, which the pipeline does anyway for the current year.
+    cursor.execute(
+        "SELECT data_type FROM information_schema.columns"
+        " WHERE table_name = 'prices' AND column_name = 'volume'"
+        "   AND table_schema = current_schema()"
+    )
+    row = cursor.fetchone()
+    if row and row[0] != "double precision":
+        logger.info("Migrating: widening prices.volume to DOUBLE PRECISION")
+        execute(conn, "ALTER TABLE prices ALTER COLUMN volume TYPE DOUBLE PRECISION")
+
     cursor.execute(INDEX_CVM_COMPANIES_TICKER_ROOT)
     # Backfill ticker_root like the SQLite path (idempotent: only fills NULLs).
     cursor.execute(

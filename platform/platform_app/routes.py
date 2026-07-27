@@ -78,8 +78,9 @@ async def create_imports(
             raise HTTPException(400, f"only .xlsx accepted: {f.filename}")
 
     dest = Path(settings.uploads_dir) / str(tid)
-    dest.mkdir(parents=True, exist_ok=True)
+    await asyncio.to_thread(dest.mkdir, parents=True, exist_ok=True)
     created: list[Import] = []
+    pending: list[tuple[Path, bytes]] = []
     for f in files:
         # Read one byte past the cap: enough to know it is oversized, without ever
         # holding the oversized body. Rejecting after a full read would be the DoS.
@@ -93,13 +94,22 @@ async def create_imports(
         # it. The same name is later joined into the IRPF workspace (irpf_report).
         name = Path(f.filename).name
         path = dest / name
-        path.write_bytes(data)
+        pending.append((path, data))
         imp = Import(
             tenant_id=tid, filename=name, stored_path=str(path),
             kind=_detect_kind(name), status="pending",
         )
         session.add(imp)
         created.append(imp)
+
+    # One thread hop for the writes rather than a synchronous write_bytes per
+    # file on the event loop: the cap here is 24 files of 25 MB, and the API is
+    # a single uvicorn process, so writing that inline stops every other request.
+    def _persist() -> None:
+        for path, data in pending:
+            path.write_bytes(data)
+
+    await asyncio.to_thread(_persist)
     await session.commit()
 
     # One job for the whole batch (load_b3 is a full rebuild over all files at once).
@@ -782,29 +792,43 @@ async def irpf_report(
         select(Import).where(Import.tenant_id == tid, Import.kind == "movimentacao")
     )).all()
 
-    ws = Path(tempfile.mkdtemp(prefix="b3irpf-", dir=b3run.workspace_root(tid)))
-    try:
-        b3run.seed_workspace(ws)
-        b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, [
-            [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
-             t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades])
-        b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, [
-            [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
-             e.qty, e.price, e.amount, e.broker, e.source_file] for e in events])
-        b3run.write_csv(ws / "data" / "cost_basis_overrides.csv", _OVERRIDE_HEADER, [
-            [o.date, o.ticker, o.kind, o.qty, o.price, o.amount, o.note] for o in overrides])
-        for imp in movs:
-            if Path(imp.stored_path).exists():
-                shutil.copy(imp.stored_path, ws / "b3_imports" / imp.filename)
+    # Row payloads built on the loop (plain attribute reads off loaded instances),
+    # so the worker thread below never touches a Session.
+    trade_rows = [
+        [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
+         t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades]
+    event_rows = [
+        [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
+         e.qty, e.price, e.amount, e.broker, e.source_file] for e in events]
+    override_rows = [
+        [o.date, o.ticker, o.kind, o.qty, o.price, o.amount, o.note] for o in overrides]
+    extracts = [(imp.stored_path, imp.filename) for imp in movs]
 
-        proc = await asyncio.to_thread(
-            b3run.run_module, ws, ["scripts.irpf_2026", "--year", str(body.year)]
-        )
-        if proc.returncode != 0:
-            raise HTTPException(500, f"irpf_2026 failed: {(proc.stderr or proc.stdout)[-2000:]}")
-        return {"year": body.year, "markdown": proc.stdout}
-    finally:
-        shutil.rmtree(ws, ignore_errors=True)
+    def _work():
+        """Workspace build + subprocess + teardown, off the event loop.
+
+        Serialising a full trade history and copying every uploaded extract used
+        to run inline. The API is one uvicorn process with no --workers, so that
+        stalled every concurrent request for the duration.
+        """
+        ws = Path(tempfile.mkdtemp(prefix="b3irpf-", dir=b3run.workspace_root(tid)))
+        try:
+            b3run.seed_workspace(ws)
+            b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
+            b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
+            b3run.write_csv(
+                ws / "data" / "cost_basis_overrides.csv", _OVERRIDE_HEADER, override_rows)
+            for stored_path, filename in extracts:
+                if Path(stored_path).exists():
+                    shutil.copy(stored_path, ws / "b3_imports" / filename)
+            return b3run.run_module(ws, ["scripts.irpf_2026", "--year", str(body.year)])
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    proc = await asyncio.to_thread(_work)
+    if proc.returncode != 0:
+        raise HTTPException(500, f"irpf_2026 failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    return {"year": body.year, "markdown": proc.stdout}
 
 
 # ── Tax-loss harvesting ───────────────────────────────────────────────────────
@@ -852,47 +876,65 @@ async def _run_tlh_plan(
         select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
     )).all()
 
-    ws = Path(tempfile.mkdtemp(prefix="b3tlh-", dir=b3run.workspace_root(tid)))
-    try:
-        b3run.seed_workspace(ws)
-        # tlh_plan reads: data/trades.csv + data/cash_events.csv (build_timeline),
-        # data/positions.csv (canonical holdings), and the latest price snapshot in
-        # each of data/{snapshots,fii_snapshots,external_prices} (via _common.price_lookup).
-        # It does NOT read cost_basis_overrides. cash_events header must mirror the
-        # canonical CSV (source_file -> __source_file) like the IRPF route.
-        b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, [
-            [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
-             t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades])
-        b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, [
-            [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
-             e.qty, e.price, e.amount, e.broker, e.source_file] for e in events])
-        b3run.write_csv(ws / "data" / "positions.csv", _POSITION_HEADER, [
-            [p.ticker, p.qty, p.avg_cost, p.total_cost, p.market] for p in positions])
-        # Price source = the engine market plane (Postgres), the same prices the
-        # rebalance trades come from — works in-image where taxcore/data is excluded.
-        # price_lookup reads the latest external_prices CSV (columns papel,cotacao).
-        (ws / "data" / "external_prices").mkdir(parents=True, exist_ok=True)
-        b3run.write_csv(
-            ws / "data" / "external_prices" / f"{date.today().isoformat()}.csv",
-            ["papel", "cotacao"],
-            await _latest_engine_prices([p.ticker for p in positions]),
-        )
+    # Materialise every row payload here, on the loop: these are plain attribute
+    # reads off already-loaded ORM instances (microseconds), and doing them now
+    # means the worker thread below never touches a Session.
+    trade_rows = [
+        [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
+         t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades]
+    event_rows = [
+        [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
+         e.qty, e.price, e.amount, e.broker, e.source_file] for e in events]
+    position_rows = [
+        [p.ticker, p.qty, p.avg_cost, p.total_cost, p.market] for p in positions]
+    # asyncpg, so it has to run on the loop rather than inside the thread.
+    price_rows = await _latest_engine_prices([p.ticker for p in positions])
 
-        args = ["scripts.tlh_plan", "--json"]
-        sells_spec = ",".join(f"{t}:{q}" for t, q in sells)
-        if sells_spec:
-            args += ["--sells", sells_spec]
-        if exclude:
-            args += ["--exclude", ",".join(exclude)]
+    args = ["scripts.tlh_plan", "--json"]
+    sells_spec = ",".join(f"{t}:{q}" for t, q in sells)
+    if sells_spec:
+        args += ["--sells", sells_spec]
+    if exclude:
+        args += ["--exclude", ",".join(exclude)]
 
-        proc = await asyncio.to_thread(b3run.run_module, ws, args)
-        if proc.returncode == 2:  # validation error (bad/oversized sell)
-            raise HTTPException(422, (proc.stderr or proc.stdout).strip()[-2000:])
-        if proc.returncode != 0:
-            raise HTTPException(500, f"tlh_plan failed: {(proc.stderr or proc.stdout)[-2000:]}")
-        return _parse_tlh_stdout(proc.stdout)
-    finally:
-        shutil.rmtree(ws, ignore_errors=True)
+    def _work():
+        """Everything that touches the filesystem, in one thread hop.
+
+        Two copytrees, three CSV serialisations of the tenant's whole history, a
+        subprocess and an rmtree. Only the subprocess used to be offloaded; the
+        rest ran on the event loop, which is the entire API — this is a single
+        uvicorn process with no --workers, so a book being written to disk
+        stopped every other request in flight.
+        """
+        ws = Path(tempfile.mkdtemp(prefix="b3tlh-", dir=b3run.workspace_root(tid)))
+        try:
+            b3run.seed_workspace(ws)
+            # tlh_plan reads: data/trades.csv + data/cash_events.csv (build_timeline),
+            # data/positions.csv (canonical holdings), and the latest price snapshot in
+            # each of data/{snapshots,fii_snapshots,external_prices} (via _common.price_lookup).
+            # It does NOT read cost_basis_overrides. cash_events header must mirror the
+            # canonical CSV (source_file -> __source_file) like the IRPF route.
+            b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
+            b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
+            b3run.write_csv(ws / "data" / "positions.csv", _POSITION_HEADER, position_rows)
+            # Price source = the engine market plane (Postgres), the same prices the
+            # rebalance trades come from — works in-image where taxcore/data is excluded.
+            # price_lookup reads the latest external_prices CSV (columns papel,cotacao).
+            (ws / "data" / "external_prices").mkdir(parents=True, exist_ok=True)
+            b3run.write_csv(
+                ws / "data" / "external_prices" / f"{date.today().isoformat()}.csv",
+                ["papel", "cotacao"], price_rows,
+            )
+            return b3run.run_module(ws, args)
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    proc = await asyncio.to_thread(_work)
+    if proc.returncode == 2:  # validation error (bad/oversized sell)
+        raise HTTPException(422, (proc.stderr or proc.stdout).strip()[-2000:])
+    if proc.returncode != 0:
+        raise HTTPException(500, f"tlh_plan failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    return _parse_tlh_stdout(proc.stdout)
 
 
 def _parse_tlh_stdout(stdout: str) -> dict:

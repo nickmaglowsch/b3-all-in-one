@@ -2,6 +2,7 @@
 
     pytest tests/test_pnl.py     (or: python tests/test_pnl.py)
 """
+import datetime
 from types import SimpleNamespace
 
 from platform_app.routes import _value_position
@@ -40,6 +41,22 @@ def test_pnl():
     assert mv == 1250.0 and base == 1000.0 and (mv - base) / base == 0.25
 
 
+def test_renda_fixa_mark():
+    """A CDB priced off B3's monthly posição report: same P/L math, but the mark
+    is dated, because it is a month-end number sitting beside live closes."""
+    cdb = _value_position(_pos(1, 1000.0, 1000.0), 1084.32,
+                          datetime.date(2026, 6, 30))
+    assert cdb["market_value"] == 1084.32
+    assert cdb["pnl"] == 84.32
+    assert cdb["price_date"] == "2026-06-30"
+
+    # A listed close is undated — the UI already calls it "última cotação".
+    assert _value_position(_pos(100, 10.0, 1000.0), 12.5)["price_date"] is None
+    # No mark and no close is still unpriced, not zero.
+    assert _value_position(_pos(1, 1000.0, 1000.0), None)["price_date"] is None
+
+
 if __name__ == "__main__":
     test_pnl()
+    test_renda_fixa_mark()
     print("ok")

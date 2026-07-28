@@ -15,7 +15,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { AllocationDonut } from "@/components/charts/AllocationDonut";
 import { SERIES } from "@/components/charts/theme";
 import { IconWallet } from "@/components/icons";
-import { formatInt, formatMoney, formatPercent } from "@/lib/format";
+import { formatDate, formatInt, formatMoney, formatPercent } from "@/lib/format";
 import { PositionsTable } from "./PositionsTable";
 import { IndexSection } from "./IndexSection";
 import { TaxSection } from "./TaxSection";
@@ -124,6 +124,15 @@ export default function PortfolioPage() {
   // The price engine can fail wholesale (routes.py returns every position
   // unpriced). Then market value is unknown, not zero, and the tiles say so.
   const nothingPriced = positions.length > 0 && priced.length === 0;
+
+  // Renda fixa carries no live quote: its mark is the per-unit price B3 printed
+  // on the monthly posição report, so those rows are dated and the rest are
+  // "latest close". Both totals sit in the same tile — the caption says which is
+  // which rather than letting a month-old number pass for today's.
+  const dated = priced.filter((p) => p.price_date);
+  const oldestMark = dated
+    .map((p) => p.price_date as string)
+    .sort()[0];
 
   // Honest split by the market the API actually reports (Mercado à Vista, Renda
   // Fixa, …). FIIs aren't a distinct market in the data — they ride under Mercado
@@ -290,6 +299,15 @@ export default function PortfolioPage() {
                   </span>
                 </Stat>
               </div>
+
+              {dated.length > 0 && (
+                <p className="mt-3 text-xs text-muted">
+                  {formatInt(dated.length)} posições de renda fixa entram pelo
+                  preço que a B3 publicou no relatório de posição
+                  {oldestMark ? ` (a partir de ${formatDate(oldestMark)})` : ""} —
+                  não há cotação diária para esse papel.
+                </p>
+              )}
 
               <p className="mt-3 text-xs text-muted">
                 O retorno simples compara o valor de mercado com o custo de hoje. A

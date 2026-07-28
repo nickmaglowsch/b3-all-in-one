@@ -109,9 +109,13 @@ export interface Position {
   avg_cost: number;
   total_cost: number;
   market: string;
-  // Marked to the latest engine close; null when the ticker has no price
-  // (Renda Fixa, delisted) — such rows stay out of the P/L base.
+  // Marked to the latest engine close, or for Renda Fixa to the last per-unit
+  // price B3 published for the contract; null when neither exists (delisted, no
+  // posição report) — such rows stay out of the P/L base.
   last_price: number | null;
+  // Set only when the mark is not the live plane: an ISO date for a renda fixa
+  // mark, which is month-end. Null means "latest close".
+  price_date: string | null;
   market_value: number | null;
   pnl: number | null;
   pnl_pct: number | null;

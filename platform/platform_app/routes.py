@@ -30,8 +30,8 @@ from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    IngestRun, PortfolioSleeve, Position, RebalanceSettings, TaxSummary, Trade,
-    UserStrategy,
+    IngestRun, PortfolioSleeve, Position, RebalanceSettings, RendaFixaMark,
+    TaxSummary, Trade, UserStrategy,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
@@ -158,20 +158,47 @@ async def list_imports(
     ]
 
 
-def _value_position(p, price: float | None) -> dict:
-    """Position row marked to the latest engine close. Unpriced (Renda Fixa,
-    delisted, ticker absent from the market plane) → nulls, so the UI leaves it
-    out of the P/L base instead of pretending value == cost."""
+def _value_position(p, price: float | None, as_of: date | None = None) -> dict:
+    """Position row marked to the latest engine close, or — for renda fixa, which
+    no feed can mark — to the last per-unit price B3 itself published for the
+    contract. Still unpriced (delisted, ticker absent from the market plane, a
+    contract with no posição report) → nulls, so the UI leaves it out of the P/L
+    base instead of pretending value == cost.
+
+    `as_of` dates the mark and is set only when it is NOT today's plane: a renda
+    fixa mark is month-end, and a month-end number shown beside live closes has
+    to say so."""
     cost = float(p.total_cost or 0.0)
     mv = round(float(p.qty or 0.0) * price, 2) if price else None
     return {
         "ticker": p.ticker, "qty": p.qty, "avg_cost": p.avg_cost,
         "total_cost": p.total_cost, "market": p.market,
         "last_price": price,
+        "price_date": as_of.isoformat() if as_of else None,
         "market_value": mv,
         "pnl": None if mv is None else round(mv - cost, 2),
         "pnl_pct": None if mv is None or cost <= 0 else (mv - cost) / cost,
     }
+
+
+async def _latest_rf_marks(
+    session: AsyncSession, tid: uuid.UUID
+) -> dict[str, tuple[float, date]]:
+    """Last per-unit price B3 published for each of the tenant's renda fixa
+    contracts, from their relatório consolidado mensal.
+
+    ponytail: the mark as reported, not accrued forward. portfolio_index.accrue_rf
+    already grows a contract past its last mark from renda_fixa_terms — wire that
+    in here when a month-old value stops being good enough, or when tenants
+    actually fill the terms table.
+    """
+    rows = (await session.execute(
+        select(RendaFixaMark.ticker, RendaFixaMark.price, RendaFixaMark.date)
+        .where(RendaFixaMark.tenant_id == tid)
+        .distinct(RendaFixaMark.ticker)
+        .order_by(RendaFixaMark.ticker, RendaFixaMark.date.desc())
+    )).all()
+    return {r.ticker: (float(r.price), r.date) for r in rows if r.price}
 
 
 @portfolio_router.get("/positions")
@@ -191,7 +218,18 @@ async def get_positions(
         # ponytail: market plane down → cost-only view instead of a 500. Add a
         # cache/retry here only if the engine DB turns out to be flaky.
         prices = {}
-    return [_value_position(p, prices.get(p.ticker)) for p in rows]
+    # Second-choice mark, consulted only where the plane has nothing: a listed
+    # ticker always wins, so an RF ETF that trades on the exchange keeps its close.
+    rf = await _latest_rf_marks(session, tid)
+    out = []
+    for p in rows:
+        price = prices.get(p.ticker)
+        if price is not None:
+            out.append(_value_position(p, price))
+            continue
+        mark, as_of = rf.get(p.ticker, (None, None))
+        out.append(_value_position(p, mark, as_of))
+    return out
 
 
 def _downsample(values: list[float], target: int = 40) -> list[float]:

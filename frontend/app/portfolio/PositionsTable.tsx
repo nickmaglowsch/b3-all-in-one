@@ -6,7 +6,7 @@ import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { Sparkline } from "@/components/charts/Sparkline";
-import { formatInt, formatQty } from "@/lib/format";
+import { formatDate, formatInt, formatQty } from "@/lib/format";
 import type { Position } from "@/lib/types";
 
 type SortKey =
@@ -213,7 +213,17 @@ export function PositionsTable({
         p.last_price === null ? (
           <span className="text-muted">—</span>
         ) : (
-          <Money value={p.last_price} />
+          <span className="inline-flex flex-col items-end">
+            <Money value={p.last_price} />
+            {/* Renda fixa is marked from B3's monthly posição report, not from
+                the plane. Sitting in the same column as live closes, it has to
+                carry its own date or it reads as today's price. */}
+            {p.price_date && (
+              <span className="text-[11px] text-muted">
+                {formatDate(p.price_date)}
+              </span>
+            )}
+          </span>
         ),
     },
     {

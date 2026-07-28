@@ -410,10 +410,13 @@ async def _seed_book(tenant_id: uuid.UUID) -> None:
     from sqlalchemy import delete
 
     from platform_app.db import async_session_maker
-    from platform_app.models import CashEvent, Position, Trade
+    from platform_app.models import CashEvent, Position, RendaFixaMark, Trade
 
     async with async_session_maker() as session:
-        for model in (Trade, Position, CashEvent):
+        # RendaFixaMark included: a stray mark is a second point on a contract,
+        # which is exactly what decides whether accrue_rf can draw it. Leaving
+        # them behind lets one test change another test's universe.
+        for model in (Trade, Position, CashEvent, RendaFixaMark):
             await session.execute(delete(model).where(model.tenant_id == tenant_id))
         await session.commit()
 
@@ -470,6 +473,43 @@ async def _seed_renda_fixa(tenant_id: uuid.UUID) -> None:
             is_amortization=False, qty=950_000, price=0, amount=0,
             source_file="seed"))
         await session.commit()
+
+
+@_asyncio
+@pytest.mark.market
+async def test_positions_price_renda_fixa_from_its_own_mark(client):
+    """/portfolio/positions used to drop every OTC contract to null and leave the
+    Resumo tiles counting 44 of 86 — the plane has no CDB, so nothing priced one.
+    The tenant's own posição report does, and that mark carries its date."""
+    from sqlalchemy import delete
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import Position, RendaFixaMark
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+    await _seed_book(tid)
+
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(RendaFixaMark).where(RendaFixaMark.tenant_id == tid))
+        session.add(Position(
+            tenant_id=tid, ticker="CDB - OPEN", qty=1_800_000, avg_cost=0.01,
+            total_cost=18_000.0, market=RENDA_FIXA_MARKET))
+        # Two marks, so the query has something to pick the latest of.
+        for d, pu in (("2024-06-30", 0.0108), ("2024-12-31", 0.0115)):
+            session.add(RendaFixaMark(tenant_id=tid, ticker="CDB - OPEN",
+                                      date=date.fromisoformat(d), price=pu))
+        await session.commit()
+
+    rows = {p["ticker"]: p
+            for p in (await client.get("/portfolio/positions", headers=headers)).json()}
+    cdb = rows["CDB - OPEN"]
+    assert cdb["last_price"] == 0.0115            # the LATEST mark, not the first
+    assert cdb["market_value"] == pytest.approx(20_700.0)
+    assert cdb["pnl"] == pytest.approx(2_700.0)
+    assert cdb["price_date"] == "2024-12-31"      # month-end, and it says so
 
 
 @_asyncio

@@ -127,6 +127,23 @@ html {
   scroll-behavior: smooth;
 }
 
+/* ── Landing: the intake sheet runs off the screen ────────────────────────────
+   A spreadsheet does not stop at the content column. Cancels the stage's right
+   padding and the centred column's own gutter so the table's right edge is the
+   viewport's, not an arbitrary box edge mid-column. The page root carries
+   `overflow-x-clip` so the scrollbar's width can never turn the overshoot into
+   a horizontal scrollbar — `clip` rather than `hidden`, which would kill the
+   sticky header. */
+.bleed-right {
+  /* the stage's own pr-4 plus the page's px-4 */
+  margin-right: -2rem;
+}
+@media (min-width: 768px) {
+  .bleed-right {
+    margin-right: calc(-4rem - max(0px, (100vw - 72rem) / 2));
+  }
+}
+
 /* ── Landing motion ───────────────────────────────────────────────────────────
    One authored moment, repeated as a system rather than scattered per element:
    a stage entering view lifts its content while its node on the engine's signal

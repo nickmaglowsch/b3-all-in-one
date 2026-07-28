@@ -30,10 +30,19 @@ Memorable moment: one figure — R$ 2.281,20 — marked wherever it reappears, s
 the claim "the same engine" is demonstrated rather than asserted. The mark is
 the same navy tint the active nav item uses: the accent naming a location.
 
-Refused: the SaaS stack this page used to be — hero with a floating dashboard
-card, a stats band, four icon cards, three alternating text/visual rows, three
-numbered steps. Also refused: a decorative ticker-tape marquee of hardcoded
-quotes, which asserted market data the page does not have.
+Refused: the SaaS stack this page used to be — a stats band, four icon cards,
+three alternating text/visual rows, three numbered steps. Also refused: a
+decorative ticker-tape marquee of hardcoded quotes, which asserted market data
+the page does not have.
+
+The hero does now carry a second surface over the extract sheet — the app's
+posições table, offset and shadowed. This is not the floating dashboard card
+that was refused, which was decoration: a generic product shot hovering on a
+gradient. This one is an argument. Its tickers are the extract's tickers, each
+last price is the price on the sheet underneath, and every resultado and both
+totals close by hand — so the overlap says *this sheet becomes this readout*,
+which is the page's whole claim, made before the argument starts. Labelled
+`exemplo` like every synthetic figure here.
 
 Motion: one authored moment, systematised — a stage entering view lifts its
 content while its node on the signal path fills and any chart inside it draws

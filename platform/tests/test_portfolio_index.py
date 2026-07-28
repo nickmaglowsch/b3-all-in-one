@@ -630,6 +630,50 @@ async def test_renda_fixa_is_charted_from_its_own_marks(client):
     assert curve == sorted(curve)
 
 
+# ── Contracts the plane prices itself: Tesouro Direto ─────────────────────────
+
+def _rf_trade(day, ticker, price):
+    """A trades row in _book's column order: date, ticker, market, signed_qty,
+    amount, side, price."""
+    return (day, ticker, RENDA_FIXA_MARKET, 100.0, 100.0 * price, "Compra", price)
+
+
+def test_an_open_contract_with_no_second_mark_is_blocked():
+    """The baseline the next test is measured against — one aplicação implies no
+    rate, so without an indexer there is nothing to draw."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0)], [], {})
+    assert marks == {}
+    assert "resgate" in blocked["TESOURO IPCA+ 2045"][1]
+
+
+def test_a_plane_priced_title_needs_neither_a_second_mark_nor_an_indexer():
+    """The Tesouro publishes a PU for every title every day, so the issuer's own
+    number replaces the accrual — the title is admitted, and kept out of `marks`
+    so nothing overwrites those closes with a curve built from two fills."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0),
+         _rf_trade(D2, "CDB - OPEN", 0.01)],
+        [], {}, plane_priced=frozenset({"TESOURO IPCA+ 2045"}))
+
+    assert "TESOURO IPCA+ 2045" not in marks
+    assert "TESOURO IPCA+ 2045" not in blocked
+    # The contract the plane does not carry is untouched by any of this.
+    assert "CDB - OPEN" in blocked
+
+
+def test_a_plane_priced_title_is_admitted_to_the_book():
+    """`is_excluded` is what actually keeps a contract out, and it decides on the
+    caller's `rf_priced` — which is where the plane-priced set has to land."""
+    assert is_excluded("TESOURO IPCA+ 2045", RENDA_FIXA_MARKET)
+    assert not is_excluded("TESOURO IPCA+ 2045", RENDA_FIXA_MARKET,
+                           frozenset({"TESOURO IPCA+ 2045"}))
+
+
 # ── Open contracts: the indexer the tenant entered, over the BCB levels ───────
 
 def _levels(grid, daily_rate):

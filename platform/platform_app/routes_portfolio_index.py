@@ -45,7 +45,9 @@ _RF_AMORTIZED = ("amortizacao", "amortização em vida não modelada")
 _RF_NO_SERIES = ("sem_indice", "índice do BCB indisponível para o período")
 
 
-def _renda_fixa(trades, events, terms: dict) -> tuple[dict, dict[str, str]]:
+def _renda_fixa(trades, events, terms: dict,
+                plane_priced: frozenset[str] = frozenset()
+                ) -> tuple[dict, dict[str, str]]:
     """(marks, blocked) for the renda fixa contracts in a book.
 
     `marks` is what `pidx.accrue_rf` interpolates between: the per-unit price of
@@ -60,12 +62,21 @@ def _renda_fixa(trades, events, terms: dict) -> tuple[dict, dict[str, str]]:
         alone, so the per-unit price has to step down with each one; accruing
         straight through would over-value the position by the returned principal
         for the rest of its life.
+
+    `plane_priced` names the contracts the market plane carries a real daily
+    price for — Tesouro Direto titles, published by the issuer and stored by
+    `engine/b3_pipeline/tesouro_direto.py`. Those are left out of `marks`
+    entirely rather than accrued: the caller unions them into `rf_priced` so they
+    are admitted, and then prices them off the plane like any listed holding. An
+    accrual would otherwise be built from the tenant's two fills and used to
+    *overwrite* the issuer's own numbers in `closes`.
     """
     marks: dict[str, list[tuple[datetime.date, float]]] = {}
     blocked: dict[str, str] = {}
 
     for t_date, ticker, market, _sq, _amount, _side, price in trades:
-        if t_date and ticker and market == pidx.RENDA_FIXA_MARKET and price:
+        if (t_date and ticker and market == pidx.RENDA_FIXA_MARKET and price
+                and ticker not in plane_priced):
             marks.setdefault(ticker, []).append((t_date, float(price)))
 
     for _d, category, ticker, _qty, _amount in events:
@@ -81,6 +92,29 @@ def _renda_fixa(trades, events, terms: dict) -> tuple[dict, dict[str, str]]:
             blocked[ticker] = _RF_STILL_HELD
 
     return {t: p for t, p in marks.items() if t not in blocked}, blocked
+
+
+async def _plane_priced(contracts: set[str]) -> frozenset[str]:
+    """Of `contracts`, the ones the market plane can price on its own.
+
+    Tesouro Direto titles: the issuer publishes a PU for every one of them every
+    business day, which the engine stores in `external_prices` under the same
+    name B3 writes in the extract (engine/b3_pipeline/tesouro_direto.py). Such a
+    contract needs neither a second mark nor an indexer the tenant typed in — it
+    is priced like any listed holding.
+
+    Guarded on the table's existence for the same reason `_plane` is: the engine
+    creates it on its next pipeline run, and the two deploy independently.
+    """
+    if not contracts:
+        return frozenset()
+    pool = await get_engine_pool()
+    if not await pool.fetchval("SELECT to_regclass('external_prices')"):
+        return frozenset()
+    rows = await pool.fetch(
+        "SELECT DISTINCT ticker FROM external_prices WHERE ticker = ANY($1::text[])",
+        sorted(contracts))
+    return frozenset(r["ticker"] for r in rows)
 
 
 async def _book(session: AsyncSession, tid):
@@ -122,8 +156,19 @@ async def _book(session: AsyncSession, tid):
     )).all()
     rf_terms = {t: (ix, float(rate)) for t, ix, rate in term_rows}
 
-    rf_marks, rf_blocked = _renda_fixa(trades, events, rf_terms)
-    rf_priced = frozenset(rf_marks)
+    # The contracts, as opposed to the listed fixed-income ETFs that share their
+    # market label — `is_excluded` with no pricing knowledge is exactly that
+    # split, so the ticker-shape rule is not written down a second time here.
+    contracts = {t for _d, t, m, _sq, _a, _s, _p in trades
+                 if t and m == pidx.RENDA_FIXA_MARKET and pidx.is_excluded(t, m)}
+    try:
+        plane_priced = await _plane_priced(contracts)
+    except Exception:                       # noqa: BLE001
+        # An unreachable engine is `_plane`'s 503 a moment later, not a 500 here.
+        plane_priced = frozenset()
+
+    rf_marks, rf_blocked = _renda_fixa(trades, events, rf_terms, plane_priced)
+    rf_priced = frozenset(rf_marks) | plane_priced
 
     qty_deltas: list[tuple[datetime.date, str, float]] = []
     flows: list[tuple[datetime.date, str, float, str | None]] = []

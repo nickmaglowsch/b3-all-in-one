@@ -8,11 +8,13 @@ from __future__ import annotations
 import asyncio
 import csv
 import datetime
+import io
 import json
 import math
 import shutil
 import tempfile
 import uuid
+import zipfile
 from datetime import date
 from pathlib import Path
 from typing import Annotated, Literal
@@ -51,6 +53,32 @@ market_router = APIRouter(prefix="/market", tags=["market"])
 # is already far beyond any real year.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_UPLOAD_FILES = 24
+# ...and on what those bytes expand to. An .xlsx is a zip, and the cap above only
+# bounds the *compressed* body: XML compresses ~1000:1, so 25 MB of accepted
+# upload is tens of GB of sheet once pandas/openpyxl materialises it, and nothing
+# downstream bounds memory (the subprocess timeout bounds wall-clock only). On a
+# VPS sharing a host with Postgres, the OOM killer picks the victim, not us.
+# A real B3 annual extract expands to ~50 KB, so this is ~1000x headroom.
+MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+
+
+def _uncompressed_size(data: bytes) -> int:
+    """Total uncompressed size an .xlsx declares, or 0 if it is not a readable zip.
+
+    The central directory is trusted deliberately: a zip that *understates* it
+    truncates its own read, because ZipExtFile stops decompressing at the
+    declared size — so a lying header yields corrupt XML, not an OOM.
+
+    Unreadable → 0 → allowed, because openpyxl reads through this same zipfile
+    module: whatever fails to parse here fails to parse there too, and lands on
+    the path that already exists for a bad upload (load_b3 errors, the Import row
+    goes to status="error"). Rejecting here instead would only move the message.
+    """
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            return sum(i.file_size for i in z.infolist())
+    except Exception:  # noqa: BLE001 — malformed zip, see docstring
+        return 0
 
 
 def _detect_kind(name: str) -> str:
@@ -90,6 +118,13 @@ async def create_imports(
         if len(data) > MAX_UPLOAD_BYTES:
             raise HTTPException(
                 413, f"arquivo grande demais (limite {MAX_UPLOAD_BYTES // 1024 // 1024} MB): {f.filename}")
+        # Checked here, on the loop, and not in the worker: this is the only place
+        # a tenant's bytes enter the system, so it is the only place the bound has
+        # to hold. Cheap — reads the zip index, never the members.
+        if _uncompressed_size(data) > MAX_UNCOMPRESSED_BYTES:
+            raise HTTPException(
+                413, f"planilha grande demais ao descompactar (limite "
+                     f"{MAX_UNCOMPRESSED_BYTES // 1024 // 1024} MB): {f.filename}")
         # Starlette hands back the client's filename verbatim, so `..` in it would
         # write outside the tenant's directory — and LGPD erasure rmtree's exactly
         # that directory, so an escaped extract would outlive the account that owns

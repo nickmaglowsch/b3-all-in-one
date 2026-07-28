@@ -30,6 +30,7 @@ from platform_app import b3run, enginerun, specstore
 from platform_app.db import get_async_session
 from platform_app.models import CashEvent, Position, Trade
 from platform_app.routes import (
+    _REBALANCE,
     _fundamentals_available,
     _gallery,
     _latest_engine_prices,
@@ -55,7 +56,12 @@ MAX_SCENARIOS = 4
 
 class WhatIfRequest(BaseModel):
     strategy_ids: list[str] = Field(max_length=MAX_SCENARIOS)
-    freq: str = "ME"
+    # Same enum BacktestRequest uses, and for the same reason: this reaches
+    # pandas .resample() in build_shared_data over ~20 years of daily prices. As
+    # a free-form string it accepted "s", which asks for a second-resolution
+    # frame of hundreds of millions of rows — an OOM of the API container, since
+    # unlike a backtest this runs inside the request rather than on the worker.
+    freq: _REBALANCE = "ME"
 
 
 async def _net_flows(session: AsyncSession, tid) -> dict[str, float]:

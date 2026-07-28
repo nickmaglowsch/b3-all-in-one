@@ -1,0 +1,15 @@
+# Cloudflare Pages response headers. `output: "export"` copies public/ into out/
+# verbatim, so this ships with the build; it is inert anywhere else.
+#
+# The session JWT lives in localStorage (lib/api.ts) as a 1h bearer credential
+# nothing can revoke, so script injection == account takeover. There is no server
+# to set headers, and no nonce is possible in a static export — this file is the
+# only place a CSP can come from.
+#
+# connect-src pins the API. If the API ever moves off b3-api.duckdns.org, this
+# line moves with it or every request in the app fails.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://b3-api.duckdns.org; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer

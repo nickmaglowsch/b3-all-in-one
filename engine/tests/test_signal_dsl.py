@@ -78,6 +78,26 @@ def test_rejects_disallowed(expr):
         signal_dsl.evaluate(expr, _frames())
 
 
+@pytest.mark.parametrize("expr", [
+    "9**9**9",          # 370-million-digit int: gigabytes, from whitelisted nodes only
+    "ret * 2**5000",    # scalar exponent, frame only along for the ride
+    "ret ** lookback**4",  # exponent built from a param, not a literal
+])
+def test_rejects_oversized_exponent(expr):
+    """Whitelisted syntax is not the same as bounded cost — see _MAX_EXPONENT."""
+    with pytest.raises(ValueError, match="exponent"):
+        signal_dsl.evaluate(expr, _frames())
+
+
+def test_allows_the_exponents_signals_actually_use():
+    ns = _frames()
+    pdt.assert_frame_equal(signal_dsl.evaluate("ret ** 2", ns), ns["ret"] ** 2)
+    # A frame exponent is elementwise, so it is bounded by the frame and allowed
+    # however large the values inside it are.
+    pdt.assert_frame_equal(
+        signal_dsl.evaluate("2 ** ret", ns), 2 ** ns["ret"])
+
+
 if __name__ == "__main__":
     test_momentum_matches_pandas()
     test_sharpe_matches_pandas()

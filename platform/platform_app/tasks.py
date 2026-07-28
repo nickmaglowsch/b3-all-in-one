@@ -255,6 +255,17 @@ async def process_imports(tenant_id: str) -> dict:
         if not still_live:
             return {"tenant_id": tenant_id, "status": "abandoned", "imports": 0}
 
+        # load_b3 prints one JSON object naming every file it read and the kind it
+        # sniffed. Best-effort: a parse failure must not fail an import whose CSVs
+        # already came back fine, it just leaves the uploaded guess in place.
+        sniffed: dict[str, str] = {}
+        try:
+            for f in (json.loads(proc.stdout).get("files_loaded") or []):
+                if f.get("name") and f.get("kind"):
+                    sniffed[f["name"]] = f["kind"]
+        except (ValueError, AttributeError):
+            pass
+
         # Full replace per tenant, one transaction. Order preserved via ascending ids.
         # TaxSummary goes with them: it is derived from exactly these rows, so
         # leaving it would serve an isenção headroom and an IR devido computed
@@ -275,6 +286,14 @@ async def process_imports(tenant_id: str) -> dict:
             imp.status = "done"
             imp.error = None
             imp.parser_version = b3run.PARSER_VERSION
+            # `kind` was guessed from the filename at upload (routes._detect_kind)
+            # while load_b3 decides it by sniffing the columns. Only the sniffed
+            # answer is right, and it matters beyond cosmetics: the IRPF route
+            # selects `kind == "movimentacao"` to pick which extract to copy for
+            # the renda fixa section, so a renamed download silently emptied it
+            # while every trade still parsed. load_b3 already reports what it
+            # read; this just stops throwing it away.
+            imp.kind = sniffed.get(imp.filename, imp.kind)
         await session.commit()
         return {
             "tenant_id": tenant_id, "status": "done",

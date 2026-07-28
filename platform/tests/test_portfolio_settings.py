@@ -213,3 +213,50 @@ async def test_sell_only_for_harvest_yields_only_loss_sells(client):
     assert len(sells) <= len(base["trades"]["sells"])
 
     await _put_rebal(client, headers)  # reset
+
+
+# ── Renda fixa contract terms ─────────────────────────────────────────────────
+
+RF_TERMS = [
+    {"ticker": "CDB - CDB25F3MPT8", "indexer": "cdi_pct", "rate_pct": 102.0},
+    {"ticker": "LCI - LCI24H9RKV3", "indexer": "ipca_plus", "rate_pct": 6.25},
+]
+
+
+async def test_renda_fixa_terms_round_trip_and_replace_wholesale(client):
+    headers, _ = await _seed(client)
+
+    r = await client.put("/portfolio/settings/renda-fixa", json=RF_TERMS,
+                         headers=headers)
+    assert r.status_code == 200, r.text
+    got = (await client.get("/portfolio/settings/renda-fixa",
+                            headers=headers)).json()
+    assert {t["ticker"]: (t["indexer"], t["rate_pct"]) for t in got} == {
+        "CDB - CDB25F3MPT8": ("cdi_pct", 102.0),
+        "LCI - LCI24H9RKV3": ("ipca_plus", 6.25),
+    }
+
+    # PUT replaces the whole set — a contract dropped from the body is gone, not
+    # merged, same semantics as the asset overrides above.
+    await client.put("/portfolio/settings/renda-fixa", json=RF_TERMS[:1],
+                     headers=headers)
+    got = (await client.get("/portfolio/settings/renda-fixa",
+                            headers=headers)).json()
+    assert [t["ticker"] for t in got] == ["CDB - CDB25F3MPT8"]
+
+    await client.put("/portfolio/settings/renda-fixa", json=[], headers=headers)
+
+
+@pytest.mark.parametrize("bad, why", [
+    ([{"ticker": "CDB - X", "indexer": "selic_plus", "rate_pct": 1}], "indexer"),
+    ([{"ticker": "  ", "indexer": "pre", "rate_pct": 12}], "ticker"),
+    ([{"ticker": "CDB - X", "indexer": "pre", "rate_pct": 12},
+      {"ticker": "CDB - X", "indexer": "cdi_pct", "rate_pct": 100}], "duplicate"),
+    # A negative rate would draw a falling curve on paper that only ever accrues.
+    ([{"ticker": "CDB - X", "indexer": "pre", "rate_pct": -5}], "negative"),
+])
+async def test_renda_fixa_terms_reject_what_cannot_be_accrued(client, bad, why):
+    headers, _ = await _seed(client)
+    r = await client.put("/portfolio/settings/renda-fixa", json=bad,
+                         headers=headers)
+    assert r.status_code == 422, why

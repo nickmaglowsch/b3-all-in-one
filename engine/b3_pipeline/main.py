@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from . import (adjustments, b3_corporate_actions, config, downloader,
-               external_prices, parser, storage)
+               external_prices, index_series, parser, storage)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -144,12 +144,14 @@ def run_pipeline(
             # resuming from the max would step permanently over any day a network
             # blip skipped. Bounded to a trailing window so old market holidays —
             # which have no rows and never will — are not re-probed forever.
-            if storage.max_external_price_date(conn) is None:
+            if storage.max_external_price_date(
+                    conn, external_prices.SOURCE) is None:
                 start = config.EXTERNAL_PRICES_START
             else:
                 start = max(config.EXTERNAL_PRICES_START,
                             today - timedelta(days=config.EXTERNAL_PRICES_HEAL_DAYS))
-            have = storage.stored_external_dates(conn, start)
+            have = storage.stored_external_dates(
+                conn, start, external_prices.SOURCE)
             logger.info(f"Fetching external prices {start} to {today} "
                         f"({len(have)} sessions already stored)")
             external = external_prices.backfill(start, today, skip=have)
@@ -160,6 +162,20 @@ def run_pipeline(
             # it; the index degrades to "unpriced and disclosed", which is where
             # it was before this step existed.
             logger.error(f"External price fetch failed, continuing: {e}")
+
+        # The CDI and IPCA levels renda fixa accrues against. Rewritten whole
+        # each run from a fixed epoch, so a stored level never depends on the
+        # window that happened to fetch it — no resume state, nothing to heal.
+        logger.info("")
+        logger.info("Step 5c/9: Fetching BCB index series (CDI, IPCA)...")
+        try:
+            levels = index_series.build(datetime.now().date())
+            if not levels.empty:
+                storage.upsert_external_prices(conn, levels)
+        except Exception as e:
+            # Same posture: an unreachable BCB leaves open contracts unpriced and
+            # disclosed, which is exactly where they were before this step.
+            logger.error(f"BCB index series fetch failed, continuing: {e}")
 
         if not skip_corporate_actions:
             logger.info("")

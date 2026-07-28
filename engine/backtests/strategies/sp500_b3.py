@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from b3_pipeline import storage
+from b3_pipeline import index_series, storage
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -450,40 +450,23 @@ def load_stock_actions(db_path: str) -> pd.DataFrame:
 def download_ipca_index(start: str, end: str) -> pd.Series:
     """Monthly IPCA cumulative index from BCB SGS series 433 (m/m % change).
 
-    Mirrors core.data.download_cdi_daily (batched requests). Returns a
-    cumulative index Series (base 1.0 at the first observation), monthly.
+    Base 1.0 at the first observation in the window. The SGS client lives in
+    b3_pipeline.index_series, which fetches the same series for the price plane —
+    this had been a second copy of the same chunk-and-retry loop, and the two
+    disagreed about how many years a chunk may span.
     """
-    import requests
-    from dateutil.relativedelta import relativedelta
-
-    print("⬇  Downloading IPCA (SGS 433) from Brazilian Central Bank...")
-    start_dt = pd.to_datetime(start)
-    end_dt = pd.to_datetime(end)
-    series = []
-    current_start = start_dt
-    while current_start <= end_dt:
-        current_end = min(current_start + relativedelta(years=9), end_dt)
-        s_str = current_start.strftime("%d/%m/%Y")
-        e_str = current_end.strftime("%d/%m/%Y")
-        url = (
-            "https://api.bcb.gov.br/dados/serie/bcdata.sgs.433/dados"
-            f"?formato=json&dataInicial={s_str}&dataFinal={e_str}"
-        )
-        try:
-            data = requests.get(url, timeout=30).json()
-            if data:
-                df = pd.DataFrame(data)
-                df["data"] = pd.to_datetime(df["data"], format="%d/%m/%Y")
-                df["valor"] = pd.to_numeric(df["valor"]) / 100.0
-                series.append(df.set_index("data")["valor"])
-        except Exception as e:
-            print(f"Warning: failed to fetch IPCA chunk {s_str}–{e_str}: {e}")
-        current_start = current_end + relativedelta(days=1)
-    if not series:
+    try:
+        rates = index_series.fetch_sgs(
+            index_series.IPCA_SERIES,
+            pd.to_datetime(start).date(), pd.to_datetime(end).date())
+    except Exception as e:                              # noqa: BLE001
+        # Callers deflate a nominal threshold with this and fall back to the
+        # nominal when it is empty, so an outage degrades rather than raises.
+        print(f"Warning: IPCA unavailable ({e}); continuing without it.")
         return pd.Series(dtype=float, name="IPCA")
-    ipca = pd.concat(series)
-    ipca = ipca[~ipca.index.duplicated(keep="first")].sort_index()
-    return (1.0 + ipca).cumprod().rename("IPCA")
+    if rates.empty:
+        return pd.Series(dtype=float, name="IPCA")
+    return (1.0 + rates).cumprod().rename("IPCA")
 
 
 def deflated_threshold(nominal: float, ipca_index: pd.Series, t: pd.Timestamp) -> float:

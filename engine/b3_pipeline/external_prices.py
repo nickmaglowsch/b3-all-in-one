@@ -43,6 +43,10 @@ _COL_CLOSE = "LastPric"
 # by the same column name would be a trap for whoever joins them later.
 _COL_VOLUME = "NtlFinVol"
 
+# `external_prices` is shared with other feeds (see index_series.py), and the
+# resume helpers in storage.py scope on this to decide what this one still owes.
+SOURCE = "B3_TRADE_INFO"
+
 
 def _num(value: str) -> float | None:
     """Parse B3's comma-decimal numerics. Blank fields are common and mean absent."""
@@ -121,7 +125,7 @@ def parse_file(body: bytes, tickers) -> pd.DataFrame:
             "low": _num(row.get(_COL_LOW)),
             "close": close,
             "volume": _num(row.get(_COL_VOLUME)) or 0.0,
-            "source": "B3_TRADE_INFO",
+            "source": SOURCE,
         })
 
     return pd.DataFrame(rows)

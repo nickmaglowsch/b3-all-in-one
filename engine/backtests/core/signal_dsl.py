@@ -11,7 +11,9 @@ Safety: the expression is parsed with the ``ast`` module and only a whitelist of
 node types is allowed (arithmetic, numeric literals, whitelisted names, and
 calls to whitelisted functions). There is **no** ``eval()`` of raw source, no
 attribute access, no subscripting, no lambdas/comprehensions — so a malicious or
-typo'd spec cannot execute arbitrary code.
+typo'd spec cannot execute arbitrary code. Whitelisted arithmetic can still be
+*expensive*, so ``**`` additionally bounds a scalar exponent (see
+``_MAX_EXPONENT``).
 
 Namespace = every ``shared_data`` frame (``ret``, ``log_ret``, ``adtv``,
 ``vol_60d``, ``f_pe_ratio_dyn`` …) plus any numeric params (e.g. ``lookback``).
@@ -44,6 +46,13 @@ _ALLOWED = (
     ast.Load, ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.USub, ast.UAdd,
     ast.Compare, ast.BitAnd, ast.BitOr, *_CMPOPS,
 )
+
+# The allow-list stops arbitrary *code*; it does not stop arbitrary *arithmetic*.
+# `9**9**9` is nothing but whitelisted nodes, and evaluates to a 370-million-digit
+# integer — CPython allocates gigabytes and the worker dies. Signals raise to
+# fractions and small powers (sqrt is `** 0.5`, variance is `** 2`), so a scalar
+# exponent past this bound is a mistake or an attack, never a factor.
+_MAX_EXPONENT = 64
 
 
 def _zscore(x: pd.DataFrame) -> pd.DataFrame:
@@ -150,7 +159,14 @@ def _ev(node, ns, funcs):
     if isinstance(node, ast.UnaryOp):
         return _UNARYOPS[type(node.op)](_ev(node.operand, ns, funcs))
     if isinstance(node, ast.BinOp):
-        return _BINOPS[type(node.op)](_ev(node.left, ns, funcs), _ev(node.right, ns, funcs))
+        left, right = _ev(node.left, ns, funcs), _ev(node.right, ns, funcs)
+        # Only a *scalar* exponent is bounded — a frame exponent is elementwise,
+        # so its cost is the frame's size, which is already bounded.
+        if (isinstance(node.op, ast.Pow) and isinstance(right, (int, float))
+                and abs(right) > _MAX_EXPONENT):
+            raise ValueError(
+                f"signal expr: exponent {right!r} exceeds the maximum of {_MAX_EXPONENT}")
+        return _BINOPS[type(node.op)](left, right)
     if isinstance(node, ast.Compare):
         if len(node.ops) != 1:
             raise ValueError(f"signal expr: chained comparisons are not allowed in {ast.dump(node)!r}")

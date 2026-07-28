@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from . import (adjustments, b3_corporate_actions, config, downloader,
-               external_prices, index_series, parser, storage)
+               external_prices, index_series, parser, storage, tesouro_direto)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -176,6 +176,26 @@ def run_pipeline(
             # Same posture: an unreachable BCB leaves open contracts unpriced and
             # disclosed, which is exactly where they were before this step.
             logger.error(f"BCB index series fetch failed, continuing: {e}")
+
+        # Tesouro Direto. Renda fixa with no ticker, like a CDB — except the
+        # issuer publishes a daily price for every title, so these need no
+        # accrual model and no indexer from the tenant at all.
+        #
+        # Resumes from the latest stored date, which step 5b deliberately does
+        # not: this file carries its whole history on every request, so a day a
+        # network error skipped is still there tomorrow. Nothing rolls off.
+        logger.info("")
+        logger.info("Step 5d/9: Fetching Tesouro Direto prices...")
+        try:
+            stored = storage.max_external_price_date(conn, tesouro_direto.SOURCE)
+            marks = tesouro_direto.build(stored or tesouro_direto.TESOURO_START)
+            if not marks.empty:
+                storage.upsert_external_prices(conn, marks)
+        except Exception as e:
+            # Same posture as 5b/5c: an unreachable Tesouro leaves those titles
+            # where they were before this step — accrued if the tenant entered
+            # terms, disclosed as unpriced if not.
+            logger.error(f"Tesouro Direto fetch failed, continuing: {e}")
 
         if not skip_corporate_actions:
             logger.info("")

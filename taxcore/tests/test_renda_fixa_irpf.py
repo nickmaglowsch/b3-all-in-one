@@ -142,3 +142,82 @@ def test_tesouro_direto_is_picked_up_despite_its_mixed_case_name(book):
     assert r["code"] == "Tesouro Selic 2029"
     assert r["irpf_codigo"] == "02"          # Tesouro is tributado
     assert r["value_cur"] == pytest.approx(2_100.00)
+
+
+# --- the two surfaces must agree -------------------------------------------
+
+def test_bens_e_direitos_matches_positions_csv_for_the_same_contract(book, tmp_path):
+    """The claim in this module's docstring, actually asserted.
+
+    positions.csv (load_b3.derive_positions) and Bens e Direitos
+    (renda_fixa_year_end) are the same accounting seen from two surfaces, and
+    they read the same extract by two different paths — one through the parsed
+    CSVs, one straight off the .xlsx. Nothing compared them, and two separate
+    bugs lived in that gap: a bare F-strip on cash-event tickers detached the
+    amortização from its contract in one path only, and an unclamped
+    subtraction let the other print a negative custo de aquisição.
+    """
+    from scripts.load_b3 import derive_positions, read_movimentacao
+
+    rows = [
+        # An F-terminated contract code, so the fractional strip is in the path.
+        ["Credito", "05/12/2024", "COMPRA / VENDA", "CRI - 24L000003F - OPEA S/A",
+         "XP", 8, 1035.42, 8283.36],
+        ["Credito", "15/05/2025", "AMORTIZAÇÃO", "CRI - 24L000003F - OPEA S/A",
+         "XP", 8, 51.59, 412.75],
+        ["Credito", "20/01/2025", "APLICAÇÃO", "CDB - K1 - BANCO X S/A",
+         "XP", 950_000, 0.01, 9_500.00],
+    ]
+    irpf = book(rows, year=2025).set_index("code")["value_cur"].to_dict()
+
+    trades, events = read_movimentacao(tmp_path / "b3_imports" / "movimentacao-test.xlsx")
+    positions, _ = derive_positions(trades, cash_events=events)
+    parsed = positions.set_index("ticker")["total_cost"].to_dict()
+
+    assert set(irpf) == set(parsed), "the two surfaces disagree about which contracts exist"
+    for code, cost in parsed.items():
+        assert irpf[code] == pytest.approx(cost, abs=0.01), code
+    # And the amortização actually landed, on both.
+    assert parsed["CRI - 24L000003F"] == pytest.approx(7870.61)
+
+
+def test_a_resgate_with_no_visible_aplicacao_is_flagged_not_declared(book):
+    """The extract's window opens after the contract was bought, so proceeds
+    minus cost is not a gain — it is a missing number. Declaring the full
+    proceeds as rendimento would overstate the income by the whole principal."""
+    r = only(book([
+        ["Debito", "01/11/2025", "VENCIMENTO", "CDB - K2 - BANCO X S/A",
+         "XP", 6_200_000, 0.01, 62_000.00],
+    ]))
+    assert bool(r["incomplete"]) is True
+    assert r["rendimento_cur"] == 0.0
+
+
+def test_an_amortizacao_larger_than_the_visible_cost_cannot_go_negative(book):
+    """derive_positions clamps at zero; this must too, or Bens e Direitos prints
+    a negative custo de aquisição — and the two surfaces disagree again."""
+    r = only(book([
+        ["Credito", "15/05/2025", "AMORTIZAÇÃO", "CRI - K3 - OPEA S/A",
+         "XP", 8, 51.59, 412.75],
+        ["Credito", "15/08/2025", "PAGAMENTO DE JUROS", "CRI - K3 - OPEA S/A",
+         "XP", 8, 12.05, 96.40],
+    ]))
+    assert r["value_cur"] == 0.0
+    assert bool(r["incomplete"]) is True
+
+
+def test_a_full_redemption_reconciles_when_the_report_carries_no_quantity(book):
+    """B3 ships extracts with no usable Quantidade. The all-or-nothing fallback
+    was dead code — nothing was ever consumed, so a fully redeemed contract
+    stayed declared at full cost *and* booked its own principal as income."""
+    r = only(book([
+        ["Credito", "01/06/2024", "APLICAÇÃO", "CDB - K4 - BANCO X S/A",
+         "XP", None, None, 10_000.00],
+        ["Debito", "01/03/2025", "RESGATE ANTECIPADO", "CDB - K4 - BANCO X S/A",
+         "XP", None, None, 5_200.00],
+        ["Debito", "01/11/2025", "VENCIMENTO", "CDB - K4 - BANCO X S/A",
+         "XP", None, None, 5_400.00],
+    ]))
+    assert r["value_prev"] == pytest.approx(10_000.00)
+    assert r["value_cur"] == 0.0
+    assert r["rendimento_cur"] == pytest.approx(600.00)

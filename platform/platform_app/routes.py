@@ -59,6 +59,8 @@ def _detect_kind(name: str) -> str:
         return "negociacao"
     if low.startswith("movimentacao-"):
         return "movimentacao"
+    if low.startswith("relatorio-consolidado-"):
+        return "posicao"
     return "unknown"
 
 

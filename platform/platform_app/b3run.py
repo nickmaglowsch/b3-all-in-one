@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import datetime
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -129,3 +130,24 @@ def write_csv(path: Path, header: list[str], rows: list[list[object]]) -> None:
     for r in rows:
         w.writerow([_fmt(c) for c in r])
     path.write_text(buf.getvalue())
+
+
+def last_json(text: str) -> dict:
+    """load_b3's stdout summary as a dict; ``{}`` when it is not there.
+
+    Not enginerun._last_json: that one scans for a *single-line* JSON object,
+    which is the engine scripts' convention, and load_b3 pretty-prints its
+    payload across many lines. Decoding from the first brace with raw_decode
+    reads that shape and also tolerates whatever a future ``print()`` puts in
+    front of it — the caller writes Import.kind from this, so a parse that
+    quietly returns nothing is better than one that raises, and one that
+    survives an extra log line is better than both.
+    """
+    start = text.find("{")
+    if start < 0:
+        return {}
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    except ValueError:
+        return {}
+    return obj if isinstance(obj, dict) else {}

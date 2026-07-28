@@ -374,7 +374,7 @@ export function IndexSection() {
   // unmodelled amortização is not something a form solves.
   const blockedRf = data.excluded.renda_fixa ?? [];
   const needsIndexer = blockedRf
-    .filter((r) => r.reason.includes("indexador"))
+    .filter((r) => r.code === "sem_indexador")
     .map((r) => r.ticker);
 
   // Everything the index could not see, said out loud (spec/03: surfaced, not

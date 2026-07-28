@@ -70,9 +70,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import calendar
+import datetime as dt
 import json
 import re
 import sys
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -85,6 +88,7 @@ DATA_DIR = ROOT / "data"
 POSITIONS_CSV = DATA_DIR / "positions.csv"
 TRADES_CSV = DATA_DIR / "trades.csv"
 CASH_EVENTS_CSV = DATA_DIR / "cash_events.csv"
+RF_MARKS_CSV = DATA_DIR / "rf_marks.csv"
 OVERRIDES_CSV = DATA_DIR / "cost_basis_overrides.csv"
 
 
@@ -272,7 +276,12 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     # is custody frozen (issuer under intervention, FGC pending): the paper still
     # exists, is still declarable at cost, and booking it as a sale would report
     # a redemption that never happened. Mirrors irpf_2026.py's `frozen` branch.
-    held = raw["mov_type"] == "RETIRADA DE CUSTÓDIA"
+    # Scoped to renda fixa. On an equity the same label is a custody transfer to
+    # another broker: the shares move, nothing is sold, and booking it as a Venda
+    # invents a realized gain that feeds the month's AÇÃO gross, the R$20k
+    # isenção headroom and the DARF. It was `skip` before this branch existed,
+    # and for equities it stays `skip`.
+    held = (raw["mov_type"] == "RETIRADA DE CUSTÓDIA") & raw["is_rf"]
     raw.loc[held, "category"] = np.where(
         raw.loc[held, "amount"].fillna(0) > 0, "trade", "frozen")
 
@@ -349,14 +358,114 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def detect_file_type(path: Path) -> str:
-    """Return 'negociacao' or 'movimentacao' by sniffing the first sheet's columns."""
-    df = pd.read_excel(path, sheet_name=0, engine="openpyxl", nrows=0)
-    cols = set(df.columns)
+    """Return 'negociacao', 'movimentacao' or 'posicao'.
+
+    The first two are sniffed from the first sheet's columns. The posição report
+    is a multi-sheet workbook whose first sheet ("Posição - Ações") matches
+    neither, so it is recognised by the sheet it exists for instead.
+    """
+    with pd.ExcelFile(path, engine="openpyxl") as xl:
+        if POSICAO_RF_SHEET in xl.sheet_names:
+            return "posicao"
+        cols = set(pd.read_excel(xl, sheet_name=0, nrows=0).columns)
     if {"Tipo de Movimentação", "Código de Negociação"}.issubset(cols):
         return "negociacao"
     if {"Movimentação", "Produto", "Entrada/Saída"}.issubset(cols):
         return "movimentacao"
     raise SystemExit(f"Could not classify {path.name}: columns = {sorted(cols)}")
+
+
+# ---------------------------------------------------------------------------
+# Posição support (relatório consolidado mensal) — marks for open contracts
+# ---------------------------------------------------------------------------
+
+POSICAO_RF_SHEET = "Posição - Renda Fixa"
+# MTM first: it is what the paper would fetch today, where a secondary market
+# exists to say so. CURVA is the contracted accrual, blind to rates having
+# moved since — but it is the only number B3 publishes for bank paper (every
+# CDB row carries MTM "-"), and for paper held to maturity it is also the right
+# one. Order, not choice: whichever B3 filled in.
+# ponytail: per-row fallback, not per-contract. If B3 ever fills MTM for a
+# contract in one month's report and only CURVA in the next, that contract's two
+# marks sit on different valuation bases and the rate implied between them is
+# neither. Not seen in a real report — which column B3 populates follows the
+# instrument, not the month. Record the column beside the price if it ever is.
+_POSICAO_PRICE_COLS = ("Preço Atualizado MTM", "Preço Atualizado CURVA")
+
+_MONTHS_PT = {name: n for n, name in enumerate(
+    ["janeiro", "fevereiro", "marco", "abril", "maio", "junho", "julho",
+     "agosto", "setembro", "outubro", "novembro", "dezembro"], start=1)}
+
+
+def _posicao_date(name: str) -> dt.date:
+    """The date a posição report describes: the close of its reference month.
+
+    Nothing inside the workbook says. The renda fixa sheet has no reference-date
+    column, and the Negociações sheet's "Período (Final)" is a literal "-". The
+    filename B3 hands out is the only source, so a report renamed past
+    recognition is refused rather than dated by guess — every mark in the file
+    hangs off this one date, and a wrong one bends the implied rate of every
+    contract in it.
+    """
+    stem = unicodedata.normalize("NFKD", Path(name).stem)
+    stem = stem.encode("ascii", "ignore").decode().lower()
+    # Searched anywhere in the name and not anchored to its end: a browser that
+    # has seen the file before saves it as "...-2026-junho (1).xlsx", which is
+    # the single most likely way a real upload arrives. Anchoring turned that
+    # into a SystemExit, and a SystemExit here fails the tenant's whole rebuild.
+    # Last valid (year, month) wins, so the trailing counter and any earlier
+    # year-like run in the name are both stepped over rather than matched.
+    found = [(int(y), _MONTHS_PT.get(tok, int(tok) if tok.isdigit() else 0))
+             for y, tok in re.findall(r"(20\d{2})[-_]([a-z]+|\d{1,2})", stem)]
+    found = [(y, m) for y, m in found if 1 <= m <= 12]
+    if not found:
+        raise SystemExit(
+            f"Could not read the reference month of the posição report {name!r}. "
+            "Keep B3's own filename (relatorio-consolidado-mensal-AAAA-mes.xlsx) "
+            "— nothing inside the file says which month it covers.")
+    year, month = found[-1]
+    return dt.date(year, month, calendar.monthrange(year, month)[1])
+
+
+def read_posicao(path: Path) -> pd.DataFrame:
+    """(date, ticker, price) marks from a relatório consolidado mensal.
+
+    The third extract, and the only one that prices a contract while it is still
+    held. Negociação and Movimentação report fills, so a CDB nobody has redeemed
+    has exactly one price in the whole book — and one price implies no rate.
+    `Preço Atualizado` is a per-unit number the issuer computed on the report
+    date: a second mark, from which portfolio_index.accrue_rf derives the rate
+    exactly. The indexer B3 does print here (`DI` / `IPCA` / `PREFIXADO`) is
+    deliberately ignored — it carries neither the percentage nor the spread, so
+    it cannot fill renda_fixa_terms, and with a second mark it does not need to.
+
+    The sheet splits what Movimentação keeps in one cell — "CDB - BANCO AGIBANK
+    S/A" in Produto, "CDB325AQWAM" in Código — so the two are recombined through
+    `_rf_code`, which owns the contract name on both sides of the join. That
+    also drops the rows this is not about: the "CFF -" FIP quotas, and the blank
+    totals row the sheet ends on.
+    """
+    df = pd.read_excel(path, sheet_name=POSICAO_RF_SHEET, engine="openpyxl")
+    have = [c for c in _POSICAO_PRICE_COLS if c in df.columns]
+    if not have:
+        raise SystemExit(
+            f"{path.name}: sheet {POSICAO_RF_SHEET!r} has none of "
+            f"{list(_POSICAO_PRICE_COLS)} — B3 changed the layout.")
+
+    price = pd.to_numeric(df[have[0]], errors="coerce")
+    for col in have[1:]:
+        price = price.fillna(pd.to_numeric(df[col], errors="coerce"))
+
+    out = pd.DataFrame({
+        "date": _posicao_date(path.name),
+        "ticker": [_rf_code(f"{str(p).split(' - ')[0]} - {str(c).strip()}")
+                   for p, c in zip(df["Produto"], df["Código"])],
+        # A zero or a blank is not a price. Kept as NaN and dropped below rather
+        # than defaulted, because downstream it would read as a per-unit value of
+        # zero and draw the contract to a total loss on the report date.
+        "price": price.where(price > 0),
+    })
+    return out.dropna(subset=["ticker", "price"]).reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -731,7 +840,8 @@ def derive_positions(
     if cash_events is not None and not cash_events.empty:
         ce = cash_events.copy()
         if consolidate:
-            ce["ticker"] = ce["ticker"].astype(str).str.replace(r"F$", "", regex=True)
+            ce["ticker"] = ce["ticker"].astype(str).str.replace(
+                _FRACTIONAL_RE, _ROUND_LOT, regex=True)
         # qty_event rows: signed qty already populated by read_movimentacao.
         cat_col = ce["event_category"] if "event_category" in ce.columns else None
         if cat_col is not None:
@@ -856,12 +966,15 @@ def main(argv: list[str]) -> int:
     neg_dfs: list[pd.DataFrame] = []
     mov_trade_dfs: list[pd.DataFrame] = []
     cash_dfs: list[pd.DataFrame] = []
+    posicao_dfs: list[pd.DataFrame] = []
     file_kinds: dict[str, str] = {}
     for f in files:
         kind = detect_file_type(f)
         file_kinds[f.name] = kind
         if kind == "negociacao":
             neg_dfs.append(read_negociacao(f))
+        elif kind == "posicao":
+            posicao_dfs.append(read_posicao(f))
         else:
             mt, ce = read_movimentacao(f)
             mov_trade_dfs.append(mt)
@@ -986,9 +1099,22 @@ def main(argv: list[str]) -> int:
         ).sort_values("date")
     cash_events = apply_ticker_renames(cash_events)
 
+    # Marks from the posição reports. Kept out of trades and cash_events on
+    # purpose: this is a price observation, not an event — nothing was bought,
+    # sold or paid. Booking it as a zero-quantity trade would have saved a CSV
+    # and then shown up in the trade list, the apuração and every count.
+    # One row per (report month, contract); a month uploaded twice keeps the
+    # later read of it.
+    rf_marks = (pd.concat(posicao_dfs, ignore_index=True) if posicao_dfs
+                else pd.DataFrame(columns=["date", "ticker", "price"]))
+    if not rf_marks.empty:
+        rf_marks = (rf_marks.drop_duplicates(subset=["date", "ticker"], keep="last")
+                    .sort_values(["ticker", "date"]))
+
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     trades.to_csv(TRADES_CSV, index=False)
     cash_events.to_csv(CASH_EVENTS_CSV, index=False)
+    rf_marks.to_csv(RF_MARKS_CSV, index=False)
 
     # derive_positions handles trades, *F consolidation, qty events (splits /
     # bonificações / fracionários) and amortizations in a single chronological
@@ -1023,6 +1149,7 @@ def main(argv: list[str]) -> int:
                         if not trades.empty else [],
         "cash_events_total": int(len(cash_events)),
         "cash_events_by_type": cash_summary,
+        "rf_marks_total": int(len(rf_marks)),
         "incomplete_history": incomplete,
         "option_activity": opt_stats,
         "unresolved_exercises": unresolved_exercises,

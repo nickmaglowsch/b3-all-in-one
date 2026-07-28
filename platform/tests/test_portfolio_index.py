@@ -219,16 +219,28 @@ def test_a_contract_joins_the_book_only_once_it_can_be_priced():
 def test_carrying_an_unpriced_contract_would_book_its_aplicacao_as_a_loss():
     """Why an unpriced contract is kept out of the book rather than carried at 0.
 
-    Its aplicação still counts as an inflow, so the chain divides a NAV that
-    never rose by a denominator that did — the purchase reads as a same-day
-    total loss of the money. Excluding it understates the book; carrying it
-    invents a number, which is the worse of the two.
+    On a book that holds nothing else, build_index's zero-numerator guard hides
+    it. On a real mixed book it does not: the equities keep the numerator
+    positive, so the chain divides a NAV the contract never joined by a
+    denominator its aplicação did — and the purchase reads as an immediate,
+    permanent loss of that money.
     """
     out = build_index(
         [D1, D2], {}, [(D1, "CDB - X", 10_000.0)], [(D1, "buy", 10_000.0)])
     assert out["unpriced"] == ["CDB - X"]
     assert out["nav"] == [0.0, 0.0]
     assert out["index"] == [100.0, 100.0]  # only because build_index holds flat
+
+    # The same contract beside R$100k of equity, both bought on D1, price flat.
+    mixed = build_index(
+        [D1, D2],
+        {"PETR4": {D1: 10.0, D2: 10.0}},
+        [(D1, "PETR4", 10_000.0), (D1, "CDB - X", 10_000.0)],
+        [(D1, "buy", 100_000.0), (D1, "buy", 10_000.0)],
+    )
+    assert mixed["unpriced"] == ["CDB - X"]
+    # Nothing moved, and the book is down 9.09% for good — 10k/110k.
+    assert mixed["index"][-1] == pytest.approx(90.91, abs=0.01)
 
 
 # ── accrue_rf: a contract's own marks imply its rate ──────────────────────────
@@ -600,7 +612,7 @@ async def test_renda_fixa_is_charted_from_its_own_marks(client):
 
     reasons = {r["ticker"]: r["reason"] for r in body["excluded"]["renda_fixa"]}
     assert set(reasons) == {"CDB - OPEN", "CDB - FROZEN"}
-    assert "resgate" in reasons["CDB - OPEN"]
+    assert "Relatório Consolidado" in reasons["CDB - OPEN"]
     assert "custódia" in reasons["CDB - FROZEN"]
     # Named one by one, so "Renda Fixa" never appears as a bare market label.
     assert "Renda Fixa" not in body["excluded"]["markets"]
@@ -616,6 +628,108 @@ async def test_renda_fixa_is_charted_from_its_own_marks(client):
     # It compounds, so it never gives ground on the way there.
     curve = [p["portfolio"] for p in only["series"]]
     assert curve == sorted(curve)
+
+
+# ── Contracts the plane prices itself: Tesouro Direto ─────────────────────────
+
+def _rf_trade(day, ticker, price):
+    """A trades row in _book's column order: date, ticker, market, signed_qty,
+    amount, side, price."""
+    return (day, ticker, RENDA_FIXA_MARKET, 100.0, 100.0 * price, "Compra", price)
+
+
+def test_an_open_contract_with_no_second_mark_is_blocked():
+    """The baseline the next test is measured against — one aplicação implies no
+    rate, so without an indexer there is nothing to draw."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0)], [], {})
+    assert marks == {}
+    assert "Relatório Consolidado" in blocked["TESOURO IPCA+ 2045"][1]
+
+
+def test_a_plane_priced_title_needs_neither_a_second_mark_nor_an_indexer():
+    """The Tesouro publishes a PU for every title every day, so the issuer's own
+    number replaces the accrual — the title is admitted, and kept out of `marks`
+    so nothing overwrites those closes with a curve built from two fills."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0),
+         _rf_trade(D2, "CDB - OPEN", 0.01)],
+        [], {}, plane_priced=frozenset({"TESOURO IPCA+ 2045"}))
+
+    assert "TESOURO IPCA+ 2045" not in marks
+    assert "TESOURO IPCA+ 2045" not in blocked
+    # The contract the plane does not carry is untouched by any of this.
+    assert "CDB - OPEN" in blocked
+
+
+def test_a_report_mark_unblocks_an_open_contract_with_no_indexer():
+    """The point of reading the posição report. B3 prints `Preço Atualizado` for
+    paper still in custody, so an unredeemed CDB gets a second dated price
+    without anyone typing in a rate — and two marks imply the rate exactly."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "CDB - OPEN", 1000.0)], [], {},
+        report_marks=[("CDB - OPEN", D2, 1206.41)])
+
+    assert blocked == {}
+    assert marks["CDB - OPEN"] == [(D1, 1000.0), (D2, 1206.41)]
+
+
+def test_a_report_mark_for_a_contract_the_book_never_bought_is_ignored():
+    """The report is a snapshot of custody, the book is a history of fills, and
+    they disagree — a contract can sit in one and not the other. A mark with no
+    aplicação behind it prices nothing, and admitting it would invent a holding
+    the chart then has to disclose as unpriceable."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "CDB - OPEN", 1000.0)], [], {},
+        report_marks=[("CDB - ELSEWHERE", D2, 900.0)])
+
+    assert "CDB - ELSEWHERE" not in marks and "CDB - ELSEWHERE" not in blocked
+
+
+def test_a_report_mark_does_not_unfreeze_a_withdrawn_contract():
+    """A custody withdrawal that never settled is held at a value nobody has
+    published. B3 keeps printing an Atualizado for it anyway, which is precisely
+    the number the blocker exists to refuse."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "CDB - PLENO", 1000.0)],
+        [(D2, "frozen", "CDB - PLENO", 0.0, 0.0)], {},
+        report_marks=[("CDB - PLENO", D3, 1249.31)])
+
+    assert marks == {}
+    assert blocked["CDB - PLENO"][0] == "custodia_bloqueada"
+
+
+def test_a_report_mark_never_overwrites_the_issuers_own_price_plane():
+    """Tesouro titles appear in the posição report too, on their own sheet and
+    in the renda fixa one for some brokers. They are priced daily off the plane,
+    and an accrual built from two of the tenant's marks would replace those
+    closes with an interpolation."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, _blocked = _renda_fixa(
+        [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0)], [], {},
+        plane_priced=frozenset({"TESOURO IPCA+ 2045"}),
+        report_marks=[("TESOURO IPCA+ 2045", D2, 1216.74)])
+
+    assert marks == {}
+
+
+def test_a_plane_priced_title_is_admitted_to_the_book():
+    """`is_excluded` is what actually keeps a contract out, and it decides on the
+    caller's `rf_priced` — which is where the plane-priced set has to land."""
+    assert is_excluded("TESOURO IPCA+ 2045", RENDA_FIXA_MARKET)
+    assert not is_excluded("TESOURO IPCA+ 2045", RENDA_FIXA_MARKET,
+                           frozenset({"TESOURO IPCA+ 2045"}))
 
 
 # ── Open contracts: the indexer the tenant entered, over the BCB levels ───────
@@ -707,3 +821,95 @@ def test_an_indexed_contract_with_no_series_draws_nothing():
     assert accrue_rf(
         grid, {"CDB - X": [(grid[0], 1.0)]},
         terms={"CDB - X": ("ipca_plus", 6.0)}, levels=late) == {}
+
+
+def test_a_stale_bcb_series_draws_nothing_rather_than_a_flat_tail():
+    """A series that stops early used to be forward-filled flat over the rest of
+    the window — the contract reads as having paid nothing for months, on paper
+    that was accruing the whole time. The start was guarded; the end was not."""
+    grid = [date(2024, 1, d) for d in range(2, 12)]
+    stale = {"$CDI": {grid[0]: 1.0, grid[1]: 1.001, grid[2]: 1.002}}
+    assert accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("cdi_pct", 100.0)}, levels=stale) == {}
+    # A couple of sessions behind is structural — SGS publishes after the close —
+    # and must still draw, or the feature never works on a live plane.
+    fresh = {"$CDI": {d: 1.0 + 0.001 * i for i, d in enumerate(grid[:-1])}}
+    assert accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("cdi_pct", 100.0)}, levels=fresh) != {}
+
+
+def test_a_mark_before_the_window_is_not_redrawn_inside_it():
+    """The aplicação predates the plane's first close (coverage.clamped). Snapped
+    to index 0, the whole pre-window run gets redrawn over the visible sessions —
+    a five-year double showing up as a six-session double. Only the part of the
+    segment the window can actually show belongs on the chart."""
+    grid = [date(2025, 3, d) for d in range(3, 10)]
+    out = accrue_rf(
+        grid, {"CDB - X": [(date(2020, 1, 2), 1.0), (grid[-1], 2.0)]})
+    series = out["CDB - X"]
+    assert series[grid[-1]] == pytest.approx(2.0)      # the reported mark holds
+    # Almost all the growth happened before the window, so the visible span is
+    # nearly flat rather than a doubling.
+    assert series[grid[0]] > 1.9
+    assert series[grid[-1]] / series[grid[0]] < 1.01
+
+
+@_asyncio
+@pytest.mark.market
+async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(client):
+    """The gap `is_excluded` alone cannot close, and the reason the route drops
+    undrawn contracts instead of only disclosing them.
+
+    `_book` decides admission before the grid exists, so it can only tell which
+    contracts are priceable *in principle*. Whether a BCB series is there to
+    price them against is known one step later — and a contract admitted there
+    and refused here still carries its aplicação as an inflow against a NAV it
+    never joined. That is a permanent loss of the whole purchase, and a caveat
+    string does not undo it.
+
+    Seeded with terms naming `$CDI`, which the test plane does not carry.
+    """
+    from sqlalchemy import delete
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import RendaFixaTerms
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+    await _seed_book(tid)
+    await _seed_renda_fixa(tid)
+
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(RendaFixaTerms).where(RendaFixaTerms.tenant_id == tid))
+        session.add(RendaFixaTerms(tenant_id=tid, ticker="CDB - OPEN",
+                                   indexer="cdi_pct", rate_pct=100.0))
+        await session.commit()
+
+    drawable = (await client.get(
+        "/portfolio/index?tickers=PETR4,VALE3,CDB - REDEEMED",
+        headers=headers)).json()
+    body = (await client.get("/portfolio/index", headers=headers)).json()
+
+    # Admitted by _book (it has terms), refused by accrue_rf (no $CDI on the
+    # plane) — so it must be absent from the book, not merely mentioned.
+    assert "CDB - OPEN" not in body["universe"]
+    assert "CDB - OPEN" not in body["excluded"]["unpriced_tickers"]
+    reasons = {r["ticker"] for r in body["excluded"]["renda_fixa"]}
+    assert "CDB - OPEN" in reasons
+
+    # The proof it never touched the chain: the whole book returns exactly what
+    # its drawable holdings alone return. Before the fix the undrawn contract's
+    # aplicação sat in the denominator and dragged this down.
+    assert body["universe"] == ["CDB - REDEEMED", "PETR4", "VALE3"]
+    assert (body["metrics"]["portfolio"]["total_return_pct"]
+            == pytest.approx(
+                drawable["metrics"]["portfolio"]["total_return_pct"], abs=0.01))
+
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(RendaFixaTerms).where(RendaFixaTerms.tenant_id == tid))
+        await session.commit()

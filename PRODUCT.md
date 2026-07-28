@@ -57,8 +57,10 @@ makes user-submitted strategies safe to accept at all.
 - **The source document is the B3 Área do Investidor extract.** Users download `.xlsx`
   spreadsheets and upload them; the platform parses them. Exactly **two** report types are
   recognised — negociação and movimentação (`taxcore/scripts/load_b3.py` `sniff_kind`) —
-  and within movimentação, 16 movement labels are categorised (`MOV_CATEGORY`), covering
-  dividendos, JCP, rendimentos, amortizações and the quantity-only corporate actions.
+  and within movimentação, 24 movement labels are categorised (`MOV_CATEGORY` plus the
+  per-row `RETIRADA DE CUSTÓDIA` branch), covering dividendos, JCP, rendimentos,
+  amortizações, the quantity-only corporate actions, and the renda fixa contract
+  lifecycle (aplicação → vencimento / resgate antecipado / custódia congelada).
   Uploads that are not `.xlsx` are rejected by both the client and the API. Nothing is
   entered by hand.
 - **The tax calendar drives the year.** IRPF declaration season runs Jan–May. DARF is
@@ -103,7 +105,8 @@ takes its rows and its uploaded extracts with it.
 
 **Honest-gaps constraint:** the product reports what it cannot see rather than papering
 over it. The portfolio index returns an `excluded` block naming what it could not price
-(Futuro, Renda Fixa, unpriced tickers) and a `coverage.clamped` flag when the chart starts
+(Futuro, unpriced tickers, and every renda fixa contract it had to leave out — by name,
+with the reason) and a `coverage.clamped` flag when the chart starts
 later than the user's real history. Zero-row tables are reported as zero. Benchmarks that
 are unavailable are reported unavailable, never drawn flat. This is a product commitment,
 not an implementation detail.
@@ -143,7 +146,7 @@ testimonials, no usage metrics, and no reference logos.** Stripe is wired with r
 prices and the stack deploys, but nobody is paying yet. Future work must not fabricate
 customer counts, quotes, logos, AUM figures, growth numbers, or "trusted by" proof. The
 landing page's stats stay descriptive of capability (e.g. "2 relatórios da B3: negociação e
-movimentação", "16 tipos de movimentação reconhecidos", "3 passos do extrato ao IRPF"),
+movimentação", "24 tipos de movimentação reconhecidos", "3 passos do extrato ao IRPF"),
 never quantitative social proof. Every figure on that page must be traceable to the
 parser; an earlier "7 relatórios" and "100% dos seus proventos rastreados" were removed
 precisely because neither survived that check.

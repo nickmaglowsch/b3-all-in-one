@@ -154,7 +154,15 @@ export interface PortfolioIndex {
     categories: string[];
     unpriced_tickers: string[];
     benchmarks: boolean;
+    /**
+     * Renda fixa contracts the index could not draw, one per row with the
+     * reason already phrased in pt-BR by the API. Named individually rather
+     * than rolled into `markets` because each one is a holding the user can
+     * act on — send a longer extract, wait for the resgate.
+     */
+    renda_fixa: { ticker: string; reason: string }[];
   };
+
   coverage: {
     first_trade: string;
     plane_start: string;
@@ -341,4 +349,17 @@ export interface TaxSummary {
   stale: boolean;
   /** Why it is stale: a newer import, or the month rolling over. */
   stale_reason: "import" | "month" | null;
+}
+
+/**
+ * The indexer of a renda fixa contract still in the book — IPCA+x%, % do CDI,
+ * CDI+x% or prefixado. Tenant-entered: neither B3 extract carries it, and a
+ * contract with no resgate has only one price, so nothing implies it.
+ * `rate_pct` reads against `indexer`: 95 with `cdi_pct` is 95% do CDI, 2.5 with
+ * `cdi_plus` is CDI + 2,5% a.a.
+ */
+export interface RendaFixaTerm {
+  ticker: string;
+  indexer: "cdi_pct" | "cdi_plus" | "ipca_plus" | "pre";
+  rate_pct: number;
 }

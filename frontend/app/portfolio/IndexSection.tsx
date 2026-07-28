@@ -15,6 +15,7 @@ import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
 import { INCOME_LABEL } from "./IncomeSection";
+import { RendaFixaTermsForm } from "./RendaFixaTermsForm";
 import type { IncomeRow } from "@/lib/types";
 
 const TITLE = "Rentabilidade vs IBOV e CDI";
@@ -368,6 +369,14 @@ export function IndexSection() {
     .filter((c) => held.has(c))
     .map((c) => INCOME_LABEL[c] ?? c);
 
+  // Renda fixa contracts the index could not draw. The ones missing an indexer
+  // are the only ones the user can fix from here — a custody freeze or an
+  // unmodelled amortização is not something a form solves.
+  const blockedRf = data.excluded.renda_fixa ?? [];
+  const needsIndexer = blockedRf
+    .filter((r) => r.reason.includes("indexador"))
+    .map((r) => r.ticker);
+
   // Everything the index could not see, said out loud (spec/03: surfaced, not
   // hidden). Silence here would read as "this is your whole portfolio".
   // Two of these describe where the *chart* starts and ends, so a date filter
@@ -384,6 +393,10 @@ export function IndexSection() {
       `Fora do cálculo: ${data.excluded.markets.join(", ")}.`,
     data.excluded.unpriced_tickers.length > 0 &&
       `Sem cotação na base: ${data.excluded.unpriced_tickers.join(", ")}.`,
+    // One line per contract, with its own reason: a CDB ainda em carteira and
+    // one preso numa retirada de custódia are missing for opposite reasons, and
+    // only one of them is something the user can do anything about.
+    ...blockedRf.map(({ ticker, reason }) => `${ticker}: ${reason}.`),
     wholeSpan &&
       data.coverage.trades_after_plane > 0 &&
       `${data.coverage.trades_after_plane} operação(ões) posterior(es) à última cotação (${formatDate(data.end)}) foram marcadas nesse preço.`,
@@ -458,6 +471,10 @@ export function IndexSection() {
               <li key={c}>{c}</li>
             ))}
           </ul>
+          {/* The one gap in this block the user can close from here. Rendered
+              beside the contracts it names, not on a settings page they would
+              have to be told about. */}
+          <RendaFixaTermsForm tickers={needsIndexer} />
         </div>
       )}
     </Card>,

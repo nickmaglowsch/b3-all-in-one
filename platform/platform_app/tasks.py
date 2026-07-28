@@ -259,12 +259,9 @@ async def process_imports(tenant_id: str) -> dict:
         # sniffed. Best-effort: a parse failure must not fail an import whose CSVs
         # already came back fine, it just leaves the uploaded guess in place.
         sniffed: dict[str, str] = {}
-        try:
-            for f in (json.loads(proc.stdout).get("files_loaded") or []):
-                if f.get("name") and f.get("kind"):
-                    sniffed[f["name"]] = f["kind"]
-        except (ValueError, AttributeError):
-            pass
+        for f in (b3run.last_json(proc.stdout).get("files_loaded") or []):
+            if isinstance(f, dict) and f.get("name") and f.get("kind"):
+                sniffed[f["name"]] = f["kind"]
 
         # Full replace per tenant, one transaction. Order preserved via ascending ids.
         # TaxSummary goes with them: it is derived from exactly these rows, so

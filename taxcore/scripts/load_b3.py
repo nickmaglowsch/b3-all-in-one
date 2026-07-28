@@ -272,7 +272,12 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     # is custody frozen (issuer under intervention, FGC pending): the paper still
     # exists, is still declarable at cost, and booking it as a sale would report
     # a redemption that never happened. Mirrors irpf_2026.py's `frozen` branch.
-    held = raw["mov_type"] == "RETIRADA DE CUSTÓDIA"
+    # Scoped to renda fixa. On an equity the same label is a custody transfer to
+    # another broker: the shares move, nothing is sold, and booking it as a Venda
+    # invents a realized gain that feeds the month's AÇÃO gross, the R$20k
+    # isenção headroom and the DARF. It was `skip` before this branch existed,
+    # and for equities it stays `skip`.
+    held = (raw["mov_type"] == "RETIRADA DE CUSTÓDIA") & raw["is_rf"]
     raw.loc[held, "category"] = np.where(
         raw.loc[held, "amount"].fillna(0) > 0, "trade", "frozen")
 
@@ -731,7 +736,8 @@ def derive_positions(
     if cash_events is not None and not cash_events.empty:
         ce = cash_events.copy()
         if consolidate:
-            ce["ticker"] = ce["ticker"].astype(str).str.replace(r"F$", "", regex=True)
+            ce["ticker"] = ce["ticker"].astype(str).str.replace(
+                _FRACTIONAL_RE, _ROUND_LOT, regex=True)
         # qty_event rows: signed qty already populated by read_movimentacao.
         cat_col = ce["event_category"] if "event_category" in ce.columns else None
         if cat_col is not None:

@@ -219,16 +219,28 @@ def test_a_contract_joins_the_book_only_once_it_can_be_priced():
 def test_carrying_an_unpriced_contract_would_book_its_aplicacao_as_a_loss():
     """Why an unpriced contract is kept out of the book rather than carried at 0.
 
-    Its aplicação still counts as an inflow, so the chain divides a NAV that
-    never rose by a denominator that did — the purchase reads as a same-day
-    total loss of the money. Excluding it understates the book; carrying it
-    invents a number, which is the worse of the two.
+    On a book that holds nothing else, build_index's zero-numerator guard hides
+    it. On a real mixed book it does not: the equities keep the numerator
+    positive, so the chain divides a NAV the contract never joined by a
+    denominator its aplicação did — and the purchase reads as an immediate,
+    permanent loss of that money.
     """
     out = build_index(
         [D1, D2], {}, [(D1, "CDB - X", 10_000.0)], [(D1, "buy", 10_000.0)])
     assert out["unpriced"] == ["CDB - X"]
     assert out["nav"] == [0.0, 0.0]
     assert out["index"] == [100.0, 100.0]  # only because build_index holds flat
+
+    # The same contract beside R$100k of equity, both bought on D1, price flat.
+    mixed = build_index(
+        [D1, D2],
+        {"PETR4": {D1: 10.0, D2: 10.0}},
+        [(D1, "PETR4", 10_000.0), (D1, "CDB - X", 10_000.0)],
+        [(D1, "buy", 100_000.0), (D1, "buy", 10_000.0)],
+    )
+    assert mixed["unpriced"] == ["CDB - X"]
+    # Nothing moved, and the book is down 9.09% for good — 10k/110k.
+    assert mixed["index"][-1] == pytest.approx(90.91, abs=0.01)
 
 
 # ── accrue_rf: a contract's own marks imply its rate ──────────────────────────
@@ -707,3 +719,95 @@ def test_an_indexed_contract_with_no_series_draws_nothing():
     assert accrue_rf(
         grid, {"CDB - X": [(grid[0], 1.0)]},
         terms={"CDB - X": ("ipca_plus", 6.0)}, levels=late) == {}
+
+
+def test_a_stale_bcb_series_draws_nothing_rather_than_a_flat_tail():
+    """A series that stops early used to be forward-filled flat over the rest of
+    the window — the contract reads as having paid nothing for months, on paper
+    that was accruing the whole time. The start was guarded; the end was not."""
+    grid = [date(2024, 1, d) for d in range(2, 12)]
+    stale = {"$CDI": {grid[0]: 1.0, grid[1]: 1.001, grid[2]: 1.002}}
+    assert accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("cdi_pct", 100.0)}, levels=stale) == {}
+    # A couple of sessions behind is structural — SGS publishes after the close —
+    # and must still draw, or the feature never works on a live plane.
+    fresh = {"$CDI": {d: 1.0 + 0.001 * i for i, d in enumerate(grid[:-1])}}
+    assert accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("cdi_pct", 100.0)}, levels=fresh) != {}
+
+
+def test_a_mark_before_the_window_is_not_redrawn_inside_it():
+    """The aplicação predates the plane's first close (coverage.clamped). Snapped
+    to index 0, the whole pre-window run gets redrawn over the visible sessions —
+    a five-year double showing up as a six-session double. Only the part of the
+    segment the window can actually show belongs on the chart."""
+    grid = [date(2025, 3, d) for d in range(3, 10)]
+    out = accrue_rf(
+        grid, {"CDB - X": [(date(2020, 1, 2), 1.0), (grid[-1], 2.0)]})
+    series = out["CDB - X"]
+    assert series[grid[-1]] == pytest.approx(2.0)      # the reported mark holds
+    # Almost all the growth happened before the window, so the visible span is
+    # nearly flat rather than a doubling.
+    assert series[grid[0]] > 1.9
+    assert series[grid[-1]] / series[grid[0]] < 1.01
+
+
+@_asyncio
+@pytest.mark.market
+async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(client):
+    """The gap `is_excluded` alone cannot close, and the reason the route drops
+    undrawn contracts instead of only disclosing them.
+
+    `_book` decides admission before the grid exists, so it can only tell which
+    contracts are priceable *in principle*. Whether a BCB series is there to
+    price them against is known one step later — and a contract admitted there
+    and refused here still carries its aplicação as an inflow against a NAV it
+    never joined. That is a permanent loss of the whole purchase, and a caveat
+    string does not undo it.
+
+    Seeded with terms naming `$CDI`, which the test plane does not carry.
+    """
+    from sqlalchemy import delete
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import RendaFixaTerms
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+    await _seed_book(tid)
+    await _seed_renda_fixa(tid)
+
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(RendaFixaTerms).where(RendaFixaTerms.tenant_id == tid))
+        session.add(RendaFixaTerms(tenant_id=tid, ticker="CDB - OPEN",
+                                   indexer="cdi_pct", rate_pct=100.0))
+        await session.commit()
+
+    drawable = (await client.get(
+        "/portfolio/index?tickers=PETR4,VALE3,CDB - REDEEMED",
+        headers=headers)).json()
+    body = (await client.get("/portfolio/index", headers=headers)).json()
+
+    # Admitted by _book (it has terms), refused by accrue_rf (no $CDI on the
+    # plane) — so it must be absent from the book, not merely mentioned.
+    assert "CDB - OPEN" not in body["universe"]
+    assert "CDB - OPEN" not in body["excluded"]["unpriced_tickers"]
+    reasons = {r["ticker"] for r in body["excluded"]["renda_fixa"]}
+    assert "CDB - OPEN" in reasons
+
+    # The proof it never touched the chain: the whole book returns exactly what
+    # its drawable holdings alone return. Before the fix the undrawn contract's
+    # aplicação sat in the denominator and dragged this down.
+    assert body["universe"] == ["CDB - REDEEMED", "PETR4", "VALE3"]
+    assert (body["metrics"]["portfolio"]["total_return_pct"]
+            == pytest.approx(
+                drawable["metrics"]["portfolio"]["total_return_pct"], abs=0.01))
+
+    async with async_session_maker() as session:
+        await session.execute(
+            delete(RendaFixaTerms).where(RendaFixaTerms.tenant_id == tid))
+        await session.commit()

@@ -34,11 +34,15 @@ portfolio_index_router = APIRouter(prefix="/portfolio/index", tags=["portfolio-i
 # Why a renda fixa contract the tenant holds is not on the chart. Phrased for
 # the caveat block the UI already renders, since the endpoint's other user-facing
 # strings are pt-BR too.
-_RF_STILL_HELD = ("ainda em carteira e sem indexador informado — a B3 não "
+# The `code` travels beside the prose so the UI can branch on it — only the
+# "no indexer" case has a form that fixes it, and selecting those by
+# substring-matching the sentence means a copy edit silently removes the form.
+_RF_STILL_HELD = ("sem_indexador",
+                  "ainda em carteira e sem indexador informado — a B3 não "
                   "publica a taxa, e sem resgate não há o que deduzi-la")
-_RF_FROZEN = "retirada de custódia sem liquidação"
-_RF_AMORTIZED = "amortização em vida não modelada"
-_RF_NO_SERIES = "índice do BCB indisponível para o período"
+_RF_FROZEN = ("custodia_bloqueada", "retirada de custódia sem liquidação")
+_RF_AMORTIZED = ("amortizacao", "amortização em vida não modelada")
+_RF_NO_SERIES = ("sem_indice", "índice do BCB indisponível para o período")
 
 
 def _renda_fixa(trades, events, terms: dict) -> tuple[dict, dict[str, str]]:
@@ -309,27 +313,20 @@ async def get_portfolio_index(
     if not all_deltas:
         raise HTTPException(422, "no trades to index — import a portfolio first")
 
-    universe = sorted({t for _, t, _ in all_deltas})
-    keep = None if tickers is None else {
-        t.strip().upper() for t in tickers.split(",") if t.strip()} & set(universe)
-    qty_deltas, flows = pidx.select_tickers(all_deltas, flows, keep)
-    if not qty_deltas:
-        raise HTTPException(422, "nenhum ativo selecionado tem histórico a indexar")
-
     # Pinned to the *whole* book, not the selection: toggling an asset has to
     # change the lines and never the x-axis, or the before and after are not
     # comparable — and the grid and benchmark caches would miss on every click.
     # A selection whose first buy lands mid-window simply holds nothing until
     # then, which build_index already draws flat at the base.
     first_trade = min(d for d, _, _ in all_deltas)
-    selected = sorted({t for _, t, _ in qty_deltas})
+    candidates = sorted({t for _, t, _ in all_deltas})
     # The BCB index levels ride on the plane under reserved tickers, so they
     # come back from the same query as everything else — asked for only when a
     # contract in this book actually needs one.
     wanted = {pidx.rf_series_for(ix) for ix, _ in rf_terms.values()}
     try:
         grid, closes = await _plane(
-            selected + sorted(w for w in wanted if w), first_trade)
+            candidates + sorted(w for w in wanted if w), first_trade)
     except Exception:
         raise HTTPException(503, "market plane unavailable — try again shortly")
     if not grid:
@@ -340,16 +337,42 @@ async def get_portfolio_index(
               if name in pidx.RF_SERIES_TICKERS}
 
     # Renda fixa is priced off the tenant's own extract rather than the plane,
-    # so it is merged in here rather than unioned into the SQL above. Restricted
-    # to `selected` for the same reason every other series is: the holding
-    # filter rebuilds the whole TWR, it does not slice a finished line.
+    # so it is accrued here rather than unioned into the SQL above.
+    #
+    # This runs *before* the book is assembled, and that ordering is the whole
+    # point. `_book` can only tell which contracts are priceable in principle —
+    # whether a series exists to price them against needs the grid, which needs
+    # the first trade, which needs `_book`. So a contract can be admitted there
+    # and refused here, and a refused contract left in the book is not merely
+    # missing from the NAV: its aplicação still counts as an inflow, so the
+    # chain divides a NAV that never rose by a denominator that did and books
+    # the whole purchase as a same-day total loss that never recovers. The
+    # disclosure below is a caveat, not a guard — it would have narrated that
+    # wrong number instead of removing it.
     accrued = pidx.accrue_rf(grid, rf_marks, rf_terms, levels)
+    undrawn = set(rf_marks) - set(accrued)
+    if undrawn:
+        for ticker in undrawn:
+            rf_blocked.setdefault(ticker, _RF_NO_SERIES)
+        # Dropped here rather than via `keep` below, because `select_tickers`
+        # reads a non-None `keep` as "the user filtered the book" and discards
+        # cash events that name no ticker. This is not a user filter.
+        all_deltas = [d for d in all_deltas if d[1] not in undrawn]
+        flows = [f for f in flows if f[3] not in undrawn]
+        if not all_deltas:
+            raise HTTPException(422, "no trades to index — import a portfolio first")
+
+    universe = sorted({t for _, t, _ in all_deltas})
+    keep = None if tickers is None else {
+        t.strip().upper() for t in tickers.split(",") if t.strip()} & set(universe)
+    qty_deltas, flows = pidx.select_tickers(all_deltas, flows, keep)
+    if not qty_deltas:
+        raise HTTPException(422, "nenhum ativo selecionado tem histórico a indexar")
+    selected = sorted({t for _, t, _ in qty_deltas})
+
+    # Restricted to `selected` for the same reason every other series is: the
+    # holding filter rebuilds the whole TWR, it does not slice a finished line.
     closes.update({t: s for t, s in accrued.items() if t in selected})
-    # A contract whose terms named a series the plane could not serve draws
-    # nothing rather than a flat line, and says which.
-    for ticker in rf_marks:
-        if ticker not in accrued:
-            rf_blocked[ticker] = _RF_NO_SERIES
 
     built = pidx.build_index(grid, closes, qty_deltas, flows)
     bench = await _benchmarks(grid)
@@ -385,8 +408,12 @@ async def get_portfolio_index(
             # a contract left off the chart is a holding the user can act on
             # (send a longer extract, wait for the resgate), and "Renda Fixa"
             # alone says none of that.
-            "renda_fixa": [{"ticker": t, "reason": r}
-                           for t, r in sorted(rf_blocked.items())],
+            # Scoped to the current selection like every other entry in this
+            # block: a caveat naming contracts the line above does not contain
+            # describes a different chart than the one on screen.
+            "renda_fixa": [{"ticker": t, "code": c, "reason": r}
+                           for t, (c, r) in sorted(rf_blocked.items())
+                           if keep is None or t in keep],
         },
         "coverage": {
             "first_trade": first_trade.isoformat(),

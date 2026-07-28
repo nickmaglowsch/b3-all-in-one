@@ -160,7 +160,7 @@ export interface PortfolioIndex {
      * than rolled into `markets` because each one is a holding the user can
      * act on — send a longer extract, wait for the resgate.
      */
-    renda_fixa: { ticker: string; reason: string }[];
+    renda_fixa: { ticker: string; code: string; reason: string }[];
   };
 
   coverage: {

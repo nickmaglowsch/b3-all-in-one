@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import bisect
 import datetime
+import math
 import re
 
 # Markets with no daily-position meaning, excluded from the index and disclosed.
@@ -166,6 +167,30 @@ def select_tickers(
     )
 
 
+def _grid_pos(d: datetime.date, grid: list[datetime.date]) -> float:
+    """Where `d` sits on the grid, as a signed session index, unclamped.
+
+    `_snap` clamps, which is exactly right for placing a cash flow — it has to
+    land inside the window to be counted at all — and exactly wrong for an
+    accrual endpoint. An aplicação from 2020 clamped to index 0 makes a five-year
+    run look like it happened over the window's first few sessions.
+
+    Outside the grid the position is extrapolated at the window's own average
+    calendar days per session, which is the only pace this function can know:
+    there is no trading calendar before the plane's first close.
+    """
+    if grid[0] < d < grid[-1]:
+        return float(bisect.bisect_left(grid, d))
+    if len(grid) < 2:
+        return 0.0
+    per_session = (grid[-1] - grid[0]).days / (len(grid) - 1)
+    if per_session <= 0:
+        return 0.0 if d <= grid[0] else float(len(grid) - 1)
+    if d <= grid[0]:
+        return -((grid[0] - d).days / per_session)
+    return (len(grid) - 1) + (d - grid[-1]).days / per_session
+
+
 def _snap(d: datetime.date, grid: list[datetime.date]) -> int:
     """Index of the first grid day >= `d`, clamped to the last day.
 
@@ -295,6 +320,14 @@ _RF_SERIES = {"cdi_pct": "$CDI", "cdi_plus": "$CDI", "ipca_plus": "$IPCA"}
 RF_SERIES_TICKERS = frozenset(_RF_SERIES.values())
 BUSINESS_DAYS_PER_YEAR = 252
 
+# How far behind the chart a BCB series may fall before a contract indexed to it
+# stops being drawn. Some lag is structural — the plane closes on the exchange
+# calendar and SGS publishes a day or two later — and refusing to draw over that
+# would mean never drawing. A series months behind is a different thing: forward
+# -filling it paints a long flat tail on paper that was accruing the whole time,
+# which reads as "this paid nothing".
+RF_SERIES_STALE_SESSIONS = 10
+
 
 def rf_series_for(indexer: str) -> str | None:
     """The plane ticker an indexer needs, or None when it needs no series."""
@@ -306,19 +339,24 @@ def _factor_path(
     start: int,
     terms: tuple[str, float],
     levels: dict[datetime.date, float] | None,
+    offset: float = 0.0,
 ) -> list[float] | None:
     """Growth factors from `grid[start]` onward under `terms`, or None.
 
+    `offset` is how many sessions of accrual already happened before
+    `grid[start]` — non-zero when the anchoring mark predates the window, so the
+    first drawn point carries that growth instead of restarting from 1.
+
     None means "cannot be drawn honestly": an indexed contract whose series is
-    missing or does not reach far enough gets no curve rather than a flat one,
-    because flat would read as "this paid nothing".
+    missing, starts too late, or has fallen too far behind gets no curve rather
+    than a flat one, because flat would read as "this paid nothing".
     """
     indexer, rate = terms
     pct = rate / 100.0
 
     if indexer == "pre":
         daily = (1.0 + pct) ** (1.0 / BUSINESS_DAYS_PER_YEAR)
-        return [daily ** i for i in range(len(grid) - start)]
+        return [daily ** (i + offset) for i in range(len(grid) - start)]
 
     if not levels:
         return None
@@ -329,6 +367,16 @@ def _factor_path(
     # carry, and forcing one would invent the growth up to it.
     ordered = sorted(levels)
     if ordered[0] > grid[start]:
+        return None
+    # ...and a series that stops long before the window does would be carried
+    # forward flat over the rest of it, which is the same fabrication in the
+    # other direction. See RF_SERIES_STALE_SESSIONS for why this is a tolerance
+    # rather than an equality — and why it is also capped at half the span being
+    # drawn, so a fixed session count cannot swallow a window shorter than
+    # itself and let the guard pass on anything.
+    covered = bisect.bisect_right(grid, ordered[-1]) - 1
+    tolerance = min(RF_SERIES_STALE_SESSIONS, max(1, (len(grid) - start) // 2))
+    if covered < len(grid) - 1 - tolerance:
         return None
     sampled: list[float] = []
     last = levels[ordered[0]]
@@ -409,26 +457,34 @@ def accrue_rf(
             continue
         series: dict[datetime.date, float] = {}
         for (d0, pu0), (d1, pu1) in zip(pts, pts[1:]):
-            i0, i1 = _snap(d0, grid), _snap(d1, grid)
-            if i1 <= i0:
-                # Two marks the grid cannot separate (same session, or both
-                # rolled onto a stale plane's last day). The later price wins.
-                series[grid[i1]] = pu1
+            p0, p1 = _grid_pos(d0, grid), _grid_pos(d1, grid)
+            if p1 - p0 < 1e-9:
+                # Two marks the grid cannot separate (same session). The later
+                # price wins.
+                series[grid[_snap(d1, grid)]] = pu1
                 continue
             growth = pu1 / pu0
-            span = i1 - i0
-            for i in range(i0, i1 + 1):
-                series[grid[i]] = pu0 * growth ** ((i - i0) / span)
+            # Only the part of the segment the window can show. Both ends are
+            # real positions, extrapolated outside the grid rather than clamped
+            # onto it, so a contract bought years before the plane's first close
+            # is drawn at the value it had reached by then — clamping p0 to 0
+            # redrew the whole pre-window run inside the visible window.
+            lo = max(0, math.ceil(p0 - 1e-9))
+            hi = min(len(grid) - 1, math.floor(p1 + 1e-9))
+            for i in range(lo, hi + 1):
+                series[grid[i]] = pu0 * growth ** ((i - p0) / (p1 - p0))
 
         # Past the last mark the contract is still accruing, and only the terms
         # the tenant entered say how fast. Anchored at that mark's price, so the
         # curve stays pinned to a reported number and only its slope is a model.
         last_day, last_pu = pts[-1]
-        anchor = _snap(last_day, grid)
-        if contract_terms and anchor < len(grid) - 1:
+        anchor_pos = _grid_pos(last_day, grid)
+        anchor = max(0, math.ceil(anchor_pos - 1e-9))
+        if contract_terms and anchor < len(grid):
             path = _factor_path(
                 grid, anchor, contract_terms,
-                levels.get(_RF_SERIES.get(contract_terms[0], "")))
+                levels.get(_RF_SERIES.get(contract_terms[0], "")),
+                offset=anchor - anchor_pos)
             if path:
                 for i, factor in enumerate(path):
                     series[grid[anchor + i]] = last_pu * factor

@@ -116,7 +116,16 @@ export function RendaFixaTermsForm({ tickers }: { tickers: string[] }) {
               <button
                 type="button"
                 onClick={() => submit(ticker)}
-                disabled={save.isPending || !draft[ticker]?.rate}
+                // Also blocked until the existing terms have loaded: the PUT
+                // replaces the whole set, so saving one row against an empty
+                // `existing` — a slow or failed GET — deletes every other
+                // contract's indexer.
+                disabled={
+                  save.isPending ||
+                  terms.isPending ||
+                  terms.isError ||
+                  !draft[ticker]?.rate
+                }
                 className="rounded-[4px] border border-navy bg-navy px-2 py-0.5 text-[11px] text-white disabled:opacity-40"
               >
                 Salvar

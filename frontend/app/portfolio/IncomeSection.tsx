@@ -20,6 +20,10 @@ export const INCOME_LABEL: Record<string, string> = {
   amortization: "Amortizações",
   other: "Outros",
   qty_event: "Eventos de qtd.",
+  // Renda fixa custody freezes carry no cash, so they land here at R$ 0,00 —
+  // but without a label the fallback capitalises the key and prints "Frozen"
+  // in the middle of a pt-BR table.
+  frozen: "Custódia bloqueada",
 };
 const label = (c: string) => INCOME_LABEL[c] ?? c.charAt(0).toUpperCase() + c.slice(1);
 

@@ -87,7 +87,6 @@ const EXTRACT_ROWS: [string, string, string, string, string, string, number, num
   ["03/07/2026", "Venda", "Mercado à Vista", "—", "CLEAR CORRETORA LTDA", "WEGE3", 20, 58.2, 1164],
 ];
 
-// A sample of the 16 MOV_CATEGORY labels — these strings are the parser's keys.
 // A sample of MOV_CATEGORY (taxcore/scripts/load_b3.py), not the whole list —
 // the count above it is the claim, and that has to match the parser. Every
 // figure on this page is traceable there; keep them in step.

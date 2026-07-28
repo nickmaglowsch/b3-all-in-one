@@ -103,6 +103,15 @@ TICKER_RENAMES: dict[str, str] = {
 }
 
 
+# A fractional-market ticker is the round-lot code plus an F (VTRU3F -> VTRU3).
+# Anchored on the round-lot shape, not on the bare suffix: a renda fixa contract
+# code ending in F ("LCI - LCI24H9RKF") would otherwise be silently truncated
+# here, again in consolidate_fractional, and again in derive_positions — at
+# different stages of the pipeline, so the three would disagree about one book.
+_FRACTIONAL_RE = r"^([A-Z][A-Z0-9]{3}\d{1,2})F$"
+_ROUND_LOT = r"\1"
+
+
 def apply_ticker_renames(df: pd.DataFrame) -> pd.DataFrame:
     """Rewrite old ticker roots to their current code, preserving any *F suffix
     (TRPL4F -> ISAE4F) so fractional consolidation still works downstream."""
@@ -110,8 +119,8 @@ def apply_ticker_renames(df: pd.DataFrame) -> pd.DataFrame:
         return df
     df = df.copy()
     t = df["ticker"].astype(str)
-    frac = t.str.endswith("F")
-    root = t.str.replace(r"F$", "", regex=True).replace(TICKER_RENAMES)
+    frac = t.str.match(_FRACTIONAL_RE)
+    root = t.str.replace(_FRACTIONAL_RE, _ROUND_LOT, regex=True).replace(TICKER_RENAMES)
     df["ticker"] = root.where(~frac, root + "F")
     return df
 
@@ -171,6 +180,18 @@ MOV_CATEGORY = {
     "Desdobro":              "qty_event",
     "Bonificação em Ativos": "qty_event",
     "Fração em Ativos":      "qty_event",
+    # --- Renda fixa contract lifecycle (CDB, LCI, LCA, CRI, CRA, debêntures,
+    # Tesouro Direto). Aplicação is the buy, resgate/vencimento the sell — the
+    # same shape as a trade, so they need no special case downstream. Same
+    # labels irpf_2026.renda_fixa_year_end already recognises; keep in step.
+    "APLICAÇÃO":                        "trade",
+    "APLICAÇÃO/DEPÓSITO":               "trade",
+    "VENCIMENTO":                       "trade",
+    "VENCIMENTO/RESGATE SALDO EM CONTA": "trade",
+    "RESGATE ANTECIPADO":               "trade",
+    "Resgate":                          "trade",
+    # RETIRADA DE CUSTÓDIA is two unrelated events under one label and is
+    # resolved per row below, not here.
 }
 
 
@@ -180,17 +201,48 @@ MOV_CATEGORY = {
 _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9]{3}\d{1,2}$")
 
 
-def _extract_ticker(produto: str) -> str | None:
-    """Extract the equity/FII ticker from a Movimentação 'Produto' cell.
+# Renda fixa products, which B3 books as 'PREFIX - <contrato> - <emissor>'
+# ('CDB - CDB24C7HQ2L - BANCO ORIGINAL S/A') or, for Tesouro Direto, as a plain
+# name ('Tesouro Selic 2029'). Case-insensitive because B3 writes the bank paper
+# in caps and the Tesouro titles in mixed case. Same prefix list as
+# irpf_2026.renda_fixa_year_end — copied rather than imported, like _TICKER_RE
+# is across this repo, because the two run in different processes. Keep in step.
+_RF_PREFIX_RE = re.compile(
+    r"^(CDB|LCI|LCA|LC|LF|CRA|CRI|TESOURO|DEB|NTN|LTN|LFT|RDB)\b", re.IGNORECASE)
 
-    Format is typically 'TICKER - COMPANY NAME' for exchange-traded names,
-    or 'CRI - <code> - <issuer>' / 'CDB - ...' / 'CFF - ...' for non-exchange
-    products. We only care about the first form.
+# B3's own label for the market these are booked under. Shared by listed
+# fixed-income ETFs (LFTB11), which is why the ticker decides, never the label.
+RENDA_FIXA_MARKET = "Renda Fixa"
+
+
+def _rf_code(produto: str) -> str | None:
+    """Stable identity for a renda fixa 'Produto' cell, or None if it isn't one.
+
+    'PREFIX - <contrato>' — the first two segments only. The issuer is the third
+    and is left out on purpose: it reformats between reports ('BANCO PINE S/A'
+    vs 'BANCO PINE S.A.') and would split one contract into two holdings.
+    irpf_2026 still reads it off the raw extract, where it needs the CNPJ lookup.
+    """
+    if not isinstance(produto, str) or not _RF_PREFIX_RE.match(produto.strip()):
+        return None
+    parts = [p.strip() for p in produto.split(" - ") if p.strip()]
+    return " - ".join(parts[:2]).upper()
+
+
+def _extract_ticker(produto: str) -> str | None:
+    """Extract the security identity from a Movimentação 'Produto' cell.
+
+    Two forms: 'TICKER - COMPANY NAME' for exchange-traded names, and
+    'CRI - <code> - <issuer>' / 'CDB - ...' for renda fixa contracts, which have
+    no listed ticker and are identified by their contract code instead. Anything
+    else (e.g. 'CFF - ...') stays None and its rows are dropped, as before.
     """
     if not isinstance(produto, str):
         return None
     head = produto.split(" - ", 1)[0].strip().upper()
-    return head if _TICKER_RE.fullmatch(head) else None
+    if _TICKER_RE.fullmatch(head):
+        return head
+    return _rf_code(produto)
 
 
 def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -213,14 +265,41 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     raw["mov_type"] = raw["Movimentação"].astype(str).str.strip()
     raw["direction"] = raw["Entrada/Saída"].astype(str).str.strip().str.lower()
     raw["category"] = raw["mov_type"].map(MOV_CATEGORY).fillna("skip")
+    raw["is_rf"] = raw["Produto"].map(_rf_code).notna()
+
+    # RETIRADA DE CUSTÓDIA is two unrelated events sharing one label. With a
+    # settlement value it is a transfer out that paid — a resgate. With none it
+    # is custody frozen (issuer under intervention, FGC pending): the paper still
+    # exists, is still declarable at cost, and booking it as a sale would report
+    # a redemption that never happened. Mirrors irpf_2026.py's `frozen` branch.
+    held = raw["mov_type"] == "RETIRADA DE CUSTÓDIA"
+    raw.loc[held, "category"] = np.where(
+        raw.loc[held, "amount"].fillna(0) > 0, "trade", "frozen")
 
     trade_rows = raw[raw["category"] == "trade"].copy()
     # Direction -> Compra/Venda; skip rows missing essential numeric fields.
     trade_rows["side"] = trade_rows["direction"].map(
         lambda d: "Compra" if d.startswith("credito") else "Venda")
+
+    # Renda fixa is denominated inconsistently: the same R$25k CDB aplicação is
+    # 2,500,000 units at PU 0.01 in one report and a CRI is 8 units at PU
+    # 1035.42 in another. `Valor ≈ Quantidade × PU` holds under either, so derive
+    # the PU from the ratio rather than trusting a convention, and fall back to
+    # one unit priced at the whole amount when a report carries no quantity at
+    # all. Equities keep B3's own Preço unitário untouched.
+    rf = trade_rows["is_rf"]
+    if rf.any():
+        qty = trade_rows["qty"].where(trade_rows["qty"] > 0).fillna(1.0)
+        pu = (trade_rows["amount"] / qty).where(trade_rows["amount"] > 0)
+        trade_rows.loc[rf, "qty"] = qty[rf]
+        trade_rows.loc[rf, "price"] = pu[rf].fillna(trade_rows.loc[rf, "price"])
+
     trade_rows = trade_rows.dropna(subset=["date", "ticker", "qty", "price"])
     trade_rows = trade_rows[(trade_rows["qty"] > 0) & (trade_rows["price"] > 0)]
-    trade_rows["market"] = "Mercado à Vista"  # Movimentação doesn't expose this
+    # Movimentação doesn't expose the market, so it is inferred: renda fixa from
+    # the Produto shape, everything else spot.
+    trade_rows["market"] = np.where(
+        trade_rows["is_rf"], "Renda Fixa", "Mercado à Vista")
     trade_rows["maturity"] = "-"
     trade_rows["signed_qty"] = np.where(
         trade_rows["side"] == "Compra", trade_rows["qty"], -trade_rows["qty"])
@@ -233,7 +312,11 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     # bucket includes income, reembolso, amortization, qty_event and "other".
     # We tag it with event_category so downstream consumers (portfolio_status,
     # derive_positions) can filter precisely.
-    keep_categories = ("cash", "reembolso", "amort", "qty_event", "other")
+    # "frozen" carries no cash and never touches cost basis; it is kept so the
+    # portfolio can say *why* a contract it still holds has no closing mark,
+    # instead of listing it as merely unpriced.
+    keep_categories = ("cash", "reembolso", "amort", "qty_event", "other",
+                       "frozen")
     cash_rows = raw[raw["category"].isin(keep_categories)].copy()
     cash_rows = cash_rows.dropna(subset=["date", "ticker"])
     # event_type stays human-readable so users can grep cash_events.csv later.
@@ -241,7 +324,7 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     # Map internal category -> stable public label written to CSV.
     _label = {"cash": "income", "reembolso": "reembolso",
               "amort": "amortization", "qty_event": "qty_event",
-              "other": "other"}
+              "other": "other", "frozen": "frozen"}
     cash_rows["event_category"] = cash_rows["category"].map(_label)
     # is_amortization stays for backwards compatibility with older code paths.
     cash_rows["is_amortization"] = cash_rows["category"] == "amort"
@@ -571,7 +654,8 @@ def consolidate_fractional(positions: pd.DataFrame) -> pd.DataFrame:
         return positions
     out = positions.copy()
     # Group key: round-lot ticker (strip trailing F if present and the parent exists)
-    out["_canonical"] = out["ticker"].str.replace(r"F$", "", regex=True)
+    out["_canonical"] = out["ticker"].str.replace(
+        _FRACTIONAL_RE, _ROUND_LOT, regex=True)
     grouped = (
         out.groupby("_canonical", as_index=False)
         .agg(
@@ -624,7 +708,8 @@ def derive_positions(
         # Strip *F suffix so fractional and round-lot trades roll up to the
         # canonical ticker. We retain the most informative market label
         # ("Mercado à Vista" wins) for display per consolidate_fractional().
-        t["ticker"] = t["ticker"].astype(str).str.replace(r"F$", "", regex=True)
+        t["ticker"] = t["ticker"].astype(str).str.replace(
+            _FRACTIONAL_RE, _ROUND_LOT, regex=True)
 
     # Build a unified event timeline. Each row carries:
     #   kind ∈ {trade, qty_event, amort}
@@ -809,6 +894,20 @@ def main(argv: list[str]) -> int:
         trades, premium_events, unresolved_exercises, opt_stats = (
             process_option_activity(trades, mov_settlements)
         )
+        # Negociação is the exchange's own trade log, so it wins wherever the
+        # two reports describe the same event — that is what this precedence
+        # rule is for, since Movimentação's settlement rows are dupes of it.
+        # Renda fixa contracts are *registered* at B3, never traded on it, so
+        # they appear in no Negociação report at all: there is nothing for them
+        # to duplicate, and dropping them with the rest of the Movimentação
+        # trade rows loses every CDB, LCI and Tesouro aplicação the moment a
+        # single Negociação file is present. Unioned back in; the dedup below
+        # collapses the copies that overlapping report ranges produce.
+        if not mov_settlements.empty:
+            rf_rows = mov_settlements[
+                mov_settlements["market"] == RENDA_FIXA_MARKET]
+            if not rf_rows.empty:
+                trades = pd.concat([trades, rf_rows], ignore_index=True)
     elif mov_trade_dfs:
         trades = pd.concat(mov_trade_dfs, ignore_index=True).dropna(
             subset=["date", "ticker"])
@@ -853,13 +952,20 @@ def main(argv: list[str]) -> int:
         # Detected by: market contains "Renda Fixa" AND ticker matches the
         # standard B3 stock-ticker shape (rejects CDB/LCI/LCA contract codes
         # which are alphanumeric strings without the ticker pattern).
-        is_rf_etf = (
-            trades["market"].fillna("").astype(str).str.contains(
-                "Renda Fixa", case=False, na=False)
-            & trades["ticker"].astype(str).str.match(
-                _TICKER_RE.pattern, na=False)
-        )
-        trades_for_positions = trades[is_equity_market | is_rf_etf]
+        is_renda_fixa = trades["market"].fillna("").astype(str).str.contains(
+            "Renda Fixa", case=False, na=False)
+        is_rf_etf = is_renda_fixa & trades["ticker"].astype(str).str.match(
+            _TICKER_RE.pattern, na=False)
+        # The contracts themselves — CDB, LCI, CRI, Tesouro Direto — are real
+        # holdings too, identified by their contract code rather than a ticker.
+        # Admitted by name here rather than by flipping --all-markets, which
+        # would also let in Mercado = "Futuro": WIN/WDO daytrades net to zero
+        # every session, so they are not a position, and nothing downstream of
+        # positions.csv filters them back out.
+        is_rf_contract = is_renda_fixa & trades["ticker"].astype(str).str.match(
+            _RF_PREFIX_RE.pattern, case=False, na=False)
+        trades_for_positions = trades[
+            is_equity_market | is_rf_etf | is_rf_contract]
     else:
         trades_for_positions = trades
 

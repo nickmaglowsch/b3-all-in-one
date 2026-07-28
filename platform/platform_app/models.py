@@ -252,6 +252,35 @@ class AssetClassOverride(Base):
     )
 
 
+class RendaFixaTerms(Base):
+    """What a still-open renda fixa contract pays, for the tenant to fill in.
+
+    A redeemed contract needs no row: B3 reported both its aplicação and its
+    resgate, and two marks imply the rate exactly. One still held has only its
+    aplicação, and neither extract B3 publishes carries the indexer — so the
+    only honest source for it is the person who signed the paper. Absent a row,
+    the contract stays off the return chart and is disclosed by name.
+
+    `rate_pct` reads against `indexer`: the percentage for cdi_pct (95 = 95% do
+    CDI), the spread for cdi_plus / ipca_plus (2.5 = CDI + 2,5% a.a.), the
+    coupon for pre (12 = 12% a.a. prefixado).
+    """
+
+    __tablename__ = "renda_fixa_terms"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "ticker", name="uq_rf_terms_tenant_ticker"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    ticker: Mapped[str] = mapped_column(Text, nullable=False)
+    indexer: Mapped[str] = mapped_column(Text, nullable=False)  # cdi_pct|cdi_plus|ipca_plus|pre
+    rate_pct: Mapped[float] = mapped_column(Numeric, nullable=False)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class RebalanceSettings(Base):
     # spec/05 Feature 4: per-tenant rebalance behavior. One row per tenant
     # (tenant_id is the PK), upserted on PUT. Defaults reproduce today's behavior.

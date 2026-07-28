@@ -37,9 +37,17 @@ Ports of the existing scripts, as API + UI instead of stdout markdown:
   "same money, different strategy" point comparison. Benchmarks come from the
   engine (`scripts/bench_series.py`, Yahoo ^BVSP + BCB CDI) and degrade to
   portfolio-only when unavailable rather than drawing a flat line.
-  Not modelled yet: renda fixa has no daily marks in the plane, so an RF sleeve
-  is excluded from the index and disclosed via the response's `excluded` block
-  (the taxcore CLI valued it as units of the CDI index — a feature of its own).
+  Renda fixa (CDB, LCI, LCA, CRI, CRA, debêntures, Tesouro) has no feed, so it is
+  priced from the tenant's own extract instead: `portfolio_index.accrue_rf`
+  interpolates geometrically between the per-unit price of every aplicação and
+  every resgate B3 reported — two real marks imply the rate exactly, so no
+  indexer has to be known for a contract that has been redeemed. One still held
+  has a single mark, and its indexer (`renda_fixa_terms`, tenant-entered, since
+  neither extract carries it) accrues it forward from there against the BCB CDI
+  and IPCA levels the engine stores on the plane under `$CDI` / `$IPCA`
+  (`b3_pipeline/index_series.py`). Anything left undrawable — a custody freeze,
+  an unmodelled amortização, a missing indexer — is named contract by contract,
+  with its reason, in the response's `excluded.renda_fixa`.
 - **Sector exposure** (`sector_exposure.py`).
 - **Rankings & allocation** (`rank*.py` + `methodologies/`): platform-wide equity/FII
   rankings computed once per market-data refresh and cached (methodologies are pure

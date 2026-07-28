@@ -88,6 +88,9 @@ const EXTRACT_ROWS: [string, string, string, string, string, string, number, num
 ];
 
 // A sample of the 16 MOV_CATEGORY labels — these strings are the parser's keys.
+// A sample of MOV_CATEGORY (taxcore/scripts/load_b3.py), not the whole list —
+// the count above it is the claim, and that has to match the parser. Every
+// figure on this page is traceable there; keep them in step.
 const MOV_LABELS = [
   "Dividendo",
   "Juros Sobre Capital Próprio",
@@ -97,6 +100,10 @@ const MOV_LABELS = [
   "Bonificação em Ativos",
   "Fração em Ativos",
   "Transferência - Liquidação",
+  "APLICAÇÃO",
+  "VENCIMENTO",
+  "RESGATE ANTECIPADO",
+  "PAGAMENTO DE JUROS",
 ];
 
 function ExtractSheet() {
@@ -449,7 +456,7 @@ export default function LandingPage() {
             </p>
             <div>
               <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-                16 tipos de movimentação reconhecidos
+                24 tipos de movimentação reconhecidos
               </p>
               <ul className="flex flex-wrap gap-1.5">
                 {MOV_LABELS.map((m) => (

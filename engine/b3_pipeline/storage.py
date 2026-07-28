@@ -805,14 +805,22 @@ def _as_date(value) -> date:
     return date.fromisoformat(str(value)[:10])
 
 
-def max_external_price_date(conn) -> Optional[date]:
-    """Latest date already stored — None when the table is empty."""
-    row = execute(conn, "SELECT MAX(date) FROM external_prices").fetchone()
+# Both helpers below answer "what has this feed already got?", and both are used
+# to decide what NOT to fetch — so they must be scoped to one feed. Unscoped,
+# any second writer to the shared table (the BCB index series, a Tesouro Direto
+# loader) makes the ETF backfill believe those dates are covered and skip them.
+# B3's window is ~14 months and rolling, so a skipped day is gone for good.
+def max_external_price_date(conn, source: str) -> Optional[date]:
+    """Latest date already stored for `source` — None when it has no rows."""
+    row = execute(
+        conn, "SELECT MAX(date) FROM external_prices WHERE source = ?",
+        (source,),
+    ).fetchone()
     return _as_date(row[0]) if row and row[0] else None
 
 
-def stored_external_dates(conn, start: date) -> set:
-    """Dates from `start` that already have rows.
+def stored_external_dates(conn, start: date, source: str) -> set:
+    """Dates from `start` that `source` already has rows for.
 
     The caller fetches the complement rather than everything after the latest
     stored date. Resuming from the max would step over a day a transient network
@@ -820,8 +828,10 @@ def stored_external_dates(conn, start: date) -> set:
     becomes permanently unrecoverable — the one failure mode worth extra code.
     """
     rows = execute(
-        conn, "SELECT DISTINCT date FROM external_prices WHERE date >= ?",
-        (start.isoformat(),),
+        conn,
+        "SELECT DISTINCT date FROM external_prices "
+        "WHERE date >= ? AND source = ?",
+        (start.isoformat(), source),
     ).fetchall()
     return {_as_date(r[0]) for r in rows if r and r[0]}
 

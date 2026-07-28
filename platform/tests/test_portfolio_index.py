@@ -16,9 +16,9 @@ from datetime import date
 import pytest
 
 from platform_app.portfolio_index import (
-    EXCLUDED_MARKETS, PRIMARY_ETF_MARKET, RENDA_FIXA_MARKET, build_index,
-    canonical, is_excluded, max_drawdown_pct, rebase, select_tickers, summarize,
-    years_between,
+    EXCLUDED_MARKETS, PRIMARY_ETF_MARKET, RENDA_FIXA_MARKET, accrue_rf,
+    build_index, canonical, is_excluded, max_drawdown_pct, rebase,
+    select_tickers, summarize, years_between,
 )
 
 D1, D2, D3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
@@ -162,6 +162,15 @@ def test_canonical_only_strips_the_fractional_suffix():
     assert canonical("BTLG11") == "BTLG11"   # no round-lot B3 code ends in F
 
 
+def test_canonical_leaves_a_renda_fixa_contract_code_ending_in_f_intact():
+    """Renda fixa contracts share the "Renda Fixa" label with the listed ETFs,
+    so the market cannot scope this strip — the round-lot shape has to. taxcore
+    strips at a different pipeline stage, so a truncation here would leave the
+    two layers disagreeing about one holding."""
+    assert canonical("LCI - LCI24H9RKF") == "LCI - LCI24H9RKF"
+    assert canonical("CDB - CDB24C7HQ2L") == "CDB - CDB24C7HQ2L"
+
+
 def test_etf_subscription_is_the_buy_not_a_duplicate():
     """Subscribe 50 HASH11 in the primary market (booked as HASH11H), sell them
     on the exchange months later. Drop the subscription and the sell is an orphan:
@@ -197,6 +206,71 @@ def test_renda_fixa_splits_by_ticker_shape_not_by_label():
     assert is_excluded("", RENDA_FIXA_MARKET)
     assert is_excluded("WINJ20", "Futuro")                    # still no position
     assert not is_excluded("PETR4", "Mercado à Vista")
+
+
+def test_a_contract_joins_the_book_only_once_it_can_be_priced():
+    priced = frozenset({"CDB - CDB24C7HQ2L"})
+    assert not is_excluded("CDB - CDB24C7HQ2L", RENDA_FIXA_MARKET, priced)
+    assert is_excluded("LCI - LCI24H9RKV3", RENDA_FIXA_MARKET, priced)
+    # Whatever it can price, a Futuro trade is still not an overnight position.
+    assert is_excluded("WINJ20", "Futuro", frozenset({"WINJ20"}))
+
+
+def test_carrying_an_unpriced_contract_would_book_its_aplicacao_as_a_loss():
+    """Why an unpriced contract is kept out of the book rather than carried at 0.
+
+    Its aplicação still counts as an inflow, so the chain divides a NAV that
+    never rose by a denominator that did — the purchase reads as a same-day
+    total loss of the money. Excluding it understates the book; carrying it
+    invents a number, which is the worse of the two.
+    """
+    out = build_index(
+        [D1, D2], {}, [(D1, "CDB - X", 10_000.0)], [(D1, "buy", 10_000.0)])
+    assert out["unpriced"] == ["CDB - X"]
+    assert out["nav"] == [0.0, 0.0]
+    assert out["index"] == [100.0, 100.0]  # only because build_index holds flat
+
+
+# ── accrue_rf: a contract's own marks imply its rate ──────────────────────────
+
+def test_accrue_rf_lands_exactly_on_both_of_b3s_marks():
+    """A CDB bought at PU 0.01 and redeemed at 0.0121 is worth exactly the
+    aplicação on the first day and exactly the resgate on the last — those are
+    reported values, not model output, so the path must not round them away."""
+    grid = [date(2024, 1, d) for d in range(2, 12)]
+    out = accrue_rf(grid, {"CDB - X": [(grid[0], 0.01), (grid[-1], 0.0121)]})
+    series = out["CDB - X"]
+    assert series[grid[0]] == pytest.approx(0.01)
+    assert series[grid[-1]] == pytest.approx(0.0121)
+    assert len(series) == len(grid)
+    assert all(series[a] < series[b] for a, b in zip(grid, grid[1:]))
+
+
+def test_accrue_rf_compounds_rather_than_interpolating_straight():
+    """Interest compounds, so the midpoint of a 16x run is 4x, not 8.5x. A
+    straight line would understate every day in the first half of a contract."""
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    out = accrue_rf(grid, {"CDB - X": [(grid[0], 1.0), (grid[4], 16.0)]})
+    assert out["CDB - X"][grid[2]] == pytest.approx(4.0)
+
+
+def test_accrue_rf_segments_between_every_mark():
+    """A second aplicação is another real mark, not noise: the contract accrued
+    at one rate before it and may accrue at another after."""
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    marks = [(grid[0], 1.0), (grid[2], 2.0), (grid[4], 2.0)]
+    series = accrue_rf(grid, {"CDB - X": marks})["CDB - X"]
+    assert series[grid[1]] == pytest.approx(2 ** 0.5)   # doubling over 2 days
+    assert series[grid[3]] == pytest.approx(2.0)        # flat over the second
+
+
+def test_accrue_rf_skips_a_contract_with_nothing_to_interpolate():
+    """One mark implies no rate. A contract still held has only its aplicação,
+    and inventing a curve from it is exactly what this must not do."""
+    grid = [date(2024, 1, 2), date(2024, 1, 3)]
+    assert accrue_rf(grid, {"CDB - X": [(grid[0], 0.01)]}) == {}
+    assert accrue_rf(grid, {"CDB - X": [(grid[0], 0.0), (grid[1], 0.0)]}) == {}
+    assert accrue_rf([], {"CDB - X": [(date(2024, 1, 2), 0.01)]}) == {}
 
 
 def test_marks_starting_mid_window_do_not_fabricate_a_return():
@@ -351,6 +425,41 @@ async def _seed_book(tenant_id: uuid.UUID) -> None:
         await session.commit()
 
 
+async def _seed_renda_fixa(tenant_id: uuid.UUID) -> None:
+    """Three OTC contracts on top of `_seed_book`, one of each outcome.
+
+    Redeemed (two marks, chartable), still held (one mark), and frozen by a
+    custody withdrawal that never settled. Denominated the way B3 denominates
+    CDBs: units of R$0.01, so the per-unit prices are small and the quantities
+    large — which is also what proves nothing here assumes a share-like PU.
+    """
+    from platform_app.db import async_session_maker
+    from platform_app.models import CashEvent, Trade
+
+    rf = [
+        # Redeemed: 25,000 in at PU 0.01, 30,250 back at 0.0121 — a real 21%.
+        ("2023-02-01", "Compra", "CDB - REDEEMED", 2_500_000, 0.01, 25_000.0, 2_500_000),
+        ("2023-11-01", "Venda", "CDB - REDEEMED", 2_500_000, 0.0121, 30_250.0, -2_500_000),
+        # Still held: no resgate, so no rate is implied and none is invented.
+        ("2023-03-01", "Compra", "CDB - OPEN", 1_800_000, 0.01, 18_000.0, 1_800_000),
+        # Frozen: two marks, but the second never paid — see event below.
+        ("2023-04-01", "Compra", "CDB - FROZEN", 950_000, 0.01, 9_500.0, 950_000),
+        ("2023-10-02", "Venda", "CDB - FROZEN", 950_000, 0.011, 10_450.0, -950_000),
+    ]
+    async with async_session_maker() as session:
+        for d, side, tk, qty, px, amt, sq in rf:
+            session.add(Trade(
+                tenant_id=tenant_id, date=date.fromisoformat(d), side=side,
+                market=RENDA_FIXA_MARKET, ticker=tk, qty=qty, price=px,
+                amount=amt, signed_qty=sq, source_file="seed"))
+        session.add(CashEvent(
+            tenant_id=tenant_id, date=date(2023, 10, 2), ticker="CDB - FROZEN",
+            event_type="RETIRADA DE CUSTÓDIA", event_category="frozen",
+            is_amortization=False, qty=950_000, price=0, amount=0,
+            source_file="seed"))
+        await session.commit()
+
+
 @_asyncio
 @pytest.mark.market
 async def test_portfolio_index_charts_the_real_book(client):
@@ -467,3 +576,134 @@ async def test_portfolio_index_422_without_trades(client):
     r = await client.get("/portfolio/index", headers=headers)
     assert r.status_code == 422
     assert "import a portfolio" in r.json()["detail"]
+
+
+@_asyncio
+@pytest.mark.market
+async def test_renda_fixa_is_charted_from_its_own_marks(client):
+    """The end-to-end wiring for OTC paper: contract rows in the tenant's tables,
+    a per-unit path interpolated from B3's own aplicação and resgate prices, and
+    every contract that has no such path named with a reason instead."""
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+    await _seed_book(tid)
+    await _seed_renda_fixa(tid)
+
+    body = (await client.get("/portfolio/index", headers=headers)).json()
+
+    # Only the redeemed contract is chartable, and it is a first-class holding
+    # in the filter menu alongside the equities.
+    assert body["universe"] == ["CDB - REDEEMED", "PETR4", "VALE3"]
+    # Priced, so it is never reported as merely missing a quote.
+    assert "CDB - REDEEMED" not in body["excluded"]["unpriced_tickers"]
+
+    reasons = {r["ticker"]: r["reason"] for r in body["excluded"]["renda_fixa"]}
+    assert set(reasons) == {"CDB - OPEN", "CDB - FROZEN"}
+    assert "resgate" in reasons["CDB - OPEN"]
+    assert "custódia" in reasons["CDB - FROZEN"]
+    # Named one by one, so "Renda Fixa" never appears as a bare market label.
+    assert "Renda Fixa" not in body["excluded"]["markets"]
+
+    # Isolating the contract reproduces exactly the return its two marks imply:
+    # 25,000 in, 30,250 back. Nothing else touches that line, so 21.00% is the
+    # whole assertion — the accrual is anchored, not modelled.
+    only = (await client.get(
+        "/portfolio/index?tickers=CDB - REDEEMED", headers=headers)).json()
+    assert only["tickers"] == ["CDB - REDEEMED"]
+    assert only["metrics"]["portfolio"]["total_return_pct"] == pytest.approx(
+        21.00, abs=0.01)
+    # It compounds, so it never gives ground on the way there.
+    curve = [p["portfolio"] for p in only["series"]]
+    assert curve == sorted(curve)
+
+
+# ── Open contracts: the indexer the tenant entered, over the BCB levels ───────
+
+def _levels(grid, daily_rate):
+    """A $CDI-shaped cumulative level series over `grid`, seeded at 1 + i0."""
+    out, running = {}, 1.0
+    for d in grid:
+        running *= 1.0 + daily_rate
+        out[d] = running
+    return out
+
+
+def test_an_open_contract_accrues_from_its_aplicacao_under_its_terms():
+    """One mark and no resgate used to mean no line at all. With the indexer
+    entered, the curve starts at the reported aplicação price — the anchor is
+    still a real number, only the slope is a model."""
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    out = accrue_rf(
+        grid, {"CDB - X": [(grid[0], 0.01)]},
+        terms={"CDB - X": ("cdi_pct", 100.0)},
+        levels={"$CDI": _levels(grid, 0.001)},
+    )
+    series = out["CDB - X"]
+    assert series[grid[0]] == pytest.approx(0.01)         # anchored, not modelled
+    assert series[grid[-1]] == pytest.approx(0.01 * 1.001 ** 4)
+
+
+def test_a_percentage_of_cdi_compounds_the_rate_not_the_level():
+    """50% do CDI over a doubling is not a 50% gain. Scaling the accumulated
+    level would say it is; scaling the daily rate — which is what the contract
+    actually pays — does not."""
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    levels = _levels(grid, 0.10)                          # 10% a day, 4 steps on
+    out = accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("cdi_pct", 50.0)}, levels={"$CDI": levels},
+    )
+    assert out["CDB - X"][grid[-1]] == pytest.approx(1.05 ** 4)
+    naive = 1.0 + 0.5 * (levels[grid[-1]] / levels[grid[0]] - 1.0)
+    assert out["CDB - X"][grid[-1]] != pytest.approx(naive)
+
+
+def test_prefixado_needs_no_series_at_all():
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    out = accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("pre", 12.0)}, levels={},
+    )
+    daily = 1.12 ** (1 / 252)
+    assert out["CDB - X"][grid[-1]] == pytest.approx(daily ** 4)
+
+
+def test_cdi_plus_a_spread_adds_the_spread_on_top_of_the_index():
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    out = accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("cdi_plus", 2.0)},
+        levels={"$CDI": _levels(grid, 0.001)},
+    )
+    expected = 1.001 ** 4 * 1.02 ** (4 / 252)
+    assert out["CDB - X"][grid[-1]] == pytest.approx(expected)
+
+
+def test_terms_extend_a_redeemed_contract_without_disturbing_its_marks():
+    """A partial resgate leaves the rest running. The segment between the two
+    real marks stays exact; the accrual only takes over past the last one."""
+    grid = [date(2024, 1, d) for d in range(2, 9)]
+    out = accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0), (grid[3], 2.0)]},
+        terms={"CDB - X": ("pre", 12.0)},
+        levels={},
+    )
+    series = out["CDB - X"]
+    assert series[grid[0]] == pytest.approx(1.0)          # both reported marks
+    assert series[grid[3]] == pytest.approx(2.0)          # survive untouched
+    assert series[grid[-1]] == pytest.approx(2.0 * 1.12 ** (3 / 252))
+
+
+def test_an_indexed_contract_with_no_series_draws_nothing():
+    """A flat line would read as "this paid nothing" for a year. Better absent
+    and disclosed — which is what the route turns this empty result into."""
+    grid = [date(2024, 1, d) for d in range(2, 7)]
+    assert accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("ipca_plus", 6.0)}, levels={}) == {}
+    # Same when the series exists but starts after the contract does.
+    late = {"$IPCA": {date(2024, 6, 1): 1.0}}
+    assert accrue_rf(
+        grid, {"CDB - X": [(grid[0], 1.0)]},
+        terms={"CDB - X": ("ipca_plus", 6.0)}, levels=late) == {}

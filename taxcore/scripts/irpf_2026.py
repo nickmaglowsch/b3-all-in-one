@@ -49,13 +49,30 @@ UNITS_NOT_FII: set[str] = {
 }
 
 
+# Renda fixa contracts, identified by the prefix B3 puts in front of the
+# contract code ('CDB - CDB24C7HQ2L'). Case-insensitive because B3 caps the bank
+# paper and writes the Tesouro titles mixed-case ('Tesouro Selic 2029'), which a
+# case-sensitive ^TESOURO would miss entirely. Same list as load_b3._RF_PREFIX_RE
+# — the two run in different processes, so they are duplicated. Keep in step.
+RF_PREFIX_RE = re.compile(
+    r"^(CDB|LCI|LCA|LC|LF|CRA|CRI|TESOURO|DEB|NTN|LTN|LFT|RDB)\b", re.IGNORECASE)
+
+
 def asset_class(t: str) -> str:
-    """Map a ticker to its tax asset class (AÇÃO / FII / BDR / ETF_RV / ETF_RF)."""
+    """Map a ticker to its tax asset class (AÇÃO / FII / BDR / ETF_RV / ETF_RF / RF)."""
     t = t.upper()
     if t == "IVVB11":
         return "ETF_RV"
     if t == "LFTB11":
         return "ETF_RF"
+    # Renda fixa contracts carry a contract code, not a ticker, so every shape
+    # rule below misses and they would fall through to AÇÃO. That is not a
+    # cosmetic mislabel: a CDB resgate booked as a stock sale inflates the
+    # month's AÇÃO gross, can blow the R$20k isenção for genuine equity sales,
+    # and taxes tributação-exclusiva income as renda variável. tlh_plan imports
+    # this same function, so one branch here covers both callers.
+    if RF_PREFIX_RE.match(t):
+        return "RF"
     if t in UNITS_NOT_FII:
         return "AÇÃO"
     if t.endswith("11"):
@@ -184,8 +201,20 @@ def build_timeline() -> pd.DataFrame:
     valid_ticker = trades["ticker"].astype(str).apply(lambda s: bool(rf_etf_re.match(s)))
     trades = trades[is_eq | (is_rf & valid_ticker)].copy()
 
-    trades["ticker_root"] = trades["ticker"].str.replace(r"F$", "", regex=True)
+    # Guarded by the round-lot shape: a bare F-strip would truncate a renda fixa
+    # contract code ending in F. See load_b3._FRACTIONAL_RE.
+    trades["ticker_root"] = trades["ticker"].str.replace(
+        r"^([A-Z][A-Z0-9]{3}\d{1,2})F$", r"\1", regex=True)
     trades["is_buy"] = trades["side"].str.lower().str.startswith("compra")
+
+    # Renda fixa cash events (amortização and coupon rows on a CRI, custody
+    # freezes on a CDB) now carry the contract code as their ticker. They are
+    # declared by renda_fixa_year_end at cost, in Bens e Direitos — letting them
+    # into this timeline would open a second, competing position for the same
+    # paper and feed it to the renda-variável apuração below. Mirrors the trade
+    # filter above; the two must drop the same set.
+    events = events[~events["ticker"].astype(str).str.match(
+        RF_PREFIX_RE.pattern, case=False, na=False)].copy()
 
     rows = []
     for _, t in trades.iterrows():
@@ -247,7 +276,13 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
     """Build per-product saldo snapshot at 31/12/(year-1) and 31/12/year.
 
     Returns one row per (code, bank) pair with:
-      aplic_total, exit_date, status, value_prev, value_cur, irpf_grupo, irpf_codigo.
+      aplic_total, exit_date, status, value_prev, value_cur, irpf_grupo, irpf_codigo,
+      plus the year's realized rendimento (rendimento_cur) and coupon income
+      (juros_cur) for the Rendimentos ficha.
+
+    Balances are preço médio over the contract's own quantities, so a partial
+    resgate takes its share of the cost and leaves the rest declared, and an
+    aplicação made *after* a year-end is not counted into that year-end.
     """
     files = sorted((ROOT / "b3_imports").glob("movimentacao*.xlsx"))
     if not files:
@@ -258,9 +293,10 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
     mov["Valor"] = pd.to_numeric(mov["Valor da Operação"], errors="coerce")
     mov["dir"] = mov["Entrada/Saída"].astype(str).str.strip().str.lower()
     mov["mov_type"] = mov["Movimentação"].astype(str).str.strip()
+    mov["Qtd"] = pd.to_numeric(mov.get("Quantidade"), errors="coerce")
 
-    rf_pattern = r"^(CDB|LCI|LCA|LC|LF|CRA|CRI|TESOURO|DEB|NTN|LTN|LFT|RDB)\b"
-    rf = mov[mov["Produto"].astype(str).str.match(rf_pattern, na=False)].copy()
+    rf = mov[mov["Produto"].astype(str).str.match(
+        RF_PREFIX_RE.pattern, case=False, na=False)].copy()
 
     def code_of(p):
         parts = [x.strip() for x in p.split(" - ")]
@@ -284,14 +320,31 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
             m = r["mov_type"]
             d = r["dir"]
             has_value = pd.notna(r["Valor"]) and float(r["Valor"]) > 0
-            if m in ("APLICAÇÃO", "APLICAÇÃO/DEPÓSITO"): return "aplic"
-            if m in ("COMPRA / VENDA", "COMPRA/VENDA DEFINITIVA/CESSAO"): return "aplic"
-            if m == "MDA COMPRA/VENDA DEFINITIVA MERCADO PRIMARIO": return "aplic"
+            # Tesouro Direto is booked as a plain Compra / Venda, which
+            # load_b3.MOV_CATEGORY has always read as a trade — so leaving them
+            # out here dropped every Tesouro position from the report while its
+            # trades parsed fine everywhere else. The two must agree.
+            if m in ("APLICAÇÃO", "APLICAÇÃO/DEPÓSITO", "Compra"): return "aplic"
             if m in ("VENCIMENTO", "VENCIMENTO/RESGATE SALDO EM CONTA",
-                     "RESGATE ANTECIPADO", "Resgate"):
+                     "RESGATE ANTECIPADO", "Resgate", "Venda"):
                 return "resgate"
+            # Labels B3 uses for both legs of a round trip; Entrada/Saída is the
+            # only thing that separates them.
+            if m in ("COMPRA / VENDA", "COMPRA/VENDA DEFINITIVA/CESSAO",
+                     "MDA COMPRA/VENDA DEFINITIVA MERCADO PRIMARIO",
+                     "Transferência - Liquidação"):
+                return "aplic" if d.startswith("credito") else "resgate"
             if m == "RETIRADA DE CUSTÓDIA":
                 return "frozen" if not has_value else "resgate"
+            # Coupon paid during the contract's life (CRI/CRA/debênture). Real
+            # income, unlike AMORTIZAÇÃO, which returns principal.
+            if m in ("PAGAMENTO DE JUROS", "JUROS"):
+                return "juros"
+            # Principal returned mid-life (CRI / CRA / debênture): not income,
+            # and not an exit — it reduces the cost basis and leaves the
+            # quantity alone, exactly as load_b3.derive_positions treats it.
+            if m in ("AMORTIZAÇÃO", "Amortização"):
+                return "amort"
             return "other"
         g = g.assign(cat=g.apply(cat, axis=1))
 
@@ -304,18 +357,62 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
         first_exit = exit_rows["Data"].min() if not exit_rows.empty else None
         is_frozen = (g["cat"] == "frozen").any()
 
-        # Held on date D iff aplic occurred ≤ D AND no exit ≤ D
-        def held_on(D):
-            if first_aplic is None or first_aplic > D:
-                return False
-            if first_exit is not None and first_exit <= D:
-                return False
-            return True
+        # One chronological walk in preço médio, the same accounting
+        # load_b3.derive_positions applies to every other holding — so the two
+        # surfaces cannot report different cost bases for one contract.
+        #
+        # Three things it fixes at once: summing every aplicação regardless of
+        # date reported a contract's *final* size as its 31/12/(Y-1) balance;
+        # treating the first resgate as terminal wrote a partially redeemed
+        # contract out of Bens e Direitos entirely; and an amortização (CRI /
+        # CRA principal returned in instalments) never reduced the declared
+        # cost at all. Quantities are what let a partial resgate take its
+        # share; a report carrying none falls back to all-or-nothing.
+        walk = g.sort_values("Data")
+        by_qty = float(walk.loc[walk["cat"] == "aplic", "Qtd"].fillna(0).sum()) > 0
 
-        held_prev = held_on(prev_eoy)
-        held_cur = held_on(cur_eoy)
-        if not (held_prev or held_cur):
+        def _num(v):
+            return float(v) if pd.notna(v) else 0.0
+
+        qty = cost = 0.0
+        value_prev = value_cur = None
+        rendimento_cur = juros_cur = 0.0
+        for _, r in walk.iterrows():
+            if value_prev is None and r["Data"] > prev_eoy:
+                value_prev = cost
+            if value_cur is None and r["Data"] > cur_eoy:
+                value_cur = cost
+            v, q, when = _num(r["Valor"]), _num(r["Qtd"]), r["Data"]
+            if r["cat"] == "aplic":
+                cost += v
+                qty += q
+            elif r["cat"] == "amort":
+                cost -= v                      # principal back, quantity intact
+            elif r["cat"] == "juros" and when.year == year:
+                juros_cur += v
+            elif r["cat"] == "resgate":
+                out = min(q, qty) if by_qty and q > 0 else qty
+                consumed = cost * (out / qty) if qty > 0 else 0.0
+                if when.year == year:
+                    rendimento_cur += v - consumed
+                cost -= consumed
+                qty -= out
+            # "frozen" deliberately consumes nothing: a custody withdrawal that
+            # never settled paid the holder nothing, so the paper is still owned
+            # and still declarable — which is what the ⚠ note in the report says.
+        value_prev = cost if value_prev is None else value_prev
+        value_cur = cost if value_cur is None else value_cur
+
+        held_prev = value_prev > 0.005
+        held_cur = value_cur > 0.005
+        # A contract opened and fully redeemed inside the year holds nothing at
+        # either year-end, but its gain is still declarable — so it stays.
+        redeemed_in_year = ((g["cat"] == "resgate")
+                            & (g["Data"].dt.year == year)).any()
+        if not (held_prev or held_cur or redeemed_in_year):
             continue  # not relevant for IRPF this year
+
+        rendimento_cur = round(rendimento_cur, 2)
 
         bank = next((b for b in g["bank"] if isinstance(b, str) and b), "")
         prefix = code.split(" - ")[0]
@@ -345,8 +442,10 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
             "first_aplic": first_aplic,
             "exit_date": first_exit,
             "is_frozen": is_frozen,
-            "value_prev": round(aplic_total, 2) if held_prev else 0.0,
-            "value_cur": round(aplic_total, 2) if held_cur else 0.0,
+            "value_prev": round(value_prev, 2),
+            "value_cur": round(value_cur, 2),
+            "rendimento_cur": rendimento_cur,
+            "juros_cur": round(juros_cur, 2),
             "irpf_grupo": irpf_g,
             "irpf_codigo": irpf_c,
         })
@@ -551,7 +650,11 @@ def main(argv: list[str]) -> int:
         w(f"\n**Totais renda fixa (excl. ETFs LFTB11 já listados acima):**")
         w(f"\n- Posição em 31/12/{Y-1}: **R$ {total_prev:,.2f}**")
         w(f"\n- Posição em 31/12/{Y}: **R$ {total_cur:,.2f}**")
-        w(f"\n*Os valores acima usam o **valor de aplicação** (custo de aquisição). "
+        w(f"\n*Os valores acima usam o **valor de aplicação** (custo de aquisição), "
+          f"reduzido pelas amortizações já recebidas — o mesmo custo que a aba "
+          f"Portfólio mostra. É deliberadamente **não** o valor corrigido que a "
+          f"curva de rentabilidade desenha: aquele é um modelo, e a Receita pede "
+          f"o custo. "
           f"Para o IRPF, em alguns casos a Receita pede o saldo com juros acumulados — "
           f"se o Informe de Rendimentos do broker mostrar saldos diferentes, prefira o "
           f"informe. A diferença não é material para títulos sem cupom (zero-coupon), "
@@ -642,17 +745,60 @@ def main(argv: list[str]) -> int:
     else:
         w(f"Nenhum JCP registrado em {Y}.\n")
 
+    # Renda fixa rendimentos, per contract, from the same frame that built Bens
+    # e Direitos. What the extract can support differs sharply by código: the
+    # isento paper is complete, the tributado paper is net of IR retido and can
+    # never be more than that here — so each says exactly what it is.
+    rf_income = rf if not rf.empty else pd.DataFrame(
+        columns=["code", "bank", "kind_label", "irpf_codigo",
+                 "rendimento_cur", "juros_cur"])
+
+    def _rf_rows(codigo):
+        if rf_income.empty:
+            return rf_income
+        sel = rf_income[rf_income["irpf_codigo"] == codigo].copy()
+        sel["total"] = sel["rendimento_cur"] + sel["juros_cur"]
+        return sel[sel["total"].abs() > 0.005].sort_values(["bank", "code"])
+
     w(f"\n**Código 06 — Rendimentos de aplicações financeiras (CDB / Tesouro / ETF RF)**")
     w(f"\nGanhos em CDB, RDB, Tesouro Direto e ETFs de Renda Fixa (LFTB11) são tributados "
-      f"pela tabela regressiva e o IR já foi retido na fonte. Use os totais do Informe de "
-      f"Rendimentos do broker — ele lista cada \"Rendimento Líquido\" e \"IR retido na fonte\" "
-      f"por título resgatado em {Y}.\n")
+      f"pela tabela regressiva e o IR já foi retido na fonte.\n")
+    trib = _rf_rows("02")
+    if not trib.empty:
+        w(f"\n⚠ **Os valores abaixo são LÍQUIDOS.** O extrato da B3 registra o valor "
+          f"*creditado* no resgate, já descontado o IR retido na fonte — o rendimento "
+          f"**bruto** e o **IR retido** não existem em nenhum dos dois relatórios. "
+          f"Use estes números para conferir o Informe de Rendimentos, e o informe para "
+          f"preencher a declaração.\n")
+        w("| Título | Emissor | Resgate − aplicação em {} (líquido, R$) |".format(Y))
+        w("|---|---|---|")
+        for _, r in trib.iterrows():
+            code_short = r["code"].split(" - ")[1] if " - " in r["code"] else r["code"]
+            w(f"| {r['code'].split(' - ')[0]} {code_short} | "
+              f"{r['bank'] or '(emissor não informado)'} | {r['total']:,.2f} |")
+        w(f"| **Total líquido apurado** | | **{trib['total'].sum():,.2f}** |")
+    else:
+        w(f"\nNenhum resgate de renda fixa tributada em {Y} neste extrato. Use os totais "
+          f"do Informe de Rendimentos do broker.\n")
 
     w(f"\n**Código 12 — Rendimentos isentos: cadernetas, LCI, LCA, CRI, CRA, debêntures incentivadas**")
     w(f"\nRendimentos pagos em {Y} sobre LCIs, LCAs, CRIs (e CRAs / debêntures incentivadas, "
-      f"se houver) são **isentos** de IR para pessoa física. O Informe de Rendimentos do "
-      f"broker lista o valor por título — somar e declarar o total aqui. Não há retenção "
-      f"na fonte para esses, então só o \"Rendimento\" é declarado.\n")
+      f"se houver) são **isentos** de IR para pessoa física.\n")
+    isento_inc = _rf_rows("03")
+    if not isento_inc.empty:
+        w(f"\nNão há retenção na fonte nesses títulos, então o valor creditado **é** o "
+          f"rendimento — a apuração abaixo é completa, não uma aproximação. Some com "
+          f"quaisquer LCIs/LCAs mantidas fora da B3 antes de declarar.\n")
+        w("| Título | Emissor | Resgate − aplicação (R$) | Juros pagos em {} (R$) | Total (R$) |".format(Y))
+        w("|---|---|---|---|---|")
+        for _, r in isento_inc.iterrows():
+            code_short = r["code"].split(" - ")[1] if " - " in r["code"] else r["code"]
+            w(f"| {r['code'].split(' - ')[0]} {code_short} | "
+              f"{r['bank'] or '(emissor não informado)'} | "
+              f"{r['rendimento_cur']:,.2f} | {r['juros_cur']:,.2f} | {r['total']:,.2f} |")
+        w(f"| **Total isento** | | | | **{isento_inc['total'].sum():,.2f}** |")
+    else:
+        w(f"\nNenhum rendimento isento de renda fixa apurado em {Y} neste extrato.\n")
 
     w(f"\n**Código 12 — Outros — Premiums de opções (se aplicável)**")
     prem_total = float(premios["amount"].sum()) if not premios.empty else 0

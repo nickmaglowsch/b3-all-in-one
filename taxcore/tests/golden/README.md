@@ -39,7 +39,7 @@ scripts under test alive:
 | TRPL4 trades **and** a TRPL4 dividend | `TICKER_RENAMES` → ISAE4 on trades *and* events |
 | Option premiums (`PETRF460`…) + 2 exercises with their Movimentação settlements | `process_option_activity`, `_resolve_exercise_underlying` |
 | `Futuro` rows (`WINJ25`) | `--all-markets` genuinely widens `positions.csv` |
-| CDB / RDB / LCI / CRI `Produto` strings, one frozen custody | `irpf_2026.renda_fixa_year_end`, issuer-CNPJ lookup + `(verificar no informe)` |
+| CDB / RDB / LCI / CRI `Produto` strings, one frozen custody | `irpf_2026.renda_fixa_year_end`, issuer-CNPJ lookup + `(verificar no informe)`; `load_b3._rf_code` and the renda fixa lifecycle labels (aplicação → vencimento / resgate antecipado / retirada de custódia), in both of B3's quantity conventions (CDBs as units at PU 0.01, the CRI as 8 units at PU 1035.42) |
 | Feb/Mar 2025 sells ≤ R$20k, Apr/Nov > R$20k, Jul loss, Sep isento loss | isenção, taxable months, loss carryforward into 2026 |
 | FII sells (Mar/Ago/Dez 2025), IVVB11 sell, LFTB11 sell | FII 20% table, BDR/ETF-RV table, ETF-RF table |
 | `cost_basis_overrides.csv` (XPBR31 `buy` + ITUB4 `cost_adjust`) | `read_overrides`, both `kind`s |

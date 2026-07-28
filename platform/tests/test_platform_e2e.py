@@ -23,6 +23,7 @@ TAXCORE = Path(__file__).resolve().parents[2] / "taxcore"
 B3_IMPORTS = TAXCORE / "b3_imports"
 POSITIONS_CSV = TAXCORE / "data" / "positions.csv"
 OVERRIDES_CSV = TAXCORE / "data" / "cost_basis_overrides.csv"
+TRADES_CSV = TAXCORE / "data" / "trades.csv"
 GOLDEN_IRPF = TAXCORE / "tests" / "golden" / "expected" / "irpf-2025.md"
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -106,9 +107,17 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
     # Run the job inline (the deferred one is never picked up in tests).
     from platform_app.tasks import process_imports
 
+    # Counted off the canonical CSVs this test already compares against, rather
+    # than repeated as literals: the point is that the platform reproduces
+    # taxcore exactly, and a hardcoded total only ever restates the same fact in
+    # a second place that has to be remembered whenever the parser widens.
+    expected = {r["ticker"]: r
+                for r in csv.DictReader(POSITIONS_CSV.read_text().splitlines())}
+    expected_trades = len(TRADES_CSV.read_text().strip().splitlines()) - 1
+
     result = await process_imports(tenant_id=tid)
     assert result["status"] == "done", result
-    assert result["positions"] == 25
+    assert result["positions"] == len(expected)
 
     # imports flipped to done
     imports = (await client.get("/imports", headers=headers)).json()
@@ -117,8 +126,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
 
     # positions equal taxcore/data/positions.csv (ticker/qty/avg_cost, float-tolerant)
     api_pos = {p["ticker"]: p for p in (await client.get("/portfolio/positions", headers=headers)).json()}
-    expected = {r["ticker"]: r for r in csv.DictReader(POSITIONS_CSV.read_text().splitlines())}
-    assert len(api_pos) == len(expected) == 25
+    assert len(api_pos) == len(expected)
     for ticker, exp in expected.items():
         assert ticker in api_pos, f"missing {ticker}"
         assert abs(api_pos[ticker]["qty"] - float(exp["qty"])) < 1e-6, ticker
@@ -126,7 +134,7 @@ async def test_import_positions_and_irpf_equivalent_to_golden(client):
 
     # trades endpoint returns newest-first, paginated
     trades = (await client.get("/portfolio/trades?limit=5", headers=headers)).json()
-    assert trades["total"] == 74
+    assert trades["total"] == expected_trades
     assert len(trades["items"]) == 5
     dates = [t["date"] for t in trades["items"]]
     assert dates == sorted(dates, reverse=True)

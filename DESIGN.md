@@ -29,7 +29,7 @@ colors:
 typography:
   display:
     fontFamily: "Archivo, system-ui, sans-serif"
-    fontSize: "clamp(2.25rem, 5vw, 3.75rem)"
+    fontSize: "clamp(2.5rem, 6.5vw, 5rem)"
     fontWeight: 800
     lineHeight: 1.05
     letterSpacing: "-0.025em"
@@ -195,7 +195,7 @@ Three data-only families. None of them ever appear on interface chrome.
 **Character:** Archivo at 800 is compressed and flat-sided; against IBM Plex's humanist warmth it reads as a machined header on a paper form. The pairing is deliberately unbalanced — headings are much heavier than anything under them — so hierarchy survives at the small sizes this product runs at. Plex Mono is not decorative here: it is doing structural work on every number in the app.
 
 ### Hierarchy
-- **Display** (800, `clamp(2.25rem, 5vw, 3.75rem)`, 1.05, -0.025em): The landing hero headline, and nothing else. The only place type is allowed to be the loudest thing on screen.
+- **Display** (800, `clamp(2.5rem, 6.5vw, 5rem)`, 1.05, -0.025em): The landing hero headline, and nothing else. The only place type is allowed to be the loudest thing on screen — and the ceiling is set so it genuinely is: 80px on a desktop viewport against the 36px Headline step below it. Raised from a 60px cap, which was only 1.6× the section heads and left the hero reading as the page's first section rather than its one shout.
 - **Headline** (800, `clamp(1.875rem, 3vw, 2.25rem)`, 1.1, -0.025em): Landing section heads and pricing figures. Marketing surfaces only.
 - **Title** (800, 1.5rem, 1.25, -0.025em): The `PageHeader` h1 on every app page. At 24px against 14px body, the size ratio is doing the hierarchy work that colour is not allowed to do.
 - **Body** (400, 0.875rem, 1.5): The app's default. Note this is 14px, not 16px — a deliberate density choice for a product whose primary user is reading tables. Prose blocks on marketing and IRPF report surfaces may step up to 1rem; keep measure at 65–75ch when they do.
@@ -228,7 +228,9 @@ Density is set by the components, not by a global scale: card padding is 16px, c
 
 The application is flat. Depth comes entirely from tonal layering and hairlines: Bench Paper is the page, Panel White is the surface above it, and an Etched Rule border marks the boundary. There are no shadows on cards, on the sidebar, on inputs, or on the paywall dialog — the dialog separates itself with an ink scrim at 30% instead.
 
-One shadow exists in the codebase: the chart tooltip's `shadow-sm`. It is recorded here as observation, not as a sanctioned exception — the elevation question is deliberately left open, so future work may introduce depth where it earns its place rather than working around a prohibition. The landing page's floating hero card (`shadow-xl shadow-navy/5` plus a 6-second float) went away when that page was rebuilt as the engine cross-section; the page is now flat like the rest of the app.
+Two shadows exist in the codebase. The chart tooltip's `shadow-sm` is recorded here as observation, not as a sanctioned exception — the elevation question is deliberately left open, so future work may introduce depth where it earns its place rather than working around a prohibition.
+
+The second is where it earned its place: the landing hero's posições panel, which sits **over** the B3 extract sheet running underneath it. Two flat surfaces at the same tonal step, one overlapping the other, read as a misalignment rather than a stack, so the panel carries an offset-and-blur shadow (`0 18px 45px -18px`, ink at 35%) to say which one is on top. In dark mode the tonal step does that work on its own and the shadow all but disappears — correctly. This is the only place in the product where one surface overlaps another; the app itself stays flat. Note this replaces an earlier prohibition: the page's original `shadow-xl shadow-navy/5` floating hero card, plus its 6-second float, is still refused — a decorative card hovering beside the copy is not the same object as an artifact laid over the artifact it was computed from.
 
 ## Shapes
 

@@ -14,7 +14,7 @@ from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import (
     BacktestRun, CashEvent, CostBasisOverride, Import, IngestRun, Position,
-    TaxSummary, Trade,
+    RendaFixaMark, TaxSummary, Trade,
 )
 
 # Postgres-backed queue (spec 01: jobs live in Postgres).
@@ -52,6 +52,13 @@ def _event_dict(tid: uuid.UUID, r: dict[str, str]) -> dict:
         qty=b3run.to_float(r["qty"]), price=b3run.to_float(r["price"]),
         amount=b3run.to_float(r["amount"]), broker=r["broker"],
         source_file=r["__source_file"],
+    )
+
+
+def _rf_mark_dict(tid: uuid.UUID, r: dict[str, str]) -> dict:
+    return dict(
+        tenant_id=tid, ticker=r["ticker"], date=b3run.to_date(r["date"]),
+        price=b3run.to_float(r["price"]),
     )
 
 
@@ -225,17 +232,23 @@ async def process_imports(tenant_id: str) -> dict:
                 )
                 proc = b3run.run_module(ws, ["scripts.load_b3"])
                 if proc.returncode != 0:
-                    return proc, None, None, None
+                    return proc, None, None, None, None
+                # rf_marks.csv is written unconditionally by a load_b3 new enough
+                # to know about posição reports, but the workspace is seeded from
+                # whatever taxcore is on disk — read defensively so an older one
+                # is a book without marks, not a failed import.
+                marks_csv = ws / "data" / "rf_marks.csv"
                 return (
                     proc,
                     b3run.read_csv_rows(ws / "data" / "trades.csv"),
                     b3run.read_csv_rows(ws / "data" / "cash_events.csv"),
                     b3run.read_csv_rows(ws / "data" / "positions.csv"),
+                    b3run.read_csv_rows(marks_csv) if marks_csv.exists() else [],
                 )
             finally:
                 shutil.rmtree(ws, ignore_errors=True)
 
-        proc, trades, events, positions = await asyncio.to_thread(_work)
+        proc, trades, events, positions, rf_marks = await asyncio.to_thread(_work)
         if proc.returncode != 0:
             msg = (proc.stderr or proc.stdout)[-2000:]
             for imp in imports:
@@ -269,7 +282,7 @@ async def process_imports(tenant_id: str) -> dict:
         # against a book that no longer exists. Dropping it rather than
         # recomputing here keeps this task's cost bounded — the next reader sees
         # "nunca apurado" and asks for it.
-        for model in (Trade, CashEvent, Position, TaxSummary):
+        for model in (Trade, CashEvent, Position, RendaFixaMark, TaxSummary):
             await session.execute(delete(model).where(model.tenant_id == tid))
         if trades:
             await session.execute(insert(Trade), [_trade_dict(tid, r) for r in trades])
@@ -278,6 +291,10 @@ async def process_imports(tenant_id: str) -> dict:
         if positions:
             await session.execute(
                 insert(Position), [_position_dict(tid, r) for r in positions]
+            )
+        if rf_marks:
+            await session.execute(
+                insert(RendaFixaMark), [_rf_mark_dict(tid, r) for r in rf_marks]
             )
         for imp in imports:
             imp.status = "done"
@@ -295,4 +312,5 @@ async def process_imports(tenant_id: str) -> dict:
         return {
             "tenant_id": tenant_id, "status": "done",
             "trades": len(trades), "cash_events": len(events), "positions": len(positions),
+            "rf_marks": len(rf_marks),
         }

@@ -16,6 +16,7 @@ import { UploadZone } from "./UploadZone";
 const KIND_LABEL: Record<string, string> = {
   negociacao: "Negociação",
   movimentacao: "Movimentação",
+  posicao: "Posição",
   unknown: "Desconhecido",
 };
 
@@ -82,6 +83,13 @@ export default function ImportsPage() {
               baixe cada um em Excel (.xlsx).
             </li>
             <li>Envie os dois tipos acima para montar posições, negociações e proventos.</li>
+            <li>
+              Para renda fixa ainda em carteira, baixe também o{" "}
+              <span className="font-medium">Relatório Consolidado Mensal</span> (mesma
+              tela). Ele traz o preço atualizado de cada CDB, LCI, LCA e CRI — é o que
+              coloca esses contratos na rentabilidade sem você digitar a taxa. Um por
+              mês; quanto mais meses, mais pontos na curva.
+            </li>
           </ol>
           <p className="mt-4 border-t border-hairline pt-3 text-sm text-muted">
             Baixe o período mais longo possível. Se um extrato começar depois das suas

@@ -252,6 +252,35 @@ class AssetClassOverride(Base):
     )
 
 
+class RendaFixaMark(Base):
+    """A per-unit price B3 published for a renda fixa contract on a date.
+
+    Read off the tenant's relatório consolidado mensal ("posição"), which is the
+    only extract that prices paper still in custody — Negociação and Movimentação
+    report fills, so an unredeemed CDB has exactly one price in the whole book
+    and one price implies no rate. `Preço Atualizado` is a second dated mark, and
+    two marks imply the rate exactly, so a contract with one of these needs no
+    RendaFixaTerms row. The report prints an indexer too, but only its family
+    (`DI`, `IPCA`, `PREFIXADO`) with neither percentage nor spread, so it cannot
+    fill that table and is ignored.
+
+    Derived from the uploaded extracts, so process_imports full-replaces these
+    alongside trades and positions — unlike RendaFixaTerms, which the tenant
+    typed in and nothing may delete on their behalf.
+    """
+
+    __tablename__ = "renda_fixa_marks"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "ticker", "date", name="uq_rf_marks_tenant_ticker_date"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    ticker: Mapped[str] = mapped_column(Text, nullable=False)
+    date: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    price: Mapped[float] = mapped_column(Numeric, nullable=False)
+
+
 class RendaFixaTerms(Base):
     """What a still-open renda fixa contract pays, for the tenant to fill in.
 

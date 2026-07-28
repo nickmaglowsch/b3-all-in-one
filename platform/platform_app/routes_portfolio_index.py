@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import enginerun, portfolio_index as pidx
 from platform_app.db import get_async_session, get_engine_pool
-from platform_app.models import CashEvent, RendaFixaTerms, Trade
+from platform_app.models import CashEvent, RendaFixaMark, RendaFixaTerms, Trade
 from platform_app.tenancy import get_current_tenant
 
 portfolio_index_router = APIRouter(prefix="/portfolio/index", tags=["portfolio-index"])
@@ -38,15 +38,17 @@ portfolio_index_router = APIRouter(prefix="/portfolio/index", tags=["portfolio-i
 # "no indexer" case has a form that fixes it, and selecting those by
 # substring-matching the sentence means a copy edit silently removes the form.
 _RF_STILL_HELD = ("sem_indexador",
-                  "ainda em carteira e sem indexador informado — a B3 não "
-                  "publica a taxa, e sem resgate não há o que deduzi-la")
+                  "ainda em carteira e sem um segundo preço — envie o Relatório "
+                  "Consolidado Mensal da B3, que traz o preço atualizado do "
+                  "contrato, ou informe o indexador aqui")
 _RF_FROZEN = ("custodia_bloqueada", "retirada de custódia sem liquidação")
 _RF_AMORTIZED = ("amortizacao", "amortização em vida não modelada")
 _RF_NO_SERIES = ("sem_indice", "índice do BCB indisponível para o período")
 
 
 def _renda_fixa(trades, events, terms: dict,
-                plane_priced: frozenset[str] = frozenset()
+                plane_priced: frozenset[str] = frozenset(),
+                report_marks=(),
                 ) -> tuple[dict, dict[str, str]]:
     """(marks, blocked) for the renda fixa contracts in a book.
 
@@ -70,6 +72,16 @@ def _renda_fixa(trades, events, terms: dict,
     are admitted, and then prices them off the plane like any listed holding. An
     accrual would otherwise be built from the tenant's two fills and used to
     *overwrite* the issuer's own numbers in `closes`.
+
+    `report_marks` are (ticker, date, price) rows read off the tenant's posição
+    reports — the per-unit `Preço Atualizado` B3 publishes for paper still in
+    custody. They are what makes an unredeemed contract drawable without an
+    indexer: a fill and a report price are two dated marks like any other pair.
+    Merged only into contracts the book already bought, because a mark with no
+    aplicação behind it prices nothing and would only add a holding the chart
+    then has to disclose as unpriceable. The blockers below still apply — B3
+    keeps printing an Atualizado for frozen and amortized paper too, and those
+    are exactly the numbers the blockers exist to refuse.
     """
     marks: dict[str, list[tuple[datetime.date, float]]] = {}
     blocked: dict[str, str] = {}
@@ -78,6 +90,10 @@ def _renda_fixa(trades, events, terms: dict,
         if (t_date and ticker and market == pidx.RENDA_FIXA_MARKET and price
                 and ticker not in plane_priced):
             marks.setdefault(ticker, []).append((t_date, float(price)))
+
+    for ticker, m_date, price in report_marks:
+        if m_date and price and ticker in marks:
+            marks[ticker].append((m_date, float(price)))
 
     for _d, category, ticker, _qty, _amount in events:
         if not ticker or ticker not in marks:
@@ -156,6 +172,14 @@ async def _book(session: AsyncSession, tid):
     )).all()
     rf_terms = {t: (ix, float(rate)) for t, ix, rate in term_rows}
 
+    # The prices B3 published for contracts still in custody, one per posição
+    # report the tenant uploaded. These are what let an unredeemed contract be
+    # drawn without an indexer — see `_renda_fixa`.
+    report_marks = (await session.execute(
+        select(RendaFixaMark.ticker, RendaFixaMark.date, RendaFixaMark.price)
+        .where(RendaFixaMark.tenant_id == tid)
+    )).all()
+
     # The contracts, as opposed to the listed fixed-income ETFs that share their
     # market label — `is_excluded` with no pricing knowledge is exactly that
     # split, so the ticker-shape rule is not written down a second time here.
@@ -167,7 +191,8 @@ async def _book(session: AsyncSession, tid):
         # An unreachable engine is `_plane`'s 503 a moment later, not a 500 here.
         plane_priced = frozenset()
 
-    rf_marks, rf_blocked = _renda_fixa(trades, events, rf_terms, plane_priced)
+    rf_marks, rf_blocked = _renda_fixa(
+        trades, events, rf_terms, plane_priced, report_marks)
     rf_priced = frozenset(rf_marks) | plane_priced
 
     qty_deltas: list[tuple[datetime.date, str, float]] = []

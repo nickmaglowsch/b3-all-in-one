@@ -612,7 +612,7 @@ async def test_renda_fixa_is_charted_from_its_own_marks(client):
 
     reasons = {r["ticker"]: r["reason"] for r in body["excluded"]["renda_fixa"]}
     assert set(reasons) == {"CDB - OPEN", "CDB - FROZEN"}
-    assert "resgate" in reasons["CDB - OPEN"]
+    assert "Relatório Consolidado" in reasons["CDB - OPEN"]
     assert "custódia" in reasons["CDB - FROZEN"]
     # Named one by one, so "Renda Fixa" never appears as a bare market label.
     assert "Renda Fixa" not in body["excluded"]["markets"]
@@ -646,7 +646,7 @@ def test_an_open_contract_with_no_second_mark_is_blocked():
     marks, blocked = _renda_fixa(
         [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0)], [], {})
     assert marks == {}
-    assert "resgate" in blocked["TESOURO IPCA+ 2045"][1]
+    assert "Relatório Consolidado" in blocked["TESOURO IPCA+ 2045"][1]
 
 
 def test_a_plane_priced_title_needs_neither_a_second_mark_nor_an_indexer():
@@ -664,6 +664,64 @@ def test_a_plane_priced_title_needs_neither_a_second_mark_nor_an_indexer():
     assert "TESOURO IPCA+ 2045" not in blocked
     # The contract the plane does not carry is untouched by any of this.
     assert "CDB - OPEN" in blocked
+
+
+def test_a_report_mark_unblocks_an_open_contract_with_no_indexer():
+    """The point of reading the posição report. B3 prints `Preço Atualizado` for
+    paper still in custody, so an unredeemed CDB gets a second dated price
+    without anyone typing in a rate — and two marks imply the rate exactly."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "CDB - OPEN", 1000.0)], [], {},
+        report_marks=[("CDB - OPEN", D2, 1206.41)])
+
+    assert blocked == {}
+    assert marks["CDB - OPEN"] == [(D1, 1000.0), (D2, 1206.41)]
+
+
+def test_a_report_mark_for_a_contract_the_book_never_bought_is_ignored():
+    """The report is a snapshot of custody, the book is a history of fills, and
+    they disagree — a contract can sit in one and not the other. A mark with no
+    aplicação behind it prices nothing, and admitting it would invent a holding
+    the chart then has to disclose as unpriceable."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "CDB - OPEN", 1000.0)], [], {},
+        report_marks=[("CDB - ELSEWHERE", D2, 900.0)])
+
+    assert "CDB - ELSEWHERE" not in marks and "CDB - ELSEWHERE" not in blocked
+
+
+def test_a_report_mark_does_not_unfreeze_a_withdrawn_contract():
+    """A custody withdrawal that never settled is held at a value nobody has
+    published. B3 keeps printing an Atualizado for it anyway, which is precisely
+    the number the blocker exists to refuse."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, blocked = _renda_fixa(
+        [_rf_trade(D1, "CDB - PLENO", 1000.0)],
+        [(D2, "frozen", "CDB - PLENO", 0.0, 0.0)], {},
+        report_marks=[("CDB - PLENO", D3, 1249.31)])
+
+    assert marks == {}
+    assert blocked["CDB - PLENO"][0] == "custodia_bloqueada"
+
+
+def test_a_report_mark_never_overwrites_the_issuers_own_price_plane():
+    """Tesouro titles appear in the posição report too, on their own sheet and
+    in the renda fixa one for some brokers. They are priced daily off the plane,
+    and an accrual built from two of the tenant's marks would replace those
+    closes with an interpolation."""
+    from platform_app.routes_portfolio_index import _renda_fixa
+
+    marks, _blocked = _renda_fixa(
+        [_rf_trade(D1, "TESOURO IPCA+ 2045", 1000.0)], [], {},
+        plane_priced=frozenset({"TESOURO IPCA+ 2045"}),
+        report_marks=[("TESOURO IPCA+ 2045", D2, 1216.74)])
+
+    assert marks == {}
 
 
 def test_a_plane_priced_title_is_admitted_to_the_book():

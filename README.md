@@ -267,10 +267,17 @@ that only differs at `pnl == 0`, where the two branches do the same arithmetic
 49 `pnl > 0`→`pnl >= 0`   61 `pnl < 0`→`pnl <= 0`   62 `pnl < 0`→`pnl < 1`
 ```
 
-No test can kill them, so 6 is the bound the job enforces: it reads `survived` out of
+No test can kill them, so 6 is the bound the job enforces: it reads
 `mutmut export-cicd-stats` and fails at 7. A seventh survivor is a real hole in the
 apuração suite. If `monthly_apuracao` changes, re-check the equivalence argument above
 rather than just raising the bound.
+
+It also fails if `no_tests` is non-zero — a mutant that no test even *executes*. Those
+do not count as survivors, so without that clause adding an uncovered branch to
+`monthly_apuracao` would sail through the gate that exists to catch exactly that.
+`timeout` is deliberately *not* gated: a timeout usually means the mutant hung, which
+means the suite would have killed it, and it is the one bucket a slow runner can move
+things into.
 
 `mutmut run` itself exits 0 with survivors, so it cannot be the gate — that is why the
 count is checked explicitly instead of relying on the exit code.

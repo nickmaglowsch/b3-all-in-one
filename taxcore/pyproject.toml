@@ -56,8 +56,8 @@ filterwarnings = [
 [tool.mutmut]
 source_paths = ["scripts/apuracao.py"]
 # Only the suites that exercise the apuração. mutmut re-runs the selection once per
-# mutant, so pulling in the golden fixtures (minutes each) would multiply an already
-# long run into an unusable one.
+# mutant, so this selection is what keeps the whole job at ~12s and lets it gate every
+# PR; pulling in the golden fixtures (minutes each) would multiply that by 96.
 pytest_add_cli_args_test_selection = [
     "tests/test_apuracao.py",
     "tests/test_apuracao_bdd.py",

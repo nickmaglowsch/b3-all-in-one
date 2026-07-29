@@ -455,6 +455,13 @@ export function IndexSection() {
       <p className="mt-4 text-sm text-muted">
         Retorno ponderado pelo tempo (TWR): aportes e retiradas mudam o saldo, não
         a linha. Proventos entram como retorno no dia em que caem.
+        {hasBench && (
+          <>
+            {" "}
+            O IBOV é representado pelo BOVA11, o ETF que replica o índice: a taxa
+            do fundo (~0,20% a.a.) e o erro de rastreamento entram na linha.
+          </>
+        )}
       </p>
 
       {/* What the index could not see, at the weight of what it could. Reporting

@@ -401,6 +401,17 @@ async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
                   for d, v in (raw.get(name) or {}).items()}
         if not parsed:
             continue
+        # Both lines are rebased to 100 on the window's first day — that is the
+        # whole basis of the comparison — so a benchmark whose own history starts
+        # later has nothing to put there. Drawing it from its first day on would
+        # compare the book's three years against the index's six months; filling
+        # the front with zeros (what the loop below would do) reads as a crash.
+        # Dropped and disclosed instead, like a benchmark we could not read.
+        #
+        # Reachable because benchmarks come off the plane now: BOVA11's history
+        # is however much COTAHIST this box has ingested, not Yahoo's 1993.
+        if min(parsed) > grid[0]:
+            continue
         # Forward-fill onto our grid: the benchmark calendars (Yahoo sessions,
         # BCB business days) never line up exactly with the plane's.
         series: list[float] = []

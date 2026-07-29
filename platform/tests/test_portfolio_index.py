@@ -542,17 +542,119 @@ async def test_portfolio_index_charts_the_real_book(client):
     assert m["ann_return_pct"] is not None          # >1y window → CAGR is meaningful
     assert m["max_dd_pct"] <= 0
 
-    # Surfaced, not hidden: the Futuro trade and the offline benchmarks.
+    # Surfaced, not hidden: the Futuro trade, and whether the benchmarks are here.
     assert "Futuro" in body["excluded"]["markets"]
-    assert body["excluded"]["benchmarks"] is True   # ENGINE_BENCH_OFFLINE=1
     assert not body["excluded"]["unpriced_tickers"]  # PETR4/VALE3 are in the plane
-    assert "ibov" not in series[0] and "cdi" not in series[0]
+    # Benchmarks come off the plane (BOVA11, $CDI), so which of them are here
+    # depends on what this box has ingested rather than on a stub flag — and they
+    # arrive independently, since one can start after the window does. The
+    # invariant that holds either way, and the one a user reads, is that the
+    # disclosure matches the chart: "unavailable" iff neither line is drawn.
+    drawn = {k for k in ("ibov", "cdi") if k in series[0]}
+    assert body["excluded"]["benchmarks"] == (not drawn)
 
     # The plane starts after the first trade only if the book predates it; this
     # seed starts 2023-01-16 and the plane 2023-01-02, so no clamp.
     assert body["coverage"]["first_trade"] == "2023-01-16"
     assert body["coverage"]["clamped"] is False
     assert body["coverage"]["trades_after_plane"] == 0   # seed ends inside the plane
+
+
+def test_summarize_survives_a_series_that_opens_at_zero():
+    """A base of 0 is not a return of anything — it is a missing series.
+
+    Reachable since benchmarks moved onto the plane: the plane's history for a
+    benchmark can start after the tenant's book does, and the forward-fill then
+    hands this a leading run of zeros. `_benchmarks` drops that overlay outright
+    now, but this is the shared function every series passes through, so the
+    guard belongs here too — it used to raise ZeroDivisionError and 500 the page.
+    """
+    assert summarize([0.0, 0.0, 100.0, 110.0], 1.0) == {
+        "total_return_pct": None, "ann_return_pct": None, "max_dd_pct": None}
+    # The real case still summarises exactly as before.
+    assert summarize([100.0, 110.0], 1.0)["total_return_pct"] == 10.0
+
+
+@_asyncio
+@pytest.mark.market
+async def test_benchmark_missing_the_windows_start_is_dropped(client, monkeypatch):
+    """An overlay that starts mid-window cannot be rebased against the book.
+
+    Both lines start at 100 on the window's first day — that is what makes them
+    comparable at all. A benchmark whose own history begins later has no value to
+    put there, and drawing it from its first day on would silently compare a
+    3-year book against a 6-month index. So it is dropped and disclosed, the same
+    posture as a benchmark that could not be read at all.
+    """
+    from platform_app import routes_portfolio_index as rpi
+
+    def _late(start: str, end: str) -> dict:
+        """CDI covers the window; IBOV only shows up for the last day."""
+        day, last = date.fromisoformat(start), date.fromisoformat(end)
+        cdi = {}
+        while day <= last:
+            cdi[day.isoformat()] = 2.0
+            day = date.fromordinal(day.toordinal() + 1)
+        return {"ibov": {last.isoformat(): 130.0}, "cdi": cdi, "offline": False}
+
+    monkeypatch.setattr(rpi, "_run_bench", _late)
+    rpi._BENCH_CACHE.clear()
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = (await client.get("/me", headers=headers)).json()["id"]
+    await _seed_book(uuid.UUID(tid))
+
+    body = (await client.get("/portfolio/index", headers=headers)).json()
+    rpi._BENCH_CACHE.clear()
+
+    assert "ibov" not in body["series"][0]      # dropped, not zero-filled
+    assert "ibov" not in body["metrics"]
+    assert body["series"][0]["cdi"] == 100.0    # the one that covers it survives
+    assert body["excluded"]["benchmarks"] is False
+
+
+@_asyncio
+@pytest.mark.market
+async def test_benchmark_overlays_are_rebased_onto_the_book(client, monkeypatch):
+    """The engine hands back raw levels from the plane; the platform's job is to
+    put them on the tenant's own grid at base 100.
+
+    The engine side (BOVA11 out of `prices`, `$CDI` out of `external_prices`) is
+    pinned in engine/tests/test_bench_series.py. Stubbed here at the subprocess
+    seam so the assertion does not depend on how much history this box ingested.
+    """
+    from platform_app import routes_portfolio_index as rpi
+
+    def _levels(start: str, end: str) -> dict:
+        day = date.fromisoformat(start)
+        last = date.fromisoformat(end)
+        ibov, cdi, step = {}, {}, 0
+        while day <= last:
+            ibov[day.isoformat()] = 120.0 + step      # +1 point a day
+            cdi[day.isoformat()] = 2.0                # flat: earns nothing
+            day, step = date.fromordinal(day.toordinal() + 1), step + 1
+        return {"ibov": ibov, "cdi": cdi, "offline": False}
+
+    monkeypatch.setattr(rpi, "_run_bench", _levels)
+    rpi._BENCH_CACHE.clear()
+
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    tid = (await client.get("/me", headers=headers)).json()["id"]
+    await _seed_book(uuid.UUID(tid))
+
+    body = (await client.get("/portfolio/index", headers=headers)).json()
+    rpi._BENCH_CACHE.clear()          # don't leak the stub into the next test
+
+    series = body["series"]
+    assert body["excluded"]["benchmarks"] is False
+    # Both overlays start at 100 whatever their own units were (index points vs
+    # an accrual factor), which is the only way one axis can carry all three.
+    assert series[0]["ibov"] == 100.0 and series[0]["cdi"] == 100.0
+    assert series[-1]["ibov"] > series[0]["ibov"]   # +1/day survives the rebase
+    assert series[-1]["cdi"] == 100.0               # a flat level stays flat
+    assert body["metrics"]["ibov"]["total_return_pct"] > 0
 
 
 @_asyncio
@@ -898,7 +1000,8 @@ def test_a_mark_before_the_window_is_not_redrawn_inside_it():
 
 @_asyncio
 @pytest.mark.market
-async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(client):
+async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(
+        client, monkeypatch):
     """The gap `is_excluded` alone cannot close, and the reason the route drops
     undrawn contracts instead of only disclosing them.
 
@@ -909,12 +1012,18 @@ async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(client):
     never joined. That is a permanent loss of the whole purchase, and a caveat
     string does not undo it.
 
-    Seeded with terms naming `$CDI`, which the test plane does not carry.
+    Seeded with terms whose indexer names a series no plane carries. Pointing
+    at the real `$CDI` and relying on its absence made the test pass only on a
+    plane that had not been through `index_series.build()` — which every real
+    one has.
     """
     from sqlalchemy import delete
 
+    from platform_app import portfolio_index as pidx
     from platform_app.db import async_session_maker
     from platform_app.models import RendaFixaTerms
+
+    monkeypatch.setitem(pidx._RF_SERIES, "cdi_pct", "$NOSUCHSERIES")
 
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -934,8 +1043,8 @@ async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(client):
         headers=headers)).json()
     body = (await client.get("/portfolio/index", headers=headers)).json()
 
-    # Admitted by _book (it has terms), refused by accrue_rf (no $CDI on the
-    # plane) — so it must be absent from the book, not merely mentioned.
+    # Admitted by _book (it has terms), refused by accrue_rf (its series is not
+    # on the plane) — so it must be absent from the book, not merely mentioned.
     assert "CDB - OPEN" not in body["universe"]
     assert "CDB - OPEN" not in body["excluded"]["unpriced_tickers"]
     reasons = {r["ticker"] for r in body["excluded"]["renda_fixa"]}

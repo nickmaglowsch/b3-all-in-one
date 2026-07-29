@@ -49,7 +49,8 @@ the revenue test — if IRPF doesn't convert, revisit before building the bench.
   itself and unblock Phase 4): asset-class tax model (per-class rates/carry, isenção per
   calendar month), `compute_trades()` extraction, advise-only path, dated cash-flow
   contributions, seeded initial state.
-- Benchmark data source swap (from Phase 0 legal outcome) completed before public launch.
+- ~~Benchmark data source swap (from Phase 0 legal outcome) completed before public launch.~~
+  Done: benchmarks read the plane (IBOV via BOVA11); yfinance is out of the engine.
 - Quant tier billing.
 
 **Exit criteria:** a user clones a gallery strategy, edits a factor expression, runs it,

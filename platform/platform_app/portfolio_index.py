@@ -530,7 +530,11 @@ def summarize(index: list[float], years: float) -> dict:
     "período < 1 ano". Mirrored in frontend/lib/chartRange.summarize, which
     summarises the narrowed windows this endpoint never sees; keep them in step.
     """
-    if not index:
+    # A base of 0 is not a starting point, it is a missing one — a series whose
+    # first day carries no value cannot say what it returned since. Same answer
+    # as an empty series, and never an exception: this runs for the book and for
+    # every overlay, so one gap used to 500 the whole page.
+    if not index or not index[0]:
         return {"total_return_pct": None, "ann_return_pct": None, "max_dd_pct": None}
     total = index[-1] / index[0] - 1.0
     ann = None

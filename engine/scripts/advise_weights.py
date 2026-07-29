@@ -30,9 +30,9 @@ Prints a one-line JSON object to stdout:
 (strategy is null in --weights mode.)
 
 Reads the market plane from Postgres via ENGINE_DATABASE_URL (falls back to the
-local sqlite DB when unset). Network mirrors run_backtest_json: IBOV is always
-stubbed; set ENGINE_BENCH_OFFLINE=1 to stub CDI too and run fully offline (valid
-for price-only strategies, used by the tests).
+local sqlite DB when unset). Network mirrors run_backtest_json: IBOV comes off
+the plane; set ENGINE_BENCH_OFFLINE=1 to stub it and CDI and run fully offline
+(valid for price-only strategies, used by the tests).
 """
 from __future__ import annotations
 

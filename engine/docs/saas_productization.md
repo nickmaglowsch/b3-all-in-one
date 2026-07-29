@@ -33,7 +33,7 @@ Verified current state (branch `main`, this repo):
 - No web API: no `fastapi` / `flask` / `uvicorn` anywhere.
 - No orchestration: no `.github/`, no `apscheduler` / `airflow` / `prefect` / `celery`. Ingestion is manual CLI (`python -m b3_pipeline.main`, `cvm_main`) or triggered from the Streamlit UI.
 - No auth / billing / multi-tenancy.
-- Benchmarks pulled via `yfinance` in `backtests/core/data.py` (a scraper — not commercially redistributable).
+- Benchmarks pulled via `yfinance` in `backtests/core/data.py` (a scraper — not commercially redistributable). *Since fixed: they come off the plane, see §3.2.*
 
 Despite that, the repo holds three genuinely defensible assets:
 
@@ -185,11 +185,13 @@ redistribution. Get a written legal opinion before Phase 3. For Phases 1–2,
 derived/computed outputs (tax reports, backtest curves, screens) are lower-risk
 than exposing the raw feed — confirm scope.
 
-### 3.2 `yfinance` must go (gates Phases 1–2)
-`backtests/core/data.py` pulls IBOV + ETF benchmarks via `yfinance`. Yahoo's ToS
-prohibits commercial redistribution and yfinance is a scraper — **not
-production-safe.** Replace with a licensed benchmark source (B3 index license or
-a data vendor) or compute an in-house index from your own adjusted constituents.
+### 3.2 ~~`yfinance` must go (gates Phases 1–2)~~ — done
+`backtests/core/data.py` used to pull IBOV + ETF benchmarks via `yfinance`.
+Yahoo's ToS prohibits commercial redistribution and yfinance is a scraper — not
+production-safe. `download_benchmark` now reads the plane instead: the ETF
+sleeves are ordinary COTAHIST tickers and IBOV is stood in for by BOVA11, the
+ETF that tracks it (fee drag disclosed in the UI). No new licence, no scraper,
+and nothing external in the request path.
 
 ### 3.3 CVM investment-advice regulation (shapes Phase 1 feature set)
 Resolução CVM 19/20/179: providing **buy/sell recommendations or portfolio

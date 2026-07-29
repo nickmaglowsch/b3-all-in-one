@@ -140,8 +140,16 @@ jobs:
           cd taxcore
           uv run --with 'mutmut>=3' mutmut export-cicd-stats
           cat mutants/mutmut-cicd-stats.json
-          jq -e '.survived <= 6' mutants/mutmut-cicd-stats.json >/dev/null || {
-            echo "::error::more than 6 mutants survived — the list is in the step above"
+          # The type and `total > 0` checks are not padding. `mutmut>=3` is unpinned, and
+          # bare `.survived <= 6` passes when the key is absent (jq: `null <= 6` is true)
+          # or when zero mutants were generated because source_paths stopped matching —
+          # both are "the gate silently tested nothing", which is the failure this whole
+          # file exists to prevent.
+          jq -e '(.survived|type) == "number" and (.total|type) == "number"
+                 and .total > 0 and .survived <= 6' \
+             mutants/mutmut-cicd-stats.json >/dev/null || {
+            echo "::error::mutation gate failed — more than 6 survivors, or the stats" \
+                 "file has no usable survivor count. The list is in the step above."
             exit 1
           }
           jq -e '.survived < 6' mutants/mutmut-cicd-stats.json >/dev/null \

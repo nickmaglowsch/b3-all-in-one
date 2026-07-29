@@ -169,9 +169,12 @@ jobs:
                  and .skipped == 0 and .check_was_interrupted_by_user == 0
                  and (.killed + .survived + .timeout) == .total' \
              mutants/mutmut-cicd-stats.json >/dev/null || {
-            echo "::error::mutation gate failed — more than 6 survivors, a mutant no" \
-                 "test executes, fewer mutants generated than expected, or counts that" \
-                 "do not add up. The per-mutant list is in the step above."
+            echo "::error::mutation gate failed. Either the apuração suite got weaker" \
+                 "(more than 6 survivors, or a mutant no test executes) or fewer than" \
+                 "96 mutants were generated. If you deliberately removed code from" \
+                 "scripts/apuracao.py, that second one is expected: lower the 96 here" \
+                 "and in README.md, the same way you would re-record any other" \
+                 "baseline. The per-mutant list is in the step above."
             exit 1
           }
           jq -e '.survived < 6' mutants/mutmut-cicd-stats.json >/dev/null \

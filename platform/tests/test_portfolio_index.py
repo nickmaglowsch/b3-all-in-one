@@ -953,3 +953,88 @@ async def test_a_contract_the_accrual_refuses_leaves_the_book_entirely(client):
         await session.execute(
             delete(RendaFixaTerms).where(RendaFixaTerms.tenant_id == tid))
         await session.commit()
+
+
+# ── /portfolio/positions accrues a contract past its last reported mark ───────
+# The rentabilidade chart on this same page already grows a contract from
+# `renda_fixa_terms` (accrue_rf), while the positions table showed the raw
+# month-end mark — so one book reported two values. The mark stays the anchor;
+# only the slope between it and today is modelled.
+
+_PRE_MARK_DATE = date(2024, 12, 30)      # a session on the plane
+_PRE_MARK_PU = 0.01
+_PRE_RATE_PCT = 12.0
+
+
+async def _own_book(client, email: str) -> tuple[dict[str, str], uuid.UUID]:
+    """A fresh account, not the shared dev tenant: these tests put a contract in
+    a book and leave it there, and the dev book is read by half the suite."""
+    await client.post("/auth/register", json={"email": email, "password": "prepassword"})
+    r = await client.post(
+        "/auth/jwt/login", data={"username": email, "password": "prepassword"})
+    assert r.status_code == 200, r.text
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    r = await client.post(
+        "/billing/dev-plan", json={"plan": "investidor"}, headers=headers)
+    assert r.status_code == 200, r.text
+    return headers, uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+
+
+async def _seed_pre_contract(tid, *, with_terms: bool):
+    from platform_app.db import async_session_maker
+    from platform_app.models import (Position, RendaFixaMark, RendaFixaTerms)
+
+    async with async_session_maker() as session:
+        session.add(Position(
+            tenant_id=tid, ticker="CDB - PRE", qty=1_000_000, avg_cost=_PRE_MARK_PU,
+            total_cost=10_000.0, market=RENDA_FIXA_MARKET))
+        session.add(RendaFixaMark(tenant_id=tid, ticker="CDB - PRE",
+                                  date=_PRE_MARK_DATE, price=_PRE_MARK_PU))
+        if with_terms:
+            session.add(RendaFixaTerms(tenant_id=tid, ticker="CDB - PRE",
+                                       indexer="pre", rate_pct=_PRE_RATE_PCT))
+        await session.commit()
+
+
+async def _plane_sessions_since(start: date) -> list[date]:
+    """The exchange calendar the accrual walks — 252 business days a year is the
+    Brazilian convention, so sessions are counted, not calendar days."""
+    from platform_app.db import get_engine_pool
+
+    rows = await (await get_engine_pool()).fetch(
+        "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
+    return [r["date"] for r in rows]
+
+
+@_asyncio
+@pytest.mark.market
+async def test_positions_accrue_a_prefixado_past_its_last_mark(client):
+    headers, tid = await _own_book(client, "pre-accrued@example.com")
+    await _seed_pre_contract(tid, with_terms=True)
+
+    grid = await _plane_sessions_since(_PRE_MARK_DATE)
+    assert len(grid) > 60, "need a real run of sessions past the mark to accrue over"
+    expected = _PRE_MARK_PU * (1.0 + _PRE_RATE_PCT / 100.0) ** ((len(grid) - 1) / 252)
+
+    row = {p["ticker"]: p for p in
+           (await client.get("/portfolio/positions", headers=headers)).json()}["CDB - PRE"]
+
+    assert row["last_price"] == pytest.approx(expected, rel=1e-6)
+    assert row["last_price"] > _PRE_MARK_PU          # 12% a.a. is not zero
+    assert row["price_date"] == grid[-1].isoformat()  # dated today, not month-end
+    assert row["market_value"] == pytest.approx(round(1_000_000 * expected, 2))
+
+
+@_asyncio
+@pytest.mark.market
+async def test_positions_without_terms_still_report_the_mark_as_published(client):
+    """No indexer entered → nothing is invented. The month-end number, and the
+    month-end date beside it, exactly as before."""
+    headers, tid = await _own_book(client, "pre-reported@example.com")
+    await _seed_pre_contract(tid, with_terms=False)
+
+    row = {p["ticker"]: p for p in
+           (await client.get("/portfolio/positions", headers=headers)).json()}["CDB - PRE"]
+
+    assert row["last_price"] == _PRE_MARK_PU
+    assert row["price_date"] == _PRE_MARK_DATE.isoformat()

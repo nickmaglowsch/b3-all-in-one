@@ -60,7 +60,10 @@ def _fetch_cached(kind: str, key_parts: tuple, fetch):
     if key in _MEM_CACHE:
         return _MEM_CACHE[key].copy()
 
-    digest = hashlib.md5("|".join(key).encode()).hexdigest()[:16]  # ponytail: filename key, not security
+    # ponytail: filename key, not security — and `usedforsecurity=False` is what
+    # says so to a FIPS-mode OpenSSL, which otherwise refuses md5 outright.
+    digest = hashlib.md5(
+        "|".join(key).encode(), usedforsecurity=False).hexdigest()[:16]
     path = _CACHE_DIR / f"{kind}_{digest}.pkl"
     if path.exists() and (time.time() - path.stat().st_mtime) < _CACHE_TTL_SECONDS:
         try:

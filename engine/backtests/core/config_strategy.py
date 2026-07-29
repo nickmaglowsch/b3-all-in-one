@@ -273,11 +273,17 @@ class RankAndHold(StrategyBase):
 
     @staticmethod
     def _weights(selected, adtv_r, signal, i, scheme) -> dict:
-        if scheme == "market_cap":
-            caps = adtv_r[selected].clip(lower=0)          # ponytail: ADTV proxy for cap weight
-            tot = caps.sum()
+        # "market_cap" is a legacy alias for "adtv" and weights by liquidity, as
+        # it always did — this engine has no share counts, so it never saw a cap.
+        # The word is not free: sp500_b3/top_mcap weight by a real point-in-time
+        # market cap under it, so a spec author reading either could reasonably
+        # expect the other's behaviour. Kept accepted because user specs live in
+        # a tenant database this repo cannot grep and rewrite.
+        if scheme in ("adtv", "market_cap"):
+            size = adtv_r[selected].clip(lower=0)
+            tot = size.sum()
             if tot > 0:
-                return (caps / tot).to_dict()
+                return (size / tot).to_dict()
         # equal (default) and fallback
         w = 1.0 / len(selected)
         return {t: w for t in selected}

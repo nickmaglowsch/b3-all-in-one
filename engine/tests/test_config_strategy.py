@@ -166,3 +166,63 @@ def test_fixed_weight_all_or_nothing_holds_cdi_until_all_live(monkeypatch):
     assert (tw[["BOVA11", "IVVB11"]].iloc[:13] == 0.0).all().all()
     # after both live: equal thirds
     assert np.allclose(tw[["BOVA11", "IVVB11", "CDI_ASSET"]].iloc[13:], 1.0 / 3.0)
+
+
+# ── weighting: "adtv" says what the engine actually does ─────────────────────
+# `weighting: market_cap` here never read a market cap — it weighted by ADTV,
+# the size proxy this engine has. sp500_b3/top_mcap DO weight by a real
+# point-in-time cap under the same word, so one spec key meant two things.
+
+def _adtv_shared(adtv_by_ticker: dict[str, float], n: int = 24) -> dict:
+    idx = pd.date_range("2020-01-31", periods=n, freq="ME")
+    cols = list(adtv_by_ticker)
+    rng = np.random.default_rng(3)
+    ret = pd.DataFrame(rng.normal(0.01, 0.05, (n, len(cols))), index=idx, columns=cols)
+    adtv = pd.DataFrame(
+        [[adtv_by_ticker[c] for c in cols]] * n, index=idx, columns=cols)
+    return {
+        "ret": ret, "log_ret": np.log1p(ret), "adtv": adtv,
+        "raw_close": pd.DataFrame(10.0, index=idx, columns=cols),
+        "has_glitch": pd.DataFrame(0, index=idx, columns=cols),
+    }
+
+
+def _size_weighted_spec(weighting: str) -> dict:
+    return {
+        "name": f"size-{weighting}", "kind": "rank_and_hold", "rebalance": "ME",
+        "warmup": 1, "weighting": weighting,
+        "signal": {"factor": "sharpe_mom", "lookback": 2},
+        "universe": {"min_adtv": 0, "min_price": 0},
+        "selection": {"min_names": 2, "top_n": 2},
+    }
+
+
+def _last_active_row(tw):
+    active = tw[(tw != 0).any(axis=1)]
+    assert len(active) > 0, "strategy never invested"
+    return active.iloc[-1]
+
+
+def test_adtv_weighting_splits_by_liquidity():
+    shared = _adtv_shared({"AAAA3": 3e6, "BBBB3": 1e6})
+    _, tw = RankAndHold(_size_weighted_spec("adtv")).generate_signals(shared, {})
+    row = _last_active_row(tw)
+    assert row["AAAA3"] == pytest.approx(0.75)
+    assert row["BBBB3"] == pytest.approx(0.25)
+
+
+def test_market_cap_still_means_adtv_for_specs_already_written_that_way():
+    """Kept as an alias: user specs live in a tenant DB this repo cannot grep."""
+    shared = _adtv_shared({"AAAA3": 3e6, "BBBB3": 1e6})
+    _, tw = RankAndHold(_size_weighted_spec("market_cap")).generate_signals(shared, {})
+    row = _last_active_row(tw)
+    assert row["AAAA3"] == pytest.approx(0.75)
+    assert row["BBBB3"] == pytest.approx(0.25)
+
+
+def test_an_unknown_weighting_falls_back_to_equal_rather_than_crashing():
+    shared = _adtv_shared({"AAAA3": 3e6, "BBBB3": 1e6})
+    _, tw = RankAndHold(_size_weighted_spec("float_adjusted")).generate_signals(shared, {})
+    row = _last_active_row(tw)
+    assert row["AAAA3"] == pytest.approx(0.5)
+    assert row["BBBB3"] == pytest.approx(0.5)

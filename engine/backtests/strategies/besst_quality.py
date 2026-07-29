@@ -47,7 +47,7 @@ from backtests.strategies.sp500_b3 import (
     DEFAULT_MIN_ADTV,
     LIQUIDITY_WINDOW,
     compute_weights,
-    infer_volume_scale,
+    liquidity_median,
     load_fundamentals_pit_raw,
     load_stock_actions,
     select_constituents,
@@ -222,8 +222,7 @@ class BesstQualityStrategy(StrategyBase):
         actions = load_stock_actions(db_path)
         divs = load_dividends(db_path)
 
-        scale = infer_volume_scale(fin_vol)
-        med63 = fin_vol.fillna(0.0).rolling(LIQUIDITY_WINDOW).median() * scale
+        med63 = liquidity_median(fin_vol)
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
         daily_idx = close_px.index

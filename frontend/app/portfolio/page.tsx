@@ -303,9 +303,11 @@ export default function PortfolioPage() {
               {dated.length > 0 && (
                 <p className="mt-3 text-xs text-muted">
                   {formatInt(dated.length)} posições de renda fixa entram pelo
-                  preço que a B3 publicou no relatório de posição
-                  {oldestMark ? ` (a partir de ${formatDate(oldestMark)})` : ""} —
-                  não há cotação diária para esse papel.
+                  preço que a B3 publicou no relatório de posição, corrigido até
+                  a data ao lado de cada uma pelo indexador que você cadastrou —
+                  sem indexador, fica no preço do relatório
+                  {oldestMark ? ` (o mais antigo é de ${formatDate(oldestMark)})` : ""}.
+                  Não há cotação diária para esse papel.
                 </p>
               )}
 

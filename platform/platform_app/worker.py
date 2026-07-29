@@ -29,8 +29,13 @@ async def _run() -> None:
         )
         if row["reg"] is None:
             await app.schema_manager.apply_schema_async()
-        # ponytail: concurrency capped low — worker shares CPU on the single VPS (spec 01);
-        # per-tenant quotas are the real admission control, add them when jobs land.
+        # ponytail: concurrency capped low — worker shares CPU on the single VPS
+        # (spec 01). This is a throughput setting, not admission control: it says
+        # how fast the queue drains, never how much one account may put in it.
+        # That job belongs to routes.BACKTEST_QUOTA, which caps a *submitter's*
+        # in-flight runs — the ceiling here is the box, and the ceiling there is
+        # one customer's share of it. Imports and ingest have no such cap: an
+        # import is one job per human upload, and ingest is ours on a schedule.
         #
         # The ingest worker runs one at a time: two concurrent COTAHIST parses on a
         # shared VPS is how you page yourself. queueing_lock already stops the same

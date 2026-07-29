@@ -28,14 +28,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import b3run, enginerun, specstore, tasks
-from platform_app.billing import needs_investidor, needs_trader
+from platform_app.billing import ENTERPRISE, effective_plan, needs_investidor, needs_trader
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, DarfPayment,
-    Import, IngestRun, PortfolioSleeve, Position, RebalanceSettings,
-    RendaFixaMark, TaxSummary, Trade, UserStrategy,
+    Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
+    TaxSummary, Trade, UserStrategy,
 )
+from platform_app.routes_portfolio_index import current_rf_marks
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
 imports_router = APIRouter(prefix="/imports", tags=["imports"])
@@ -201,9 +202,10 @@ def _value_position(p, price: float | None, as_of: date | None = None) -> dict:
     contract with no posição report) → nulls, so the UI leaves it out of the P/L
     base instead of pretending value == cost.
 
-    `as_of` dates the mark and is set only when it is NOT today's plane: a renda
-    fixa mark is month-end, and a month-end number shown beside live closes has
-    to say so."""
+    `as_of` dates the mark and is set only for renda fixa: month-end when B3's
+    report is all there is, the plane's last session once terms accrue it
+    forward. Either way a number shown beside live closes has to say when it is
+    for — a live close carries no date because it is always today's."""
     cost = float(p.total_cost or 0.0)
     mv = round(float(p.qty or 0.0) * price, 2) if price else None
     return {
@@ -215,26 +217,6 @@ def _value_position(p, price: float | None, as_of: date | None = None) -> dict:
         "pnl": None if mv is None else round(mv - cost, 2),
         "pnl_pct": None if mv is None or cost <= 0 else (mv - cost) / cost,
     }
-
-
-async def _latest_rf_marks(
-    session: AsyncSession, tid: uuid.UUID
-) -> dict[str, tuple[float, date]]:
-    """Last per-unit price B3 published for each of the tenant's renda fixa
-    contracts, from their relatório consolidado mensal.
-
-    ponytail: the mark as reported, not accrued forward. portfolio_index.accrue_rf
-    already grows a contract past its last mark from renda_fixa_terms — wire that
-    in here when a month-old value stops being good enough, or when tenants
-    actually fill the terms table.
-    """
-    rows = (await session.execute(
-        select(RendaFixaMark.ticker, RendaFixaMark.price, RendaFixaMark.date)
-        .where(RendaFixaMark.tenant_id == tid)
-        .distinct(RendaFixaMark.ticker)
-        .order_by(RendaFixaMark.ticker, RendaFixaMark.date.desc())
-    )).all()
-    return {r.ticker: (float(r.price), r.date) for r in rows if r.price}
 
 
 @portfolio_router.get("/positions")
@@ -256,7 +238,9 @@ async def get_positions(
         prices = {}
     # Second-choice mark, consulted only where the plane has nothing: a listed
     # ticker always wins, so an RF ETF that trades on the exchange keeps its close.
-    rf = await _latest_rf_marks(session, tid)
+    # Accrued past B3's month-end report where the tenant entered terms, by the
+    # same function the rentabilidade chart draws with — see current_rf_marks.
+    rf = await current_rf_marks(session, tid)
     out = []
     for p in rows:
         price = prices.get(p.ticker)
@@ -1845,6 +1829,34 @@ class BacktestRequest(BaseModel):
     freq: _REBALANCE | None = None
 
 
+# Backtests one ACCOUNT may have queued or running at once. The worker runs two
+# jobs at a time on a shared VPS (spec/01) and `queueing_lock` only stops one
+# *kind* of job overlapping — so without this a single paying customer submitting
+# a hundred runs owns both slots for the rest of the day. Worker concurrency is a
+# throughput setting; this is the admission control worker.py points at.
+#
+# Per account, not per book: an empresarial login managing fifty client books is
+# one customer, and a per-book cap would sell fifty queues for the price of one.
+# The tiers below the two named here never reach this route (needs_trader).
+#
+# ponytail: a concurrency cap, not a monthly allowance. It protects the box,
+# which is the thing that actually breaks; a run/month meter is a billing
+# question and wants a billing period, a counter and a reset — build it when
+# runs cost money rather than latency.
+BACKTEST_QUOTA = {"trader": 3, ENTERPRISE: 10}
+
+
+async def inflight_backtests(session: AsyncSession, user) -> int:
+    """Runs not yet finished across every book the account owns."""
+    managed = select(Portfolio.id).where(Portfolio.owner_id == user.id)
+    return await session.scalar(
+        select(func.count()).select_from(BacktestRun).where(
+            BacktestRun.status.in_(("pending", "running")),
+            (BacktestRun.tenant_id == user.id) | BacktestRun.tenant_id.in_(managed),
+        )
+    )
+
+
 def _run_dict(r: BacktestRun) -> dict:
     return {
         "id": str(r.id), "strategy": r.strategy, "status": r.status,
@@ -1860,7 +1872,18 @@ async def create_backtest(
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
-    _user, tid = tenant
+    user, tid = tenant
+    # Before the gallery: that call shells into the engine venv, and a queue
+    # already full has no reason to spend an interpreter on name validation.
+    limit = BACKTEST_QUOTA.get(effective_plan(user), 0)
+    running = await inflight_backtests(session, user)
+    if running >= limit:
+        raise HTTPException(429, detail={
+            "error": "backtest_quota", "limit": limit, "running": running,
+            "message": (f"{running} backtests já na fila — aguarde uma terminar "
+                        f"(limite do seu plano: {limit})"),
+        })
+
     known = {s["name"] for s in await _gallery(session, tid)}
     if body.strategy not in known:
         raise HTTPException(404, f"unknown strategy: {body.strategy}")

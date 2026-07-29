@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import uuid
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -267,6 +268,61 @@ async def _trading_grid(start: datetime.date) -> list[datetime.date]:
         grid = await _fetch_grid(await get_engine_pool(), start)
         _bounded(_GRID_CACHE)[key] = grid
     return grid
+
+
+async def current_rf_marks(
+    session: AsyncSession, tid: uuid.UUID
+) -> dict[str, tuple[float, datetime.date]]:
+    """Each renda fixa contract's per-unit price today, and the day it is for.
+
+    B3 marks a CDB once a month, in the posição report. Left at that number a
+    contract sits flat for up to a month and then jumps — and /portfolio/index
+    on the same screen does not, because `accrue_rf` already grows it from the
+    indexer the tenant entered. Two numbers for one book. This is that same
+    accrual read at its last point, so the table and the chart agree by
+    construction rather than by two implementations staying in step.
+
+    Without terms there is no slope to model, so the contract keeps the mark B3
+    published and the month-end date that dates it — the previous behaviour, and
+    still the honest one.
+    """
+    marks: dict[str, list[tuple[datetime.date, float]]] = {}
+    for ticker, day, price in (await session.execute(
+        select(RendaFixaMark.ticker, RendaFixaMark.date, RendaFixaMark.price)
+        .where(RendaFixaMark.tenant_id == tid)
+    )).all():
+        if price:
+            marks.setdefault(ticker, []).append((day, float(price)))
+    if not marks:
+        return {}
+    latest = {t: max(pts) for t, pts in marks.items()}
+    reported = {t: (pu, day) for t, (day, pu) in latest.items()}
+
+    terms = {t: (ix, float(rate)) for t, ix, rate in (await session.execute(
+        select(RendaFixaTerms.ticker, RendaFixaTerms.indexer, RendaFixaTerms.rate_pct)
+        .where(RendaFixaTerms.tenant_id == tid)
+    )).all() if t in marks}
+    if not terms:
+        return reported       # nothing to accrue → no plane round-trip at all
+
+    try:
+        grid, closes = await _plane(
+            sorted({s for s in (pidx.rf_series_for(ix) for ix, _ in terms.values()) if s}),
+            min(day for day, _ in latest.values()))
+    except Exception:         # noqa: BLE001 — same posture as /positions itself
+        return reported       # plane down → the reported mark, not a 500
+    if not grid:
+        return reported
+
+    accrued = pidx.accrue_rf(grid, marks, terms, closes)
+    for ticker, series in accrued.items():
+        day = max(series)
+        # Only ever move a mark forward in time. A contract whose last posição
+        # report is newer than the plane's last session (B3 publishes month-end
+        # before the exchange's next close) would otherwise be walked backwards.
+        if day >= reported[ticker][1]:
+            reported[ticker] = (series[day], day)
+    return reported
 
 
 async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:

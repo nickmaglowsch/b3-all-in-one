@@ -5,10 +5,9 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # Weekly, so the mutation job runs at all: it re-runs the taxcore suite once per
-  # mutant, which is minutes rather than seconds — too slow to gate a PR, too useful
-  # to never run. Everything else runs on the schedule too, which is deliberate: a
-  # weekly full build is what catches drift in the unpinned parts of the toolchain.
+  # A weekly full build, to catch drift in the parts of the toolchain that are not
+  # pinned — the unpinned `mutmut>=3`, the ubuntu-latest image, the action versions.
+  # Nothing here is exclusive to the schedule; every job also runs on a PR.
   schedule:
     - cron: "0 5 * * 1"
   workflow_dispatch:
@@ -115,7 +114,10 @@ jobs:
 
   mutation:
     name: Mutation testing (taxcore apuração)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Runs on every PR. It was originally schedule-only because mutation testing the
+    # 1100-line irpf_2026.py took minutes; against the extracted apuracao.py the whole
+    # job is ~20s (96 mutants, 12s of mutmut), so there is nothing left to justify
+    # letting a PR merge without it. Widen `source_paths` and re-measure this.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

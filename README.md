@@ -212,7 +212,7 @@ sit on:
 | Cyclomatic complexity | ruff `C901` (Python) + eslint `complexity` (TS), max 10 | `scripts/quality_gates.py` + baseline |
 | Module size | max 400 lines (`.py`, `.ts`, `.tsx`) | `scripts/quality_gates.py` + baseline |
 | Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
-| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, max 6 survivors | `ci.yml`, weekly / `workflow_dispatch` |
+| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, max 6 survivors | `ci.yml` |
 
 **The two structural gates are ratchets, not walls.** The repo has 63 functions over
 complexity 10 (45 Python, 18 TSX) and 28 modules over 400 lines today;
@@ -246,9 +246,11 @@ hook misses — which is why that floor moved 70 → 75.
 contador has to be able to check without reading Python. `tests/test_apuracao.py` is
 the fine-grained unit suite; the feature file is the readable contract on top of it.
 
-**Mutation testing is scoped, and it is a real gate.** Target:
+**Mutation testing is scoped, and it is a real gate on every PR.** Target:
 `taxcore/scripts/apuracao.py`, the isenção / alíquota / compensação rules, against the
-two apuração suites — 96 mutants at ~200/s, **90 killed and 6 surviving**.
+two apuração suites — 96 mutants, **90 killed and 6 surviving**. The whole job is ~20s
+in CI (12s of that mutating); it is on the PR path because it is that cheap, not
+despite it.
 
 The gate earned its place on the first run: it found that nothing covered two
 consecutive loss months in one bucket, so `carry += -pnl` could become `carry = -pnl`

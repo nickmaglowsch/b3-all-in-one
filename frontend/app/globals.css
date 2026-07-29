@@ -184,3 +184,26 @@ html {
   .reveal { opacity: 1; transform: none; transition: none; }
   .stage-node { transition: none; }
 }
+
+/* ── Print ───────────────────────────────────────────────────────────────────
+   The IRPF report's "Baixar PDF" is `window.print()` over HTML the page has
+   already rendered — no server-side renderer, no font stack in the image, no
+   arm64 wheel. So the export is these rules plus `print:hidden` on whatever is
+   a control rather than content. Nothing else in the app is meant to be
+   printed; these are safe there anyway. */
+@media print {
+  @page { margin: 14mm; }
+
+  /* Paper is white and the tokens are authored for a screen: force the report
+     to ink-on-white rather than trusting each browser's "background graphics"
+     toggle, which is off by default and would drop every panel fill. */
+  body { background: #fff; color: #000; }
+
+  /* A Bens e Direitos row split across a page break is unreadable, and a
+     section heading orphaned at the foot of a page is worse. */
+  tr, img, svg { break-inside: avoid; }
+  h1, h2, h3 { break-after: avoid; }
+
+  /* Underlined blue text with no destination is noise on paper. */
+  a { color: inherit; text-decoration: none; }
+}

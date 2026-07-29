@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from datetime import date
@@ -524,14 +525,130 @@ def realized_per_month(tl: pd.DataFrame, year: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+# The three lines the Renda Variável ficha actually apurates, in render order.
+# ETF_RF is deliberately absent: renda fixa is tributada na fonte, so it gets a
+# table in the report but no apuração, no IR to pay, and no DARF.
+CLASSES_APURACAO = ("AÇÃO", "FII", "BDR_ETF")
+ALIQUOTA = {"AÇÃO": 0.15, "FII": 0.20, "BDR_ETF": 0.15}
+ISENCAO_LIMIT = 20_000.0
+
+
+def monthly_apuracao(monthly_df: pd.DataFrame) -> list[dict]:
+    """Per-month, per-class apuração: compensação, base, IR and running carry.
+
+    One row per (class, month) for all twelve months — a month with no trades is
+    reported as ``ativo=False`` rather than dropped, because the report renders a
+    "—" line for it and a caller must not have to invent one.
+
+    The rules live here, once, because the three render loops below and the
+    platform's DARF ledger read the same numbers and must not drift:
+
+    - **AÇÕES**: isentas when the month's gross sales are ``<= R$ 20.000``
+      (inclusive). Best of both worlds — an isento *gain* is tax-free and does
+      **not** consume the accumulated loss, while an isento *loss* still feeds
+      it. Above the limit: 15% on the gain net of carry.
+    - **FIIs**: 20% from the first real, no isenção, own carry bucket. FII losses
+      never offset ação gains.
+    - **BDR / ETF de renda variável**: one summed line at 15%, no isenção and no
+      carry bucket — which is what this report has always done for it.
+
+    Money is left unrounded: the caller formats with ``:,.2f``, and rounding each
+    row before summing would shift the yearly totals by cents.
+    """
+    rows: list[dict] = []
+    for cls in CLASSES_APURACAO:
+        carry = 0.0
+        for _, r in monthly_df.iterrows():
+            if cls == "BDR_ETF":
+                gross = float(r["BDR_gross"] + r["ETF_RV_gross"])
+                pnl = float(r["BDR_pnl"] + r["ETF_RV_pnl"])
+            else:
+                gross = float(r[f"{cls}_gross"])
+                pnl = float(r[f"{cls}_pnl"])
+            isento = cls == "AÇÃO" and gross <= ISENCAO_LIMIT
+            has_carry_bucket = cls != "BDR_ETF"
+            compensacao = ganho_isento = base = 0.0
+            if isento:
+                if pnl > 0:
+                    ganho_isento = pnl
+                elif pnl < 0:
+                    carry += -pnl
+            elif pnl > 0:
+                if has_carry_bucket:
+                    compensacao = min(carry, pnl)
+                    carry -= compensacao
+                base = pnl - compensacao
+            elif pnl < 0 and has_carry_bucket:
+                carry += -pnl
+            rows.append({
+                "month": int(r["month"]),
+                "classe": cls,
+                # "traded and owed nothing" is not "did not trade": the first
+                # prints real numbers, the second prints "—", and neither may
+                # raise a DARF alert.
+                "ativo": bool(gross or pnl),
+                "gross": gross,
+                "pnl": pnl,
+                "isento": isento,
+                "ganho_isento": ganho_isento,
+                "compensacao": compensacao,
+                "base": base,
+                "aliquota": ALIQUOTA[cls],
+                "ir": base * ALIQUOTA[cls],
+                "carry": carry,
+            })
+    return rows
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--year", type=int, default=2025,
                    help="Calendar year covered (default 2025; IRPF 2026 covers tax year 2025)")
+    p.add_argument("--json", action="store_true", dest="as_json",
+                   help="Emit the Renda Variável apuração as JSON and exit, skipping "
+                        "the markdown report (what the DARF ledger reads)")
     args = p.parse_args(argv[1:])
     Y = args.year
 
     tl = build_timeline()
+
+    # ----- Renda Variável monthly grid -----
+    # Built before anything else so --json can return without touching the raw
+    # extracts: the apuração needs only trades + cash_events, while Bens e
+    # Direitos and the renda fixa sections parse every uploaded Excel file.
+    realized = realized_per_month(tl, Y)
+
+    realized["cls"] = realized["ticker"].map(asset_class)
+    realized["month"] = realized["date"].dt.month
+
+    monthly = []
+    for m in range(1, 13):
+        sub = realized[realized["month"] == m]
+        row = {"month": m}
+        for cls in ("AÇÃO", "FII", "BDR", "ETF_RV", "ETF_RF"):
+            x = sub[sub["cls"] == cls]
+            row[f"{cls}_gross"] = round(x["sell_value"].sum(), 2)
+            row[f"{cls}_pnl"] = round(x["pnl"].sum(), 2)
+        monthly.append(row)
+    monthly_df = pd.DataFrame(monthly)
+
+    apuracao = monthly_apuracao(monthly_df)
+    if args.as_json:
+        json.dump({"year": Y, "apuracao": apuracao}, sys.stdout)
+        return 0
+
+    by_class = {cls: [r for r in apuracao if r["classe"] == cls]
+                for cls in CLASSES_APURACAO}
+
+    months_pt_for_table = ["Jan","Fev","Mar","Abr","Mai","Jun",
+                           "Jul","Ago","Set","Out","Nov","Dez"]
+
+    # AÇÕES isento gains (vendas mensais ≤ R$ 20k) land in Rendimentos Isentos
+    # código 20, which is rendered before the monthly table — hence read off the
+    # apuração here rather than recomputed there.
+    acoes_isento_breakdown = [r for r in by_class["AÇÃO"] if r["ganho_isento"] > 0]
+    acoes_isento_gains_total = round(
+        sum(r["ganho_isento"] for r in acoes_isento_breakdown), 2)
 
     # ----- Bens e Direitos snapshots -----
     snap_prev = snapshot_positions(tl, pd.Timestamp(f"{Y-1}-12-31"))
@@ -568,37 +685,6 @@ def main(argv: list[str]) -> int:
     reembolsos = yr[yr["event_category"] == "reembolso"]
     amortizacoes = yr[yr["event_category"] == "amortization"]
     premios = yr[yr["event_category"] == "premium"]
-
-    # ----- Renda Variável monthly grid -----
-    realized = realized_per_month(tl, Y)
-
-    realized["cls"] = realized["ticker"].map(asset_class)
-    realized["month"] = realized["date"].dt.month
-
-    monthly = []
-    for m in range(1, 13):
-        sub = realized[realized["month"] == m]
-        row = {"month": m}
-        for cls in ("AÇÃO", "FII", "BDR", "ETF_RV", "ETF_RF"):
-            x = sub[sub["cls"] == cls]
-            row[f"{cls}_gross"] = round(x["sell_value"].sum(), 2)
-            row[f"{cls}_pnl"] = round(x["pnl"].sum(), 2)
-        monthly.append(row)
-    monthly_df = pd.DataFrame(monthly)
-
-    months_pt_for_table = ["Jan","Fev","Mar","Abr","Mai","Jun",
-                           "Jul","Ago","Set","Out","Nov","Dez"]
-
-    # Precompute AÇÕES isento gains (vendas mensais ≤ R$ 20k) — needed for
-    # Rendimentos Isentos código 20 which is rendered before the monthly table.
-    # Isento gains are tax-free and do NOT consume loss carryforward; losses in
-    # isento months still accumulate into the carry and are compensable later.
-    # Mirror the loop's exact branch: gross ≤ R$ 20k AND positive PnL.
-    # (pnl > 0 already excludes the gross==0/pnl==0 no-activity rows.)
-    isento_rows = monthly_df[(monthly_df["AÇÃO_gross"] <= 20000) &
-                             (monthly_df["AÇÃO_pnl"] > 0)]
-    acoes_isento_gains_total = round(float(isento_rows["AÇÃO_pnl"].sum()), 2)
-    acoes_isento_breakdown = isento_rows[["month", "AÇÃO_gross", "AÇÃO_pnl"]].copy()
 
     # ----- Render markdown -----
     out: list[str] = []
@@ -736,11 +822,11 @@ def main(argv: list[str]) -> int:
       f"intacto para meses tributáveis futuros. (Prejuízos em meses isentos, por outro "
       f"lado, continuam sendo adicionados ao prejuízo acumulado normalmente — ver "
       f"tabela mensal na seção 3.)\n")
-    if not acoes_isento_breakdown.empty:
+    if acoes_isento_breakdown:
         w("| Mês | Vendas brutas | Ganho isento |")
         w("|---|---|---|")
-        for _, r in acoes_isento_breakdown.iterrows():
-            w(f"| {months_pt_for_table[int(r['month'])-1]} | R$ {r['AÇÃO_gross']:,.2f} | R$ {r['AÇÃO_pnl']:+,.2f} |")
+        for r in acoes_isento_breakdown:
+            w(f"| {months_pt_for_table[r['month']-1]} | R$ {r['gross']:,.2f} | R$ {r['pnl']:+,.2f} |")
         w(f"| **Total código 20** | | **R$ {acoes_isento_gains_total:,.2f}** |")
         w(f"\n*Lance este total no IRPF em **Rendimentos Isentos e Não Tributáveis → Novo → "
           f"Código 20 — Ganhos líquidos em operações no mercado à vista de ações negociadas "
@@ -904,10 +990,6 @@ def main(argv: list[str]) -> int:
     w(f"- **BDR / ETF Renda Variável**: 15% sobre ganho líquido, sem isenção, mesma "
       f"linha de \"operações comuns\".\n")
 
-    # Track AÇÃO and FII carryforward
-    acoes_carry = 0.0
-    fii_carry = 0.0
-    acoes_isento_gains = 0.0  # positive PnL in ≤R$20k months → Rendimentos Isentos código 20
     months_pt = months_pt_for_table
     w(f"\n### Tabela mensal {Y} — AÇÕES (operações comuns)")
     w(f"\n> **Atenção — o melhor dos dois mundos:** em meses com vendas brutas ≤ R$ 20.000, "
@@ -919,60 +1001,50 @@ def main(argv: list[str]) -> int:
     w(f"\n| Mês | Vendas brutas | Resultado líquido | Compensação | IR a pagar (15%) | Prejuízo acumulado |")
     w(f"|---|---|---|---|---|---|")
     acoes_year_tax = 0
-    for _, r in monthly_df.iterrows():
-        m = int(r["month"])
-        gross = r["AÇÃO_gross"]; pnl = r["AÇÃO_pnl"]
-        if gross == 0 and pnl == 0:
-            w(f"| {months_pt[m-1]} | — | — | — | — | R$ {acoes_carry:,.2f} |")
+    for r in by_class["AÇÃO"]:
+        m = r["month"]
+        gross = r["gross"]; pnl = r["pnl"]; carry = r["carry"]
+        if not r["ativo"]:
+            w(f"| {months_pt[m-1]} | — | — | — | — | R$ {carry:,.2f} |")
             continue
-        if gross <= 20000:
-            # Isento: gains are tax-free (código 20) and DON'T consume the loss carry;
-            # losses still accumulate into the carry and are compensable in future
-            # taxable months (best-of-both-worlds rule).
+        if r["isento"]:
+            # Gains are tax-free (código 20) and DON'T consume the loss carry;
+            # losses still accumulate and are compensable in future taxable
+            # months (best-of-both-worlds rule — applied in monthly_apuracao).
             if pnl > 0:
-                acoes_isento_gains += pnl
                 note = "**ISENTO** (≤ R$ 20k → código 20)"
             elif pnl < 0:
-                acoes_carry += -pnl
                 note = "**ISENTO** (prejuízo somado ao acumulado)"
             else:
                 note = "**ISENTO** (≤ R$ 20k)"
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | {note} | R$ {acoes_carry:,.2f} |")
+            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | {note} | R$ {carry:,.2f} |")
             continue
         if pnl > 0:
-            offset = min(acoes_carry, pnl)
-            taxable = pnl - offset
-            tax = taxable * 0.15
-            acoes_carry -= offset
-            acoes_year_tax += tax
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {offset:,.2f} | R$ {tax:,.2f} | R$ {acoes_carry:,.2f} |")
+            acoes_year_tax += r["ir"]
+            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {r['compensacao']:,.2f} | R$ {r['ir']:,.2f} | R$ {carry:,.2f} |")
         else:
-            acoes_carry += -pnl
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | R$ 0,00 (prejuízo) | R$ {acoes_carry:,.2f} |")
+            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | R$ 0,00 (prejuízo) | R$ {carry:,.2f} |")
+    acoes_carry = by_class["AÇÃO"][-1]["carry"]
     w(f"\n**Total IR sobre AÇÕES em {Y}**: R$ {acoes_year_tax:,.2f}")
     w(f"\n**Saldo prejuízo AÇÕES a compensar p/ {Y+1}**: R$ {acoes_carry:,.2f}")
-    w(f"\n**Ganhos isentos AÇÕES em {Y} (vendas mensais ≤ R$ 20k)**: R$ {acoes_isento_gains:,.2f} → declarar em Rendimentos Isentos código 20.")
+    w(f"\n**Ganhos isentos AÇÕES em {Y} (vendas mensais ≤ R$ 20k)**: R$ {acoes_isento_gains_total:,.2f} → declarar em Rendimentos Isentos código 20.")
 
     w(f"\n### Tabela mensal {Y} — FIIs")
     w(f"\n| Mês | Vendas brutas | Resultado líquido | Compensação | IR a pagar (20%) | Prejuízo acumulado |")
     w(f"|---|---|---|---|---|---|")
     fii_year_tax = 0
-    for _, r in monthly_df.iterrows():
-        m = int(r["month"])
-        gross = r["FII_gross"]; pnl = r["FII_pnl"]
-        if gross == 0 and pnl == 0:
-            w(f"| {months_pt[m-1]} | — | — | — | — | R$ {fii_carry:,.2f} |")
+    for r in by_class["FII"]:
+        m = r["month"]
+        gross = r["gross"]; pnl = r["pnl"]; carry = r["carry"]
+        if not r["ativo"]:
+            w(f"| {months_pt[m-1]} | — | — | — | — | R$ {carry:,.2f} |")
             continue
         if pnl > 0:
-            offset = min(fii_carry, pnl)
-            taxable = pnl - offset
-            tax = taxable * 0.20
-            fii_carry -= offset
-            fii_year_tax += tax
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {offset:,.2f} | R$ {tax:,.2f} | R$ {fii_carry:,.2f} |")
+            fii_year_tax += r["ir"]
+            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {r['compensacao']:,.2f} | R$ {r['ir']:,.2f} | R$ {carry:,.2f} |")
         else:
-            fii_carry += -pnl
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | R$ 0,00 | R$ {fii_carry:,.2f} |")
+            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | R$ 0,00 | R$ {carry:,.2f} |")
+    fii_carry = by_class["FII"][-1]["carry"]
     w(f"\n**Total IR sobre FIIs em {Y}**: R$ {fii_year_tax:,.2f}")
     w(f"\n**Saldo prejuízo FIIs a compensar p/ {Y+1}**: R$ {fii_carry:,.2f}")
 
@@ -982,15 +1054,12 @@ def main(argv: list[str]) -> int:
         w(f"\n### Tabela mensal {Y} — BDRs e ETFs de Renda Variável (15% sem isenção)")
         w(f"\n| Mês | Vendas brutas | Resultado líquido | IR (15%) |")
         w(f"|---|---|---|---|")
-        for _, r in monthly_df.iterrows():
-            m = int(r["month"])
-            gross = r["BDR_gross"] + r["ETF_RV_gross"]
-            pnl = r["BDR_pnl"] + r["ETF_RV_pnl"]
-            if gross == 0 and pnl == 0:
+        for r in by_class["BDR_ETF"]:
+            m = r["month"]
+            if not r["ativo"]:
                 w(f"| {months_pt[m-1]} | — | — | — |")
                 continue
-            tax = max(0, pnl * 0.15)
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {tax:,.2f} |")
+            w(f"| {months_pt[m-1]} | R$ {r['gross']:,.2f} | R$ {r['pnl']:+,.2f} | R$ {r['ir']:,.2f} |")
 
     # ETF_RF (LFTB11) — different treatment
     has_rf_etf = monthly_df["ETF_RF_gross"].sum() > 0

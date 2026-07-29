@@ -1,7 +1,8 @@
 # Feature: user-created strategies (rule + portfolio)
 
-Status: **in build** (full version). This doc is the build contract — every
-implementation agent reads it instead of re-deriving the architecture.
+Status: **shipped** — `/strategies/user*` on the `trader` tier, migration
+`c7e2f4a9b1d8_user_strategies`. This doc is the architecture of record for the
+feature, not a plan.
 
 ## The core insight
 

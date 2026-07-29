@@ -1,7 +1,7 @@
 # Golden-file regression suite — `taxcore` tax core
 
-Locks in the current behavior of the two most critical, previously-untested
-modules so the upcoming SaaS port can refactor safely:
+Locks in the behavior of the two modules the platform's tax surfaces are built
+on, so they can be refactored safely:
 
 - **`scripts/load_b3.py`** — B3 extract parser (trades / cash events / positions).
 - **`scripts/irpf_2026.py`** — IRPF ano-base report generator.

@@ -1,6 +1,6 @@
 """
 Storage operations for B3 market data (SQLite by default, Postgres via
-ENGINE_DATABASE_URL). See PORTING.md for the dialect map.
+ENGINE_DATABASE_URL). The dialect map lives in `_xlate`/`_pg_ddl` below.
 """
 
 import logging

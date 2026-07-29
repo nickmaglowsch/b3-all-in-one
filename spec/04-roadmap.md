@@ -1,82 +1,53 @@
 # 04 — Roadmap
 
-Phased so each phase ships something usable and de-risks the next. Estimates assume one
-developer + AI agents, part-time; treat as relative sizing.
+Phases 0–4 (foundations, portfolio, IRPF, bench, the loop) all shipped. What each phase
+was and where it landed is the codebase and `README.md`; what remains is below.
 
-## Phase 0 — Foundations & de-risking (2–4 wks)
-- Monorepo `b3-all-in-one`: `platform/` (new FastAPI app), `engine/` (pipeline repo's
-  `b3_pipeline` + `backtests` as an installable package), `taxcore/` (b3-portfolio's
-  parsing/tax logic as an installable package). Vendored via git subtree or path deps —
-  keep upstream repos alive as research benches.
-- **Golden-file test suite for `taxcore`** (load_b3 + irpf) from real anonymized outputs —
-  before any refactor.
-- Postgres port of the market-plane schema; env-driven DB config across all hardcoded-path
-  sites. Keep the 62-file engine test suite green.
-- Legal spike: B3 data redistribution posture, yfinance replacement, LGPD checklist.
-  Outcome gates what Phase 2+ can show publicly.
-- Docker + CI (neither repo has either): arm64 images (the VPS is aarch64, incl. the
-  Rust wheel), `docker-compose.prod.yml`-style deploy joining the VPS `shared` network,
-  Caddyfile block, `b3` database on `infra_postgres`.
+## Next
 
-**Exit criteria:** engine tests pass on Postgres; irpf golden tests pass from `taxcore`;
-scheduled ingestion job populates the shared market plane daily.
+### Engine work for the loop (spec `05-strategy-linked-portfolio.md`, "Engine work")
+Items 1–2 (`compute_trades()` extraction, advise-only `scripts/advise_weights.py`) shipped.
+Still open, in order:
 
-## Phase 1 — Portfolio self-care, single-tenant → multi-tenant (4–6 wks)
-- Auth: Google OAuth via fastapi-users (imobindex pattern), tenant model, RLS.
-- Import pipeline (upload → parse → dedupe → positions) with raw-file retention and
-  incomplete-history UX.
-- Dashboard: positions, status, income, benchmark, sector exposure.
-- Reference tables seeded from b3-portfolio's constants + admin curation page.
+3. Dated cash-flow `contribution` Series, so what-if replays the tenant's real deposits on
+   their real dates instead of a flat monthly figure.
+4. Seeded initial `pt_pos` / `at_pos` / `loss_carryforward`, so a what-if can start from the
+   book the tenant already holds rather than from cash.
+5. Asset-class tax model — per-class rates and carry buckets, plus the ações isenção applied
+   per **calendar month**. This also fixes a known inaccuracy in the bench itself: today the
+   isenção is applied per rebalance row and FII uses a single flat rate.
 
-**Exit criteria:** a stranger can sign up, upload their extracts, and see a correct
-portfolio. Dogfood with 3–5 real users' extracts (the parser will break; that's the point).
+### Postgres gaps
+- **Connection pooling.** `storage.get_connection` opens a fresh `psycopg` connection per
+  call. Fine for the ingest CLIs; the api/worker path wants `psycopg_pool`.
+- **Non-additive migrations.** `_migrate_schema_pg` is additive-only (`ADD COLUMN IF NOT
+  EXISTS`). Renames, drops and type changes have no path on either backend. Add a
+  `schema_migrations` table only when a destructive change is actually needed.
+- **`b3_pipeline/main.py`'s closing banner** still prints `config.DB_PATH` (the SQLite
+  fallback) in Postgres mode. Cosmetic — the data is written to PG correctly.
 
-## Phase 2 — IRPF (6–8 wks, timed to land before the IRPF season, Jan)
-- IRPF report generation (all 4 sections), copy-per-field viewer, PDF export.
-- DARF ledger + monthly apuração alerts.
-- TLH planner (non-interactive port).
-- Billing: Stripe subscriptions + webhook (imobindex pattern): Free preview vs Pro full
-  report. (Pix/local PSP only if Stripe conversion proves poor for BR cards.)
+### FATCOT quotation-factor support
+See `engine/docs/todo.md`. The COTAHIST parser ignores B3's quotation-factor field, so
+stocks that changed quotation basis get wrong adjustments. Currently papered over by
+sanity-capping in `adjustments.py`, which silently discards legitimate adjustments.
 
-**Exit criteria:** paying users file their IRPF from the platform's report. This phase is
-the revenue test — if IRPF doesn't convert, revisit before building the bench.
+### Still-open risks from `00-overview.md`
+- **Encryption at rest and DB-level RLS** (risk 2). Per-tenant isolation and the LGPD
+  data-subject routes are done (`08-privacidade-lgpd.md`); these two are not.
+- **B3 data redistribution scope** (risk 1). The platform serves derived results only and
+  yfinance is out of the engine, but no written legal opinion has been obtained. Gates any
+  raw-feed or data-API surface.
 
-## Phase 3 — Backtest bench (6–8 wks)
-- Worker queue with quotas; shared-data parquet cache.
-- Strategy gallery (platform specs), YAML editor + validation, run launcher, tear-sheet
-  viewer, run comparison.
-- **Engine extensions from `05-strategy-linked-portfolio.md`** (they upgrade the bench
-  itself and unblock Phase 4): asset-class tax model (per-class rates/carry, isenção per
-  calendar month), `compute_trades()` extraction, advise-only path, dated cash-flow
-  contributions, seeded initial state.
-- ~~Benchmark data source swap (from Phase 0 legal outcome) completed before public launch.~~
-  Done: benchmarks read the plane (IBOV from B3's own index series); yfinance is
-  out of the engine.
-- Quant tier billing.
-
-**Exit criteria:** a user clones a gallery strategy, edits a factor expression, runs it,
-and reads an after-tax tear sheet — all in the browser.
-
-## Phase 4 — The loop (5–6 wks) — spec: `05-strategy-linked-portfolio.md`
-- Sleeve config (attach strategies with fixed percentages; compiles to `FixedWeight`
-  specs for backtesting).
-- Combined-target drift view + **tax-optimal rebalance advisor** (month-tranched plan:
-  20k isenção scheduling, loss-harvest T+1 rebuys, all-class carry buckets).
-- **What-if backtests**: real cash flows replayed through alternative strategies,
-  after-tax; the old `etf_counterfactual` baselines (ETF mix / CDI / frozen basket)
-  become plain `fixed_weight` specs rather than a parallel simulator.
-- Per-sleeve virtual attribution reporting.
-- MCP server over the public API (revive the existing prototype against real endpoints).
-
-Note: the advisor and what-if depend on the engine extensions and portfolio data, not on
-the bench UI — if IRPF conversion is strong and the Quant tier can wait, the engine-work
-slice of Phase 3 plus Phase 4 can ship to the Pro tier before the full bench opens.
+### MCP server over the public API
+A thin second client over the same endpoints and the same auth — not a separate backend.
+The `b3_remote_mcp` container already deployed behind Caddy gets repointed at this API
+rather than redeployed.
 
 ## Continuous
 - Parser-drift watch (new B3 extract fixtures each format change).
 - Yearly IRPF rule review (new ano-base parameters, códigos) — recurring, every ~Dec.
 - Reference-table curation (new tickers, CNPJs, ETF classifications).
 
-## Explicit non-goals (all phases)
+## Explicit non-goals
 Day-trade support · broker order execution · raw market-data API · user-supplied Python
 strategies · CEI/broker scraping · investment advice of any kind.

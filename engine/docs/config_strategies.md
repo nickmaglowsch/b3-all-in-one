@@ -40,15 +40,19 @@ selection:
 weighting: equal
 ```
 
-That's it. It now appears in the registry and the Streamlit backtest runner:
+That's it. It now appears in the registry, and therefore in the platform's
+`GET /strategies` gallery:
 
 ```python
 from backtests.core.strategy_registry import get_registry
 get_registry().get("MyMomentum")      # a ready-to-run strategy instance
+```
 
-# Or end-to-end (loads data, runs the sim, computes metrics vs IBOV/CDI):
-from ui.services.backtest_service import run_backtest
-result = run_backtest("MyMomentum", get_registry().get("MyMomentum").get_default_parameters())
+End-to-end from the CLI (loads data, runs the sim, computes metrics vs IBOV/CDI,
+prints one line of JSON — the contract the platform worker consumes):
+
+```bash
+python scripts/run_backtest_json.py MyMomentum /tmp/run1 '{}'
 ```
 
 ---
@@ -79,7 +83,7 @@ universe:
 
 signal:
   # The factor is DATA. Reference a named signal from signals.yaml...
-  factor: low_vol          # name in signals.yaml | shared_data key | store:<feature_id>
+  factor: low_vol          # name in signals.yaml, or a shared_data key
   lookback: 12             # periods; passed into the expression and drives the warmup
   apply_glitch: true       # NaN-out flagged bad prints (has_glitch) before ranking
   range: [1.0, 30.0]       # optional: keep only signal values within [lo, hi]
@@ -156,12 +160,7 @@ Python to add a factor.
    blended_vol:{expr: "-(0.5*vol_60d + 0.5*vol_20d)"}
    ```
 
-3. `store:<feature_id>` — a factor from the research IC store (`research/discovery`),
-   e.g. `factor: store:ratio__High_low_range_20d__Win_rate_120d`. Loaded from
-   parquet and as-of-aligned to the rebalance calendar. IDs live in
-   `research/output/feature_catalog.json`. Reference-only (`factor:`); string
-   constants are rejected inside an `expr:`.
-4. A bare **`shared_data` key** — any precomputed frame (`mf_composite`,
+3. A bare **`shared_data` key** — any precomputed frame (`mf_composite`,
    `f_pe_ratio_dyn`, …). Fundamentals `f_*` keys need `needs_fundamentals: true`.
 
 ### Primitive vocabulary (what an `expr` may call)

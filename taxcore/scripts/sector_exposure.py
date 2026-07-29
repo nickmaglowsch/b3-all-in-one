@@ -14,7 +14,7 @@ The equity sector lookup hits Fundamentus' detail page which is slow
 (~1-2s per ticker). Results are cached in data/sectors_cache.csv;
 only tickers missing from the cache trigger a fetch.
 
-CLAUDE.md asks for a >25% concentration flag — printed below the table.
+Concentration above 25% in one sector is flagged below the table.
 
 Usage:
     python -m scripts.sector_exposure

@@ -19,6 +19,11 @@ flag value traps (low ROE / distorted P/L / implausible DY) → pool → clean t
 Freshness needs one detail fetch per liquid name, cached in
 data/balance_dates/<snapshot-date>.csv.
 
+Cadence: rebalance quarterly, on the 15th of June / September / December / April —
+~6 weeks after quarter-end, once the ITRs/DFP are filed. A *wave* of stale>Nd
+exclusions means the run is too early; wait for earnings season. Freshness is
+measured against the snapshot date, so historical runs reproduce.
+
 Analysis only — not a buy/sell recommendation.
 """
 from __future__ import annotations

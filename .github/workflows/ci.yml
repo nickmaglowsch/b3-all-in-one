@@ -49,6 +49,12 @@ jobs:
           uv pip install --python .venv -r requirements-bench.txt
 
       - name: Test
+        # COVERAGE_CORE=sysmon: PEP 669 monitoring instead of sys.settrace. The suite
+        # has wall-clock assertions on event-loop responsiveness, and the trace hook
+        # taxed an upload from ~170ms to 424ms — past the 250ms bound, a red build with
+        # nothing wrong. Python is pinned to 3.12 here, so sysmon is always available.
+        env:
+          COVERAGE_CORE: sysmon
         run: cd platform && uv run --frozen pytest -q --cov=platform_app --cov-fail-under=70
         # Tests marked `market` need a loaded B3 price plane; the b3 DB here is
         # empty, so conftest skips them (scripts/docker_smoke.sh covers that path

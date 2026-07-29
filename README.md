@@ -228,10 +228,16 @@ Without `frontend/node_modules` the script prints `SKIPPED` for the frontend hal
 drops those entries from the comparison rather than reporting them clean; `--update`
 refuses outright, so a partial run can never quietly erase them from the baseline.
 
-**Coverage is 71 / 62 / 22% (platform / engine / taxcore), not 100.** The floors are
-today's numbers so they can only rise; raise them in `ci.yml` whenever a PR clears one.
-The taxcore number is the honest one to fix first — most of `taxcore/scripts` is
-CLI entrypoints with no test at all.
+**Coverage is ~77 / 62 / 22% (platform / engine / taxcore), not 100.** The floors are
+below today's numbers so they can only rise; raise them in `ci.yml` whenever a PR
+clears one. The taxcore number is the honest one to fix first — most of
+`taxcore/scripts` is CLI entrypoints with no test at all.
+
+Platform is measured with `COVERAGE_CORE=sysmon` (PEP 669). That is not cosmetic: the
+default `sys.settrace` backend taxed an upload handler from ~170ms to 424ms and broke
+the suite's wall-clock assertions on event-loop responsiveness. It also reads ~5pp
+higher, because it sees lines executed in `asyncio.to_thread` workers that the trace
+hook misses.
 
 **The Gherkin specs are in Portuguese on purpose.** They cover the apuração rules
 (isenção de R$ 20.000, alíquotas, compensação de prejuízo) — the part of this repo a

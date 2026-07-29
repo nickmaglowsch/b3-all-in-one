@@ -66,7 +66,28 @@ class LoopMonitor:
 
 # Generous: the point is to catch a handler that serialises a whole book inline,
 # which parks the loop for hundreds of ms, not to police scheduler jitter.
-MAX_ACCEPTABLE_STALL = 0.25
+#
+# Doubled under coverage. This is wall-clock, and an instrumented interpreter taxes
+# every line the handler executes — CI measured 424ms for an upload that takes ~170ms
+# untraced, which is the tracer, not a regression. CI also sets COVERAGE_CORE=sysmon
+# (PEP 669) to keep that tax small; the doubling is the belt to its braces. A handler
+# that actually blocks parks the loop for seconds, so this stays a live assertion.
+
+
+def _under_coverage() -> bool:
+    """True when coverage is measuring this process.
+
+    Not `sys.gettrace()`: the sysmon backend registers with PEP 669 instead of the
+    trace hook, so that check reads as "no coverage" exactly where CI runs it.
+    """
+    try:
+        import coverage
+    except ImportError:
+        return False
+    return coverage.Coverage.current() is not None
+
+
+MAX_ACCEPTABLE_STALL = 0.5 if _under_coverage() else 0.25
 
 
 @pytest.mark.asyncio(loop_scope="session")

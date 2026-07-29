@@ -30,7 +30,7 @@ from backtests.core import signal_dsl
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec, keep_most_liquid_per_root,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+    COMMON_TAX_RATE, COMMON_SLIPPAGE,
 )
 
 

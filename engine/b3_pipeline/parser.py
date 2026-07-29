@@ -8,7 +8,7 @@ import logging
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 import pandas as pd
 
@@ -44,8 +44,23 @@ def _parse_int(value: str) -> int:
         return 0
 
 
-def _parse_cotahist_file_python(zip_path: Path) -> pd.DataFrame:
-    """Pure-Python implementation of COTAHIST ZIP parsing."""
+def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
+    """
+    Parse a single COTAHIST ZIP file.
+
+    Args:
+        zip_path: Path to COTAHIST ZIP file
+
+    Returns:
+        DataFrame with columns: [date, ticker, isin_code, open, high, low, close, volume, quotation_factor]
+        Prices (open/high/low/close) are normalized to per-share basis by dividing by quotation_factor.
+        Returns an empty DataFrame if the file does not exist or cannot be parsed.
+    """
+    zip_path = Path(zip_path)
+    if not zip_path.exists():
+        logger.error(f"File not found: {zip_path}")
+        return pd.DataFrame()
+
     records = []
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -129,26 +144,6 @@ def _parse_cotahist_file_python(zip_path: Path) -> pd.DataFrame:
 # Public API
 # ---------------------------------------------------------------------------
 
-def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
-    """
-    Parse a single COTAHIST ZIP file.
-
-    Args:
-        zip_path: Path to COTAHIST ZIP file
-
-    Returns:
-        DataFrame with columns: [date, ticker, isin_code, open, high, low, close, volume, quotation_factor]
-        Prices (open/high/low/close) are normalized to per-share basis by dividing by quotation_factor.
-        Returns an empty DataFrame if the file does not exist or cannot be parsed.
-    """
-    zip_path = Path(zip_path)
-    if not zip_path.exists():
-        logger.error(f"File not found: {zip_path}")
-        return pd.DataFrame()
-
-    return _parse_cotahist_file_python(zip_path)
-
-
 def parse_all_cotahist_files(directory: Path) -> pd.DataFrame:
     """
     Parse all COTAHIST ZIP files in a directory.
@@ -170,7 +165,7 @@ def parse_all_cotahist_files(directory: Path) -> pd.DataFrame:
     all_dfs = []
     for i, zip_path in enumerate(zip_files, 1):
         logger.info(f"Parsing {zip_path.name} ({i}/{len(zip_files)})")
-        df = _parse_cotahist_file_python(zip_path)
+        df = parse_cotahist_file(zip_path)
         if not df.empty:
             all_dfs.append(df)
 

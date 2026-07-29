@@ -81,7 +81,10 @@ async def test_whatif_replays_real_flows(client):
     assert sc["strategy"] == STRATEGY
     assert sc["final_value"] > 0
     assert sc["ann_return"] is not None and sc["sharpe"] is not None
-    assert sc["max_dd"] <= 0                # drawdown is non-positive
+    # Strictly negative, not merely non-positive: a replay starts at zero capital
+    # and feeds that through to the daily NAV path the drawdown is computed on, so
+    # 0.0 here is the signature of a flattened path rather than a flat market.
+    assert sc["max_dd"] < 0
 
     curve = sc["curve"]
     assert len(curve) > 2

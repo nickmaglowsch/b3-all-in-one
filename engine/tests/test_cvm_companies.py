@@ -1,5 +1,5 @@
 """
-Tests for CNPJ mapping functions (Task 02 — TDD).
+Tests for CNPJ normalisation and the cnpj->ticker map (Task 02 — TDD).
 """
 from __future__ import annotations
 
@@ -9,10 +9,8 @@ import pytest
 
 from b3_pipeline import storage
 from b3_pipeline import cvm_storage
-from b3_pipeline.b3_corporate_actions import (
-    extract_cnpj_from_company_data,
-    build_cnpj_ticker_map,
-)
+from b3_pipeline.b3_corporate_actions import _clean_cnpj
+from tests.conftest import seed_cvm_company
 
 
 @pytest.fixture
@@ -26,68 +24,46 @@ def mem_conn():
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. extract_cnpj_from_company_data — formatting stripped
+# 1. _clean_cnpj — formatting stripped
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_extract_cnpj_strips_formatting():
+def test_clean_cnpj_strips_formatting():
     """CNPJ with dots/slashes/dashes should be returned as 14-digit string."""
-    result = extract_cnpj_from_company_data({"cnpj": "33.000.167/0001-01"})
+    result = _clean_cnpj("33.000.167/0001-01")
     assert result == "33000167000101", f"Expected '33000167000101', got {result!r}"
 
 
-def test_extract_cnpj_returns_none_for_missing():
-    """Missing 'cnpj' key in dict should return None."""
-    result = extract_cnpj_from_company_data({})
+def test_clean_cnpj_returns_none_for_missing():
+    """A missing CNPJ should return None."""
+    result = _clean_cnpj(None)
     assert result is None, f"Expected None, got {result!r}"
 
 
-def test_extract_cnpj_returns_none_for_wrong_length():
+def test_clean_cnpj_returns_none_for_wrong_length():
     """CNPJ with wrong digit count should return None."""
-    result = extract_cnpj_from_company_data({"cnpj": "123"})
+    result = _clean_cnpj("123")
     assert result is None, f"Expected None for short CNPJ, got {result!r}"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 4. build_cnpj_ticker_map — round trip
+# 4. get_cvm_company_map — round trip
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_build_cnpj_ticker_map_round_trip(mem_conn):
-    """Inserted companies should appear in build_cnpj_ticker_map output."""
-    cvm_storage.upsert_cvm_company(
+def test_cvm_company_map_round_trip(mem_conn):
+    """Inserted companies should appear in get_cvm_company_map output."""
+    seed_cvm_company(
         mem_conn, cnpj="33000167000101", ticker="PETR",
         company_name="Petrobras", cvm_code="9512", b3_trading_name="PETROBRAS"
     )
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="19526477000175", ticker="VALE",
         company_name="Vale", cvm_code="4170", b3_trading_name="VALE"
     )
 
-    result = build_cnpj_ticker_map(mem_conn)
+    result = cvm_storage.get_cvm_company_map(mem_conn)
     assert result == {
         "33000167000101": "PETR",
         "19526477000175": "VALE",
     }, f"Unexpected map: {result}"
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 5. upsert_cvm_company — idempotent
-# ──────────────────────────────────────────────────────────────────────────────
-
-def test_upsert_cvm_company_idempotent(mem_conn):
-    """Calling upsert twice with same CNPJ but different ticker should update, not duplicate."""
-    cnpj = "33000167000101"
-
-    cvm_storage.upsert_cvm_company(
-        mem_conn, cnpj=cnpj, ticker="PETR",
-        company_name="Petrobras", cvm_code="9512", b3_trading_name="PETROBRAS"
-    )
-    cvm_storage.upsert_cvm_company(
-        mem_conn, cnpj=cnpj, ticker="PETR4",  # updated
-        company_name="Petrobras", cvm_code="9512", b3_trading_name="PETROBRAS"
-    )
-
-    cursor = mem_conn.cursor()
-    cursor.execute("SELECT COUNT(*), ticker FROM cvm_companies WHERE cnpj = ?", (cnpj,))
-    count, ticker = cursor.fetchone()
-    assert count == 1, "Should have exactly 1 row after 2 upserts with same CNPJ"
-    assert ticker == "PETR4", f"Ticker should be updated; got {ticker!r}"

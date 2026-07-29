@@ -11,10 +11,9 @@ No real HTTP calls are made. No real SQLite file is used.
 """
 import json
 import sqlite3
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import storage
 from b3_pipeline.b3_corporate_actions import (

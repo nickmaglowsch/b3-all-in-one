@@ -7,13 +7,9 @@ These tests verify:
 3. Edge cases: fatcot=0 defaults to 1 (no division by zero), fatcot=1 is unchanged
 4. volume is NOT divided (it's already in BRL, not share count)
 """
-import io
 import zipfile
-from datetime import datetime
 from pathlib import Path
 
-import pandas as pd
-import pytest
 
 # We test at the function level to avoid needing real ZIP files.
 # Import the helpers directly.

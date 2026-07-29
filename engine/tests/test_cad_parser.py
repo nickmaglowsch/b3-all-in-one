@@ -6,12 +6,8 @@ All parser tests use in-memory synthetic CSV data — no network calls.
 from __future__ import annotations
 
 import io
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 import pandas as pd
-import pytest
 
 from b3_pipeline.cad_parser import parse_cad_file, extract_cad_summary
 

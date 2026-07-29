@@ -59,20 +59,6 @@ MIN_TURNOVER_RATIO = 1e-5
 
 # ── Pure selection functions (no DB access — unit-testable) ───────────────────
 
-def quarter_end_rebalance_dates(trading_days: pd.DatetimeIndex) -> pd.DatetimeIndex:
-    """Last trading day of each completed Mar/Jun/Sep/Dec quarter.
-
-    A quarter only produces a rebalance date if its last trading day falls in
-    the quarter's final month (i.e. the quarter is complete in the data).
-    """
-    if len(trading_days) == 0:
-        return pd.DatetimeIndex([])
-    s = pd.Series(trading_days, index=trading_days)
-    last_per_q = s.groupby(trading_days.to_period("Q")).max()
-    qe = pd.DatetimeIndex(last_per_q.values)
-    return qe[qe.month.isin([3, 6, 9, 12])]
-
-
 def pit_snapshot(
     fund: pd.DataFrame,
     t: pd.Timestamp,

@@ -1,13 +1,13 @@
 """
 Tests for the CVM bulk data downloader (Task 03 — TDD).
 
-All tests mock requests.get / requests.head — no real network calls.
+All tests mock requests.get — no real network calls. The fetch itself lives in
+downloader.download_file (covered in test_cad_downloader.py); what these pin is
+that each doc type resolves to the right URL and cached path.
 """
 from __future__ import annotations
 
-import io
-from pathlib import Path
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
@@ -73,50 +73,22 @@ def test_download_dfp_cleans_up_on_failure(tmp_cvm_dir):
     assert not partial.exists(), "Partial file should be cleaned up after failure"
 
 
-# ── 4. download_all returns dict with three keys ───────────────────────────────
+# ── 4. Each doc type keeps its own base URL and filename ──────────────────────
 
-def test_download_all_returns_dict_with_three_keys(tmp_cvm_dir, monkeypatch):
-    """download_all_cvm_files should return {'dfp': [...], 'itr': [...], 'fre': [...]}."""
-    dummy_path = tmp_cvm_dir / "dummy.zip"
-    dummy_path.write_bytes(b"x")
-
-    monkeypatch.setattr(cvm_downloader, "download_dfp_file", lambda year, force=False: dummy_path)
-    monkeypatch.setattr(cvm_downloader, "download_itr_file", lambda year, force=False: dummy_path)
-    monkeypatch.setattr(cvm_downloader, "download_fre_file", lambda year, force=False: dummy_path)
-
-    result = cvm_downloader.download_all_cvm_files(start_year=2023, end_year=2023)
-
-    assert isinstance(result, dict)
-    assert "dfp" in result
-    assert "itr" in result
-    assert "fre" in result
-    assert isinstance(result["dfp"], list)
-    assert isinstance(result["itr"], list)
-    assert isinstance(result["fre"], list)
-
-
-# ── 5. detect_available_years filters 200 only ────────────────────────────────
-
-def test_detect_available_years_filters_200_only(monkeypatch):
-    """Only years where HEAD returns 200 should be included."""
+@pytest.mark.parametrize("fn, stem, base_attr", [
+    (cvm_downloader.download_dfp_file, "dfp", "CVM_DFP_BASE_URL"),
+    (cvm_downloader.download_itr_file, "itr", "CVM_ITR_BASE_URL"),
+    (cvm_downloader.download_fre_file, "fre", "CVM_FRE_BASE_URL"),
+    (cvm_downloader.download_fca_file, "fca", "CVM_FCA_BASE_URL"),
+])
+def test_doc_type_resolves_to_its_own_url_and_path(tmp_cvm_dir, fn, stem, base_attr):
+    """Sharing one fetch must not collapse four datasets onto one URL."""
     import b3_pipeline.config as _cfg
-    monkeypatch.setattr(_cfg, "CVM_START_YEAR", 2020)
+    from b3_pipeline import downloader
 
-    def fake_head(url, **kwargs):
-        resp = MagicMock()
-        # Return 200 only for 2022 and 2023
-        if "2022" in url or "2023" in url:
-            resp.status_code = 200
-        else:
-            resp.status_code = 404
-        return resp
+    with patch.object(downloader, "download_file") as mock_dl:
+        fn(2023)
 
-    with patch("requests.head", side_effect=fake_head):
-        # CVM_START_YEAR=2020, current year >= 2026, so probes 2020..2026
-        result = cvm_downloader.detect_available_cvm_years("DFP")
-
-    assert 2022 in result
-    assert 2023 in result
-    # Other years should NOT be in result
-    for y in [2020, 2021, 2024, 2025]:
-        assert y not in result, f"Year {y} should not be available (404)"
+    url, path = mock_dl.call_args.args
+    assert url == f"{getattr(_cfg, base_attr)}{stem}_cia_aberta_2023.zip"
+    assert path == tmp_cvm_dir / f"{stem}_cia_aberta_2023.zip"

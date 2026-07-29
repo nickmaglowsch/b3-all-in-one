@@ -7,8 +7,6 @@ These tests verify:
 3. INCORPORACAO is logged and stored in skipped_events, NOT treated as a split
 4. parse_stock_dividends still correctly handles DESDOBRAMENTO/GRUPAMENTO/BONIFICACAO
 """
-import pandas as pd
-import pytest
 
 from b3_pipeline.b3_corporate_actions import parse_stock_dividends
 

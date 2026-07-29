@@ -1,5 +1,3 @@
-from functools import lru_cache
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -71,12 +69,7 @@ class Settings(BaseSettings):
         return self.environment == "development"
 
 
-@lru_cache
-def get_settings() -> Settings:
-    return Settings()
-
-
-settings = get_settings()
+settings = Settings()
 
 # The signing key fails open: `SECRET_KEY: ${SECRET_KEY}` in compose interpolates a
 # missing var to "", pydantic reads the env var as present-and-empty and so takes ""

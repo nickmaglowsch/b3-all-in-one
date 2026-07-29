@@ -17,36 +17,6 @@ from . import storage
 logger = logging.getLogger(__name__)
 
 
-def upsert_cvm_company(
-    conn: sqlite3.Connection,
-    cnpj: str,
-    ticker: Optional[str],
-    company_name: Optional[str],
-    cvm_code: Optional[str],
-    b3_trading_name: Optional[str],
-) -> None:
-    """Insert or update a CVM company mapping row.
-
-    Uses ON CONFLICT(cnpj) DO UPDATE so calling twice with the same CNPJ
-    updates the existing row rather than raising an IntegrityError.
-    """
-    ticker_root = ticker[:4] if ticker else None
-    sql = """
-        INSERT INTO cvm_companies (cnpj, ticker, ticker_root, company_name, cvm_code, b3_trading_name, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(cnpj) DO UPDATE SET
-            ticker = excluded.ticker,
-            ticker_root = excluded.ticker_root,
-            company_name = excluded.company_name,
-            cvm_code = excluded.cvm_code,
-            b3_trading_name = excluded.b3_trading_name,
-            updated_at = CURRENT_TIMESTAMP
-    """
-    storage.execute(conn, sql, (cnpj, ticker, ticker_root, company_name, cvm_code, b3_trading_name))
-    conn.commit()
-    logger.debug(f"Upserted cvm_company: cnpj={cnpj} ticker={ticker}")
-
-
 def bulk_upsert_companies_index(conn: sqlite3.Connection, companies: list) -> int:
     """Upsert company rows from CVM file data (cnpj + cvm_code + company_name).
 

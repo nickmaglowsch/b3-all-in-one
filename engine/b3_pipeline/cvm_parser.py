@@ -9,7 +9,6 @@ All values in VL_CONTA are in thousands of BRL — stored as-is; do not multiply
 """
 from __future__ import annotations
 
-import io
 import logging
 import re
 import zipfile

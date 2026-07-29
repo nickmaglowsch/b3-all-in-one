@@ -9,7 +9,7 @@ from pathlib import Path
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import delete, func, insert, select
 
-from platform_app import b3run, enginerun, specstore
+from platform_app import b3run, enginerun, specstore, subprocs
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import (
@@ -100,7 +100,7 @@ async def run_backtest(run_id: str) -> dict:
             return {"run_id": run_id, "status": "error", "error": run.error}
 
         try:
-            summary = enginerun._last_json(proc.stdout)
+            summary = subprocs.last_json(proc.stdout, strict=True)
         except ValueError as e:
             run.status = "error"
             run.error = f"{e}: {(proc.stderr or proc.stdout)[-1000:]}"
@@ -272,7 +272,7 @@ async def process_imports(tenant_id: str) -> dict:
         # sniffed. Best-effort: a parse failure must not fail an import whose CSVs
         # already came back fine, it just leaves the uploaded guess in place.
         sniffed: dict[str, str] = {}
-        for f in (b3run.last_json(proc.stdout).get("files_loaded") or []):
+        for f in (subprocs.last_json(proc.stdout).get("files_loaded") or []):
             if isinstance(f, dict) and f.get("name") and f.get("kind"):
                 sniffed[f["name"]] = f["kind"]
 

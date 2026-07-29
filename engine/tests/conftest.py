@@ -16,9 +16,43 @@ that had it in the shell.
 """
 from __future__ import annotations
 
-import os
+import sqlite3
+from typing import Optional
 
 import pytest
+
+from b3_pipeline import storage
+
+
+def seed_cvm_company(
+    conn: sqlite3.Connection,
+    cnpj: str,
+    ticker: Optional[str],
+    company_name: Optional[str],
+    cvm_code: Optional[str],
+    b3_trading_name: Optional[str],
+) -> None:
+    """Put one row in cvm_companies. Test-only: the pipeline writes in bulk.
+
+    Idempotent on cnpj, so a test can seed the same company twice to check that
+    the second write updates rather than raising.
+    """
+    sql = """
+        INSERT INTO cvm_companies (cnpj, ticker, ticker_root, company_name, cvm_code, b3_trading_name, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(cnpj) DO UPDATE SET
+            ticker = excluded.ticker,
+            ticker_root = excluded.ticker_root,
+            company_name = excluded.company_name,
+            cvm_code = excluded.cvm_code,
+            b3_trading_name = excluded.b3_trading_name,
+            updated_at = CURRENT_TIMESTAMP
+    """
+    storage.execute(
+        conn, sql,
+        (cnpj, ticker, ticker[:4] if ticker else None, company_name, cvm_code, b3_trading_name),
+    )
+    conn.commit()
 
 
 def pytest_configure(config):
@@ -44,10 +78,3 @@ def isolate_engine_dsn(request, monkeypatch):
     monkeypatch.delenv("ENGINE_DATABASE_URL", raising=False)
 
 
-@pytest.fixture
-def engine_dsn() -> str:
-    """The Postgres DSN, for tests marked `postgres`."""
-    dsn = os.environ.get("ENGINE_DATABASE_URL")
-    if not dsn:
-        pytest.skip("ENGINE_DATABASE_URL is not set")
-    return dsn

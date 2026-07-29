@@ -22,7 +22,6 @@ from backtests.core.strategy_base import (
 )
 from backtests.strategies.sp500_b3 import (
     DEFAULT_MIN_ADTV,
-    LIQUIDITY_WINDOW,
     compute_weights,
     liquidity_median,
     load_fundamentals_pit_raw,

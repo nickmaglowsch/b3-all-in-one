@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, specstore
+from platform_app import b3run, enginerun, specstore, subprocs
 from platform_app.db import get_async_session
 from platform_app.models import CashEvent, Position, Trade
 from platform_app.routes import (
@@ -112,18 +112,20 @@ def _read_curve(path: Path) -> list[dict]:
 def _run_whatif(
     strategy: str, config: dict, tid, extra_env: dict | None = None
 ) -> dict:
-    """Run scripts/whatif_run.py in the engine venv (mirrors enginerun's subprocess
-    pattern; reuses its interpreter + env resolution) and return {summary, curve}.
+    """Run scripts/run_backtest_json.py in the engine venv (mirrors enginerun's
+    subprocess pattern; reuses its interpreter + env resolution) and return
+    {summary, curve}. The `flows` key in `config` is what makes it a replay rather
+    than a plain backtest — same script, same artifact contract.
     Artifacts land in a scratch dir we read then delete — under the tenant's own
     uploads dir so a skipped `finally` leaves nothing erasure can't reach (see
     b3run.workspace_root). Blocking — call via to_thread."""
     out = Path(tempfile.mkdtemp(prefix="b3whatif-", dir=b3run.workspace_root(tid)))
     try:
         proc = enginerun.run_script(
-            "whatif_run.py", [strategy, str(out), json.dumps(config)], extra_env)
+            "run_backtest_json.py", [strategy, str(out), json.dumps(config)], extra_env)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-        return {"summary": enginerun._last_json(proc.stdout),
+        return {"summary": subprocs.last_json(proc.stdout, strict=True),
                 "curve": _read_curve(out / "curves.csv")}
     finally:
         shutil.rmtree(out, ignore_errors=True)

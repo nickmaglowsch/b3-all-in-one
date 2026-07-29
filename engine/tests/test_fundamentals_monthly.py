@@ -9,7 +9,6 @@ No network calls or real CVM files are used.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 import pandas as pd
 import pytest

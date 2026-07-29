@@ -14,10 +14,10 @@ from __future__ import annotations
 
 import sqlite3
 
-import pandas as pd
 import pytest
 
 from b3_pipeline import storage, cvm_storage
+from tests.conftest import seed_cvm_company
 
 
 @pytest.fixture
@@ -85,7 +85,7 @@ def test_populate_company_isin_map_fills_rows(mem_conn):
     populate_company_isin_map should create rows linking CNPJ to ISINs.
     """
     # Seed cvm_companies
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -123,7 +123,7 @@ def test_populate_company_isin_map_fills_rows(mem_conn):
 
 def test_populate_company_isin_map_share_class_on(mem_conn):
     """Ticker ending in '3' should map to share_class='ON'."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -147,7 +147,7 @@ def test_populate_company_isin_map_share_class_on(mem_conn):
 
 def test_populate_company_isin_map_share_class_pn(mem_conn):
     """Ticker ending in '4' should map to share_class='PN'."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -171,7 +171,7 @@ def test_populate_company_isin_map_share_class_pn(mem_conn):
 
 def test_populate_company_isin_map_share_class_unit(mem_conn):
     """Ticker with suffix '11' should map to share_class='UNT'."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="00000000000191",
         ticker="SANB",
@@ -195,7 +195,7 @@ def test_populate_company_isin_map_share_class_unit(mem_conn):
 
 def test_populate_company_isin_map_is_primary_for_on(mem_conn):
     """is_primary should be 1 for the ON share class (ticker suffix 3)."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -224,7 +224,7 @@ def test_populate_company_isin_map_is_primary_for_on(mem_conn):
 
 def test_populate_company_isin_map_first_last_seen(mem_conn):
     """first_seen and last_seen should track the date range in prices."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -253,7 +253,7 @@ def test_populate_company_isin_map_first_last_seen(mem_conn):
 
 def test_populate_company_isin_map_skips_unknown_isin(mem_conn):
     """Rows with isin_code='UNKNOWN' should not be inserted."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -284,7 +284,7 @@ def test_populate_company_isin_map_no_cvm_company_skips(mem_conn):
 
 def test_populate_company_isin_map_is_idempotent(mem_conn):
     """Calling populate_company_isin_map twice should not duplicate rows."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker="PETR",
@@ -320,7 +320,7 @@ def test_company_isin_map_can_join_prices_via_isin(mem_conn):
     """
     cnpj = "33000167000101"
 
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj=cnpj,
         ticker="PETR",

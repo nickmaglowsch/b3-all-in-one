@@ -4,10 +4,19 @@ Usage:
     python scripts/run_backtest_json.py <strategy_name> <out_dir> <config_json>
 
 <config_json> is a JSON string: {"params": {...}, "start": ..., "end": ...,
-"freq": ...} — all keys optional. Reads the market plane from Postgres via
-ENGINE_DATABASE_URL (falls back to the local sqlite DB when unset), runs the
-registry strategy through run_simulation, writes metrics.json + curves.csv into
-<out_dir>, and prints a one-line JSON summary to stdout.
+"freq": ..., "flows": [...]} — all keys optional. Reads the market plane from
+Postgres via ENGINE_DATABASE_URL (falls back to the local sqlite DB when unset),
+runs the registry strategy through run_simulation, writes metrics.json +
+curves.csv into <out_dir>, and prints a one-line JSON summary to stdout.
+
+Two modes, one runner. Without "flows" this is a plain backtest: the strategy's
+own window and lump sum. With "flows" — [{"date": "YYYY-MM-DD", "amount": N},
+...] — it is a what-if replay of a tenant's real dated cash flows: no lump sum
+at all, the window opens at their first trade, and the money arrives on its true
+dates as a dated ``contribution`` Series. Flows deploy at the next rebalance (a
+documented approximation — a flow between two monthly marks lands on the later
+one). Everything downstream of the window is identical, which is why the replay
+does not get its own script.
 
 Network: this path never touches yfinance. The IBOV benchmark (^BVSP) is stubbed
 with a flat series — the bench reports the strategy's own pre/after-tax metrics,
@@ -66,6 +75,36 @@ def _resolve_end(end: str) -> str:
     return datetime.today().strftime("%Y-%m-%d") if end == "today" else end
 
 
+def _build_flows(raw: list[dict]) -> pd.Series:
+    """[{date, amount}, ...] -> a date-indexed Series, same-date flows summed."""
+    if not raw:
+        raise SystemExit("whatif requires a non-empty 'flows' list")
+    s = pd.Series(
+        [float(f["amount"]) for f in raw],
+        index=pd.DatetimeIndex([pd.Timestamp(f["date"]) for f in raw]),
+    )
+    return s.groupby(level=0).sum().sort_index()
+
+
+def _capital_and_flows(cfg: dict, params: dict) -> tuple[str, float, object]:
+    """``(start, initial_capital, contribution)`` for whichever mode was asked for.
+
+    The only place the replay and the plain backtest differ. Keyed on the
+    *presence* of "flows", not its truthiness: a caller that asked for a replay
+    and sent an empty list gets an error, never a silent 100k lump-sum backtest
+    reported under the same name.
+    """
+    if "flows" in cfg:
+        flows = _build_flows(cfg["flows"] or [])
+        start = str(cfg.get("start") or flows.index.min().date().isoformat())
+        return start, 0.0, flows
+    return (
+        str(cfg.get("start") or params.get("start_date", "2005-01-01")),
+        float(params.get("initial_capital", 100_000)),
+        float(params.get("contribution", 0.0)),
+    )
+
+
 def main() -> None:
     name, out_dir, config_json = sys.argv[1], sys.argv[2], sys.argv[3]
     cfg = json.loads(config_json) if config_json else {}
@@ -75,19 +114,17 @@ def main() -> None:
     from backtests.core.strategy_base import dedup_target_weights
     from backtests.core.simulation import run_simulation
     from backtests.core.metrics import (
-        build_metrics, value_to_ret, strategy_daily_values, cumret,
+        build_metrics, value_to_ret, strategy_daily_values,
     )
 
     strat = get_registry().get(name)
     params = strat.get_default_parameters()
     params.update(req_params)
 
-    start = str(cfg.get("start") or params.get("start_date", "2005-01-01"))
+    start, initial_capital, contribution = _capital_and_flows(cfg, params)
     end = _resolve_end(str(cfg.get("end") or params.get("end_date", "today")))
     freq = str(cfg.get("freq") or params.get("rebalance_freq", "ME"))
     needs_funds = bool(getattr(strat, "needs_fundamentals", False))
-    initial_capital = float(params.get("initial_capital", 100_000))
-    contribution = float(params.get("contribution", 0.0))
 
     offline = os.environ.get("ENGINE_BENCH_OFFLINE") == "1"
     _install_benchmark_stubs(start, end, offline)
@@ -118,6 +155,8 @@ def main() -> None:
     contribs = result["contributions"]
     pt_ret = value_to_ret(result["pretax_values"], contribs)
     at_ret = value_to_ret(result["aftertax_values"], contribs)
+    # Zero is fine here even for a replay: reconstruct_daily_values is scale-free
+    # and rebases a zero start to 1.0 itself, so the drawdown ratios hold.
     strat_daily = strategy_daily_values(shared, tw, initial_capital)
     ppy = {"ME": 12, "QE": 4, "W-FRI": 52}.get(freq, 12)
 

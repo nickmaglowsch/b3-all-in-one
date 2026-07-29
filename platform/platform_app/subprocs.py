@@ -10,6 +10,7 @@ env and timeouts.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -53,3 +54,31 @@ def run(
             argv, TIMEOUT_EXIT, stdout="",
             stderr=f"{label} timed out after {timeout_s}s",
         )
+
+
+def last_json(text: str, *, strict: bool = False) -> dict:
+    """The JSON object a subprocess printed on stdout, as a dict.
+
+    Scans backwards for a line that opens an object and decodes from there, so
+    one reader covers both conventions in this repo: the engine's single-line
+    payload preceded by progress lines, and load_b3's pretty-printed multi-line
+    one. raw_decode means output *after* the object is fine too.
+
+    ``strict`` picks the error contract. Default returns ``{}`` — a caller that
+    writes an Import row from the payload would rather record nothing than 500.
+    strict=True raises, for callers answering the request with this dict.
+    """
+    offset = len(text)
+    for line in reversed(text.splitlines(keepends=True)):
+        offset -= len(line)
+        if not line.lstrip().startswith("{"):
+            continue
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(text[offset:].lstrip())
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    if strict:
+        raise ValueError(f"no JSON object in subprocess output:\n{text[-2000:]}")
+    return {}

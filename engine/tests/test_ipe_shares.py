@@ -15,11 +15,9 @@ These tests confirm the Path B behavior:
 from __future__ import annotations
 
 import io
-import sqlite3
 import zipfile
 
 import pandas as pd
-import pytest
 
 from b3_pipeline.ipe_parser import parse_ipe_zip, IPE_SHARES_COLUMN
 import b3_pipeline.ipe_parser as ipe_parser_module

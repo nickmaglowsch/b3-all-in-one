@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import sqlite3
 import logging
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from b3_pipeline import storage, cvm_storage
+from b3_pipeline import storage
+from tests.conftest import seed_cvm_company
 
 
 @pytest.fixture
@@ -184,7 +185,7 @@ def test_fetch_ticker_mappings_uses_cvm_code_not_cnpj(mem_conn):
     The new implementation must call update_ticker_by_cvm_code (via codeCVM),
     NOT upsert_cvm_company (the old CNPJ path that always got None).
     """
-    from b3_pipeline import cvm_main, cvm_storage as _cvm_storage
+    from b3_pipeline import cvm_main
 
     mem_conn.execute(
         "INSERT INTO prices (ticker, isin_code, date, close) VALUES ('PETR3', 'BRPETRACNOR9', '2024-01-02', 30.0)"
@@ -192,7 +193,7 @@ def test_fetch_ticker_mappings_uses_cvm_code_not_cnpj(mem_conn):
     mem_conn.commit()
 
     # Pre-seed cvm_companies with cvm_code so update_ticker_by_cvm_code can match
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker=None,
@@ -236,11 +237,11 @@ def test_fetch_ticker_mappings_uses_bulk_list_primary_path(mem_conn):
     )
     mem_conn.commit()
 
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="33000167000101", ticker=None, company_name="Petrobras",
         cvm_code="009512", b3_trading_name=None,
     )
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="19526477000175", ticker=None, company_name="Vale",
         cvm_code="004170", b3_trading_name=None,
     )
@@ -305,7 +306,7 @@ def test_fetch_ticker_mappings_no_warning_when_match_rate_ok(mem_conn, caplog):
             "INSERT INTO prices (ticker, isin_code, date, close) VALUES (?, ?, '2024-01-02', 10.0)",
             (ticker, isin),
         )
-        cvm_storage.upsert_cvm_company(
+        seed_cvm_company(
             mem_conn, cnpj=f"0000000000{i:04d}", ticker=None,
             company_name=f"Co {i}", cvm_code=f"{i:06d}", b3_trading_name=None,
         )

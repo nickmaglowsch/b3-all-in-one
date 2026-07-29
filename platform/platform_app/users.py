@@ -12,12 +12,21 @@ from fastapi_users.authentication.transport import (
     TransportLogoutNotSupportedError,
 )
 from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users.schemas import BaseUser, BaseUserCreate
 from httpx_oauth.clients.google import GoogleOAuth2
 from starlette.responses import RedirectResponse, Response
 
 from platform_app.config import settings
 from platform_app.db import get_user_db
 from platform_app.models import User
+
+
+class UserRead(BaseUser[uuid.UUID]):
+    pass
+
+
+class UserCreate(BaseUserCreate):
+    pass
 
 
 class UserManager(UUIDIDMixin, BaseUserManager[User, uuid.UUID]):

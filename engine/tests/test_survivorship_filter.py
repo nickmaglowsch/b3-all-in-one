@@ -6,12 +6,8 @@ All tests use in-memory SQLite DBs or temp files — no real price data required
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-import pandas as pd
-import pytest
 
 from b3_pipeline import storage
 

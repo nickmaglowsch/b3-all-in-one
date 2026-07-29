@@ -1,12 +1,17 @@
 """
-Download COTAHIST files from B3.
+Download COTAHIST files from B3, and the streaming download every other
+b3_pipeline fetcher is built on.
+
+`download_file` is the single implementation of "stream a URL to a path". CAD,
+IPE and the CVM bulk files (DFP/ITR/FRE/FCA) are the same fetch with a different
+URL and filename, so they call this rather than carrying their own copy — four
+copies of one try/except was four places to fix a dropped-connection bug in.
 
 Note: Corporate actions are now fetched via b3_corporate_actions module,
 which queries B3 directly as the single source of truth.
 """
 
 import logging
-from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Optional
 
@@ -39,25 +44,20 @@ def detect_available_years() -> List[int]:
     return available
 
 
-def download_annual_file(year: int, force: bool = False) -> Optional[Path]:
+def download_file(url: str, filepath: Path, force: bool = False) -> Optional[Path]:
     """
-    Download annual COTAHIST ZIP file for a given year.
+    Stream `url` into `filepath`.
 
-    Args:
-        year: Year to download
-        force: If True, re-download even if file exists
+    Skips the download if the file already exists and force=False.
+    On failure, cleans up the partial file — a truncated ZIP left on disk would
+    be skipped as "already downloaded" on every later run — and returns None.
 
-    Returns:
-        Path to downloaded file, or None if download failed
+    Returns the local Path on success, None on failure.
     """
-    filename = f"COTAHIST_A{year}.ZIP"
-    filepath = config.DATA_DIR / filename
-
     if filepath.exists() and not force:
         logger.debug(f"File already exists: {filepath}")
         return filepath
 
-    url = config.BASE_COTAHIST_URL.format(year=year)
     logger.info(f"Downloading {url}...")
 
     try:
@@ -87,5 +87,14 @@ def download_annual_file(year: int, force: bool = False) -> Optional[Path]:
         if filepath.exists():
             filepath.unlink()
         return None
+
+
+def download_annual_file(year: int, force: bool = False) -> Optional[Path]:
+    """Download the annual COTAHIST ZIP file for a given year."""
+    return download_file(
+        config.BASE_COTAHIST_URL.format(year=year),
+        config.DATA_DIR / f"COTAHIST_A{year}.ZIP",
+        force=force,
+    )
 
 

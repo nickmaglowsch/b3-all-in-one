@@ -10,7 +10,6 @@ These tests verify:
 6. Non-standard large jumps are not auto-corrected but logged/returned separately
 """
 import pandas as pd
-import pytest
 from datetime import date, timedelta
 
 from b3_pipeline.adjustments import detect_splits_from_prices, filter_fatcot_redundant_splits

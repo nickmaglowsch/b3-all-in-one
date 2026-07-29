@@ -5,14 +5,12 @@ All tests mock network calls and use in-memory DBs.
 """
 from __future__ import annotations
 
-import argparse
 import io
 import sqlite3
 import zipfile
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import storage
 from b3_pipeline.cvm_main import run_fundamentals_pipeline
@@ -48,21 +46,6 @@ def _make_ipe_zip(year: int = 2008) -> io.BytesIO:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr(f"ipe_cia_aberta_{year}.csv", _csv_bytes(rows))
-    buf.seek(0)
-    return buf
-
-
-def _make_cad_stringio() -> io.StringIO:
-    rows = [{
-        "CNPJ_CIA": "00.000.000/0001-91",
-        "DENOM_SOCIAL": "BANCO DO BRASIL SA",
-        "CD_CVM": "001023",
-        "DT_REG": "1994-04-22",
-        "DT_CANCEL": "",
-        "SIT": "ATIVO",
-    }]
-    buf = io.StringIO()
-    pd.DataFrame(rows).to_csv(buf, sep=";", index=False)
     buf.seek(0)
     return buf
 
@@ -229,7 +212,6 @@ def test_run_pipeline_ipe_year_range_default():
 
 def test_include_historical_flag_in_cli():
     """argparse correctly parses --include-historical as True."""
-    from b3_pipeline.cvm_main import main
     import argparse
 
     # Re-build the arg_parser as in main() to test argument parsing
@@ -250,8 +232,6 @@ def test_include_historical_flag_in_cli():
 
 def test_run_pipeline_historical_upserts_filings(tmp_path):
     """With include_historical=True and a valid IPE ZIP, filings rows are processed."""
-    import tempfile
-    from pathlib import Path
 
     # Use a temp DB file
     db_path = tmp_path / "test.sqlite"

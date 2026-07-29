@@ -22,7 +22,6 @@ import io
 import zipfile
 
 import pandas as pd
-import pytest
 
 from b3_pipeline.ipe_parser import parse_ipe_zip, extract_ipe_company_index
 

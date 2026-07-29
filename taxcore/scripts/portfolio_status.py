@@ -12,23 +12,12 @@ from pathlib import Path
 import pandas as pd
 from tabulate import tabulate
 
-from scripts._common import (
-    SNAPSHOTS,
-    latest_csv as _latest_csv,
-    price_lookup,
-)
+from scripts._common import price_lookup
 
 ROOT = Path(__file__).resolve().parent.parent
 POSITIONS = ROOT / "data" / "positions.csv"
 TRADES = ROOT / "data" / "trades.csv"
 CASH_EVENTS = ROOT / "data" / "cash_events.csv"
-
-
-def latest_snapshot_df() -> pd.DataFrame:
-    df = _latest_csv(SNAPSHOTS)
-    if df is None:
-        raise SystemExit("No equity snapshots. Run fetch_fundamentus.py first.")
-    return df
 
 
 def per_ticker_history() -> pd.DataFrame:

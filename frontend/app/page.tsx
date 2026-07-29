@@ -9,7 +9,7 @@ import { IconCheck } from "@/components/icons";
 // THESIS: one tax engine, shown in cross-section. Refuses the SaaS stack this
 //   page used to be — hero + icon-card grid + alternating showcase + pricing —
 //   which claimed the loop in an h2 and then demonstrated three separate tools.
-// OWN-WORLD: unchanged Quantax Instrument Panel (frontend/DESIGN.md). Bench
+// OWN-WORLD: unchanged Quantax Instrument Panel (DESIGN.md). Bench
 //   Paper ground, Panel White surfaces, Etched Rule hairlines doing all
 //   separation, Archivo 800 / Plex Sans 14 / Plex Mono tnum, scarce navy.
 // STORY: a B3 investor arrives believing backtest, carteira and IRPF are three

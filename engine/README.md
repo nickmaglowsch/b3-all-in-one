@@ -4,17 +4,19 @@ An end-to-end Python platform for Brazilian equity research: it **downloads and
 cleans** historical B3 market data, **enriches** it with CVM fundamentals, and
 **backtests** strategies against a tax-accurate simulator.
 
-It started life as a COTAHIST price scraper. It is now three layers:
+It started life as a COTAHIST price scraper. It is now two layers:
 
 | Layer | Where | What it does |
 |-------|-------|--------------|
-| **Data pipeline** | `b3_pipeline/` | Prices, corporate actions, and fundamentals into one SQLite DB |
+| **Data pipeline** | `b3_pipeline/` | Prices, corporate actions, and fundamentals into the market plane |
 | **Backtesting framework** | `backtests/` | Tax-aware simulator + config/DSL-driven strategies |
 
-All data lands in a single SQLite file (`b3_market_data.sqlite`) with
-split/dividend-adjusted prices (Yahoo-style `adj_close`), point-in-time
-fundamentals, and ISIN-linked identity so the dataset is **survivorship-bias
-free** across ticker changes, mergers, and delistings.
+Storage is selected at runtime: **Postgres** when `ENGINE_DATABASE_URL` is a
+`postgresql://` DSN (what the platform runs), otherwise a local SQLite file
+(`b3_market_data.sqlite`) — the default for standalone research. Either way the
+data carries split/dividend-adjusted prices (Yahoo-style `adj_close`),
+point-in-time fundamentals, and ISIN-linked identity so the dataset is
+**survivorship-bias free** across ticker changes, mergers, and delistings.
 
 ## Data sources & provenance
 
@@ -39,8 +41,7 @@ all handled exactly.
 Requirements: **Python 3.9+**.
 
 ```bash
-git clone <repository_url>
-cd b3-pipeline-data-and-backtest-framework
+cd engine
 
 python -m venv .venv
 source .venv/bin/activate        # Linux/macOS  (.venv\Scripts\activate on Windows)
@@ -52,7 +53,7 @@ pip install -r requirements.txt  # pipeline + backtests
 
 ## Running the data pipelines
 
-There are three independent entry points. All write to the same SQLite DB.
+There are three independent entry points. All write to the same database.
 
 ### 1. Prices + corporate actions — `b3_pipeline.main`
 
@@ -108,7 +109,7 @@ python -m b3_pipeline.dm_main --parse-only    # re-parse files already in data/d
 
 ## Database schema
 
-`b3_market_data.sqlite` holds 12 tables. Identity is **ISIN-linked** so ticker
+The market plane holds 12 tables. Identity is **ISIN-linked** so ticker
 renames don't fragment a company's history.
 
 **Market data**
@@ -162,11 +163,14 @@ B3's Portuguese labels map to standard event types, and localised factor strings
 
 `backtests/` is a modular framework built on the pipeline DB. It uses
 fully-adjusted `adj_close`, computes daily financial volume natively from
-COTAHIST, pulls CDI (BCB) and IBOV/ETFs (Yahoo), and — critically — implements
-the **exact mechanics of Brazilian capital-gains tax** for variable income
-(15% CGT, infinite loss carryforward, the R$20k/month sale exemption, slippage,
-and margin borrow at CDI + spread). The result is a realistic **after-tax**
-equity curve, not a gross one. See **[backtests/README.md](backtests/README.md)**.
+COTAHIST, pulls CDI from the BCB and benchmarks off the plane itself
+(`$IBOV` is B3's own index series; ETF sleeves are ordinary COTAHIST tickers —
+no yfinance), and — critically — implements the **exact mechanics of Brazilian
+capital-gains tax** for variable income (15% CGT, infinite loss carryforward,
+the R$20k/month sale exemption, slippage, and margin borrow at CDI + spread).
+The result is a realistic **after-tax** equity curve, not a gross one. Simulator
+behaviour (aportes, margin, rebalance frequencies) is in
+**[backtests/README.md](backtests/README.md)**.
 
 ### Strategies are data — config + a signal DSL
 
@@ -209,7 +213,8 @@ class MyStrategy(StrategyBase):
 ```
 
 Both paths flow through one registry (`get_registry()`, auto-discovered) and the
-shared `run_simulation`. **28 strategies** are registered today — factor books
+shared `run_simulation`. **39 strategies** are registered today (16 plugin classes
++ 23 YAML specs) — factor books
 (momentum, low-vol, Sharpe-momentum, multifactor, value/quality, low-P/E,
 smallcap momentum, frog-in-the-pan, volume breakout, mean reversion), regime
 overlays (COPOM easing, IBOV trend/vol, dual momentum), index-style books, and
@@ -219,7 +224,7 @@ fixed ETF/CDI blends.
 
 | Module | Description |
 |--------|-------------|
-| `data.py` | Loads B3 data from SQLite; downloads CDI (BCB) and IBOV/ETFs (Yahoo) |
+| `data.py` | Loads B3 data through `storage.get_connection` (SQLite or Postgres); downloads CDI (BCB); reads benchmarks off the plane |
 | `shared_data.py` | Builds the shared frame bundle (`ret`, `log_ret`, `adj_close`, `adtv`, `f_*`, regime flags…) consumed by every strategy |
 | `simulation.py` | Tax-aware multi-asset simulator (CGT, loss carryforward, slippage, margin, R$20k exemption) |
 | `signal_dsl.py` | Safe `ast`-parsed expression interpreter for factor signals |

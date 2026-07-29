@@ -34,8 +34,10 @@ platform copies it deliberately.
 ```
 
 - **One language (Python) end-to-end on the backend** — both repos are Python; FastAPI wraps
-  their functions directly. The Rust COTAHIST parser stays as the pyo3 extension it already
-  is — built for **aarch64** (build in CI with an arm64 runner/QEMU, or on the VPS itself).
+  their functions directly. There is no native build step: the pipeline repo's Rust COTAHIST
+  parser was removed (nothing shipped ever reached it: the image excluded the crate and every
+  production call resolves to `engine/.venv`, which never had it built), so the images are
+  pure Python and arm64 needs no cross-compilation.
 - **Job queue on Postgres, not Redis.** The shared `infra_redis` runs
   `maxmemory 256mb --maxmemory-policy allkeys-lru` — it evicts arbitrary keys under
   pressure, so it must never hold jobs. Use a Postgres-backed queue (procrastinate, or
@@ -56,9 +58,9 @@ platform copies it deliberately.
     events, cost-basis overrides, DARF ledger, strategy specs, backtest runs. Postgres
     with `tenant_id` on every row + row-level security.
 - **Async jobs** for anything slow: extract import, backtest run, IRPF generation, market
-  ingestion. The pipeline repo's `ui/services/job_runner.py` (ThreadPoolExecutor) is
-  replaced by the Postgres-backed queue with per-tenant quotas; its job/status/log model
-  is kept as the API contract.
+  ingestion. The Postgres-backed queue with per-tenant quotas replaced the pipeline repo's
+  thread-pool job runner (deleted along with its Streamlit UI); the job/status/log model it
+  used is kept as the API contract.
 
 ## Storage decisions
 
@@ -150,8 +152,8 @@ exactly as imobindex's frontend; env vars set in the Cloudflare dashboard). Talk
 API on its own subdomain over CORS. Three areas matching the tiers: **Portfolio**
 (dashboard, positions, income, imports), **IRPF** (report viewer with copy-per-field,
 DARF ledger, checklist), **Bench** (strategy editor with YAML validation, run launcher,
-tear-sheet viewer — port the Plotly tear sheets from `backtests/core/plotting.py`). The
-existing Streamlit UI is a reference for flows, not shipped.
+tear-sheet viewer). The tear sheets are rebuilt in the frontend from the run's curves
+endpoint; the engine's Plotly plotting module and Streamlit UI were both deleted.
 
 ## Deployment & operations
 

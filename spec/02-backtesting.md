@@ -56,21 +56,18 @@ dated cash flows, seeded initial state, asset-class tax model) are listed there.
 - Live/paper trading, broker order routing — different regulatory universe. Never in scope
   without CVM analysis.
 
-## Migration checklist (engine)
-1. Parameterize DB access: env/DSN-driven connection in `data.py`, `strategy_returns.py`,
-   `run_single_backtest.py`, `research/config.py`, ui services (all hardcoded-path sites
-   listed in the recon are known).
-2. Port SQLite dialect → Postgres in `storage.py`/`cvm_storage.py`.
-3. ~~Replace yfinance benchmarks (IBOV, ETF sleeves) with B3/BCB official sources or a
-   licensed feed — legal blocker before any paid launch.~~ Done: `download_benchmark`
-   reads the plane (IBOV from B3's own published index series, sleeves by their
-   own tickers); no yfinance left
-   in the engine.
-4. Wrap `run_simulation` + `build_metrics` in a worker task with resource limits.
-5. Keep the 62-file test suite green throughout — it covers simulation, DSL, config
-   engines, corporate actions; it is the regression net for the whole migration.
-6. Engine extensions for the loop features (see `05-strategy-linked-portfolio.md`,
-   "Engine work"): `compute_trades()` extraction, advise-only path, dated cash flows,
-   seeded state, asset-class tax model. The tax-model item also fixes a known
-   inaccuracy in the bench itself (isenção applied per rebalance row instead of per
-   calendar month; single flat rate for FII).
+## Engine migration — what's left
+
+The storage port (env/DSN-driven connections, SQLite → Postgres dialect), the worker
+wrapping of `run_simulation` + `build_metrics`, and the yfinance removal are all done;
+`download_benchmark` reads the plane (IBOV from B3's own published index series, sleeves by
+their own tickers).
+
+Still open: the loop's engine extensions — dated cash flows, seeded initial state, and the
+asset-class tax model (see `05-strategy-linked-portfolio.md` "Engine work" and
+`04-roadmap.md`). The tax-model item also fixes a known inaccuracy in the bench itself:
+isenção is applied per rebalance row instead of per calendar month, and FII uses a single
+flat rate.
+
+The engine test suite is the regression net for all of it — it covers simulation, the DSL,
+the config engines and corporate actions. Keep it green.

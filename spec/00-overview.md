@@ -24,9 +24,13 @@ QuantBrasil/backtests, Kinvo/tracking).
 
 | Tier | User | Gets |
 |---|---|---|
-| Free | Retail investor | Import extracts, portfolio status, limited IRPF preview |
-| Pro (paid) | DIY investor at IRPF time | Full IRPF report, DARF tracking, TLH planner, benchmarking |
-| Quant (paid+) | Prosumer/quant hobbyist | Backtest bench, strategy specs, factor library, discovery features |
+| `gratis` | Retail investor | Import extracts, portfolio, market status |
+| `investidor` R$29/mês | DIY investor at IRPF time | IRPF report, DARF tracking, TLH planner, what-if, sleeves/target/rebalance/index |
+| `trader` R$79/mês | Prosumer/quant hobbyist | Backtest bench, user-authored strategy specs |
+| `enterprise` R$249/mês | Assessor / escritório | The above, across many client books |
+
+Shipped tiers and route gating are in `README.md`; entitlements are written only by the
+Stripe webhook.
 
 IRPF is the seasonal acquisition hook (Jan–May); backtesting and portfolio care are the
 year-round retention product.
@@ -38,15 +42,17 @@ year-round retention product.
 | `b3-pipeline-data-and-backtest-framework` (~26k LOC + Rust, 62 test files) | Tax-aware simulator (`backtests/core/simulation.py`), YAML strategy specs + safe `ast` DSL, PIT fundamentals pipeline | Engine + pipeline nearly as-is; infra is the lift |
 | `b3-portfolio` (~7.6k LOC) | B3 extract parser (`scripts/load_b3.py`), IRPF engine (`scripts/irpf_2026.py`), TLH planner | Domain logic reused; storage/config must be rebuilt (CSV → DB, hardcoded personal constants → data-driven) |
 
-Both repos already contain productization notes — `docs/saas_productization.md` (pipeline)
-and `docs/MCP/product-remote-mcp-plan.md` (portfolio). This spec supersedes and merges them.
+Both repos carried their own productization notes. This spec superseded them and they were
+deleted; `git log` has them if the original reasoning is ever wanted.
 
 ## Known hard risks (decide early)
 
-1. **Data redistribution licensing** — B3 market data and yfinance benchmarks are likely
-   not redistributable commercially. Mitigation: serve *derived* results (backtest curves,
-   metrics, rankings), never raw price feeds; replace yfinance with B3/BCB official series
-   or a licensed provider before launch.
+1. **Data redistribution licensing** — B3 market data is likely not redistributable
+   commercially. Mitigations in place: the platform serves *derived* results (curves,
+   metrics, rankings) and never a raw price feed, and yfinance is out of the engine —
+   benchmarks read the plane (IBOV from B3's own index series) and CDI comes from the BCB.
+   Still open: a written legal opinion on redistribution scope, which gates any raw-feed or
+   data-API surface.
 2. **Financial-data custody / LGPD** — the platform holds users' full trade history and
    tax data. Per-tenant isolation, data export/delete and the privacy posture are done
    (`08-privacidade-lgpd.md`); encryption at rest and DB-level RLS are still open.

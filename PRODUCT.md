@@ -157,7 +157,7 @@ derived from them, and the IRPF golden are fabricated by
 real public market data. Screenshots and demos must never be presented as a real person's
 book.
 
-**Real assets that do exist:** the working application at eight surfaces, `spec/` (six
+**Real assets that do exist:** the working application at eight surfaces, `spec/` (seven
 documents), a live CDI series from the Brazilian Central Bank (`api.bcb.gov.br`), and
 vendored Fundamentus fundamentals snapshots.
 
@@ -183,5 +183,8 @@ platform holds users' full trade and tax history. LGPD posture — data export, 
 data deletion, and a clear privacy statement — must be reachable in the interface, not
 only backend policy.
 
-**Not yet built:** no export or account-deletion route exists in `platform/` today. Future
-work must build these surfaces, and must not imply they already exist.
+**Shipped:** `GET /privacy/summary`, `GET /privacy/export` and `DELETE /privacy/account`
+(`platform_app/privacy.py`), free at every tier, served at `/conta` with the public policy
+at `/privacidade`. Both export and erasure discover their tables from `Base.metadata`, so a
+new tenant table is covered without touching either. Encryption at rest and DB-level RLS
+are still open — see `spec/04-roadmap.md`.

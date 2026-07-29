@@ -272,12 +272,25 @@ No test can kill them, so 6 is the bound the job enforces: it reads
 apuração suite. If `monthly_apuracao` changes, re-check the equivalence argument above
 rather than just raising the bound.
 
-It also fails if `no_tests` is non-zero — a mutant that no test even *executes*. Those
-do not count as survivors, so without that clause adding an uncovered branch to
-`monthly_apuracao` would sail through the gate that exists to catch exactly that.
-`timeout` is deliberately *not* gated: a timeout usually means the mutant hung, which
-means the suite would have killed it, and it is the one bucket a slow runner can move
-things into.
+The other clauses all guard one failure — the gate going green having tested less than
+it claims — because `survived` alone is easy to hold at 6 while the work disappears:
+
+- **`no_tests == 0`** — a mutant no test even *executes*. Those are not survivors, so
+  an uncovered new branch in `monthly_apuracao` would otherwise sail through.
+- **`total >= 96`** — a *falling* mutant count needs a human, whatever the cause. One
+  `# pragma: no mutate` on the `isento` line deletes 6 mutants of the R$20.000
+  boundary; measured, every other clause stays green. Raise the floor when
+  `apuracao.py` legitimately grows.
+- **`killed + survived + timeout == total`** — `mutmut`'s `Stat` has 11 fields and the
+  exported JSON writes 9, while `total` sums all 11. Two buckets are therefore counted
+  in a key you never see, and no `X == 0` clause can cover a key that isn't in the
+  file. Only the arithmetic can.
+- **`suspicious`, `segfault`, `skipped`, `check_was_interrupted_by_user`** — fate
+  unknown, which is the same as untested.
+
+`timeout` is deliberately *not* gated: a timeout usually means the mutant hung, so the
+suite would have killed it, and it is the one bucket a slow runner can move things into
+— gating it would trade a real hole for a flake.
 
 `mutmut run` itself exits 0 with survivors, so it cannot be the gate — that is why the
 count is checked explicitly instead of relying on the exit code.

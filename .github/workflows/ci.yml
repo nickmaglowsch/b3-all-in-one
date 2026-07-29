@@ -140,24 +140,38 @@ jobs:
           cd taxcore
           uv run --with 'mutmut>=3' mutmut export-cicd-stats
           cat mutants/mutmut-cicd-stats.json
-          # Everything past `.survived <= 6` guards the same failure: the gate reporting
-          # green having tested nothing.
-          #   - the type checks and `total > 0`: `mutmut>=3` is unpinned, and bare
-          #     `.survived <= 6` passes when the key is absent (jq: `null <= 6` is true)
-          #     or when source_paths stopped matching any file.
-          #   - `no_tests == 0`: a mutant no test even executes. Add an uncovered branch
-          #     to monthly_apuracao and its mutants land here, not in `survived` — so
-          #     without this clause new untested money-path code passes the gate.
-          #   - `suspicious`/`segfault`: fate unknown, same as untested.
+          # `.survived <= 6` is the finding; everything else guards the same failure —
+          # the gate reporting green having tested less than it claims.
+          #
+          #   - type checks: `mutmut>=3` is unpinned, and bare `.survived <= 6` passes
+          #     when the key is absent (jq: `null <= 6` is true).
+          #   - `total >= 96`: a *falling* mutant count on this module needs a human,
+          #     whatever the cause. One `# pragma: no mutate` on the isento line deletes
+          #     6 mutants of the R$20k boundary; measured, every other clause here
+          #     including the sum identity stays green, because the books still balance.
+          #     Raise this floor when apuracao.py legitimately grows.
+          #   - `no_tests == 0`: a mutant no test even executes. An uncovered branch in
+          #     monthly_apuracao lands here, not in `survived`.
+          #   - `suspicious`/`segfault`/`skipped`/`check_was_interrupted_by_user`: fate
+          #     unknown, same as untested. `skipped` is unreachable today — mutmut has a
+          #     TODO to route `pragma: no mutate` into it, and this is unpinned.
+          #   - the sum identity: `Stat` has 11 fields and export writes 9, but `total`
+          #     sums all 11 — so two buckets (`not_checked`, `caught_by_type_check`) are
+          #     counted in a key we never see. No `X == 0` clause can cover a key that
+          #     isn't in the file; only the arithmetic can.
+          #
           # Deliberately NOT `timeout == 0`: a timeout usually means the mutant hung,
           # i.e. the suite would have killed it, and it is the one bucket a slow runner
           # can move things into. Gating on it would trade a real hole for a flake.
           jq -e '(.survived|type) == "number" and (.total|type) == "number"
-                 and .total > 0 and .survived <= 6
-                 and .no_tests == 0 and .suspicious == 0 and .segfault == 0' \
+                 and .total >= 96 and .survived <= 6
+                 and .no_tests == 0 and .suspicious == 0 and .segfault == 0
+                 and .skipped == 0 and .check_was_interrupted_by_user == 0
+                 and (.killed + .survived + .timeout) == .total' \
              mutants/mutmut-cicd-stats.json >/dev/null || {
             echo "::error::mutation gate failed — more than 6 survivors, a mutant no" \
-                 "test executes (no_tests), or stats with no usable counts. See above."
+                 "test executes, fewer mutants generated than expected, or counts that" \
+                 "do not add up. The per-mutant list is in the step above."
             exit 1
           }
           jq -e '.survived < 6' mutants/mutmut-cicd-stats.json >/dev/null \

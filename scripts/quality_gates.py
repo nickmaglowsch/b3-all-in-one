@@ -115,13 +115,19 @@ def ts_complexity() -> dict[str, int] | None:
 def _record(out: dict[str, int], key: str, value: int) -> None:
     """Add one offender, refusing to let a second one overwrite the first.
 
-    `path::function` is not unique — two `def run` in one module collide, and the
-    loser's regression would then be invisible. There are no collisions today; this
-    fails loudly on the day someone introduces one rather than silently passing.
+    `path::function` is not unique — two `def run` in one module collide (ruff reports
+    nested functions too, so a second `def _fmt` is enough), and the loser's regression
+    would then be invisible. There are no collisions today; this fails loudly on the
+    day someone introduces one rather than silently passing.
+
+    Renaming is the fix, not a line-numbered key: keying on `lineno` would make every
+    insertion above an over-complex function look like a brand-new offender, which
+    fires the ratchet on unrelated PRs. Only the anonymous arrows in ts_complexity()
+    pay that cost, because eslint gives them no name to use instead.
     """
     if key in out:
-        sys.exit(f"ambiguous key {key!r}: two functions of that name in one module. "
-                 "Rename one, or key on line number here.")
+        sys.exit(f"ambiguous key {key!r}: two functions of that name in one module — "
+                 "the gate cannot tell their complexities apart. Rename one.")
     out[key] = value
 
 

@@ -212,7 +212,7 @@ sit on:
 | Cyclomatic complexity | ruff `C901` (Python) + eslint `complexity` (TS), max 10 | `scripts/quality_gates.py` + baseline |
 | Module size | max 400 lines (`.py`, `.ts`, `.tsx`) | `scripts/quality_gates.py` + baseline |
 | Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
-| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py` | weekly / `workflow_dispatch` only |
+| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, max 6 survivors | `ci.yml`, weekly / `workflow_dispatch` |
 
 **The two structural gates are ratchets, not walls.** The repo has 63 functions over
 complexity 10 (45 Python, 18 TSX) and 28 modules over 400 lines today;
@@ -246,9 +246,9 @@ hook misses — which is why that floor moved 70 → 75.
 contador has to be able to check without reading Python. `tests/test_apuracao.py` is
 the fine-grained unit suite; the feature file is the readable contract on top of it.
 
-**Mutation testing is scoped and advisory.** Target: `taxcore/scripts/apuracao.py`,
-the isenção / alíquota / compensação rules, against the two apuração suites — 96
-mutants at ~200/s, **86 killed and 6 surviving**.
+**Mutation testing is scoped, and it is a real gate.** Target:
+`taxcore/scripts/apuracao.py`, the isenção / alíquota / compensação rules, against the
+two apuração suites — 96 mutants at ~200/s, **90 killed and 6 surviving**.
 
 The gate earned its place on the first run: it found that nothing covered two
 consecutive loss months in one bucket, so `carry += -pnl` could become `carry = -pnl`
@@ -265,8 +265,13 @@ that only differs at `pnl == 0`, where the two branches do the same arithmetic
 49 `pnl > 0`→`pnl >= 0`   61 `pnl < 0`→`pnl <= 0`   62 `pnl < 0`→`pnl < 1`
 ```
 
-No test can kill them, which is why the job keeps `|| true` and reports. Re-check that
-claim if `monthly_apuracao` changes — a survivor list that grows is a real finding.
+No test can kill them, so 6 is the bound the job enforces: it reads `survived` out of
+`mutmut export-cicd-stats` and fails at 7. A seventh survivor is a real hole in the
+apuração suite. If `monthly_apuracao` changes, re-check the equivalence argument above
+rather than just raising the bound.
+
+`mutmut run` itself exits 0 with survivors, so it cannot be the gate — that is why the
+count is checked explicitly instead of relying on the exit code.
 
 Those rules live in their own module *because* of this gate: mutmut writes every
 mutant of a module into one file, and pointed at the 1100-line `irpf_2026.py` it

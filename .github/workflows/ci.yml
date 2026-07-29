@@ -121,14 +121,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       # Target and scope live in taxcore/pyproject.toml [tool.mutmut]: scripts/apuracao.py
-      # against the two apuração suites, ~85 mutants at ~200/s.
-      - run: cd taxcore && uv run --with 'mutmut>=3' mutmut run || true
-      # `|| true`: 6 of the 96 survive, and all 6 are equivalent mutants — each flips
-      # a comparison in a way that only differs at `pnl == 0`, where both branches do
-      # the same arithmetic, so no test can kill them. mutmut still exits non-zero.
-      # Read the results step: a survivor list longer than 6 is a real finding.
-      # See the Quality gates section of the README for the enumerated list.
+      # against the two apuração suites, 96 mutants at ~200/s.
+      #
+      # No `|| true`. `mutmut run` exits 0 even with survivors (measured, at two
+      # different survivor counts), so the only thing it could mask is a genuine
+      # failure — a broken clean run, a timeout — which should fail the build.
+      - run: cd taxcore && uv run --with 'mutmut>=3' mutmut run
       - run: cd taxcore && uv run --with 'mutmut>=3' mutmut results
+      # The gate itself, since `mutmut run` won't do it. 6 of the 96 survive and all 6
+      # are equivalent mutants: each flips a comparison in a way that only differs at
+      # `pnl == 0`, where both branches do the same arithmetic (`carry += -0.0`,
+      # `base = 0 - 0`), so no test can kill them. A seventh survivor is a real hole in
+      # the apuração suite. The README enumerates the six.
+      - name: Fail if a new mutant survives
+        run: |
+          cd taxcore
+          uv run --with 'mutmut>=3' mutmut export-cicd-stats
+          cat mutants/mutmut-cicd-stats.json
+          jq -e '.survived <= 6' mutants/mutmut-cicd-stats.json >/dev/null || {
+            echo "::error::more than 6 mutants survived — the list is in the step above"
+            exit 1
+          }
+          jq -e '.survived < 6' mutants/mutmut-cicd-stats.json >/dev/null \
+            && echo "::notice::fewer than 6 survivors — lower the bound here and in the README" \
+            || true
 
   frontend:
     name: Frontend build

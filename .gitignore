@@ -42,3 +42,5 @@ taxcore/reports/*
 # record what a tool said on the way there. The live config stays tracked.
 .impeccable/critique/
 .claude/agent-memory/
+# An agent's working notes across a context window — same reason as above.
+.claude/handoff.md

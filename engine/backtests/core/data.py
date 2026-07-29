@@ -323,12 +323,24 @@ import requests
 # real approximation and it is disclosed as one wherever it is charted.
 #
 # ponytail: BOVA11 carries the index's ~0.20%/yr fee drag plus its own tracking
-# error. The index proper is in the plane too — COTAHIST carries IBOV11 (BDI 02,
-# close = the index in points / 100) — but only on the sessions that instrument
-# traded: 224 rows against ~870 sessions from 2023, versus BOVA11's every one. A
-# benchmark with three quarters of its days missing is worse than a tracking
-# error, which is why the alias points where it does. Revisit if IBOV11's
-# coverage fills in.
+# error, and the index proper is in the plane too — COTAHIST carries IBOV11
+# (BDI 02, NOMRES "IBOVESPA", close = the index in points: 174316.0 on
+# 2026-07-24). It is not used because it is a traded instrument, so it prints
+# only on sessions it trades, and that coverage is recent:
+#
+#     year   IBOV11   BOVA11   sessions
+#     2024       12      251        251
+#     2025       65      250        250
+#     2026      135      140        140
+#
+# 2026 is effectively daily; 2024 is twelve points, and forward-filling twelve
+# points across a year draws months of flat line — a worse lie than a tracking
+# error. Splitting the source by era is worse still: the two are different
+# numbers (index level vs ETF NAV), so splicing them invents a jump at the seam.
+# Switch the alias to IBOV11 outright once its *back* years fill in, or when the
+# product stops charting windows that reach before ~2026.
+#
+# Re-measure with a scan of COTAHIST for codneg IBOV11 by year, not from here.
 BENCHMARK_ALIASES = {"^BVSP": "BOVA11", "IBOV": "BOVA11"}
 
 

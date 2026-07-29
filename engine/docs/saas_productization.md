@@ -189,7 +189,7 @@ than exposing the raw feed — confirm scope.
 `backtests/core/data.py` used to pull IBOV + ETF benchmarks via `yfinance`.
 Yahoo's ToS prohibits commercial redistribution and yfinance is a scraper — not
 production-safe. `download_benchmark` now reads the plane instead: the ETF
-sleeves are ordinary COTAHIST tickers and IBOV is stood in for by BOVA11, the
+sleeves are ordinary COTAHIST tickers and IBOV is B3's own published index, the
 ETF that tracks it (fee drag disclosed in the UI). No new licence, no scraper,
 and nothing external in the request path.
 

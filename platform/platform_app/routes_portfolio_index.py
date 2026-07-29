@@ -408,8 +408,10 @@ async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
         # the front with zeros (what the loop below would do) reads as a crash.
         # Dropped and disclosed instead, like a benchmark we could not read.
         #
-        # Reachable because benchmarks come off the plane now: BOVA11's history
-        # is however much COTAHIST this box has ingested, not Yahoo's 1993.
+        # Reachable because benchmarks come off the plane now: each series goes
+        # back as far as the box has ingested it, not as far as Yahoo went.
+        # `$CDI` starts at index_series.INDEX_SERIES_START (2010) even on a
+        # fully-built plane, so a book older than that trips this every run.
         if min(parsed) > grid[0]:
             continue
         # Forward-fill onto our grid: the benchmark calendars (Yahoo sessions,

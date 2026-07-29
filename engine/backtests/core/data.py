@@ -315,33 +315,15 @@ import requests
 
 # What the callers ask for -> what the plane calls it. `^BVSP` is Yahoo's symbol
 # for the Ibovespa; the sleeves were asked for with Yahoo's `.SA` suffix. Both
-# now resolve to ordinary B3 tickers, because every series these benchmarks need
-# is already in `prices` — COTAHIST, the same file the whole plane is built from.
+# now resolve on the plane, because every series these benchmarks need is
+# already there.
 #
-# The Ibovespa itself is not a traded instrument, so what stands in for it is
-# BOVA11 — the ETF that has tracked it since 2008, on every session. That is a
-# real approximation and it is disclosed as one wherever it is charted.
-#
-# ponytail: BOVA11 carries the index's ~0.20%/yr fee drag plus its own tracking
-# error, and the index proper is in the plane too — COTAHIST carries IBOV11
-# (BDI 02, NOMRES "IBOVESPA", close = the index in points: 174316.0 on
-# 2026-07-24). It is not used because it is a traded instrument, so it prints
-# only on sessions it trades, and that coverage is recent:
-#
-#     year   IBOV11   BOVA11   sessions
-#     2024       12      251        251
-#     2025       65      250        250
-#     2026      135      140        140
-#
-# 2026 is effectively daily; 2024 is twelve points, and forward-filling twelve
-# points across a year draws months of flat line — a worse lie than a tracking
-# error. Splitting the source by era is worse still: the two are different
-# numbers (index level vs ETF NAV), so splicing them invents a jump at the seam.
-# Switch the alias to IBOV11 outright once its *back* years fill in, or when the
-# product stops charting windows that reach before ~2026.
-#
-# Re-measure with a scan of COTAHIST for codneg IBOV11 by year, not from here.
-BENCHMARK_ALIASES = {"^BVSP": "BOVA11", "IBOV": "BOVA11"}
+# The sleeves are ordinary COTAHIST tickers and read `prices`. The Ibovespa is
+# not an instrument and is in no COTAHIST year, so it is stored as `$IBOV` in
+# `external_prices` — B3's own published index, in points, every session, by
+# b3_pipeline/ibov_series.py. A `$` symbol routes to that table; see there for
+# why the index and not a fund that tracks it.
+BENCHMARK_ALIASES = {"^BVSP": "$IBOV", "IBOV": "$IBOV"}
 
 
 def _plane_series(table: str, column: str, symbol: str,
@@ -367,11 +349,15 @@ def _plane_series(table: str, column: str, symbol: str,
 def download_benchmark(ticker: str, start: str, end: str) -> pd.Series:
     """Daily total-return series for a benchmark, from B3's own price plane.
 
-    `adj_close`, not `close`: the callers compare a strategy's total return
-    against it, and that is what Yahoo's `auto_adjust=True` used to hand back.
+    `adj_close`, not `close`, for the traded sleeves: the callers compare a
+    strategy's total return against it, and that is what Yahoo's
+    `auto_adjust=True` used to hand back. A stored index has no corporate
+    actions to adjust for and only carries `close`.
     """
     symbol = ticker.strip().upper()
     symbol = BENCHMARK_ALIASES.get(symbol, symbol.removesuffix(".SA"))
+    if symbol.startswith("$"):
+        return download_index_level(symbol, start, end)
     return _plane_series("prices", "adj_close", symbol, start, end)
 
 

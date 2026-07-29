@@ -17,7 +17,7 @@ os.environ["ENVIRONMENT"] = "development"
 # Backtests read the market plane from the real `b3` DB (engine_database_url's
 # default). Stub the CDI fetch so a backtest never waits on BCB. Benchmarks are
 # read from the plane now, so this no longer decides whether they appear —
-# whether the plane carries BOVA11 and $CDI does.
+# whether the plane carries $IBOV and $CDI does.
 os.environ["ENGINE_BENCH_OFFLINE"] = "1"
 
 import pytest

@@ -4,7 +4,8 @@
 problem for a paid product and a data-quality one (see the synthetic LFTB11 head
 documented in b3_pipeline/external_prices.py). Every series it fetched is already
 in the plane: the `.SA` sleeves are ordinary COTAHIST tickers, and the Ibovespa
-is tracked by BOVA11, which has traded since 2008.
+itself is stored as `$IBOV` by b3_pipeline/ibov_series.py, from B3's own
+published series.
 
 These tests pin the mapping and the window handling. Nothing here touches the
 network — that is the point.
@@ -44,23 +45,49 @@ def _insert(db_path: str, ticker: str, rows: list[tuple[str, float]]) -> None:
     conn.close()
 
 
+def _insert_index(db_path: str, ticker: str, rows: list[tuple[str, float]]) -> None:
+    """Index levels live in `external_prices` under a reserved `$` ticker."""
+    conn = sqlite3.connect(db_path)
+    for date_str, close in rows:
+        conn.execute(
+            """INSERT INTO external_prices (ticker, isin_code, date, open, high,
+                                            low, close, volume, source)
+               VALUES (?, 'UNKNOWN', ?, NULL, NULL, NULL, ?, 0, 'B3_INDEX')""",
+            (ticker, date_str, close))
+    conn.commit()
+    conn.close()
+
+
 def _use(monkeypatch, db_path: str) -> None:
     """Point the default connection at the temp plane (conftest strips the real
     ENGINE_DATABASE_URL, so this is the whole resolution chain)."""
     monkeypatch.setenv("ENGINE_DATABASE_URL", db_path)
 
 
-def test_bvsp_resolves_to_bova11(tmp_path, monkeypatch):
-    """^BVSP is Yahoo's symbol for the Ibovespa; on the plane it is BOVA11."""
+def test_bvsp_resolves_to_the_stored_index(tmp_path, monkeypatch):
+    """^BVSP is Yahoo's symbol for the Ibovespa. On the plane it is `$IBOV` —
+    the index B3 publishes, in points, not a fund that tracks it."""
     db = _plane(tmp_path)
-    _insert(db, "BOVA11", [("2024-01-02", 100.0), ("2024-01-03", 102.0)])
+    _insert_index(db, "$IBOV", [("2024-01-02", 132696.63),
+                                ("2024-01-03", 131000.0)])
     _use(monkeypatch, db)
 
     px = download_benchmark("^BVSP", "2024-01-01", "2024-01-31")
 
     assert isinstance(px, pd.Series)
     assert list(px.index) == [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
-    assert px.tolist() == [100.0, 102.0]      # adj_close, not close
+    assert px.tolist() == [132696.63, 131000.0]
+
+
+def test_the_index_is_not_a_traded_ticker(tmp_path, monkeypatch):
+    """A plane holding BOVA11 but no `$IBOV` must draw nothing rather than
+    silently substituting the ETF — the two are different numbers, and the
+    chart rebases, so the swap would never show up as wrong."""
+    db = _plane(tmp_path)
+    _insert(db, "BOVA11", [("2024-01-02", 128.76)])
+    _use(monkeypatch, db)
+
+    assert download_benchmark("^BVSP", "2024-01-01", "2024-01-31").empty
 
 
 def test_sa_suffix_is_stripped(tmp_path, monkeypatch):
@@ -76,8 +103,8 @@ def test_sa_suffix_is_stripped(tmp_path, monkeypatch):
 
 def test_window_is_respected(tmp_path, monkeypatch):
     db = _plane(tmp_path)
-    _insert(db, "BOVA11", [("2023-12-29", 90.0), ("2024-01-02", 100.0),
-                           ("2024-02-01", 110.0)])
+    _insert_index(db, "$IBOV", [("2023-12-29", 90.0), ("2024-01-02", 100.0),
+                                ("2024-02-01", 110.0)])
     _use(monkeypatch, db)
 
     px = download_benchmark("^BVSP", "2024-01-01", "2024-01-31")
@@ -96,6 +123,7 @@ def test_missing_ticker_is_empty_not_an_error(tmp_path, monkeypatch):
 
     px = download_benchmark("^BVSP", "2024-01-01", "2024-01-31")
     assert isinstance(px, pd.Series) and px.empty
+    assert download_benchmark("IVVB11.SA", "2024-01-01", "2024-01-31").empty
 
 
 def test_no_yahoo_left_in_the_engine():

@@ -18,7 +18,7 @@ documented approximation — a flow between two monthly marks lands on the later
 one). Everything downstream of the window is identical, which is why the replay
 does not get its own script.
 
-Network: the IBOV benchmark comes off the plane now (BOVA11 in `prices`), so it
+Network: the IBOV benchmark comes off the plane now (`$IBOV` in `external_prices`), so it
 costs nothing and is real — it used to be stubbed flat because the only source
 was Yahoo. CDI daily is still fetched from the Brazilian Central Bank
 (api.bcb.gov.br, reliable) because build_shared_data requires it; set

@@ -52,7 +52,7 @@ the image — backtests read the market plane from Postgres, not from files.
 
 **Network:** a backtest run fetches **CDI daily from the Brazilian Central Bank**
 (`api.bcb.gov.br`, required by `build_shared_data`, reliable) and nothing else.
-**Benchmarks come off the plane**, not Yahoo: `^BVSP` resolves to BOVA11 and the
+**Benchmarks come off the plane**, not Yahoo: `^BVSP` resolves to `$IBOV` and the
 ETF sleeves to their own COTAHIST tickers, so IBOV is a real series now instead of
 a flat stub. Set `ENGINE_BENCH_OFFLINE=1` (compose sets it on api+worker;
 `platform/tests` set it too) to stub CDI and the benchmarks and run fully offline —

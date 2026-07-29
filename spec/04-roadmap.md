@@ -50,7 +50,8 @@ the revenue test — if IRPF doesn't convert, revisit before building the bench.
   calendar month), `compute_trades()` extraction, advise-only path, dated cash-flow
   contributions, seeded initial state.
 - ~~Benchmark data source swap (from Phase 0 legal outcome) completed before public launch.~~
-  Done: benchmarks read the plane (IBOV via BOVA11); yfinance is out of the engine.
+  Done: benchmarks read the plane (IBOV from B3's own index series); yfinance is
+  out of the engine.
 - Quant tier billing.
 
 **Exit criteria:** a user clones a gallery strategy, edits a factor expression, runs it,

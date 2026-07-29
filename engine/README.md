@@ -28,7 +28,7 @@ true — the platform stitches together several official feeds:
 | **CVM** | `dados.cvm.gov.br` bulk CSVs (DFP/ITR/FCA) | Structured fundamentals (2010→present) + PIT ticker map |
 | **CVM** | "Download Múltiplo" legacy channel | Pre-2010 fundamentals (~2006–2009), *opt-in, credentialed* |
 | **BCB** | Central Bank API | CDI risk-free daily series |
-| **B3** | the plane itself (`prices`) | Benchmarks: IBOV via BOVA11, ETF sleeves (IVVB11, DIVO11, …) |
+| **B3** | the plane itself (`prices`, `external_prices`) | Benchmarks: the Ibovespa (`$IBOV`, B3's own series), ETF sleeves (IVVB11, DIVO11, …) |
 
 Splits use B3's **official factors** (not heuristic jump detection), so
 100:1 splits, `0.01` reverse-split factors, and `Bonificação` bonus shares are

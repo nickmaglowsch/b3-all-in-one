@@ -63,7 +63,8 @@ dated cash flows, seeded initial state, asset-class tax model) are listed there.
 2. Port SQLite dialect → Postgres in `storage.py`/`cvm_storage.py`.
 3. ~~Replace yfinance benchmarks (IBOV, ETF sleeves) with B3/BCB official sources or a
    licensed feed — legal blocker before any paid launch.~~ Done: `download_benchmark`
-   reads the plane (IBOV via BOVA11, sleeves by their own tickers); no yfinance left
+   reads the plane (IBOV from B3's own published index series, sleeves by their
+   own tickers); no yfinance left
    in the engine.
 4. Wrap `run_simulation` + `build_metrics` in a worker task with resource limits.
 5. Keep the 62-file test suite green throughout — it covers simulation, DSL, config

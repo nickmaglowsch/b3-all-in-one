@@ -1,8 +1,8 @@
 """bench_series serves the portfolio page's IBOV/CDI overlay from the plane.
 
 It used to fetch IBOV from Yahoo and CDI from BCB on every cache miss, inside a
-request. Both series are already stored — BOVA11 in `prices`, `$CDI` in
-`external_prices` (written by b3_pipeline/index_series.py) — so the request path
+request. Both series are already stored — `$IBOV` and `$CDI` in
+`external_prices` (written by b3_pipeline/ibov_series.py and index_series.py) — so the request path
 now reads the database and touches nothing external.
 
 The consequence worth testing: `offline` no longer means "we were told not to
@@ -39,15 +39,14 @@ def plane(tmp_path, monkeypatch):
     return db_path
 
 
-def _bova(db_path: str, rows: list[tuple[str, float]]) -> None:
+def _ibov(db_path: str, rows: list[tuple[str, float]]) -> None:
     conn = sqlite3.connect(db_path)
-    for date_str, px in rows:
+    for date_str, pts in rows:
         conn.execute(
-            """INSERT INTO prices (ticker, isin_code, date, open, high, low,
-                                   close, adj_close, split_adj_high,
-                                   split_adj_low, split_adj_close, volume)
-               VALUES ('BOVA11', 'UNKNOWN', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1000.0)""",
-            (date_str, px, px, px, px, px, px, px, px),
+            """INSERT INTO external_prices
+                   (ticker, isin_code, date, open, high, low, close, volume, source)
+               VALUES ('$IBOV', 'UNKNOWN', ?, NULL, NULL, NULL, ?, 0, 'B3_INDEX')""",
+            (date_str, pts),
         )
     conn.commit()
     conn.close()
@@ -67,13 +66,13 @@ def _cdi(db_path: str, rows: list[tuple[str, float]]) -> None:
 
 
 def test_both_series_come_from_the_plane(plane):
-    _bova(plane, [("2024-01-02", 100.0), ("2024-01-03", 101.0)])
+    _ibov(plane, [("2024-01-02", 132696.63), ("2024-01-03", 131000.0)])
     _cdi(plane, [("2024-01-02", 1.5), ("2024-01-03", 1.5004)])
 
     out = _load_bench_series().series("2024-01-01", "2024-01-31")
 
     assert out["offline"] is False
-    assert out["ibov"] == {"2024-01-02": 100.0, "2024-01-03": 101.0}
+    assert out["ibov"] == {"2024-01-02": 132696.63, "2024-01-03": 131000.0}
     assert out["cdi"] == {"2024-01-02": 1.5, "2024-01-03": 1.5004}
 
 
@@ -86,9 +85,9 @@ def test_empty_plane_reports_offline(plane):
 
 
 def test_one_series_present_is_not_offline(plane):
-    """CDI is written by a different pipeline step than BOVA11; one being late
+    """CDI is written by a different pipeline step than $IBOV; one being late
     must not blank the other."""
-    _bova(plane, [("2024-01-02", 100.0)])
+    _ibov(plane, [("2024-01-02", 100.0)])
 
     out = _load_bench_series().series("2024-01-01", "2024-01-31")
 

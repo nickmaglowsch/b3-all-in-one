@@ -2,8 +2,8 @@
 
 Split out of `irpf_2026.py` so mutation testing has a target it can finish: mutmut
 generates every mutant of a module into one file, and at 1100 lines the report script
-produced a 42 MB module that never finished importing. Seventy lines does it in
-seconds — and these seventy are the ones where a surviving mutant is a real tax bug.
+produced a 42 MB module that never finished importing. This module does it in seconds
+— and these are the lines where a surviving mutant is a real tax bug.
 
 `irpf_2026.py` re-exports all four names, so `from scripts.irpf_2026 import
 monthly_apuracao` still works.

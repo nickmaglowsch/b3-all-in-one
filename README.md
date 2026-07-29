@@ -199,7 +199,9 @@ build.
 
 ## Quality gates
 
-The suites are the contract, not the review. Six gates run in CI (`.github/workflows/ci.yml`):
+The suites are the contract, not the review. Eight checks run in CI
+(`.github/workflows/ci.yml`) — the six gates, plus the unit suites and the lint they
+sit on:
 
 | Gate | What runs | Where the threshold lives |
 | --- | --- | --- |
@@ -245,10 +247,26 @@ contador has to be able to check without reading Python. `tests/test_apuracao.py
 the fine-grained unit suite; the feature file is the readable contract on top of it.
 
 **Mutation testing is scoped and advisory.** Target: `taxcore/scripts/apuracao.py`,
-the isenção / alíquota / compensação rules, against the two apuração suites — ~85
-mutants at ~200/s. **14 survive today**; some are equivalent mutants (`pnl > 0` vs
-`pnl >= 0` on a zero-PnL month), so the job reports rather than fails. Triage the list
-to zero, then drop the `|| true` in `ci.yml`.
+the isenção / alíquota / compensação rules, against the two apuração suites — 96
+mutants at ~200/s, **86 killed and 6 surviving**.
+
+The gate earned its place on the first run: it found that nothing covered two
+consecutive loss months in one bucket, so `carry += -pnl` could become `carry = -pnl`
+undetected. On the reviewer's example that under-reports the accumulated loss by
+R$ 5.000 and over-collects R$ 750 of IR. Also unlabelled: sub-R$1 gains (`pnl > 0` vs
+`pnl > 1`) and break-even months. Those tests are now in `tests/test_apuracao.py`.
+
+The 6 that remain are all **equivalent mutants** — each flips a comparison in a way
+that only differs at `pnl == 0`, where the two branches do the same arithmetic
+(`carry += -0.0` and `base = 0 - 0` are both no-ops):
+
+```
+41 `pnl > 0`→`pnl >= 0`   44 `pnl < 0`→`pnl <= 0`   45 `pnl < 0`→`pnl < 1`
+49 `pnl > 0`→`pnl >= 0`   61 `pnl < 0`→`pnl <= 0`   62 `pnl < 0`→`pnl < 1`
+```
+
+No test can kill them, which is why the job keeps `|| true` and reports. Re-check that
+claim if `monthly_apuracao` changes — a survivor list that grows is a real finding.
 
 Those rules live in their own module *because* of this gate: mutmut writes every
 mutant of a module into one file, and pointed at the 1100-line `irpf_2026.py` it

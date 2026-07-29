@@ -30,7 +30,8 @@ dev = [
 [tool.pytest.ini_options]
 # mutmut copies the whole tree into ./mutants, tests included. Left collectable, its
 # duplicate test basenames shadow the real ones on sys.path and every module that does
-# `from test_renda_fixa import ...` breaks. Keep the pytest defaults alongside it.
+# `from test_renda_fixa import ...` breaks. The rest of the list restates the pytest
+# defaults this repo can actually hit — setting norecursedirs replaces them wholesale.
 norecursedirs = ["mutants", "*.egg", ".*", "build", "dist", "node_modules", "venv"]
 markers = [
     "golden: golden-file regression tests over the real B3 fixtures (minutes, offline)",

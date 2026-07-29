@@ -28,41 +28,49 @@ scenarios("features/apuracao_mensal.feature")
 MES, SEGUINTE = 1, 2
 
 
+# BDR and ETF_RV are two input columns that the apuração sums into one line.
+APURACAO_LINE = {"BDR": "BDR_ETF", "ETF_RV": "BDR_ETF"}
+
+
 @pytest.fixture
 def livro() -> dict:
     """month number -> {classe: (gross, pnl)}, exactly what `grid` takes."""
     return {}
 
 
+@pytest.fixture
+def alvo() -> dict:
+    """Which apuração line the Então steps read. Kept out of `livro` because that
+    one is splatted into `grid(**livro)` — a stray key there is a grid column."""
+    return {}
+
+
 @given(parsers.parse(
     'um mês com vendas de "{classe}" de R$ {gross:f} e lucro de R$ {pnl:f}'))
-def mes(livro, classe, gross, pnl):
+def mes(livro, alvo, classe, gross, pnl):
     livro[str(MES)] = {classe: (gross, pnl)}
-    livro["classe"] = classe
+    alvo["classe"] = APURACAO_LINE.get(classe, classe)
 
 
 @given(parsers.parse(
     'o mês seguinte com vendas de "{classe}" de R$ {gross:f} e lucro de R$ {pnl:f}'))
-def mes_seguinte(livro, classe, gross, pnl):
+def mes_seguinte(livro, alvo, classe, gross, pnl):
     livro[str(SEGUINTE)] = {classe: (gross, pnl)}
-    livro["classe"] = classe
+    alvo["classe"] = APURACAO_LINE.get(classe, classe)
 
 
-def _apurar(livro, month):
-    classe = livro.pop("classe")
-    rows = monthly_apuracao(grid(**livro))
-    livro["classe"] = classe
-    return pick(rows, classe, month)
+def _apurar(livro, alvo, month):
+    return pick(monthly_apuracao(grid(**livro)), alvo["classe"], month)
 
 
 @when("eu apuro o mês", target_fixture="apurado")
-def apuro_o_mes(livro):
-    return _apurar(livro, MES)
+def apuro_o_mes(livro, alvo):
+    return _apurar(livro, alvo, MES)
 
 
 @when("eu apuro o mês seguinte", target_fixture="apurado")
-def apuro_o_mes_seguinte(livro):
-    return _apurar(livro, SEGUINTE)
+def apuro_o_mes_seguinte(livro, alvo):
+    return _apurar(livro, alvo, SEGUINTE)
 
 
 @then("o mês é isento")

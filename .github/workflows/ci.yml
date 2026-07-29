@@ -5,8 +5,10 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # The mutation job only — it re-runs the taxcore suite once per mutant, which is
-  # minutes, not seconds. Too slow to gate a PR, too useful to never run.
+  # Weekly, so the mutation job runs at all: it re-runs the taxcore suite once per
+  # mutant, which is minutes rather than seconds — too slow to gate a PR, too useful
+  # to never run. Everything else runs on the schedule too, which is deliberate: a
+  # weekly full build is what catches drift in the unpinned parts of the toolchain.
   schedule:
     - cron: "0 5 * * 1"
   workflow_dispatch:
@@ -121,10 +123,11 @@ jobs:
       # Target and scope live in taxcore/pyproject.toml [tool.mutmut]: scripts/apuracao.py
       # against the two apuração suites, ~85 mutants at ~200/s.
       - run: cd taxcore && uv run --with 'mutmut>=3' mutmut run || true
-      # `|| true`: a surviving mutant is a finding to read, not a build to break —
-      # 14 of the 85 survive today and some are genuinely equivalent mutants
-      # (`pnl > 0` vs `pnl >= 0` on a zero-PnL month). Make it a hard gate once the
-      # list is triaged down to zero.
+      # `|| true`: 6 of the 96 survive, and all 6 are equivalent mutants — each flips
+      # a comparison in a way that only differs at `pnl == 0`, where both branches do
+      # the same arithmetic, so no test can kill them. mutmut still exits non-zero.
+      # Read the results step: a survivor list longer than 6 is a real finding.
+      # See the Quality gates section of the README for the enumerated list.
       - run: cd taxcore && uv run --with 'mutmut>=3' mutmut results
 
   frontend:

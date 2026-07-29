@@ -91,6 +91,14 @@ def ts_complexity() -> dict[str, int] | None:
         sys.exit(f"eslint produced no report: {proc.stderr.strip()}")
     out = {}
     for f in json.loads(proc.stdout):
+        # A file that does not parse yields no complexity messages at all, so every
+        # entry it has in the baseline would read as "now under the limit" — the gate
+        # would report a complexity-43 function as an *improvement* and exit 0. Same
+        # invariant as the node_modules guard above: never infer clean from silence.
+        fatal = [m for m in f["messages"] if m.get("fatal")]
+        if fatal:
+            sys.exit(f"eslint could not parse {_rel(Path(f['filePath']))}: "
+                     f"{fatal[0].get('message', '').strip()}")
         for m in f["messages"]:
             if m.get("ruleId") != "complexity":
                 continue
@@ -100,8 +108,21 @@ def ts_complexity() -> dict[str, int] | None:
             # (re-run --update), and there is exactly one such function today.
             name = m["message"].split("'")[1] if "'" in m["message"] else f"line{m['line']}"
             key = f"{_rel(Path(f['filePath']))}::{name}"
-            out[key] = int(m["message"].split("complexity of ")[1].split(".")[0])
+            _record(out, key, int(m["message"].split("complexity of ")[1].split(".")[0]))
     return out
+
+
+def _record(out: dict[str, int], key: str, value: int) -> None:
+    """Add one offender, refusing to let a second one overwrite the first.
+
+    `path::function` is not unique — two `def run` in one module collide, and the
+    loser's regression would then be invisible. There are no collisions today; this
+    fails loudly on the day someone introduces one rather than silently passing.
+    """
+    if key in out:
+        sys.exit(f"ambiguous key {key!r}: two functions of that name in one module. "
+                 "Rename one, or key on line number here.")
+    out[key] = value
 
 
 def complexity() -> dict[str, int]:
@@ -117,10 +138,14 @@ def complexity() -> dict[str, int]:
     out = {}
     for v in json.loads(proc.stdout or "[]"):
         # "`run_pipeline` is too complex (43 > 10)"
-        name, _, tail = v["message"].partition("` is too complex (")
+        name, sep, tail = v["message"].partition("` is too complex (")
+        # ruff reports syntax errors whatever `--select` says, and those carry no
+        # separator. Say so instead of dying on int("") three lines down.
+        if not sep:
+            sys.exit(f"ruff could not parse {v.get('filename', '?')}: {v['message']}")
         # ruff reports absolute paths; the baseline must survive a different checkout dir.
         key = f"{_rel(Path(v['filename']))}::{name.lstrip('`')}"
-        out[key] = int(tail.split(" >")[0])
+        _record(out, key, int(tail.split(" >")[0]))
     return out
 
 

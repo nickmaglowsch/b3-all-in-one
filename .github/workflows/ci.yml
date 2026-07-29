@@ -55,7 +55,7 @@ jobs:
         # nothing wrong. Python is pinned to 3.12 here, so sysmon is always available.
         env:
           COVERAGE_CORE: sysmon
-        run: cd platform && uv run --frozen pytest -q --cov=platform_app --cov-fail-under=70
+        run: cd platform && uv run --frozen pytest -q --cov=platform_app --cov-fail-under=75
         # Tests marked `market` need a loaded B3 price plane; the b3 DB here is
         # empty, so conftest skips them (scripts/docker_smoke.sh covers that path
         # locally). Everything else runs.

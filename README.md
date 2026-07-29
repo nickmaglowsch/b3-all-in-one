@@ -206,7 +206,7 @@ The suites are the contract, not the review. Six gates run in CI (`.github/workf
 | Unit tests | `pytest` per package, `node --test` for the frontend | — |
 | Lint | `npm run lint` (eslint, green) | `frontend/eslint.config.mjs` |
 | Gherkin specs | `taxcore/tests/features/*.feature` via pytest-bdd | the feature files |
-| Coverage floor | `pytest --cov-fail-under` | `ci.yml`: platform 70, engine 60, taxcore 20 |
+| Coverage floor | `pytest --cov-fail-under` | `ci.yml`: platform 75, engine 60, taxcore 20 |
 | Cyclomatic complexity | ruff `C901` (Python) + eslint `complexity` (TS), max 10 | `scripts/quality_gates.py` + baseline |
 | Module size | max 400 lines (`.py`, `.ts`, `.tsx`) | `scripts/quality_gates.py` + baseline |
 | Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
@@ -228,16 +228,16 @@ Without `frontend/node_modules` the script prints `SKIPPED` for the frontend hal
 drops those entries from the comparison rather than reporting them clean; `--update`
 refuses outright, so a partial run can never quietly erase them from the baseline.
 
-**Coverage is ~77 / 62 / 22% (platform / engine / taxcore), not 100.** The floors are
+**Coverage is 80 / 62 / 22% (platform / engine / taxcore), not 100.** The floors are
 below today's numbers so they can only rise; raise them in `ci.yml` whenever a PR
 clears one. The taxcore number is the honest one to fix first — most of
 `taxcore/scripts` is CLI entrypoints with no test at all.
 
 Platform is measured with `COVERAGE_CORE=sysmon` (PEP 669). That is not cosmetic: the
 default `sys.settrace` backend taxed an upload handler from ~170ms to 424ms and broke
-the suite's wall-clock assertions on event-loop responsiveness. It also reads ~5pp
+the suite's wall-clock assertions on event-loop responsiveness. It also reads ~8pp
 higher, because it sees lines executed in `asyncio.to_thread` workers that the trace
-hook misses.
+hook misses — which is why that floor moved 70 → 75.
 
 **The Gherkin specs are in Portuguese on purpose.** They cover the apuração rules
 (isenção de R$ 20.000, alíquotas, compensação de prejuízo) — the part of this repo a

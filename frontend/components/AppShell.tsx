@@ -97,7 +97,7 @@ function ShellChrome({
 
       <aside
         id="app-nav"
-        className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-hairline bg-panel transition-transform md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-hairline bg-panel transition-transform md:translate-x-0 print:hidden ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -145,8 +145,11 @@ function ShellChrome({
         <SidebarFooter />
       </aside>
 
-      <main className="min-w-0 flex-1 px-4 pb-8 md:ml-60 md:px-8 md:py-8">
-        <div className="sticky top-0 z-20 -mx-4 mb-4 flex h-14 items-center gap-2 border-b border-hairline bg-paper px-4 md:hidden">
+      {/* print:* — "Baixar PDF" on the IRPF report is the browser's own
+          print-to-PDF over the already-rendered report, so the sidebar's gutter
+          has to collapse or every page carries a 15rem blank margin. */}
+      <main className="min-w-0 flex-1 px-4 pb-8 md:ml-60 md:px-8 md:py-8 print:m-0 print:p-0">
+        <div className="sticky top-0 z-20 -mx-4 mb-4 flex h-14 items-center gap-2 border-b border-hairline bg-paper px-4 md:hidden print:hidden">
           <button
             type="button"
             onClick={() => setOpen(true)}

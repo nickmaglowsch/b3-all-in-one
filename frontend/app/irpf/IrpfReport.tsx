@@ -54,7 +54,9 @@ export function IrpfReport({ markdown }: { markdown: string }) {
   );
 
   return (
-    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_190px]">
+    // print:block — the section rail is hidden on paper, so its 190px column
+    // would otherwise leave a blank gutter down every printed page.
+    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_190px] print:block">
       {/* min-w-0 lets wide tables scroll inside the cell instead of blowing out the grid */}
       <div className="min-w-0">
         {preamble && (
@@ -71,7 +73,7 @@ export function IrpfReport({ markdown }: { markdown: string }) {
         </div>
       </div>
 
-      <nav className="hidden lg:block">
+      <nav className="hidden lg:block print:hidden">
         <div className="sticky top-8">
           <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
             Seções
@@ -128,7 +130,7 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={copy}
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors print:hidden ${
         copied
           ? "border-status-done/30 bg-status-done/10 text-status-done"
           : "border-hairline text-muted hover:bg-hairline/40 hover:text-ink"

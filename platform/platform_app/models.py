@@ -386,6 +386,47 @@ class IngestRun(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class DarfPayment(Base):
+    """One DARF the tenant says they paid, for one apuração month and class.
+
+    Only the *payment* lives here. The apuração beside it — gross, resultado,
+    compensação, base, alíquota, IR devido — is recomputed from the trade history
+    by taxcore's ``irpf_2026 --json`` on every read, exactly like the IRPF report
+    (spec/03: "regenerable any time from the trade history — no stored tax state
+    to corrupt"). Storing those figures would create a second, staler answer to
+    the one question this product exists to get right.
+
+    A table of this name existed once, created by 8083522f305e and dropped unused
+    by d5b8e37f1a94. This is the narrower shape the ledger actually needs, and it
+    is modelled, so privacy._tenant_tables() reaches it for the LGPD export and
+    erasure sweeps — which is the reason the empty one was dropped rather than
+    left to sit there uncovered.
+    """
+
+    __tablename__ = "darf_payments"
+    __table_args__ = (
+        # One DARF per month per class: they are separate apurações with separate
+        # rates, and paying either one twice is a data-entry mistake, not a case.
+        UniqueConstraint("tenant_id", "apuracao", "classe",
+                         name="uq_darf_tenant_apuracao_classe"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    tenant_id: Mapped[uuid.UUID] = _tenant_col()
+    # First day of the apuração month. A Date rather than a "YYYY-MM" string so
+    # the year filter is a range scan and the ordering is the calendar's.
+    apuracao: Mapped[datetime.date] = mapped_column(Date, nullable=False)
+    classe: Mapped[str] = mapped_column(Text, nullable=False)  # AÇÃO | FII | BDR_ETF
+    valor_principal: Mapped[float] = mapped_column(Numeric, nullable=False)
+    # Null while the DARF is issued but not yet paid — the ledger still counts it
+    # as recorded, because the alert is about a month nobody has dealt with.
+    data_pagamento: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    obs: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class TaxSummary(Base):
     """Cached `tlh_plan --json` with no sells — the book's current tax situation.
 

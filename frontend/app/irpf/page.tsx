@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconReceipt } from "@/components/icons";
 import { IrpfReport } from "./IrpfReport";
+import { DarfLedger } from "./DarfLedger";
 
 interface IrpfResponse {
   year: number;
@@ -41,7 +42,7 @@ export default function IrpfPage() {
           value={year}
           onChange={(e) => setYear(Number(e.target.value))}
           disabled={gen.isPending}
-          className="rounded-md border border-hairline bg-panel px-3 py-2 text-sm font-medium text-ink disabled:opacity-60"
+          className="rounded-md border border-hairline bg-panel px-3 py-2 text-sm font-medium text-ink disabled:opacity-60 print:hidden"
         >
           {YEARS.map((y) => (
             <option key={y} value={y}>
@@ -53,17 +54,25 @@ export default function IrpfPage() {
           type="button"
           onClick={() => gen.mutate(year)}
           disabled={gen.isPending}
-          className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90 disabled:opacity-60"
+          className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90 disabled:opacity-60 print:hidden"
         >
           {gen.isPending ? "Gerando…" : "Gerar relatório"}
         </button>
+        {report && <ExportButtons report={report} />}
       </PageHeader>
 
+      {/* The one line that must survive into the PDF: it is the disclaimer, and
+          a printed tax report that drops it is the version that gets forwarded
+          to an accountant as if it were advice. */}
       <p className="mb-6 flex items-start gap-2 text-xs text-muted">
         <span aria-hidden>ⓘ</span>
         Confira os valores no informe de rendimentos. Este relatório não é
         aconselhamento tributário.
       </p>
+
+      <div className="mb-8 print:hidden">
+        <DarfLedger year={year} />
+      </div>
 
       {gen.isPending ? (
         <ReportSkeleton />
@@ -85,6 +94,43 @@ export default function IrpfPage() {
           hint="Bens e Direitos, proventos e ganhos de capital, prontos para colar no programa do IRPF."
         />
       )}
+    </>
+  );
+}
+
+/**
+ * Markdown and PDF export (spec/03, "full markdown/PDF export").
+ *
+ * The PDF is the browser's own print-to-PDF over the report already rendered on
+ * this page, styled by the `@media print` block in globals.css. That is a
+ * stylesheet instead of WeasyPrint plus Pango, Cairo and a font stack in an
+ * arm64 image — and it prints exactly what the user is looking at, which is the
+ * property that matters for a document they are about to copy into the IRPF
+ * program. The .md is the same string the API returned, as a Blob.
+ */
+function ExportButtons({ report }: { report: IrpfResponse }) {
+  function downloadMarkdown() {
+    const url = URL.createObjectURL(
+      new Blob([report.markdown], { type: "text/markdown;charset=utf-8" }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `irpf-ano-base-${report.year}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const cls =
+    "rounded-md border border-hairline px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-hairline/40 hover:text-ink print:hidden";
+
+  return (
+    <>
+      <button type="button" onClick={() => window.print()} className={cls}>
+        Baixar PDF
+      </button>
+      <button type="button" onClick={downloadMarkdown} className={cls}>
+        Baixar .md
+      </button>
     </>
   );
 }

@@ -6,6 +6,7 @@ request. Routers + task functions only (no service/repository layers).
 from __future__ import annotations
 
 import asyncio
+import calendar
 import csv
 import datetime
 import io
@@ -31,9 +32,9 @@ from platform_app.billing import needs_investidor, needs_trader
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
-    AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, Import,
-    IngestRun, PortfolioSleeve, Position, RebalanceSettings, RendaFixaMark,
-    TaxSummary, Trade, UserStrategy,
+    AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, DarfPayment,
+    Import, IngestRun, PortfolioSleeve, Position, RebalanceSettings,
+    RendaFixaMark, TaxSummary, Trade, UserStrategy,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant
 
@@ -877,6 +878,30 @@ _OVERRIDE_HEADER = ["date", "ticker", "kind", "qty", "price", "amount", "note"]
 _POSITION_HEADER = ["ticker", "qty", "avg_cost", "total_cost", "market"]
 
 
+async def _book_csv_rows(
+    session: AsyncSession, tid: uuid.UUID
+) -> tuple[list[list], list[list]]:
+    """``(trade_rows, event_rows)`` for a taxcore workspace, materialised here.
+
+    Plain attribute reads off already-loaded ORM instances (microseconds), done
+    on the loop so the worker thread that writes the CSVs never touches a
+    Session. Shared by the IRPF report and the DARF apuração so the two can
+    never write differently-shaped books for the same script to read.
+    """
+    trades = (await session.scalars(
+        select(Trade).where(Trade.tenant_id == tid).order_by(Trade.id)
+    )).all()
+    events = (await session.scalars(
+        select(CashEvent).where(CashEvent.tenant_id == tid).order_by(CashEvent.id)
+    )).all()
+    return (
+        [[t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
+          t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades],
+        [[e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
+          e.qty, e.price, e.amount, e.broker, e.source_file] for e in events],
+    )
+
+
 @irpf_router.post("/reports")
 async def irpf_report(
     body: IrpfRequest,
@@ -884,12 +909,7 @@ async def irpf_report(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
-    trades = (await session.scalars(
-        select(Trade).where(Trade.tenant_id == tid).order_by(Trade.id)
-    )).all()
-    events = (await session.scalars(
-        select(CashEvent).where(CashEvent.tenant_id == tid).order_by(CashEvent.id)
-    )).all()
+    trade_rows, event_rows = await _book_csv_rows(session, tid)
     overrides = (await session.scalars(
         select(CostBasisOverride).where(CostBasisOverride.tenant_id == tid)
         .order_by(CostBasisOverride.id)
@@ -898,14 +918,6 @@ async def irpf_report(
         select(Import).where(Import.tenant_id == tid, Import.kind == "movimentacao")
     )).all()
 
-    # Row payloads built on the loop (plain attribute reads off loaded instances),
-    # so the worker thread below never touches a Session.
-    trade_rows = [
-        [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
-         t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades]
-    event_rows = [
-        [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
-         e.qty, e.price, e.amount, e.broker, e.source_file] for e in events]
     override_rows = [
         [o.date, o.ticker, o.kind, o.qty, o.price, o.amount, o.note] for o in overrides]
     extracts = [(imp.stored_path, imp.filename) for imp in movs]
@@ -935,6 +947,216 @@ async def irpf_report(
     if proc.returncode != 0:
         raise HTTPException(500, f"irpf_2026 failed: {(proc.stderr or proc.stdout)[-2000:]}")
     return {"year": body.year, "markdown": proc.stdout}
+
+
+# ── DARF ledger ───────────────────────────────────────────────────────────────
+# spec/03: "port of darf_payments.csv as CRUD + monthly apuração view; alert when
+# a month's computed tax is due and unrecorded."
+#
+# Half computed, half stored, and deliberately so. The apuração — gross,
+# resultado, compensação, base, IR — is recomputed from the trade history on
+# every read by the same taxcore function that renders the report's Renda
+# Variável tables, so the ledger can never bill a number the report does not
+# show. Only the payment is a row here: what the tenant knows and the engine
+# cannot.
+
+# Mirrors taxcore's irpf_2026.CLASSES_APURACAO. Not imported — taxcore runs in
+# its own interpreter as a subprocess, which is the whole point of b3run — so the
+# guard here is the test that reads a real apuração back and finds these names.
+DARF_CLASSES = ("AÇÃO", "FII", "BDR_ETF")
+# Ganhos líquidos em renda variável, pessoa física. One code for every class:
+# the rate differs, the DARF's código does not.
+DARF_CODIGO = "6015"
+
+
+def _darf_vencimento(apuracao: datetime.date) -> datetime.date:
+    """Último dia útil do mês seguinte — when that month's DARF is due.
+
+    ponytail: weekdays only, no feriado calendar. A national holiday landing on
+    the last business day pulls the real deadline one day earlier, so this can
+    only ever call something "atrasado" later than the Receita would — never
+    earlier, which is the direction that would cry wolf.
+    """
+    if apuracao.month == 12:
+        year, month = apuracao.year + 1, 1
+    else:
+        year, month = apuracao.year, apuracao.month + 1
+    due = datetime.date(year, month, calendar.monthrange(year, month)[1])
+    while due.weekday() >= 5:  # Saturday, Sunday
+        due -= datetime.timedelta(days=1)
+    return due
+
+
+async def _darf_payments(
+    session: AsyncSession, tid: uuid.UUID, year: int
+) -> list[DarfPayment]:
+    return list(await session.scalars(
+        select(DarfPayment).where(
+            DarfPayment.tenant_id == tid,
+            DarfPayment.apuracao >= datetime.date(year, 1, 1),
+            DarfPayment.apuracao <= datetime.date(year, 12, 1),
+        ).order_by(DarfPayment.apuracao, DarfPayment.classe)
+    ))
+
+
+def _payment_dict(p: DarfPayment | None) -> dict | None:
+    if p is None:
+        return None
+    return {
+        "id": p.id,
+        "apuracao": p.apuracao.strftime("%Y-%m"),
+        "classe": p.classe,
+        "valor_principal": float(p.valor_principal),
+        "data_pagamento": p.data_pagamento.isoformat() if p.data_pagamento else None,
+        "obs": p.obs,
+    }
+
+
+async def _run_apuracao(
+    session: AsyncSession, tid: uuid.UUID, year: int
+) -> list[dict]:
+    """taxcore's per-month Renda Variável apuração for the year, as data.
+
+    Far cheaper than POST /irpf/reports even though it is the same script:
+    ``--json`` returns before Bens e Direitos and the renda fixa sections, which
+    are what parse every uploaded Excel file. This needs only trades and
+    cash_events, so the workspace copies no extracts.
+    """
+    trade_rows, event_rows = await _book_csv_rows(session, tid)
+    if not trade_rows:
+        # build_timeline over an empty book has no columns to sort. An empty
+        # ledger is the honest answer anyway — nothing was sold, nothing is due.
+        return []
+
+    def _work():
+        ws = Path(tempfile.mkdtemp(prefix="b3darf-", dir=b3run.workspace_root(tid)))
+        try:
+            b3run.seed_workspace(ws)
+            b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
+            b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
+            return b3run.run_module(
+                ws, ["scripts.irpf_2026", "--year", str(year), "--json"])
+        finally:
+            shutil.rmtree(ws, ignore_errors=True)
+
+    proc = await asyncio.to_thread(_work)
+    if proc.returncode != 0:
+        raise HTTPException(
+            500, f"irpf_2026 --json failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    return b3run.last_json(proc.stdout).get("apuracao") or []
+
+
+@irpf_router.get("/darf")
+async def darf_ledger(
+    year: int | None = Query(None, ge=2000, le=2100),
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """The year's DARFs: what the engine says is owed, what the tenant recorded.
+
+    Only months that owe something — or that already carry a recorded payment —
+    are listed. The full twelve-month grid, including the quiet months, is the
+    IRPF report's job; here a zero row would be one nobody can act on and one
+    that reads like an unpaid one.
+    """
+    _user, tid = tenant
+    year = year or date.today().year
+    payments = {(p.apuracao, p.classe): p for p in await _darf_payments(session, tid, year)}
+    today = date.today()
+
+    meses = []
+    for r in await _run_apuracao(session, tid, year):
+        apuracao = datetime.date(year, r["month"], 1)
+        pago = payments.get((apuracao, r["classe"]))
+        ir = round(r["ir"], 2)
+        if ir <= 0 and pago is None:
+            continue
+        vencimento = _darf_vencimento(apuracao)
+        meses.append({
+            "apuracao": apuracao.strftime("%Y-%m"),
+            "classe": r["classe"],
+            "codigo": DARF_CODIGO,
+            "gross": r["gross"],
+            "pnl": r["pnl"],
+            "compensacao": r["compensacao"],
+            "base": r["base"],
+            "aliquota": r["aliquota"],
+            "ir_devido": ir,
+            "vencimento": vencimento.isoformat(),
+            "pagamento": _payment_dict(pago),
+            # "atrasado" is the alert: computed tax, past its due date, and
+            # nothing recorded against it.
+            "status": "pago" if pago else ("atrasado" if today > vencimento else "pendente"),
+        })
+    meses.sort(key=lambda m: (m["apuracao"], m["classe"]))
+
+    return {
+        "year": year,
+        "codigo": DARF_CODIGO,
+        "meses": meses,
+        "total_devido": round(sum(m["ir_devido"] for m in meses), 2),
+        "total_pago": round(sum(m["pagamento"]["valor_principal"]
+                                for m in meses if m["pagamento"]), 2),
+        "atrasados": sum(1 for m in meses if m["status"] == "atrasado"),
+    }
+
+
+class DarfPaymentIn(BaseModel):
+    apuracao: str  # "AAAA-MM"
+    classe: str
+    valor_principal: float
+    data_pagamento: datetime.date | None = None
+    obs: str | None = None
+
+
+@irpf_router.put("/darf")
+async def put_darf_payments(
+    body: list[DarfPaymentIn],
+    year: int | None = Query(None, ge=2000, le=2100),
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> list[dict]:
+    """Replace the year's recorded DARFs atomically — the same shape as the
+    portfolio settings PUTs.
+
+    ponytail: delete-and-reinsert, not per-row CRUD. A year holds a handful of
+    rows, nothing references their ids, and the scoping is what keeps one year's
+    edit from touching another's.
+    """
+    _user, tid = tenant
+    year = year or date.today().year
+
+    seen: dict[tuple[datetime.date, str], DarfPaymentIn] = {}
+    for p in body:
+        try:
+            apuracao = datetime.datetime.strptime(p.apuracao, "%Y-%m").date()
+        except ValueError:
+            raise HTTPException(422, f"apuração inválida: {p.apuracao!r} (esperado AAAA-MM)")
+        if apuracao.year != year:
+            raise HTTPException(422, f"apuração {p.apuracao} fora do ano {year}")
+        classe = p.classe.strip().upper()
+        if classe not in DARF_CLASSES:
+            raise HTTPException(422, f"classe desconhecida: {p.classe!r}")
+        if p.valor_principal < 0:
+            raise HTTPException(422, f"valor negativo em {p.apuracao} {classe}")
+        if (apuracao, classe) in seen:
+            raise HTTPException(422, f"apuração {p.apuracao} {classe} repetida")
+        seen[(apuracao, classe)] = p
+
+    await session.execute(delete(DarfPayment).where(
+        DarfPayment.tenant_id == tid,
+        DarfPayment.apuracao >= datetime.date(year, 1, 1),
+        DarfPayment.apuracao <= datetime.date(year, 12, 1),
+    ))
+    for (apuracao, classe), p in sorted(seen.items()):
+        session.add(DarfPayment(
+            tenant_id=tid, apuracao=apuracao, classe=classe,
+            valor_principal=round(p.valor_principal, 2),
+            data_pagamento=p.data_pagamento,
+            obs=(p.obs or "").strip() or None,
+        ))
+    await session.commit()
+    return [_payment_dict(r) for r in await _darf_payments(session, tid, year)]
 
 
 # ── Tax-loss harvesting ───────────────────────────────────────────────────────

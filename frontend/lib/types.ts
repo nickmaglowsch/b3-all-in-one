@@ -367,3 +367,48 @@ export interface RendaFixaTerm {
   indexer: "cdi_pct" | "cdi_plus" | "ipca_plus" | "pre";
   rate_pct: number;
 }
+
+/** One DARF the user says they paid. The only stored half of the ledger. */
+export interface DarfPaymentRecord {
+  id: number;
+  /** "AAAA-MM" — the apuração month, not the payment month. */
+  apuracao: string;
+  classe: DarfClasse;
+  valor_principal: number;
+  data_pagamento: string | null;
+  obs: string | null;
+}
+
+/** The three lines the Renda Variável ficha apurates separately. */
+export type DarfClasse = "AÇÃO" | "FII" | "BDR_ETF";
+
+/**
+ * A month's apuração joined to whatever payment was recorded against it. Every
+ * figure but `pagamento` is recomputed from the trade history on each read — the
+ * same numbers the IRPF report's monthly tables show.
+ */
+export interface DarfMonth {
+  apuracao: string;
+  classe: DarfClasse;
+  codigo: string;
+  gross: number;
+  pnl: number;
+  compensacao: number;
+  base: number;
+  aliquota: number;
+  ir_devido: number;
+  /** Último dia útil do mês seguinte. */
+  vencimento: string;
+  pagamento: DarfPaymentRecord | null;
+  /** `atrasado` is the alert: tax due, past the deadline, nothing recorded. */
+  status: "pago" | "pendente" | "atrasado";
+}
+
+export interface DarfLedger {
+  year: number;
+  codigo: string;
+  meses: DarfMonth[];
+  total_devido: number;
+  total_pago: number;
+  atrasados: number;
+}

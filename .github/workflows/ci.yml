@@ -5,6 +5,12 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # A weekly full build, to catch drift in the parts of the toolchain that are not
+  # pinned — the unpinned `mutmut>=3`, the ubuntu-latest image, the action versions.
+  # Nothing here is exclusive to the schedule; every job also runs on a PR.
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
 
 jobs:
   platform-tests:
@@ -44,10 +50,20 @@ jobs:
           uv pip install --python .venv -r requirements-bench.txt
 
       - name: Test
-        run: cd platform && uv run --frozen pytest -q
+        # COVERAGE_CORE=sysmon: PEP 669 monitoring instead of sys.settrace. The suite
+        # has wall-clock assertions on event-loop responsiveness, and the trace hook
+        # taxed an upload from ~170ms to 424ms — past the 250ms bound, a red build with
+        # nothing wrong. Python is pinned to 3.12 here, so sysmon is always available.
+        env:
+          COVERAGE_CORE: sysmon
+        run: cd platform && uv run --frozen pytest -q --cov=platform_app --cov-fail-under=75
         # Tests marked `market` need a loaded B3 price plane; the b3 DB here is
         # empty, so conftest skips them (scripts/docker_smoke.sh covers that path
         # locally). Everything else runs.
+        #
+        # --cov-fail-under is a floor, not the goal. The goal is 100% (see the
+        # Quality gates section of the README); the floor is today's number so the
+        # number can only go up. Raise it whenever a PR clears it.
 
   engine-tests:
     name: Engine tests
@@ -59,7 +75,9 @@ jobs:
           python-version: "3.12"
       - run: pip install -r engine/requirements.txt
       # The Rust extension and Postgres-backed tests skip themselves when absent.
-      - run: cd engine && pytest -q
+      - run: >-
+          cd engine && pytest -q
+          --cov=b3_pipeline --cov=backtests --cov=scripts --cov-fail-under=60
 
   taxcore-tests:
     name: Taxcore tests
@@ -67,7 +85,101 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: cd taxcore && uv run --frozen pytest -q
+      - run: >-
+          cd taxcore && uv run --frozen pytest -q
+          --cov=scripts --cov=methodologies --cov-fail-under=20
+
+  quality-gates:
+    name: Structural quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv tool install ruff
+      # The frontend half of the complexity gate shells into eslint, which needs the
+      # deps installed. Without them the script prints SKIPPED and drops the frontend
+      # entries rather than reporting them clean — so this step is load-bearing.
+      - run: npm --prefix frontend ci
+      # Complexity (ruff C901 + eslint), module size and the dependency contracts, all
+      # ratcheted against scripts/quality_baseline.json — see the README.
+      - run: python scripts/quality_gates.py
+
+  mutation:
+    name: Mutation testing (taxcore apuração)
+    # Runs on every PR. It was originally schedule-only because mutation testing the
+    # 1100-line irpf_2026.py took minutes; against the extracted apuracao.py the whole
+    # job is ~20s (96 mutants, 12s of mutmut), so there is nothing left to justify
+    # letting a PR merge without it. Widen `source_paths` and re-measure this.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # Target and scope live in taxcore/pyproject.toml [tool.mutmut]: scripts/apuracao.py
+      # against the two apuração suites, 96 mutants in ~12s on a CI runner.
+      #
+      # No `|| true`. `mutmut run` exits 0 even with survivors (measured, at two
+      # different survivor counts), so the only thing it could mask is a genuine
+      # failure — a broken clean run, a timeout — which should fail the build.
+      - run: cd taxcore && uv run --with 'mutmut>=3' mutmut run
+      - run: cd taxcore && uv run --with 'mutmut>=3' mutmut results
+      # The gate itself, since `mutmut run` won't do it. 6 of the 96 survive and all 6
+      # are equivalent mutants: each flips a comparison in a way that only differs at
+      # `pnl == 0`, where both branches do the same arithmetic (`carry += -0.0`,
+      # `base = 0 - 0`), so no test can kill them. A seventh survivor is a real hole in
+      # the apuração suite. The README enumerates the six.
+      - name: Fail if a new mutant survives
+        run: |
+          cd taxcore
+          uv run --with 'mutmut>=3' mutmut export-cicd-stats
+          cat mutants/mutmut-cicd-stats.json
+          # `.survived <= 6` is the finding; everything else guards the same failure —
+          # the gate reporting green having tested less than it claims.
+          #
+          #   - type checks: `mutmut>=3` is unpinned, and bare `.survived <= 6` passes
+          #     when the key is absent (jq: `null <= 6` is true).
+          #   - `total >= 96`: a *falling* mutant count on this module needs a human,
+          #     whatever the cause. One `# pragma: no mutate` on the isento line deletes
+          #     6 mutants of the R$20k boundary; measured, every other clause here
+          #     including the sum identity stays green, because the books still balance.
+          #     Raise this floor when apuracao.py legitimately grows.
+          #   - `no_tests == 0`: a mutant no test even executes. An uncovered branch in
+          #     monthly_apuracao lands here, not in `survived`.
+          #   - `suspicious`/`segfault`/`skipped`/`check_was_interrupted_by_user`: fate
+          #     unknown, same as untested. `skipped` is unreachable today — mutmut has a
+          #     TODO to route `pragma: no mutate` into it, and this is unpinned.
+          #   - the sum identity: `Stat` has 11 fields and export writes 9, but `total`
+          #     sums all 11 — so two buckets (`not_checked`, `caught_by_type_check`) are
+          #     counted in a key we never see. No `X == 0` clause can cover a key that
+          #     isn't in the file; only the arithmetic can.
+          #
+          # Deliberately NOT `timeout == 0`: a timeout usually means the mutant hung,
+          # i.e. the suite would have killed it, and it is the one bucket a slow runner
+          # can move things into. Gating on it would trade a real hole for a flake.
+          jq -e '(.survived|type) == "number" and (.total|type) == "number"
+                 and .total >= 96 and .survived <= 6
+                 and .no_tests == 0 and .suspicious == 0 and .segfault == 0
+                 and .skipped == 0 and .check_was_interrupted_by_user == 0
+                 and (.killed + .survived + .timeout) == .total' \
+             mutants/mutmut-cicd-stats.json >/dev/null || {
+            echo "::error::mutation gate failed. Either the apuração suite got weaker" \
+                 "(more than 6 survivors, or a mutant no test executes) or fewer than" \
+                 "96 mutants were generated. If you deliberately removed code from" \
+                 "scripts/apuracao.py, that second one is expected: lower the 96 here" \
+                 "and in README.md, the same way you would re-record any other" \
+                 "baseline. The per-mutant list is in the step above."
+            exit 1
+          }
+          jq -e '.survived < 6' mutants/mutmut-cicd-stats.json >/dev/null \
+            && echo "::notice::fewer than 6 survivors — lower the bound here and in the README" \
+            || true
 
   frontend:
     name: Frontend build
@@ -84,9 +196,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: cd frontend && npm ci
       - run: cd frontend && npm test
+      # Green as of this commit. The `complexity` rule is a warning, not an error —
+      # its 18 pre-existing offenders are ratcheted by scripts/quality_gates.py
+      # instead, which is what fails a PR that adds a nineteenth.
+      - run: cd frontend && npm run lint
       # Type-checks, and with `output: "export"` also proves every route is
-      # still prerenderable. `npm run lint` is NOT wired in: it has pre-existing
-      # react-hooks errors, so it would land red — fix those first, then add it.
+      # still prerenderable.
       - run: cd frontend && npm run build
 
   compose-config:

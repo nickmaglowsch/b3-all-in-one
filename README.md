@@ -196,3 +196,107 @@ email, and a **sair** (logout) action. Google OAuth comes later.
 `scripts/dev_seed.sh` is idempotent (imports full-replace the portfolio) and prints a
 backtest summary at the end. `npm --prefix frontend run build` runs a clean production
 build.
+
+## Quality gates
+
+The suites are the contract, not the review. Eight checks run in CI
+(`.github/workflows/ci.yml`) — the six gates, plus the unit suites and the lint they
+sit on:
+
+| Gate | What runs | Where the threshold lives |
+| --- | --- | --- |
+| Unit tests | `pytest` per package, `node --test` for the frontend | — |
+| Lint | `npm run lint` (eslint, green) | `frontend/eslint.config.mjs` |
+| Gherkin specs | `taxcore/tests/features/*.feature` via pytest-bdd | the feature files |
+| Coverage floor | `pytest --cov-fail-under` | `ci.yml`: platform 75, engine 60, taxcore 20 |
+| Cyclomatic complexity | ruff `C901` (Python) + eslint `complexity` (TS), max 10 | `scripts/quality_gates.py` + baseline |
+| Module size | max 400 lines (`.py`, `.ts`, `.tsx`) | `scripts/quality_gates.py` + baseline |
+| Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
+| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, max 6 survivors | `ci.yml` |
+
+**The two structural gates are ratchets, not walls.** The repo has 63 functions over
+complexity 10 (45 Python, 18 TSX) and 28 modules over 400 lines today;
+`scripts/quality_baseline.json` records every one. A PR fails if a baselined offender
+gets worse or a new one appears — never for the debt that was already there. After a
+genuine improvement:
+
+```
+npm --prefix frontend ci                   # once; eslint is half the complexity gate
+python scripts/quality_gates.py            # check, as CI does
+python scripts/quality_gates.py --update   # re-record; the baseline only goes down
+```
+
+Without `frontend/node_modules` the script prints `SKIPPED` for the frontend half and
+drops those entries from the comparison rather than reporting them clean; `--update`
+refuses outright, so a partial run can never quietly erase them from the baseline.
+
+**Coverage is 80 / 62 / 22% (platform / engine / taxcore), not 100.** The floors are
+below today's numbers so they can only rise; raise them in `ci.yml` whenever a PR
+clears one. The taxcore number is the honest one to fix first — most of
+`taxcore/scripts` is CLI entrypoints with no test at all.
+
+Platform is measured with `COVERAGE_CORE=sysmon` (PEP 669). That is not cosmetic: the
+default `sys.settrace` backend taxed an upload handler from ~170ms to 424ms and broke
+the suite's wall-clock assertions on event-loop responsiveness. It also reads ~8pp
+higher, because it sees lines executed in `asyncio.to_thread` workers that the trace
+hook misses — which is why that floor moved 70 → 75.
+
+**The Gherkin specs are in Portuguese on purpose.** They cover the apuração rules
+(isenção de R$ 20.000, alíquotas, compensação de prejuízo) — the part of this repo a
+contador has to be able to check without reading Python. `tests/test_apuracao.py` is
+the fine-grained unit suite; the feature file is the readable contract on top of it.
+
+**Mutation testing is scoped, and it is a real gate on every PR.** Target:
+`taxcore/scripts/apuracao.py`, the isenção / alíquota / compensação rules, against the
+two apuração suites — 96 mutants, **90 killed and 6 surviving**. The whole job is ~20s
+in CI (12s of that mutating); it is on the PR path because it is that cheap, not
+despite it.
+
+The gate earned its place on the first run: it found that nothing covered two
+consecutive loss months in one bucket, so `carry += -pnl` could become `carry = -pnl`
+undetected. On the reviewer's example that under-reports the accumulated loss by
+R$ 5.000 and over-collects R$ 750 of IR. Also unlabelled: sub-R$1 gains (`pnl > 0` vs
+`pnl > 1`) and break-even months. Those tests are now in `tests/test_apuracao.py`.
+
+The 6 that remain are all **equivalent mutants** — each flips a comparison in a way
+that only differs at `pnl == 0`, where the two branches do the same arithmetic
+(`carry += -0.0` and `base = 0 - 0` are both no-ops):
+
+```
+41 `pnl > 0`→`pnl >= 0`   44 `pnl < 0`→`pnl <= 0`   45 `pnl < 0`→`pnl < 1`
+49 `pnl > 0`→`pnl >= 0`   61 `pnl < 0`→`pnl <= 0`   62 `pnl < 0`→`pnl < 1`
+```
+
+No test can kill them, so 6 is the bound the job enforces: it reads
+`mutmut export-cicd-stats` and fails at 7. A seventh survivor is a real hole in the
+apuração suite. If `monthly_apuracao` changes, re-check the equivalence argument above
+rather than just raising the bound.
+
+The other clauses all guard one failure — the gate going green having tested less than
+it claims — because `survived` alone is easy to hold at 6 while the work disappears:
+
+- **`no_tests == 0`** — a mutant no test even *executes*. Those are not survivors, so
+  an uncovered new branch in `monthly_apuracao` would otherwise sail through.
+- **`total >= 96`** — a *falling* mutant count needs a human, whatever the cause. One
+  `# pragma: no mutate` on the `isento` line deletes 6 mutants of the R$20.000
+  boundary; measured, every other clause stays green. Raise the floor when
+  `apuracao.py` legitimately grows.
+- **`killed + survived + timeout == total`** — `mutmut`'s `Stat` has 11 fields and the
+  exported JSON writes 9, while `total` sums all 11. Two buckets are therefore counted
+  in a key you never see, and no `X == 0` clause can cover a key that isn't in the
+  file. Only the arithmetic can.
+- **`suspicious`, `segfault`, `skipped`, `check_was_interrupted_by_user`** — fate
+  unknown, which is the same as untested.
+
+`timeout` is deliberately *not* gated: a timeout usually means the mutant hung, so the
+suite would have killed it, and it is the one bucket a slow runner can move things into
+— gating it would trade a real hole for a flake.
+
+`mutmut run` itself exits 0 with survivors, so it cannot be the gate — that is why the
+count is checked explicitly instead of relying on the exit code.
+
+Those rules live in their own module *because* of this gate: mutmut writes every
+mutant of a module into one file, and pointed at the 1100-line `irpf_2026.py` it
+produced a 42 MB, 745k-line module that never finished importing. Keep the target
+small. Widen `source_paths` in `taxcore/pyproject.toml` one small module at a time,
+not by pointing it at a directory.

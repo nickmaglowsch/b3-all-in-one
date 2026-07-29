@@ -39,6 +39,7 @@ from pathlib import Path
 import pandas as pd
 
 from scripts._common import price_lookup as latest_prices
+from scripts.apuracao import ISENCAO_LIMIT  # one copy of the R$20k rule
 from scripts.irpf_2026 import asset_class, build_timeline
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,7 +47,6 @@ DATA = ROOT / "data"
 POSITIONS = DATA / "positions.csv"
 REPORTS = ROOT / "reports"
 
-ISENCAO_LIMIT = 20_000.0
 ACOES_RATE = 0.15
 FII_RATE = 0.20
 

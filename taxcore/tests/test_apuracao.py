@@ -154,3 +154,68 @@ def test_a_month_with_activity_is_marked_active_even_when_it_owes_nothing():
     assert pick(rows, "FII", 2)["ativo"] is True
     assert pick(rows, "FII", 2)["ir"] == 0.0
     assert pick(rows, "FII", 1)["ativo"] is False
+
+
+def test_a_break_even_month_still_counts_as_activity():
+    """Sold, netted exactly zero. `ativo` is `gross or pnl`, not `gross and pnl`:
+    a break-even sale is a real month that prints real numbers, and the mutation
+    suite reaches this line only through a month where one of the two is zero."""
+    rows = monthly_apuracao(grid(**{"4": {"AÇÃO": (8_000, 0)}}))
+    assert pick(rows, "AÇÃO", 4)["ativo"] is True
+    assert pick(rows, "AÇÃO", 4)["ir"] == 0.0
+
+
+def test_consecutive_isento_losses_accumulate_instead_of_replacing():
+    """Two losing isento months in a row: the carry is their *sum*.
+
+    `carry += -pnl`, not `carry = -pnl`. Assignment survives every other test in
+    this file, because none of them has two consecutive losses in one bucket — and
+    it would under-report the accumulated loss, over-collecting IR in the first
+    taxable month that follows."""
+    rows = monthly_apuracao(grid(**{
+        "1": {"AÇÃO": (5_000, -5_000)},     # isento, feeds the carry
+        "2": {"AÇÃO": (5_000, -3_000)},     # isento, feeds it again
+        "3": {"AÇÃO": (50_000, 10_000)},    # taxable, spends it
+    }))
+    assert pick(rows, "AÇÃO", 1)["carry"] == pytest.approx(5_000.0)
+    assert pick(rows, "AÇÃO", 2)["carry"] == pytest.approx(8_000.0)
+    mar = pick(rows, "AÇÃO", 3)
+    assert mar["compensacao"] == pytest.approx(8_000.0)
+    assert mar["base"] == pytest.approx(2_000.0)
+    # 8.000 of carry, not 3.000: the difference is R$ 750 of IR.
+    assert mar["ir"] == pytest.approx(300.0)
+
+
+def test_consecutive_taxable_losses_accumulate_instead_of_replacing():
+    """The same, down the non-isento branch — FIIs never have isenção, so their
+    losses reach the carry through the other `carry += -pnl` in the function."""
+    rows = monthly_apuracao(grid(**{
+        "1": {"FII": (10_000, -5_000)},
+        "2": {"FII": (10_000, -3_000)},
+        "3": {"FII": (10_000, 10_000)},
+    }))
+    assert pick(rows, "FII", 2)["carry"] == pytest.approx(8_000.0)
+    mar = pick(rows, "FII", 3)
+    assert mar["compensacao"] == pytest.approx(8_000.0)
+    assert mar["ir"] == pytest.approx(400.0)   # 20% of 2.000
+
+
+def test_a_gain_of_centavos_is_still_a_gain():
+    """The thresholds are `pnl > 0`, not `pnl > 1`: fifty centavos of profit is a
+    taxable gain in a taxable month and an isento gain in an isento one. Every other
+    test here uses round thousands, which cannot tell the two apart.
+
+    Also the only place that asserts `pnl` is carried through to the row at all —
+    the render loops and the DARF ledger both read that key by name."""
+    rows = monthly_apuracao(grid(**{
+        "5": {"AÇÃO": (8_000, 0.50)},        # isento: gain below the R$20k limit
+        "6": {"AÇÃO": (50_000, 0.50)},       # taxable: same gain, over the limit
+    }))
+    mai = pick(rows, "AÇÃO", 5)
+    assert mai["pnl"] == pytest.approx(0.50)
+    assert mai["ganho_isento"] == pytest.approx(0.50)
+    assert mai["ir"] == 0.0
+    jun = pick(rows, "AÇÃO", 6)
+    assert jun["pnl"] == pytest.approx(0.50)
+    assert jun["base"] == pytest.approx(0.50)
+    assert jun["ir"] == pytest.approx(0.075)

@@ -23,12 +23,43 @@ build-backend = "setuptools.build_meta"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-bdd>=8.1.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
+# mutmut copies the whole tree into ./mutants, tests included. Left collectable, its
+# duplicate test basenames shadow the real ones on sys.path and every module that does
+# `from test_renda_fixa import ...` breaks. The rest of the list restates the pytest
+# defaults this repo can actually hit — setting norecursedirs replaces them wholesale.
+norecursedirs = ["mutants", "*.egg", ".*", "build", "dist", "node_modules", "venv"]
 markers = [
     "golden: golden-file regression tests over the real B3 fixtures (minutes, offline)",
 ]
 filterwarnings = [
     "ignore::UserWarning:openpyxl.styles.stylesheet",
+    # pytest-bdd 8.1 still calls the pre-8.4 fixture-registration API.
+    "ignore:Passing (nodeid|baseid).*:pytest.PytestRemovedIn10Warning",
 ]
+
+# Mutation testing — does the suite actually *catch* a wrong number, or only run it?
+#
+# mutmut 3, not 2: mutmut 2 mutates the real file in place with a .bak beside it, so
+# an interrupted run leaves a live mutant in the working tree (it did, once, while this
+# was being set up). mutmut 3 copies the tree into ./mutants and never touches the
+# source. mutmut 2 is also broken on Python 3.13, which is what uv resolves here — its
+# pony-ORM result cache raises on `Mutant.select()`.
+#
+# `source_paths` is scripts/apuracao.py and not the 1100-line report script on purpose:
+# mutmut writes every mutant of a module into one file, and irpf_2026.py produced a
+# 42 MB, 745k-line module that never finished importing. See scripts/apuracao.py.
+[tool.mutmut]
+source_paths = ["scripts/apuracao.py"]
+# Only the suites that exercise the apuração. mutmut re-runs the selection once per
+# mutant, so this selection is what keeps the whole job at ~12s and lets it gate every
+# PR; pulling in the golden fixtures (minutes each) would multiply that by 96.
+pytest_add_cli_args_test_selection = [
+    "tests/test_apuracao.py",
+    "tests/test_apuracao_bdd.py",
+]
+also_copy = ["tests/features/"]

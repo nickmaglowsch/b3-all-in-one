@@ -52,21 +52,6 @@ def _make_ipe_zip(year: int = 2008) -> io.BytesIO:
     return buf
 
 
-def _make_cad_stringio() -> io.StringIO:
-    rows = [{
-        "CNPJ_CIA": "00.000.000/0001-91",
-        "DENOM_SOCIAL": "BANCO DO BRASIL SA",
-        "CD_CVM": "001023",
-        "DT_REG": "1994-04-22",
-        "DT_CANCEL": "",
-        "SIT": "ATIVO",
-    }]
-    buf = io.StringIO()
-    pd.DataFrame(rows).to_csv(buf, sep=";", index=False)
-    buf.seek(0)
-    return buf
-
-
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 def test_run_pipeline_without_historical_skips_ipe_steps():

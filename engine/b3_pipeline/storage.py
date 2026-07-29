@@ -673,15 +673,6 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             cursor.execute(f"ALTER TABLE fundamentals_pit ADD COLUMN {col} REAL")
 
 
-def _prepare_date(val) -> Optional[str]:
-    """Convert date to standard string format."""
-    if pd.isna(val):
-        return None
-    if isinstance(val, (date, datetime)):
-        return val.strftime("%Y-%m-%d")
-    return str(val)[:10]
-
-
 def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     """Upsert price records into the database."""
     if df.empty:

@@ -13,6 +13,7 @@ import pytest
 
 from b3_pipeline import storage
 from b3_pipeline import cvm_storage
+from tests.conftest import seed_cvm_company
 
 
 @pytest.fixture
@@ -60,7 +61,7 @@ def test_init_db_creates_new_tables(mem_conn):
 
 def test_init_db_rebuild_drops_and_recreates(mem_conn):
     """rebuild=True should drop all data but leave tables intact."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="12345678000100", ticker="TEST",
         company_name="Test Co", cvm_code="999", b3_trading_name="TEST"
     )
@@ -80,18 +81,18 @@ def test_init_db_rebuild_drops_and_recreates(mem_conn):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3. upsert_cvm_company — insert and update
+# 3. cvm_companies.cnpj is unique — a second write updates the row
 # ──────────────────────────────────────────────────────────────────────────────
 
-def test_upsert_cvm_company_insert_and_update(mem_conn):
-    """upsert_cvm_company() should update on conflict, not duplicate."""
+def test_cnpj_is_unique_so_a_second_write_updates_in_place(mem_conn):
+    """The schema, not the writer: ON CONFLICT(cnpj) needs cnpj to be UNIQUE."""
     cnpj = "33000167000101"
 
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj=cnpj, ticker="PETR",
         company_name="Petrobras", cvm_code="9512", b3_trading_name="PETROBRAS"
     )
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj=cnpj, ticker="PETR4",  # updated ticker
         company_name="Petrobras S.A.", cvm_code="9512", b3_trading_name="PETROBRAS"
     )
@@ -196,11 +197,11 @@ def test_get_summary_stats_includes_fundamentals_keys(mem_conn):
 
 def test_get_cvm_company_map_returns_dict(mem_conn):
     """get_cvm_company_map() should return {cnpj: ticker} for all mapped rows."""
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="12345", ticker="PETR",
         company_name="Petrobras", cvm_code="1", b3_trading_name="PETROBRAS"
     )
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="67890", ticker="VALE",
         company_name="Vale", cvm_code="2", b3_trading_name="VALE"
     )
@@ -264,7 +265,7 @@ def test_upsert_cad_company_dates_inserts_new_row(mem_conn):
 def test_upsert_cad_company_dates_does_not_overwrite_ticker(mem_conn):
     """upsert_cad_company_dates() must NOT overwrite an existing ticker."""
     # Insert company with ticker via the regular upsert
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn, cnpj="12345678000100", ticker="PETR",
         company_name="Petrobras", cvm_code="9512", b3_trading_name="PETROBRAS"
     )

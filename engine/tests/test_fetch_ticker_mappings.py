@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from b3_pipeline import storage, cvm_storage
+from tests.conftest import seed_cvm_company
 
 
 @pytest.fixture
@@ -57,7 +58,7 @@ def test_fetch_ticker_mappings_populates_ticker(mem_conn):
     mem_conn.commit()
 
     # Seed cvm_companies with matching cvm_code but no ticker
-    cvm_storage.upsert_cvm_company(
+    seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",
         ticker=None,

@@ -19,7 +19,6 @@ from backtests.strategies.sp500_b3 import (
     build_index_series,
     compute_weights,
     pit_snapshot,
-    quarter_end_rebalance_dates,
     select_constituents,
     share_multiplier,
 )
@@ -241,15 +240,6 @@ class TestDelisting:
         assert level.loc[d2] == pytest.approx(1.005)       # value conserved at delist
         assert level.loc[dates[3]] == pytest.approx(0.6655 * (1 + 0.4 / 0.605))
         assert level.loc[d4] == pytest.approx(0.6655 * 1.1 * (1 + 0.4 / 0.605))
-
-
-# ── rebalance calendar ────────────────────────────────────────────────────────
-
-def test_quarter_end_rebalance_dates_last_trading_day_of_quarter():
-    # Business days Jan–mid-Jul 2021: only Mar and Jun quarter-ends qualify.
-    days = pd.date_range("2021-01-04", "2021-07-15", freq="B")
-    qe = quarter_end_rebalance_dates(days)
-    assert list(qe) == [pd.Timestamp("2021-03-31"), pd.Timestamp("2021-06-30")]
 
 
 # ── UI plugin weight timing (regression: one-quarter execution lag) ──────────

@@ -31,18 +31,6 @@ def _clean_cnpj(raw: str) -> Optional[str]:
     return digits if len(digits) == 14 else None
 
 
-def extract_cnpj_from_company_data(company_data: dict) -> Optional[str]:
-    """Safely extract and clean the CNPJ from a B3 company API response dict."""
-    raw = company_data.get("cnpj", None)
-    return _clean_cnpj(raw)
-
-
-def build_cnpj_ticker_map(conn) -> dict:
-    """Query cvm_companies and return {cnpj_14digits: ticker_root} mapping."""
-    from . import cvm_storage as _cvm_storage
-    return _cvm_storage.get_cvm_company_map(conn)
-
-
 def _encode_payload(payload: dict) -> str:
     """Encode a dictionary as base64 string for B3 API."""
     json_str = json.dumps(payload, separators=(",", ":"))
@@ -72,68 +60,6 @@ def _parse_b3_float(value_str) -> float:
         return float(normalized)
     except (ValueError, AttributeError):
         return 0.0
-
-
-def _isin_to_ticker_suffix(isin_code: str) -> Tuple[str, str]:
-    """
-    Extract company code and share type from ISIN.
-
-    ISIN format: BR + 4-char company code + share type + check digit
-    Example: BRPETRACNOR9 -> ('PETR', 'ON')
-             BRPETRACNPR6 -> ('PETR', 'PN')
-
-    Returns:
-        Tuple of (company_code, share_type)
-    """
-    if len(isin_code) < 8:
-        return "", ""
-
-    company_code = isin_code[2:6]
-
-    if "OR" in isin_code[6:11]:
-        share_type = "ON"
-    elif "PR" in isin_code[6:11]:
-        share_type = "PN"
-    else:
-        share_type = "ON"
-
-    return company_code, share_type
-
-
-def _map_isin_to_ticker(isin_code: str, available_tickers: List[str]) -> Optional[str]:
-    """
-    Map an ISIN code to a ticker symbol.
-
-    Args:
-        isin_code: ISIN code (e.g., 'BRPETRACNOR9')
-        available_tickers: List of tickers available in our database
-
-    Returns:
-        Matching ticker or None
-    """
-    company_code, share_type = _isin_to_ticker_suffix(isin_code)
-
-    if not company_code:
-        return None
-
-    matching = [t for t in available_tickers if t.startswith(company_code)]
-
-    if not matching:
-        return None
-
-    if share_type == "ON":
-        for t in matching:
-            if t.endswith("3"):
-                return t
-    elif share_type == "PN":
-        for t in matching:
-            if t.endswith("4") or t.endswith("5") or t.endswith("6"):
-                return t
-
-    if matching:
-        return matching[0]
-
-    return None
 
 
 def fetch_company_data(trading_name: str, conn=None) -> Optional[dict]:

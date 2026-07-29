@@ -11,60 +11,17 @@ Year range available: 2003-present
 """
 from __future__ import annotations
 
-import logging
-import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-import requests
-
-from . import config
-
-logger = logging.getLogger(__name__)
+from . import config, downloader
 
 
 def download_ipe_file(year: int, force: bool = False) -> Optional[Path]:
-    """Download an IPE document index ZIP file for the given year.
-
-    Skips download if the file already exists and force=False.
-    On failure, cleans up any partial file and returns None.
-    """
+    """Download the IPE document index ZIP for `year`, or return the cached copy."""
     filename = f"ipe_cia_aberta_{year}.zip"
-    filepath = config.CVM_DATA_DIR / filename
-    url = f"{config.CVM_IPE_BASE_URL}{filename}"
-
-    if filepath.exists() and not force:
-        logger.debug(f"IPE file already exists: {filepath}")
-        return filepath
-
-    logger.info(f"Downloading IPE file for {year}: {url}")
-
-    try:
-        resp = requests.get(url, headers=config.B3_HEADERS, timeout=300, stream=True)
-        resp.raise_for_status()
-
-        total_size = int(resp.headers.get("content-length", 0))
-        downloaded = 0
-
-        with open(filepath, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        pct = (downloaded / total_size) * 100
-                        if downloaded % (2 * 1024 * 1024) < 8192:
-                            logger.debug(
-                                f"Downloaded {downloaded:,}/{total_size:,} bytes ({pct:.1f}%)"
-                            )
-
-        logger.info(f"Downloaded IPE {year}: {filepath} ({downloaded:,} bytes)")
-        return filepath
-
-    except requests.RequestException as e:
-        logger.error(f"Failed to download IPE {year} from {url}: {e}")
-        if filepath.exists():
-            filepath.unlink()
-        return None
-
-
+    return downloader.download_file(
+        f"{config.CVM_IPE_BASE_URL}{filename}",
+        config.CVM_DATA_DIR / filename,
+        force=force,
+    )

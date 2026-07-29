@@ -112,15 +112,17 @@ def _read_curve(path: Path) -> list[dict]:
 def _run_whatif(
     strategy: str, config: dict, tid, extra_env: dict | None = None
 ) -> dict:
-    """Run scripts/whatif_run.py in the engine venv (mirrors enginerun's subprocess
-    pattern; reuses its interpreter + env resolution) and return {summary, curve}.
+    """Run scripts/run_backtest_json.py in the engine venv (mirrors enginerun's
+    subprocess pattern; reuses its interpreter + env resolution) and return
+    {summary, curve}. The `flows` key in `config` is what makes it a replay rather
+    than a plain backtest — same script, same artifact contract.
     Artifacts land in a scratch dir we read then delete — under the tenant's own
     uploads dir so a skipped `finally` leaves nothing erasure can't reach (see
     b3run.workspace_root). Blocking — call via to_thread."""
     out = Path(tempfile.mkdtemp(prefix="b3whatif-", dir=b3run.workspace_root(tid)))
     try:
         proc = enginerun.run_script(
-            "whatif_run.py", [strategy, str(out), json.dumps(config)], extra_env)
+            "run_backtest_json.py", [strategy, str(out), json.dumps(config)], extra_env)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
         return {"summary": enginerun._last_json(proc.stdout),

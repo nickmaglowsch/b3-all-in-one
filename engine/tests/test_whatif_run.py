@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from backtests.core.simulation import run_simulation
-from scripts.whatif_run import _build_flows
+from scripts.run_backtest_json import _build_flows, _capital_and_flows
 
 IDX = pd.date_range("2020-01-31", periods=5, freq="ME")
 COLS = ["A", "B"]
@@ -59,6 +59,36 @@ def test_build_flows_sums_same_date_and_sorts():
                       {"date": "2020-01-15", "amount": 2.0}])
     assert list(s.index) == [pd.Timestamp("2020-01-15"), pd.Timestamp("2020-03-01")]
     assert s.loc[pd.Timestamp("2020-01-15")] == pytest.approx(12.0)
+
+
+# ── The one branch that separates a replay from a plain backtest ──────────────
+
+def test_replay_config_zeroes_the_lump_sum_and_opens_at_the_first_flow():
+    cfg = {"flows": [{"date": "2021-03-04", "amount": 700.0},
+                     {"date": "2020-06-01", "amount": 300.0}]}
+    start, capital, contribution = _capital_and_flows(
+        cfg, {"start_date": "2005-01-01", "initial_capital": 100_000.0})
+    assert start == "2020-06-01"        # the tenant's first trade, not the default
+    assert capital == 0.0               # every cruzeiro comes from the flows
+    assert contribution.sum() == pytest.approx(1_000.0)
+
+
+def test_plain_backtest_config_keeps_the_strategy_defaults():
+    params = {"start_date": "2010-01-01", "initial_capital": 50_000.0,
+              "contribution": 250.0}
+    assert _capital_and_flows({}, params) == ("2010-01-01", 50_000.0, 250.0)
+
+
+def test_explicit_start_wins_over_the_first_flow():
+    cfg = {"flows": [{"date": "2020-06-01", "amount": 300.0}], "start": "2019-01-01"}
+    assert _capital_and_flows(cfg, {})[0] == "2019-01-01"
+
+
+def test_empty_flows_list_is_an_error_not_a_silent_lump_sum_backtest():
+    # A caller that asked for a replay and sent nothing must not get a
+    # 100k lump-sum backtest back under the same name.
+    with pytest.raises(SystemExit, match="non-empty 'flows'"):
+        _capital_and_flows({"flows": []}, {"initial_capital": 100_000.0})
 
 
 # ── Scalar path is unchanged by the widening ──────────────────────────────────

@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from backtests.core.data import (
-    load_b3_data, load_b3_hlc_data, download_benchmark, download_cdi_daily,
+    load_b3_hlc_data, download_benchmark, download_cdi_daily,
     load_all_fundamentals, load_all_fundamentals_monthly,
     compute_pe_ratio_dynamic, compute_pb_ratio_dynamic, compute_ev_ebitda_dynamic,
     load_sector_pit,

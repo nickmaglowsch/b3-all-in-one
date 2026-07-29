@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import sqlite3
 import logging
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from b3_pipeline import storage, cvm_storage
+from b3_pipeline import storage
 from tests.conftest import seed_cvm_company
 
 
@@ -185,7 +185,7 @@ def test_fetch_ticker_mappings_uses_cvm_code_not_cnpj(mem_conn):
     The new implementation must call update_ticker_by_cvm_code (via codeCVM),
     NOT upsert_cvm_company (the old CNPJ path that always got None).
     """
-    from b3_pipeline import cvm_main, cvm_storage as _cvm_storage
+    from b3_pipeline import cvm_main
 
     mem_conn.execute(
         "INSERT INTO prices (ticker, isin_code, date, close) VALUES ('PETR3', 'BRPETRACNOR9', '2024-01-02', 30.0)"

@@ -509,23 +509,6 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     return out.dropna(subset=["date", "ticker", "qty", "price"])
 
 
-# ---------------------------------------------------------------------------
-# Option-activity handling
-# ---------------------------------------------------------------------------
-# B3 option series codes are <UNDERLYING_ROOT(4)><SERIES_LETTER><STRIKE_TAG>,
-# with an optional trailing 'E' on exercise lines. e.g. B3SAW130E → root B3SA.
-# Underlying roots may include embedded digits (B3SA, M1TA), so the first 4
-# chars are letter + 3 alphanumeric.
-_OPT_SERIES_RE = re.compile(r"^([A-Z][A-Z0-9]{3})[A-Z]\d+E?$")
-
-
-def _option_underlying_root(code: str) -> str | None:
-    if not isinstance(code, str):
-        return None
-    m = _OPT_SERIES_RE.match(code.strip().upper())
-    return m.group(1) if m else None
-
-
 def _resolve_exercise_underlying(
     exercises: pd.DataFrame,
     mov_settlements: pd.DataFrame,

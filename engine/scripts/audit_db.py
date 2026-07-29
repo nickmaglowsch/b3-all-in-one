@@ -13,7 +13,7 @@ import argparse
 import os
 import sqlite3
 import sys
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 

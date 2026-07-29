@@ -6,7 +6,6 @@ before and after the Rust implementation is introduced.
 """
 import datetime
 import pandas as pd
-import pytest
 
 from b3_pipeline.adjustments import (
     compute_split_adjustment_factors,

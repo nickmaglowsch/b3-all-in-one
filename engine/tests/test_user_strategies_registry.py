@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from backtests.core.strategy_registry import StrategyRegistry
-from backtests.core.config_strategy import RankAndHold, FixedWeight
+from backtests.core.config_strategy import RankAndHold
 
 
 def _write(dir_, fname, spec):

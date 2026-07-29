@@ -5,14 +5,12 @@ All tests mock network calls and use in-memory DBs.
 """
 from __future__ import annotations
 
-import argparse
 import io
 import sqlite3
 import zipfile
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import patch
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import storage
 from b3_pipeline.cvm_main import run_fundamentals_pipeline
@@ -214,7 +212,6 @@ def test_run_pipeline_ipe_year_range_default():
 
 def test_include_historical_flag_in_cli():
     """argparse correctly parses --include-historical as True."""
-    from b3_pipeline.cvm_main import main
     import argparse
 
     # Re-build the arg_parser as in main() to test argument parsing
@@ -235,8 +232,6 @@ def test_include_historical_flag_in_cli():
 
 def test_run_pipeline_historical_upserts_filings(tmp_path):
     """With include_historical=True and a valid IPE ZIP, filings rows are processed."""
-    import tempfile
-    from pathlib import Path
 
     # Use a temp DB file
     db_path = tmp_path / "test.sqlite"

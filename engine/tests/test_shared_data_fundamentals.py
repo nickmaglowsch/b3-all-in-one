@@ -7,7 +7,6 @@ Network calls (download_cdi_daily, download_benchmark) are mocked.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd

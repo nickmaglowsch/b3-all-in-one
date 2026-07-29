@@ -3,7 +3,6 @@ Generic backtest simulation engine.
 """
 
 import math
-import numpy as np
 import pandas as pd
 from typing import Dict, Tuple
 

@@ -52,7 +52,6 @@ from backtests.core.strategy_base import (
 )
 from backtests.strategies.sp500_b3 import (
     DEFAULT_STALENESS_DAYS,
-    liquidity_median,
     load_stock_actions,
     select_constituents,
 )

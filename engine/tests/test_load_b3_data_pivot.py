@@ -8,7 +8,6 @@ import sqlite3
 from pathlib import Path
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import storage
 from backtests.core.data import load_b3_data

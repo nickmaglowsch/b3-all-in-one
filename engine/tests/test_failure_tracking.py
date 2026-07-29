@@ -8,7 +8,6 @@ These tests verify:
 4. resolve_fetch_failure marks an entry as resolved
 """
 import sqlite3
-import pytest
 
 from b3_pipeline import storage
 

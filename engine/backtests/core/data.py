@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import yfinance as yf
-from datetime import datetime
 
 from b3_pipeline import storage
 

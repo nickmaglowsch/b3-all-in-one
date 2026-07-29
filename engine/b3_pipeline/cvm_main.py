@@ -33,7 +33,7 @@ import logging
 import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 import numpy as np

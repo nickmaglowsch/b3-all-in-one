@@ -41,11 +41,9 @@ from backtests.core.strategy_base import (
     ParameterSpec,
     COMMON_START_DATE,
     COMMON_END_DATE,
-    COMMON_REBALANCE_FREQ,
 )
 from backtests.strategies.sp500_b3 import (
     DEFAULT_MIN_ADTV,
-    LIQUIDITY_WINDOW,
     compute_weights,
     liquidity_median,
     load_fundamentals_pit_raw,

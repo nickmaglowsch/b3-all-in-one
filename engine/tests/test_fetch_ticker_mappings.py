@@ -6,11 +6,11 @@ TDD: these tests are written BEFORE the implementation and should initially FAIL
 from __future__ import annotations
 
 import sqlite3
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from b3_pipeline import storage, cvm_storage
+from b3_pipeline import storage
 from tests.conftest import seed_cvm_company
 
 
@@ -258,7 +258,6 @@ def test_run_update_cnpj_map_delegates_to_fetch_ticker_mappings(mem_conn):
     rather than re-implementing the ticker-fetching logic itself.
     """
     from b3_pipeline import main as b3_main
-    from b3_pipeline import cvm_main
 
     # Seed prices so get_all_tickers returns something (otherwise the function
     # early-returns before reaching _fetch_ticker_mappings)

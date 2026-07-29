@@ -8,9 +8,9 @@ Fix something, run `--update`, and the baseline can never drift back up.
     python scripts/quality_gates.py            # check (CI)
     python scripts/quality_gates.py --update   # re-record after an improvement
 
-Complexity is Python-only (ruff's mccabe). Module size covers Python and the
-frontend's .ts/.tsx too. ponytail: no eslint complexity rule for the frontend —
-`npm run lint` isn't even green yet; wire it there once it is.
+Complexity comes from ruff's mccabe for Python and eslint's `complexity` rule for
+the frontend; module size covers .py and .ts/.tsx alike. The frontend half needs
+frontend/node_modules — see ts_complexity().
 """
 
 from __future__ import annotations

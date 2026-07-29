@@ -52,7 +52,7 @@ from backtests.core.strategy_base import (
 )
 from backtests.strategies.sp500_b3 import (
     DEFAULT_STALENESS_DAYS,
-    infer_volume_scale,
+    liquidity_median,
     load_stock_actions,
     select_constituents,
 )
@@ -283,8 +283,7 @@ class TwoLegValueStrategy(StrategyBase):
         fund = load_fundamentals_full(db_path)
         actions = load_stock_actions(db_path)
 
-        scale = infer_volume_scale(fin_vol)
-        avg_vol = fin_vol.fillna(0.0).rolling(LIQUIDITY_WINDOW).mean() * scale
+        avg_vol = fin_vol.fillna(0.0).rolling(LIQUIDITY_WINDOW).mean()
 
         holdings: dict[pd.Timestamp, pd.Series] = {}
         daily_idx = close_px.index

@@ -213,6 +213,10 @@ async function errorDetail(res: Response): Promise<unknown> {
 function errorMessage(detail: unknown, res: Response): string {
   if (typeof detail === "string") return detail;
   if (isPlanRequired(detail)) return "Recurso de um plano pago.";
+  // Structured errors carry their own pt-BR sentence (the backtest quota's 429,
+  // say). Preferred over the blob below, which puts JSON in front of a user.
+  if (detail && typeof detail === "object" && "message" in detail
+      && typeof detail.message === "string") return detail.message;
   if (detail) return JSON.stringify(detail);
   return res.statusText || `HTTP ${res.status}`;
 }

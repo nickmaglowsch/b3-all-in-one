@@ -382,24 +382,25 @@ def build_index_series(
     return pd.concat(parts)
 
 
-def infer_volume_scale(fin_vol: pd.DataFrame) -> float:
-    """Detect the fin_vol unit convention empirically.
+def liquidity_median(fin_vol: pd.DataFrame, window: int = LIQUIDITY_WINDOW) -> pd.DataFrame:
+    """Rolling median daily financial volume, in reais — what `min_adtv` screens.
 
-    core/data.py returns fin_vol = prices.volume / 100 (legacy convention from
-    the original parser that stored raw VOLTOT centavos). The CURRENT parser
-    (b3_pipeline/parser.py) already divides
-    VOLTOT by 100 when storing, so on a freshly rebuilt DB fin_vol comes back
-    understated 100x.
+    No unit sniffing. This used to be `infer_volume_scale`, which multiplied by
+    100 when the universe's busiest name traded under R$50M/day, guarding a
+    convention where core/data.py divided VOLTOT's implied decimals a second
+    time. The parser now does that division on write and core/data.py passes the
+    column through (see its "already in reais" note), so the sniffer had nothing
+    left to correct and one way to be wrong: a legitimately quiet universe — a
+    handful of small caps, a sector sleeve — reads as double-divided and has its
+    ADTV inflated 100x, which is exactly the screen it was there to protect.
 
-    ponytail: empirical calibration knob — the most liquid B3 stock trades well
-    over R$100M/day; if the max recent 63d-median is far below that, the data
-    was double-divided and we scale by 100. Upgrade path: fix the convention
-    in core/data.py once the pipeline settles.
+    A DB predating the parser fix now reads 100x low instead, so its names fail
+    `min_adtv` and the backtest comes back empty — loud, and fixed by a rebuild.
+
+    NaN is no trading, not a gap: a name that printed nothing that session
+    traded R$0, and dropping it would flatter an intermittently-traded ticker.
     """
-    if fin_vol is None or fin_vol.empty:
-        return 1.0
-    top = fin_vol.tail(LIQUIDITY_WINDOW).median().max()
-    return 100.0 if pd.notna(top) and top < 5e7 else 1.0
+    return fin_vol.fillna(0.0).rolling(window).median()
 
 
 # ── DB loaders (thin — all logic stays in the pure functions above) ──────────
@@ -566,8 +567,7 @@ class SP500B3Strategy(StrategyBase):
         fund = load_fundamentals_pit_raw(db_path)
         actions = load_stock_actions(db_path)
 
-        scale = infer_volume_scale(fin_vol)
-        med63 = fin_vol.fillna(0.0).rolling(LIQUIDITY_WINDOW).median() * scale
+        med63 = liquidity_median(fin_vol)
 
         ipca_index = pd.Series(dtype=float)
         if ipca_deflate:

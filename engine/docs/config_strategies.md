@@ -103,7 +103,12 @@ selection:
   sticky: false            # when < min_names qualify, hold the previous book
                            #   instead of going flat (volume_breakout).
 
-weighting: equal           # equal | market_cap  (market_cap uses ADTV as a size proxy)
+weighting: equal           # equal | adtv  (adtv = weight by liquidity, this
+                           #   engine's only size measure — it has no share
+                           #   counts. `market_cap` is a deprecated alias for
+                           #   `adtv`; the built-in sp500_b3/top_mcap strategies
+                           #   use that word for a real point-in-time cap, so
+                           #   prefer `adtv` here and keep the two apart.)
 
 regime: null               # optional macro overlay — see below
 ```

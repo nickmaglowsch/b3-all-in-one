@@ -1,9 +1,25 @@
 # SPEC: Productizing the B3 Pipeline into a SaaS Platform
 
-Status: **Design / not started.** This is a spec-driven roadmap for turning the
-current single-user research bench into a multi-tenant product. Nothing here is
-built yet. Each phase below is written to be picked up independently and lists
-its concrete files, interface contracts, and acceptance criteria.
+Status: **Historical — Phase 0 shipped, and the platform with it.** This was the
+roadmap for turning a single-user research bench into a multi-tenant product,
+written before any of it existed. It is kept for the reasoning, not the
+instructions: the segment analysis, the legal gates and the de-risking order
+below still hold, and the checkpoint list is still the order to spend in.
+
+**Do not follow Phase 0's file-level steps.** They describe a repo that no
+longer exists — `ui/`, `research/` and the root SQLite file are gone, and the
+work they specify is done:
+
+| Step | Where it landed |
+|---|---|
+| 0.1 parameterize the DB connection | `ENGINE_DATABASE_URL` selects the backend (`b3_pipeline/storage.py`) |
+| 0.2 Postgres backend + dialect shim | `b3_pipeline/storage.py` (`_PG_PREFIXES`, psycopg, `ON CONFLICT`) |
+| 0.3 scheduler | `platform_app/tasks.py` `@app.periodic` jobs on the procrastinate queue |
+| FastAPI + multi-tenancy + billing | `platform/` (RLS by `tenant_id`, Stripe ladder in `billing.py`) |
+| Next.js investor app | `frontend/` |
+
+The live architecture is `spec/01-architecture.md`; the current plan is
+`spec/04-roadmap.md`. When the two disagree with this file, this file is wrong.
 
 ---
 

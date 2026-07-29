@@ -216,8 +216,10 @@ export function PositionsTable({
           <span className="inline-flex flex-col items-end">
             <Money value={p.last_price} />
             {/* Renda fixa is marked from B3's monthly posição report, not from
-                the plane. Sitting in the same column as live closes, it has to
-                carry its own date or it reads as today's price. */}
+                the plane — accrued forward from it where the contract has terms,
+                left at the reported number where it does not. Sitting in the
+                same column as live closes, it has to carry the date it is for
+                or a month-old number reads as today's price. */}
             {p.price_date && (
               <span className="text-[11px] text-muted">
                 {formatDate(p.price_date)}

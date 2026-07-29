@@ -256,6 +256,28 @@ INDEX_EXTERNAL_PRICES_DATE = (
     "CREATE INDEX IF NOT EXISTS idx_external_prices_date ON external_prices(date);"
 )
 
+# Days a feed above owed and could not fetch. Separate from `fetch_failures`,
+# which keys on (company_code, endpoint) and holds B3 company-API 404s: that
+# table's rows are mostly permanent and expected, and mixing a "this company has
+# no listed page" with a "this session is about to fall off a 14-month window"
+# would bury the second in the first — they differ in urgency, in retry policy
+# and in what a non-empty count means. Two questions, two tables.
+#
+# Exempt from the rebuild drop for the same reason `external_prices` is: a
+# pending retry is a claim on rows that cannot be re-fetched once B3's window
+# passes, so dropping the ledger loses that data one step earlier than dropping
+# the prices would.
+SCHEMA_EXTERNAL_PRICE_FAILURES = """
+CREATE TABLE IF NOT EXISTS external_price_failures (
+    source TEXT NOT NULL,
+    date DATE NOT NULL,
+    error TEXT,
+    retry_count INTEGER DEFAULT 0,
+    failed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (source, date)
+);
+"""
+
 # ── CVM Fundamentals Tables ────────────────────────────────────────────────────
 
 SCHEMA_CVM_COMPANIES = """
@@ -492,6 +514,7 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
         DROP_INDEX_PRICES_TICKER,
         SCHEMA_EXTERNAL_PRICES,
         INDEX_EXTERNAL_PRICES_DATE,
+        SCHEMA_EXTERNAL_PRICE_FAILURES,
         SCHEMA_CVM_COMPANIES,
         SCHEMA_CVM_FILINGS,
         SCHEMA_FUNDAMENTALS_PIT,
@@ -832,6 +855,49 @@ def stored_external_dates(conn, start: date, source: str) -> set:
         "SELECT DISTINCT date FROM external_prices "
         "WHERE date >= ? AND source = ?",
         (start.isoformat(), source),
+    ).fetchall()
+    return {_as_date(r[0]) for r in rows if r and r[0]}
+
+
+def record_external_failure(conn, source: str, day: date, error: str) -> None:
+    """Remember that `source` owes `day`, so a later run can pay it.
+
+    Re-recording the same day bumps retry_count instead of duplicating: the count
+    is what distinguishes one bad night from a feed that has been broken for a
+    fortnight, and only the second is worth waking someone for.
+    """
+    execute(
+        conn,
+        """
+        INSERT INTO external_price_failures (source, date, error, retry_count)
+        VALUES (?, ?, ?, 0)
+        ON CONFLICT(source, date) DO UPDATE SET
+            error = excluded.error,
+            failed_at = CURRENT_TIMESTAMP,
+            retry_count = external_price_failures.retry_count + 1
+        """,
+        (source, day.isoformat(), error[:500]),
+    )
+    conn.commit()
+
+
+def clear_external_failure(conn, source: str, day: date) -> None:
+    """Drop a day from the retry queue — it either arrived or is unrecoverable."""
+    execute(
+        conn,
+        "DELETE FROM external_price_failures WHERE source = ? AND date = ?",
+        (source, day.isoformat()),
+    )
+    conn.commit()
+
+
+def pending_external_failures(conn, source: str) -> set:
+    """Days `source` still owes. Scoped, like every other question of this table:
+    `external_prices` has three writers and one feed's outage is not another's."""
+    rows = execute(
+        conn,
+        "SELECT date FROM external_price_failures WHERE source = ?",
+        (source,),
     ).fetchall()
     return {_as_date(r[0]) for r in rows if r and r[0]}
 

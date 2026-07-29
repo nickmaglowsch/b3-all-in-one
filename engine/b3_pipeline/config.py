@@ -51,7 +51,22 @@ EXTERNAL_PRICES_START = datetime(2025, 6, 1).date()
 # only recoverable while B3 still serves it, so runs heal recent holes rather than
 # resuming from the newest row. Not unbounded: market holidays never have rows, so
 # an infinite window would re-probe every past holiday on every run.
+#
+# This window alone cannot be the retry story. It cannot tell a holiday from an
+# outage — both leave no rows — so it must stay short enough that re-probing every
+# holiday inside it is cheap, which is exactly what makes it too short to cover a
+# long outage. Failures are therefore remembered explicitly, in
+# external_price_failures, and retried by date regardless of this window.
 EXTERNAL_PRICES_HEAL_DAYS = 45
+
+# When to stop retrying a failed day. Past B3's rolling window the file answers
+# 200 with an empty body forever, so a retry can never succeed and the history is
+# genuinely gone — the ledger has to give up or it grows a permanent tail that
+# costs two round trips per corpse per run. Deliberately looser than the ~14
+# months measured (2025-05-02 empty, 2025-06-10 present): the cost of retrying a
+# day B3 has already dropped is two wasted requests, while giving up on a day it
+# would still have served loses that day for good.
+EXTERNAL_PRICES_RETENTION_DAYS = 400
 
 PROJECT_ROOT = Path(__file__).parent.parent
 DATA_DIR = PROJECT_ROOT / "data" / "raw"

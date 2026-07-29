@@ -23,6 +23,7 @@ import csv
 import datetime
 import io
 import logging
+from typing import NamedTuple
 
 import pandas as pd
 import requests
@@ -30,6 +31,28 @@ import requests
 from . import config
 
 logger = logging.getLogger(__name__)
+
+
+class FetchFailed(Exception):
+    """B3 did not answer for a date.
+
+    Deliberately distinct from B3 answering "nothing for that date", which is an
+    empty frame. The two used to be the same value, and that is what made the
+    feed unrecoverable: a day lost to a network blip left no rows, a holiday left
+    no rows, so nothing downstream could tell which one was owed a retry. Only
+    this one is.
+    """
+
+
+class BackfillResult(NamedTuple):
+    """Rows fetched, and the days that could not be fetched at all.
+
+    `failed` is the retry queue. It is returned rather than logged because the
+    caller is the only layer that can durably record it, and a failure that is
+    only logged is a failure that is lost at the end of the run.
+    """
+    rows: pd.DataFrame
+    failed: dict
 
 # The file's own column names. Only the ones we keep are named here.
 _COL_DATE = "RptDt"
@@ -63,28 +86,46 @@ def fetch_day(day: datetime.date, tickers=None) -> pd.DataFrame:
     """One session's marks for `tickers` (default: the fixed-income ETFs).
 
     Returns an empty frame — not an error — when B3 has nothing for that date.
-    Weekends, holidays and dates past the retention window all answer 200 with an
-    empty body, and none of them are failures worth stopping a backfill for.
+    B3 says that two different ways, and both are normal:
+
+      - **HTTP 400 on the token leg** for a date it never had a file for, i.e. a
+        non-session day. Measured 2026-07-28: Sunday 2026-07-26 and the weekday
+        holidays 2026-01-01, 2026-04-21 and 2026-05-01 all answer 400, while
+        2026-07-24 and 2026-07-27 hand out tokens.
+      - **200 with a 0-byte body** for a session that has aged out of the ~14
+        month window. 2024-01-02 still issues a token, then serves nothing.
+
+    Raises FetchFailed when B3 did not answer at all. That case must not be an
+    empty frame: on a rolling window an unfetched day is an unrecoverable day, so
+    the caller has to be able to tell "nothing here" from "ask again". It must
+    also not swallow the 400 — a holiday recorded as a failure is a debt that can
+    never be paid, retried on every run until it ages out.
     """
     tickers = config.RENDA_FIXA_ETFS if tickers is None else frozenset(tickers)
     try:
         token_url = config.B3_FILE_TOKEN_URL.format(
             name=config.B3_TRADE_INFO_FILE, date=day)
         resp = requests.get(token_url, timeout=30)
+        if resp.status_code == 400:
+            # Only 400, and only on this leg. The URL is built from constants and
+            # a date, so the request itself cannot be malformed — a 400 here is
+            # B3 saying "no file for that date", not "your request was bad".
+            logger.debug(f"{day}: no file published (non-session day)")
+            return pd.DataFrame()
         resp.raise_for_status()
         redirect = resp.json().get("redirectUrl", "")
         token = redirect.partition("token=")[2]
         if not token:
-            logger.warning(f"{day}: no download token in B3's response")
-            return pd.DataFrame()
+            # A 200 carrying no token is a broken answer, not an answer of
+            # "nothing" — B3 returns an empty *body* for that, below.
+            raise FetchFailed(f"no download token in B3's response for {day}")
 
         resp = requests.get(
             config.B3_FILE_DOWNLOAD_URL.format(token=token), timeout=120)
         resp.raise_for_status()
         body = resp.content
     except (requests.RequestException, ValueError) as e:
-        logger.warning(f"{day}: B3 daily file unavailable ({e})")
-        return pd.DataFrame()
+        raise FetchFailed(f"B3 daily file unavailable for {day}: {e}") from e
 
     if not body:
         logger.debug(f"{day}: empty file (non-session day, or past retention)")
@@ -131,33 +172,67 @@ def parse_file(body: bytes, tickers) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def backfill(start: datetime.date, end: datetime.date, tickers=None,
-             skip=frozenset()) -> pd.DataFrame:
-    """Every session from `start` to `end` inclusive, concatenated.
+def days_to_fetch(today: datetime.date, *, stored, pending, start,
+                  heal_days: int, retention_days: int):
+    """Decide what this run owes B3, and what it has to give up on.
 
-    Weekdays only — asking B3 for a Saturday spends two round trips to be told
-    nothing, and there are ~100 of them in a year's backfill. `skip` is the set of
-    dates already stored, so a re-run costs nothing for the days it already has.
+    Two sources of work, because neither covers the other:
+
+      - the trailing heal window, which finds holes nobody recorded (a run that
+        died mid-step, a day that never got attempted at all), but is short;
+      - `pending`, the recorded failures, which reach back as far as B3 still
+        serves and are the only way a long outage is ever repaired.
+
+    Returns (fetch, abandoned). `abandoned` is pending days now past B3's window:
+    a retry there cannot succeed, so they are dropped loudly rather than retried
+    forever. A pending day that turns up in `stored` is neither — it arrived by
+    some other path and is simply resolved.
+
+    Pure, so the policy can be tested without a network or a database.
     """
-    frames = []
-    day = start
-    while day <= end:
-        if day.weekday() < 5 and day not in skip:
-            df = fetch_day(day, tickers)
-            if not df.empty:
-                frames.append(df)
+    horizon = max(start, today - datetime.timedelta(days=retention_days))
+    unresolved = {d for d in pending if d not in stored}
+
+    fetch, day = set(), max(start, today - datetime.timedelta(days=heal_days))
+    while day <= today:
+        if day.weekday() < 5 and day not in stored:
+            fetch.add(day)
         day += datetime.timedelta(days=1)
 
+    fetch |= {d for d in unresolved if d >= horizon}
+    abandoned = {d for d in unresolved if d < horizon}
+    return sorted(fetch), sorted(abandoned)
+
+
+def backfill(days, tickers=None) -> BackfillResult:
+    """Fetch each day in `days`, surviving the ones that fail.
+
+    One bad day must not cost the others: an outage in the middle of a long
+    catch-up would otherwise abort the run and lose everything after it, and on a
+    rolling window "lose" is not "retry tomorrow".
+    """
+    days = list(days)
+    frames, failed = [], {}
+    for day in days:
+        try:
+            df = fetch_day(day, tickers)
+        except FetchFailed as e:
+            logger.warning(str(e))
+            failed[day] = str(e)
+            continue
+        if not df.empty:
+            frames.append(df)
+
     if not frames:
-        logger.warning(f"No external prices found between {start} and {end}")
-        return pd.DataFrame()
+        logger.warning(f"No external prices found across {len(days)} days")
+        return BackfillResult(pd.DataFrame(), failed)
 
     out = pd.concat(frames, ignore_index=True)
     logger.info(
         f"Fetched {len(out):,} external price rows for "
         f"{out['ticker'].nunique()} tickers ({out['date'].min()} to {out['date'].max()})"
     )
-    return out
+    return BackfillResult(out, failed)
 
 
 def demo() -> None:
@@ -174,8 +249,12 @@ def demo() -> None:
     assert _num("1.234,56") == 1234.56
     assert _num("") is None and _num("x") is None
 
-    # A Sunday is not an error, just nothing.
-    assert fetch_day(datetime.date(2026, 7, 26)).empty
+    # A Sunday is not an error, just nothing. Nor is a weekday holiday — B3
+    # answers 400 for both, and reading that as a failure would book a debt no
+    # retry can ever pay. Weekends never reach here (days_to_fetch drops them),
+    # holidays do, so this is the case that actually matters in production.
+    assert fetch_day(datetime.date(2026, 7, 26)).empty      # Sunday
+    assert fetch_day(datetime.date(2026, 5, 1)).empty       # Dia do Trabalho
     print(f"ok — {len(df)} rows for {day}, LFTB11 close {row['close']}")
 
 

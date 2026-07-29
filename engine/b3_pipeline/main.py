@@ -18,7 +18,7 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
 from . import (adjustments, b3_corporate_actions, config, downloader,
@@ -140,23 +140,68 @@ def run_pipeline(
         logger.info("Step 5b/9: Fetching external prices (fixed-income ETFs)...")
         try:
             today = datetime.now().date()
+            source = external_prices.SOURCE
             # Fetch the days we are missing, not everything after the newest one:
             # resuming from the max would step permanently over any day a network
-            # blip skipped. Bounded to a trailing window so old market holidays —
-            # which have no rows and never will — are not re-probed forever.
-            if storage.max_external_price_date(
-                    conn, external_prices.SOURCE) is None:
-                start = config.EXTERNAL_PRICES_START
-            else:
-                start = max(config.EXTERNAL_PRICES_START,
-                            today - timedelta(days=config.EXTERNAL_PRICES_HEAL_DAYS))
-            have = storage.stored_external_dates(
-                conn, start, external_prices.SOURCE)
-            logger.info(f"Fetching external prices {start} to {today} "
-                        f"({len(have)} sessions already stored)")
-            external = external_prices.backfill(start, today, skip=have)
-            if not external.empty:
-                storage.upsert_external_prices(conn, external)
+            # blip skipped. The trailing window is bounded so old market holidays
+            # — which have no rows and never will — are not re-probed forever,
+            # and the failure ledger reaches past it for the days that genuinely
+            # broke. On the very first run there is nothing to heal and the whole
+            # history is owed, so the window opens to the configured start.
+            first_run = storage.max_external_price_date(conn, source) is None
+            heal_days = ((today - config.EXTERNAL_PRICES_START).days if first_run
+                         else config.EXTERNAL_PRICES_HEAL_DAYS)
+            stored = storage.stored_external_dates(
+                conn, config.EXTERNAL_PRICES_START, source)
+            pending = storage.pending_external_failures(conn, source)
+
+            fetch, abandoned = external_prices.days_to_fetch(
+                today, stored=stored, pending=pending,
+                start=config.EXTERNAL_PRICES_START, heal_days=heal_days,
+                retention_days=config.EXTERNAL_PRICES_RETENTION_DAYS)
+
+            # Arrived by some other path (a manual run, a wider heal window on an
+            # earlier pass) while still listed as owed.
+            for day in sorted(pending & stored):
+                storage.clear_external_failure(conn, source, day)
+
+            if abandoned:
+                # The one genuinely unrecoverable outcome, so it is stated rather
+                # than dropped: B3 no longer serves these dates and no future run
+                # can repair them. Cleared so they stop costing round trips.
+                logger.error(
+                    f"Giving up on {len(abandoned)} external price day(s) now "
+                    f"past B3's ~{config.EXTERNAL_PRICES_RETENTION_DAYS}-day "
+                    f"window: {abandoned[0]} to {abandoned[-1]}. These marks are "
+                    f"permanently unavailable; holdings on those dates stay "
+                    f"unpriced and are disclosed as such."
+                )
+                for day in abandoned:
+                    storage.clear_external_failure(conn, source, day)
+
+            retries = sorted(set(fetch) & pending)
+            logger.info(
+                f"Fetching {len(fetch)} external price day(s) up to {today} "
+                f"({len(stored)} already stored, {len(retries)} retried)")
+
+            result = external_prices.backfill(fetch)
+            if not result.rows.empty:
+                storage.upsert_external_prices(conn, result.rows)
+
+            # Record what broke and forget what did not. A day that answered —
+            # with rows or with an empty holiday file — is settled either way;
+            # only a day B3 refused to answer stays on the books.
+            for day in fetch:
+                if day in result.failed:
+                    storage.record_external_failure(
+                        conn, source, day, result.failed[day])
+                elif day in pending:
+                    storage.clear_external_failure(conn, source, day)
+
+            if result.failed:
+                logger.warning(
+                    f"{len(result.failed)} external price day(s) failed and are "
+                    f"queued for retry on the next run")
         except Exception as e:
             # A third-party feed must never take the COTAHIST pipeline down with
             # it; the index degrades to "unpriced and disclosed", which is where

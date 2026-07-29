@@ -16,13 +16,14 @@ cannot drift back apart.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
-from platform_app import b3run, enginerun
+from platform_app import b3run, enginerun, subprocs
 from platform_app.config import settings
 
 # Both runners invoke `python -m <module>`, so the fixtures below drop a real
@@ -239,3 +240,35 @@ def test_runners_do_not_raise_timeoutexpired(
             call()
         except subprocess.TimeoutExpired:  # pragma: no cover - the bug we guard
             pytest.fail("runner leaked TimeoutExpired instead of returning 124")
+
+
+# ── One JSON reader for both stdout conventions ───────────────────────────────
+# The engine scripts print progress lines and then one line of JSON; taxcore's
+# load_b3 pretty-prints its summary across many lines. Two readers used to exist
+# because each only handled its own shape. These pin that one reader handles
+# both — and that the two error contracts stayed distinct: a caller that writes
+# an Import row from the payload wants {}, a caller answering an HTTP request
+# wants the raise.
+
+def test_last_json_reads_the_engines_one_line_payload_after_progress_lines():
+    text = 'loading prices...\ndone\n{"nav": 1000, "ok": true}\n'
+    assert subprocs.last_json(text) == {"nav": 1000, "ok": True}
+
+
+def test_last_json_reads_load_b3s_pretty_printed_payload():
+    text = 'parsing\n' + json.dumps({"files_loaded": ["a.xlsx"], "kind": "neg"}, indent=2)
+    assert subprocs.last_json(text) == {"files_loaded": ["a.xlsx"], "kind": "neg"}
+
+
+def test_last_json_ignores_a_log_line_printed_after_the_payload():
+    text = '{"nav": 1}\nWARNING: something\n'
+    assert subprocs.last_json(text) == {"nav": 1}
+
+
+def test_last_json_returns_empty_by_default_when_there_is_no_payload():
+    assert subprocs.last_json("no json here\n") == {}
+
+
+def test_last_json_strict_raises_when_there_is_no_payload():
+    with pytest.raises(ValueError, match="no JSON object"):
+        subprocs.last_json("no json here\n", strict=True)

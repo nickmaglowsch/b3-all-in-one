@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, specstore
+from platform_app import b3run, enginerun, specstore, subprocs
 from platform_app.db import get_async_session
 from platform_app.models import CashEvent, Position, Trade
 from platform_app.routes import (
@@ -125,7 +125,7 @@ def _run_whatif(
             "run_backtest_json.py", [strategy, str(out), json.dumps(config)], extra_env)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-        return {"summary": enginerun._last_json(proc.stdout),
+        return {"summary": subprocs.last_json(proc.stdout, strict=True),
                 "curve": _read_curve(out / "curves.csv")}
     finally:
         shutil.rmtree(out, ignore_errors=True)

@@ -94,19 +94,6 @@ def run_module(
     )
 
 
-def _last_json(text: str) -> dict:
-    """Parse the last JSON object line of stdout — the engine prints progress
-    lines before emitting its one-line JSON payload."""
-    for line in reversed(text.splitlines()):
-        line = line.strip()
-        if line.startswith("{"):
-            try:
-                return json.loads(line)
-            except ValueError:
-                continue
-    raise ValueError(f"no JSON object in engine output:\n{text[-2000:]}")
-
-
 def advise_weights(
     *,
     strategy: str | None = None,
@@ -131,7 +118,7 @@ def advise_weights(
         raise _needs_fundamentals(proc.stderr, strategy)
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-    return _last_json(proc.stdout)
+    return subprocs.last_json(proc.stdout, strict=True)
 
 
 def _needs_fundamentals(stderr: str, strategy: str | None) -> EngineNeedsFundamentals:

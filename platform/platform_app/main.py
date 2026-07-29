@@ -26,9 +26,10 @@ from platform_app.routes_portfolio_index import portfolio_index_router
 from platform_app.routes_portfolio_settings import portfolio_settings_router
 from platform_app.routes_portfolios import portfolios_router
 from platform_app.routes_whatif import whatif_router
-from platform_app.schemas import UserCreate, UserRead
 from platform_app.tenancy import get_current_tenant
 from platform_app.users import (
+    UserCreate,
+    UserRead,
     auth_backend,
     fastapi_users,
     get_google_oauth_client,

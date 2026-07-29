@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import enginerun, portfolio_index as pidx
+from platform_app import enginerun, portfolio_index as pidx, subprocs
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import CashEvent, RendaFixaMark, RendaFixaTerms, Trade
 from platform_app.tenancy import get_current_tenant
@@ -366,7 +366,7 @@ def _run_bench(start: str, end: str) -> dict:
     proc = enginerun.run_script("bench_series.py", [start, end])
     if proc.returncode != 0:
         raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-    return enginerun._last_json(proc.stdout)
+    return subprocs.last_json(proc.stdout, strict=True)
 
 
 async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:

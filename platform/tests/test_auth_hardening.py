@@ -96,10 +96,8 @@ def test_production_refuses_an_unsafe_secret_key(monkeypatch, secret):
 
     import platform_app.config as config
 
-    config.get_settings.cache_clear()
     with pytest.raises(RuntimeError, match="SECRET_KEY"):
         importlib.reload(config)
 
     monkeypatch.undo()
-    config.get_settings.cache_clear()
     importlib.reload(config)

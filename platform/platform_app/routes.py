@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, specstore, tasks
+from platform_app import b3run, enginerun, specstore, subprocs, tasks
 from platform_app.billing import ENTERPRISE, effective_plan, needs_investidor, needs_trader
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
@@ -534,7 +534,7 @@ async def _advise_strategy(strategy: str, freq: str, extra_env: dict | None = No
             raise enginerun._needs_fundamentals(proc.stderr, strategy)
         if proc.returncode != 0:
             raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-        return enginerun._last_json(proc.stdout)
+        return subprocs.last_json(proc.stdout, strict=True)
 
     try:
         return await asyncio.to_thread(_run)
@@ -1027,7 +1027,7 @@ async def _run_apuracao(
     if proc.returncode != 0:
         raise HTTPException(
             500, f"irpf_2026 --json failed: {(proc.stderr or proc.stdout)[-2000:]}")
-    return b3run.last_json(proc.stdout).get("apuracao") or []
+    return subprocs.last_json(proc.stdout).get("apuracao") or []
 
 
 @irpf_router.get("/darf")

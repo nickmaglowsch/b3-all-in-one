@@ -18,12 +18,12 @@ documented approximation — a flow between two monthly marks lands on the later
 one). Everything downstream of the window is identical, which is why the replay
 does not get its own script.
 
-Network: this path never touches yfinance. The IBOV benchmark (^BVSP) is stubbed
-with a flat series — the bench reports the strategy's own pre/after-tax metrics,
-not an index comparison, so the index is not needed. CDI daily is fetched from
-the Brazilian Central Bank (api.bcb.gov.br, reliable) because build_shared_data
-requires it; set ENGINE_BENCH_OFFLINE=1 to stub CDI too and run fully offline
-(valid for price-only strategies, used by tests + the docker smoke).
+Network: the IBOV benchmark comes off the plane now (`$IBOV` in `external_prices`), so it
+costs nothing and is real — it used to be stubbed flat because the only source
+was Yahoo. CDI daily is still fetched from the Brazilian Central Bank
+(api.bcb.gov.br, reliable) because build_shared_data requires it; set
+ENGINE_BENCH_OFFLINE=1 to stub both and run fully offline (valid for price-only
+strategies, used by tests + the docker smoke).
 """
 from __future__ import annotations
 
@@ -48,27 +48,26 @@ def _flat_series(start: str, end: str, name: str, value: float) -> pd.Series:
 
 
 def _install_benchmark_stubs(start: str, end: str, offline: bool) -> None:
-    """Replace the yfinance/BCB fetchers in the loaded modules with offline
-    stubs. Patches both the data module and the name shared_data imported at
-    import time. IBOV is always stubbed (no yfinance); CDI only when offline."""
+    """Replace the plane/BCB fetchers in the loaded modules with offline stubs.
+    Patches both the data module and the name shared_data imported at import
+    time. Only offline mode stubs anything — benchmarks read the plane now, so
+    online there is nothing to avoid."""
+    if not offline:
+        return
+
     import backtests.core.data as data
     import backtests.core.shared_data as sd
 
-    _real_bench = data.download_benchmark
-
     def _bench(ticker: str, s: str, e: str) -> pd.Series:
-        if ticker == "^BVSP" or offline:
-            return _flat_series(s, e, ticker, 100.0)
-        return _real_bench(ticker, s, e)  # real ETF sleeves in online mode
+        return _flat_series(s, e, ticker, 100.0)
 
     data.download_benchmark = _bench
     sd.download_benchmark = _bench
 
-    if offline:
-        def _cdi(s: str, e: str) -> pd.Series:
-            return _flat_series(s, e, "CDI", 0.0)
-        data.download_cdi_daily = _cdi
-        sd.download_cdi_daily = _cdi
+    def _cdi(s: str, e: str) -> pd.Series:
+        return _flat_series(s, e, "CDI", 0.0)
+    data.download_cdi_daily = _cdi
+    sd.download_cdi_daily = _cdi
 
 
 def _resolve_end(end: str) -> str:

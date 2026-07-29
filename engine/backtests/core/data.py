@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 from b3_pipeline import storage
 
@@ -314,28 +313,63 @@ def load_b3_data(
 import requests
 
 
+# What the callers ask for -> what the plane calls it. `^BVSP` is Yahoo's symbol
+# for the Ibovespa; the sleeves were asked for with Yahoo's `.SA` suffix. Both
+# now resolve on the plane, because every series these benchmarks need is
+# already there.
+#
+# The sleeves are ordinary COTAHIST tickers and read `prices`. The Ibovespa is
+# not an instrument and is in no COTAHIST year, so it is stored as `$IBOV` in
+# `external_prices` — B3's own published index, in points, every session, by
+# b3_pipeline/ibov_series.py. A `$` symbol routes to that table; see there for
+# why the index and not a fund that tracks it.
+BENCHMARK_ALIASES = {"^BVSP": "$IBOV", "IBOV": "$IBOV"}
+
+
+def _plane_series(table: str, column: str, symbol: str,
+                  start: str, end: str) -> pd.Series:
+    """One ticker's daily column out of the plane, as a date-indexed Series.
+
+    Empty when the plane has no rows for it — never a fabricated flat line, which
+    a chart would render as "the benchmark did not move".
+    """
+    query = (f"SELECT date, {column} FROM {table} "                  # noqa: S608
+             "WHERE ticker = ? AND date >= ? AND date <= ? ORDER BY date")
+    with storage.get_connection() as conn:
+        df = storage.read_sql(query, conn, params=[symbol, start, end])
+
+    if df.empty:
+        return pd.Series(dtype=float, index=pd.DatetimeIndex([]), name=symbol)
+    out = pd.Series(
+        df[column].astype(float).to_numpy(),
+        index=pd.to_datetime(df["date"]), name=symbol)
+    return out[out.notna()]
+
+
 def download_benchmark(ticker: str, start: str, end: str) -> pd.Series:
+    """Daily total-return series for a benchmark, from B3's own price plane.
+
+    `adj_close`, not `close`, for the traded sleeves: the callers compare a
+    strategy's total return against it, and that is what Yahoo's
+    `auto_adjust=True` used to hand back. A stored index has no corporate
+    actions to adjust for and only carries `close`.
     """
-    Download benchmark index data from Yahoo Finance (cached by ticker+window).
+    symbol = ticker.strip().upper()
+    symbol = BENCHMARK_ALIASES.get(symbol, symbol.removesuffix(".SA"))
+    if symbol.startswith("$"):
+        return download_index_level(symbol, start, end)
+    return _plane_series("prices", "adj_close", symbol, start, end)
+
+
+def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
+    """A stored index level (`$CDI`, `$IPCA`) out of `external_prices`.
+
+    These are cumulative factors written by b3_pipeline/index_series.py, not
+    prices — the growth between two dates is one division. Reserved `$` tickers,
+    so they can never collide with a B3 code.
     """
-    def _fetch() -> pd.Series:
-        print(f"⬇  Downloading {ticker} benchmark from Yahoo...")
-        index_data = yf.download(
-            ticker, start=start, end=end, auto_adjust=True, progress=False
-        )["Close"]
-
-        if isinstance(index_data, pd.DataFrame):
-            index_data = index_data.squeeze()
-
-        index_data.index = pd.to_datetime(index_data.index)
-
-        # Remove timezone if present to align with local sqlite dates
-        if index_data.index.tz is not None:
-            index_data.index = index_data.index.tz_localize(None)
-
-        return index_data
-
-    return _fetch_cached("bench", (ticker, start, end), _fetch)
+    return _plane_series("external_prices", "close",
+                         ticker.strip().upper(), start, end)
 
 
 def load_b3_hlc_data(

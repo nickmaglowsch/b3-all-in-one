@@ -51,12 +51,13 @@ the image — backtests read the market plane from Postgres, not from files.
   honestly).
 
 **Network:** a backtest run fetches **CDI daily from the Brazilian Central Bank**
-(`api.bcb.gov.br`, required by `build_shared_data`, reliable) and **never touches
-yfinance** — the IBOV benchmark is stubbed because the bench reports the strategy's own
-pre/after-tax metrics, not an index comparison. Set `ENGINE_BENCH_OFFLINE=1` (compose
-sets it on api+worker; `platform/tests` set it too) to stub CDI as well and run fully
-offline — valid for price-only strategies (`LowVol`, `MomSharpe`, …). ETF/regime
-strategies still need real benchmarks and are not supported on the offline path.
+(`api.bcb.gov.br`, required by `build_shared_data`, reliable) and nothing else.
+**Benchmarks come off the plane**, not Yahoo: `^BVSP` resolves to `$IBOV` and the
+ETF sleeves to their own COTAHIST tickers, so IBOV is a real series now instead of
+a flat stub. Set `ENGINE_BENCH_OFFLINE=1` (compose sets it on api+worker;
+`platform/tests` set it too) to stub CDI and the benchmarks and run fully offline —
+valid for price-only strategies (`LowVol`, `MomSharpe`, …). ETF/regime strategies
+need the real series and are not supported on the offline path.
 
 On boot the **api** runs `alembic upgrade head` before uvicorn (via the entrypoint,
 gated on `RUN_MIGRATIONS=1`); the **worker** applies its own procrastinate schema.

@@ -127,7 +127,7 @@ park_in_cdi_until_live: true   # before an ETF lists, route its weight to CDI
 park_mode: per_sleeve          # per_sleeve: park each dead ETF individually
                                # all_or_nothing: hold 100% CDI until *every* ETF is live
 sleeves:
-  - {ticker: DIVO11.SA, weight: 0.40}   # downloaded via download_benchmark (Yahoo)
+  - {ticker: DIVO11.SA, weight: 0.40}   # read from the plane via download_benchmark
   - {ticker: IVVB11.SA, weight: 0.40}
   - {asset: CDI,        weight: 0.20}   # the cash sleeve (shared cdi_monthly)
 ```

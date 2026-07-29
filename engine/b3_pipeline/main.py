@@ -22,7 +22,8 @@ from datetime import datetime
 from typing import Optional
 
 from . import (adjustments, b3_corporate_actions, config, downloader,
-               external_prices, index_series, parser, storage, tesouro_direto)
+               external_prices, ibov_series, index_series, parser, storage,
+               tesouro_direto)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -221,6 +222,19 @@ def run_pipeline(
             # Same posture: an unreachable BCB leaves open contracts unpriced and
             # disclosed, which is exactly where they were before this step.
             logger.error(f"BCB index series fetch failed, continuing: {e}")
+
+        # The Ibovespa, from B3's own publication. Same whole-rewrite posture as
+        # 5c, and for the same reason — one request per year, no resume state.
+        logger.info("")
+        logger.info("Step 5c2/9: Fetching Ibovespa index series...")
+        try:
+            ibov = ibov_series.build(datetime.now().date())
+            if not ibov.empty:
+                storage.upsert_external_prices(conn, ibov)
+        except Exception as e:
+            # An unreachable B3 leaves the benchmark overlay disclosed as
+            # unavailable, which the chart already knows how to say.
+            logger.error(f"Ibovespa series fetch failed, continuing: {e}")
 
         # Tesouro Direto. Renda fixa with no ticker, like a CDB — except the
         # issuer publishes a daily price for every title, so these need no

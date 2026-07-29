@@ -15,7 +15,9 @@ PG_NETLOC = f"postgres:devpassword@{PG_HOST}:{PG_PORT}"
 os.environ["DATABASE_URL"] = f"postgresql+asyncpg://{PG_NETLOC}/{TEST_DB}"
 os.environ["ENVIRONMENT"] = "development"
 # Backtests read the market plane from the real `b3` DB (engine_database_url's
-# default). Stub benchmarks so the engine subprocess never touches yfinance/BCB.
+# default). Stub the CDI fetch so a backtest never waits on BCB. Benchmarks are
+# read from the plane now, so this no longer decides whether they appear —
+# whether the plane carries $IBOV and $CDI does.
 os.environ["ENGINE_BENCH_OFFLINE"] = "1"
 
 import pytest

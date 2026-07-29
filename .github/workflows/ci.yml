@@ -5,6 +5,11 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # The mutation job only — it re-runs the taxcore suite once per mutant, which is
+  # minutes, not seconds. Too slow to gate a PR, too useful to never run.
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
 
 jobs:
   platform-tests:
@@ -44,10 +49,14 @@ jobs:
           uv pip install --python .venv -r requirements-bench.txt
 
       - name: Test
-        run: cd platform && uv run --frozen pytest -q
+        run: cd platform && uv run --frozen pytest -q --cov=platform_app --cov-fail-under=70
         # Tests marked `market` need a loaded B3 price plane; the b3 DB here is
         # empty, so conftest skips them (scripts/docker_smoke.sh covers that path
         # locally). Everything else runs.
+        #
+        # --cov-fail-under is a floor, not the goal. The goal is 100% (see the
+        # Quality gates section of the README); the floor is today's number so the
+        # number can only go up. Raise it whenever a PR clears it.
 
   engine-tests:
     name: Engine tests
@@ -59,7 +68,9 @@ jobs:
           python-version: "3.12"
       - run: pip install -r engine/requirements.txt
       # The Rust extension and Postgres-backed tests skip themselves when absent.
-      - run: cd engine && pytest -q
+      - run: >-
+          cd engine && pytest -q
+          --cov=b3_pipeline --cov=backtests --cov=scripts --cov-fail-under=60
 
   taxcore-tests:
     name: Taxcore tests
@@ -67,7 +78,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      - run: cd taxcore && uv run --frozen pytest -q
+      - run: >-
+          cd taxcore && uv run --frozen pytest -q
+          --cov=scripts --cov=methodologies --cov-fail-under=20
+
+  quality-gates:
+    name: Structural quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv tool install ruff
+      # The frontend half of the complexity gate shells into eslint, which needs the
+      # deps installed. Without them the script prints SKIPPED and drops the frontend
+      # entries rather than reporting them clean — so this step is load-bearing.
+      - run: npm --prefix frontend ci
+      # Complexity (ruff C901 + eslint), module size and the dependency contracts, all
+      # ratcheted against scripts/quality_baseline.json — see the README.
+      - run: python scripts/quality_gates.py
+
+  mutation:
+    name: Mutation testing (taxcore apuração)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # Target and scope live in taxcore/pyproject.toml [tool.mutmut]: scripts/apuracao.py
+      # against the two apuração suites, ~85 mutants at ~200/s.
+      - run: cd taxcore && uv run --with 'mutmut>=3' mutmut run || true
+      # `|| true`: a surviving mutant is a finding to read, not a build to break —
+      # 14 of the 85 survive today and some are genuinely equivalent mutants
+      # (`pnl > 0` vs `pnl >= 0` on a zero-PnL month). Make it a hard gate once the
+      # list is triaged down to zero.
+      - run: cd taxcore && uv run --with 'mutmut>=3' mutmut results
 
   frontend:
     name: Frontend build
@@ -84,9 +136,12 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: cd frontend && npm ci
       - run: cd frontend && npm test
+      # Green as of this commit. The `complexity` rule is a warning, not an error —
+      # its 18 pre-existing offenders are ratcheted by scripts/quality_gates.py
+      # instead, which is what fails a PR that adds a nineteenth.
+      - run: cd frontend && npm run lint
       # Type-checks, and with `output: "export"` also proves every route is
-      # still prerenderable. `npm run lint` is NOT wired in: it has pre-existing
-      # react-hooks errors, so it would land red — fix those first, then add it.
+      # still prerenderable.
       - run: cd frontend && npm run build
 
   compose-config:

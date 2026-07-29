@@ -5,6 +5,12 @@ venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+# mutmut 3 copies the tree it mutates into ./mutants
+mutants/
+.mutmut-cache
 build/
 dist/
 target/

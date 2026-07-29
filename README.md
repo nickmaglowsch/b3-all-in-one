@@ -196,3 +196,56 @@ email, and a **sair** (logout) action. Google OAuth comes later.
 `scripts/dev_seed.sh` is idempotent (imports full-replace the portfolio) and prints a
 backtest summary at the end. `npm --prefix frontend run build` runs a clean production
 build.
+
+## Quality gates
+
+The suites are the contract, not the review. Six gates run in CI (`.github/workflows/ci.yml`):
+
+| Gate | What runs | Where the threshold lives |
+| --- | --- | --- |
+| Unit tests | `pytest` per package, `node --test` for the frontend | — |
+| Lint | `npm run lint` (eslint, green) | `frontend/eslint.config.mjs` |
+| Gherkin specs | `taxcore/tests/features/*.feature` via pytest-bdd | the feature files |
+| Coverage floor | `pytest --cov-fail-under` | `ci.yml`: platform 70, engine 60, taxcore 20 |
+| Cyclomatic complexity | ruff `C901` (Python) + eslint `complexity` (TS), max 10 | `scripts/quality_gates.py` + baseline |
+| Module size | max 400 lines (`.py`, `.ts`, `.tsx`) | `scripts/quality_gates.py` + baseline |
+| Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
+| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py` | weekly / `workflow_dispatch` only |
+
+**The two structural gates are ratchets, not walls.** The repo has 63 functions over
+complexity 10 (45 Python, 18 TSX) and 28 modules over 400 lines today;
+`scripts/quality_baseline.json` records every one. A PR fails if a baselined offender
+gets worse or a new one appears — never for the debt that was already there. After a
+genuine improvement:
+
+```
+npm --prefix frontend ci                   # once; eslint is half the complexity gate
+python scripts/quality_gates.py            # check, as CI does
+python scripts/quality_gates.py --update   # re-record; the baseline only goes down
+```
+
+Without `frontend/node_modules` the script prints `SKIPPED` for the frontend half and
+drops those entries from the comparison rather than reporting them clean; `--update`
+refuses outright, so a partial run can never quietly erase them from the baseline.
+
+**Coverage is 71 / 62 / 22% (platform / engine / taxcore), not 100.** The floors are
+today's numbers so they can only rise; raise them in `ci.yml` whenever a PR clears one.
+The taxcore number is the honest one to fix first — most of `taxcore/scripts` is
+CLI entrypoints with no test at all.
+
+**The Gherkin specs are in Portuguese on purpose.** They cover the apuração rules
+(isenção de R$ 20.000, alíquotas, compensação de prejuízo) — the part of this repo a
+contador has to be able to check without reading Python. `tests/test_apuracao.py` is
+the fine-grained unit suite; the feature file is the readable contract on top of it.
+
+**Mutation testing is scoped and advisory.** Target: `taxcore/scripts/apuracao.py`,
+the isenção / alíquota / compensação rules, against the two apuração suites — ~85
+mutants at ~200/s. **14 survive today**; some are equivalent mutants (`pnl > 0` vs
+`pnl >= 0` on a zero-PnL month), so the job reports rather than fails. Triage the list
+to zero, then drop the `|| true` in `ci.yml`.
+
+Those rules live in their own module *because* of this gate: mutmut writes every
+mutant of a module into one file, and pointed at the 1100-line `irpf_2026.py` it
+produced a 42 MB, 745k-line module that never finished importing. Keep the target
+small. Widen `source_paths` in `taxcore/pyproject.toml` one small module at a time,
+not by pointing it at a directory.

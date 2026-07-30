@@ -1,24 +1,66 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
-import { BASE, EMPRESARIAL, PAGOS, somaModulos, TUDO } from "./modules.ts";
+import {
+  alternaModulo,
+  AVULSOS,
+  BASE,
+  BUNDLE,
+  CARTEIRA,
+  EMPRESARIAL,
+  MODULOS,
+  precoDoCarrinho,
+  somaModulos,
+  TUDO,
+} from "./modules.ts";
 
-// A frase que a seção de preço faz é "o Empresarial é mais caro que ter tudo".
-// Se alguém mexer num preço e isso deixar de valer, o modelo inteiro passa a
-// punir quem liga tudo — e nada na tela avisa. Este é o teste.
-test("o Empresarial custa mais que ligar todos os módulos", () => {
-  assert.equal(TUDO, PAGOS.reduce((s, m) => s + m.price, 0));
-  assert.ok(EMPRESARIAL.price > TUDO, `${EMPRESARIAL.price} deveria passar de ${TUDO}`);
+// Os ids são contrato com platform_app/billing.MODULES: é o que volta no 402 e no
+// GET /billing. Um rename aqui sem o backend deixa o paywall sem nome para
+// mostrar e o carrinho com um módulo que a API recusa.
+test("o catálogo é exatamente o de platform_app/billing.MODULES", () => {
+  assert.deepEqual(
+    MODULOS.map((m) => m.id),
+    ["carteira", "irpf", "mercado", "indice", "bench", "empresarial"],
+  );
 });
 
-test("a base é grátis e os módulos são todos pagos", () => {
+// A frase que a seção de preço faz é "o Empresarial é mais caro que ter tudo".
+// Se alguém mexer num preço e isso deixar de valer, o modelo passa a punir quem
+// liga tudo — e nada na tela avisa. Este é o teste.
+test("o Empresarial custa mais que ligar todos os módulos avulsos", () => {
+  assert.equal(TUDO, AVULSOS.reduce((s, m) => s + m.price, 0));
+  assert.ok(BUNDLE.price > TUDO, `${BUNDLE.price} deveria passar de ${TUDO}`);
+});
+
+test("a base é grátis, o resto é pago, e nem base nem bundle são avulsos", () => {
+  assert.equal(BASE.id, CARTEIRA);
   assert.equal(BASE.price, 0);
-  assert.ok(PAGOS.every((m) => m.price > 0));
+  assert.ok(AVULSOS.every((m) => m.price > 0));
+  assert.ok(!AVULSOS.some((m) => m.id === CARTEIRA || m.id === EMPRESARIAL));
 });
 
 test("somaModulos ignora id desconhecido e não conta duas vezes", () => {
   assert.equal(somaModulos([]), 0);
   assert.equal(somaModulos(["nada"]), 0);
   assert.equal(somaModulos(["irpf", "irpf"]), 19);
-  assert.equal(somaModulos(PAGOS.map((m) => m.id)), TUDO);
+  assert.equal(somaModulos(AVULSOS.map((m) => m.id)), TUDO);
+});
+
+// O bundle não soma com nada: a API 400a um carrinho misto, então mostrar
+// 249 + 19 seria prometer uma cobrança que não existe.
+test("o carrinho com o bundle custa o bundle, não a soma", () => {
+  assert.equal(precoDoCarrinho([EMPRESARIAL]), BUNDLE.price);
+  assert.equal(precoDoCarrinho([EMPRESARIAL, "irpf"]), BUNDLE.price);
+  assert.equal(precoDoCarrinho(["irpf", "bench"]), 19 + 49);
+  assert.equal(precoDoCarrinho([CARTEIRA]), 0);
+});
+
+// O carrinho misto é 400 na API, então o único lugar onde ele pode ser impedido
+// sem o usuário levar um erro na cara é aqui.
+test("marcar o bundle esvazia o carrinho, e marcar um avulso solta o bundle", () => {
+  assert.deepEqual(alternaModulo(["irpf", "bench"], EMPRESARIAL), [EMPRESARIAL]);
+  assert.deepEqual(alternaModulo([EMPRESARIAL], "irpf"), ["irpf"]);
+  assert.deepEqual(alternaModulo(["irpf"], "bench"), ["irpf", "bench"]);
+  assert.deepEqual(alternaModulo(["irpf", "bench"], "irpf"), ["bench"]);
+  assert.deepEqual(alternaModulo([EMPRESARIAL], EMPRESARIAL), []);
 });

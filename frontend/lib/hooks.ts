@@ -74,12 +74,12 @@ export function useSubscription(awaitingCheckout = false) {
   return useQuery({
     queryKey: ["subscription"],
     queryFn: () => api<Subscription>("/billing"),
-    // Coming back from Stripe, the plan only flips once the webhook lands — poll a
-    // few times instead of making the user reload. Capped so an abandoned checkout
-    // doesn't poll forever.
+    // Coming back from Stripe, the modules only appear once the webhook lands —
+    // poll a few times instead of making the user reload. Capped so an abandoned
+    // checkout doesn't poll forever.
     refetchInterval: (q) =>
       awaitingCheckout &&
-      q.state.data?.plan === "gratis" &&
+      q.state.data?.billed_modules.length === 0 &&
       q.state.dataUpdateCount < 12
         ? 2000
         : false,

@@ -11,11 +11,14 @@ import {
   setPortfolioId,
 } from "@/lib/api";
 import { usePortfolios, useSubscription } from "@/lib/hooks";
-import type { Portfolio } from "@/lib/types";
+import { EMPRESARIAL } from "@/lib/modules";
+import type { Portfolio, Subscription } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { IconTrash, IconUsers } from "@/components/icons";
+
+const temEmpresarial = (sub?: Subscription) => !!sub?.modules.includes(EMPRESARIAL);
 
 export default function CarteirasPage() {
   const qc = useQueryClient();
@@ -44,7 +47,7 @@ export default function CarteirasPage() {
   });
 
   const managed = data?.filter((p) => !p.is_self) ?? [];
-  const isEnterprise = sub.data?.plan === "enterprise";
+  const isEnterprise = temEmpresarial(sub.data);
 
   function create(e: React.FormEvent) {
     e.preventDefault();

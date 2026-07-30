@@ -98,43 +98,60 @@ buy/sell to rebalance — tax-optimally. All prices come from the engine market 
 
 ### Billing (Stripe, spec/01)
 
-Three tiers — `gratis` < `investidor` (R$29/mês) < `trader` (R$79/mês). Entitlements
-live on the tenant row (`user.plan` + `plan_status`) and are written **only** by the
+No ladder: entitlement is a **set of modules**, one per Stripe line item, priced by
+what the module costs the server. `carteira` is free and always entitled; `empresarial`
+is the one bundle (everything, for unlimited client books) and is refused in a cart
+alongside anything else, because that would bill the same access twice. Entitlements
+live on the tenant row (`user.modules` + `plan_status`) and are written **only** by the
 webhook: checkout hands back a URL, it never grants access.
 
-- `GET /billing` — effective plan, status, renewal date, whether a portal exists.
-- `POST /billing/checkout {plan}` — hosted Checkout session → `{url}`.
-- `POST /billing/portal` — Stripe billing portal (card, invoices, cancel, downgrade).
-- `POST /billing/webhook` — signature-verified; `customer.subscription.*` drives the
-  plan. Events older than the last applied one are dropped (Stripe doesn't order them).
-- `POST /billing/dev-plan {plan}` — **development only**, flips the plan without
-  Stripe so the paywall is testable locally.
+- `GET /billing` — `modules` (usable now), `billed_modules` (what Stripe charges for),
+  status, renewal date, whether a portal exists.
+- `POST /billing/checkout {modules: [...]}` — one line item per module → `{url}`.
+  400 on an empty cart, an unknown module, a module with no configured price, or
+  `empresarial` mixed with another module.
+- `POST /billing/portal` — Stripe billing portal (card, invoices, cancel, drop a module).
+- `POST /billing/webhook` — signature-verified; `customer.subscription.*` rewrites the
+  module set from **every** item on the subscription. Events older than the last applied
+  one are dropped (Stripe doesn't order them). `past_due` keeps access — dunning is not
+  a lockout; only `deleted` empties the set.
+- `POST /billing/dev-modules {modules, status}` — **development only**, sets the module
+  set without Stripe so the paywall is testable locally.
 
-What each tier unlocks (gated routes answer `402` with
-`{"error": "plan_required", "required_plan", "current_plan"}`; the frontend turns any
-402 into the upgrade dialog):
+What each module unlocks (gated routes answer `402` with
+`{"error": "module_required", "required_module", "modules"}`; the frontend turns any
+402 into the paywall dialog):
 
-| Tier | Routes |
-|---|---|
-| `gratis` | `/imports`, `/portfolio/{positions,trades,income,price-history}`, `/market` |
-| `investidor` | `/irpf`, `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings,index}` |
-| `trader` | `/backtests`, `/strategies/user*` |
+| Module | Routes | Why it costs what it costs |
+|---|---|---|
+| `carteira` (grátis) | `/imports`, `/portfolio/{positions,trades,income,price-history}`, `/market` | reads the extract once, then nothing runs |
+| `irpf` R$19 | `/irpf` | re-apura the tenant's own rows, no external data |
+| `mercado` R$29 | `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings}` | needs today's price for every held ticker |
+| `indice` R$12 | `/portfolio/index` | rebuilds the daily series of the book and both benchmarks |
+| `bench` R$49 | `/backtests`, `/strategies/user*` | runs the engine over years of B3 history per execution |
+| `empresarial` R$249 | every module above, plus `/portfolios` (client books) | the whole apuração, once per client book |
 
-`GET /strategies` (the gallery) stays public. The dev tenant is created on `trader` so
-seeding and tests aren't paywalled — `dev_seed.sh` re-asserts it on every run.
+The module boundary is the **cost driver, not the feature name**: TLH, what-if and
+rebalance are one module because they need exactly the same thing (today's price), and
+`mercado` is priced for that.
 
-Local loop with the Stripe CLI (test mode; keys in `.env`, price ids in `.env.example`):
+`GET /strategies` (the gallery) stays public. The dev tenant is created on
+`empresarial` so seeding and tests aren't paywalled — `dev_seed.sh` re-asserts it on
+every run.
+
+Local loop with the Stripe CLI (test mode; keys and price ids in `.env`, names in
+`.env.example`):
 
 ```
 stripe listen --forward-to localhost:8000/billing/webhook   # prints the signing secret
 stripe trigger customer.subscription.updated                # or drive a real sub:
-stripe subscriptions create --customer cus_… -d "items[0][price]=$STRIPE_PRICE_TRADER"
+stripe subscriptions create --customer cus_… -d "items[0][price]=$STRIPE_PRICE_BENCH"
 ```
 
 ### Privacidade / LGPD (spec/08)
 
-The data-subject rights of art. 18 are routes, not a support mailbox — free at every
-tier, scoped to the **account** (its own book plus every client book it manages):
+The data-subject rights of art. 18 are routes, not a support mailbox — free for every
+module set, scoped to the **account** (its own book plus every client book it manages):
 
 - `GET /privacy/summary` — confirmação do tratamento: what is stored, counted per book.
 - `GET /privacy/export` — acesso + portabilidade: every row of every book, as JSON.

@@ -1,18 +1,15 @@
-// Assinatura montada módulo a módulo, precificada por custo de servidor.
+// O catálogo de assinatura: um módulo por grupo de rotas, precificado pelo que o
+// servidor gasta. Não existe escada — `bench` não implica `irpf`, e por isso o
+// entitlement é um conjunto, não um posto (platform_app/billing.MODULES é a
+// autoridade sobre acesso; este arquivo só é dono do preço e da cópia).
 //
-// Isto NÃO é lib/plans.ts. `plans.ts` descreve a escada que a API vende hoje
-// (platform_app/billing.LADDER: gratis < investidor < trader < enterprise) e é o
-// que /assinatura, /conta e o paywall precisam falar. Este arquivo descreve o
-// modelo que a landing propõe: sem escada, você liga o que usa.
+// Os ids têm de bater com o backend: são eles que voltam no 402
+// (`required_module`) e no GET /billing. `lib/modules.test.ts` trava a lista.
 //
-// Cada módulo é um grupo de rotas que já existe e já é gated, então a lista não
-// pode virar ficção — mas o *gate* de hoje é por índice na escada
-// (billing.require_plan compara LADDER.index), e por isso vender isto de verdade
-// precisa de entitlement por conjunto, não por rank. Ver o commit que introduziu
-// este arquivo.
-//
-// O preço segue o que o servidor faz, não o valor percebido: guardar um extrato
-// custa uma vez; rodar o motor sobre dez anos de histórico custa a cada clique.
+// A regra que decide onde um módulo começa e termina é o custo, não o nome do
+// recurso: colheita de prejuízo, simulação de venda e rebalanceamento precisam
+// exatamente da mesma coisa — o preço de hoje de cada papel — então são um módulo
+// (`mercado`) e não três.
 
 export type Modulo = {
   id: string;
@@ -23,65 +20,79 @@ export type Modulo = {
   carga: string;
 };
 
+/** A base, sempre entitulada: os extratos importados são do tenant, e um cartão
+ *  vencido não é motivo para esconder a carteira dele. */
+export const CARTEIRA = "carteira";
+/** O único pacote fechado: todos os módulos, para carteiras de clientes
+ *  ilimitadas. Não entra num carrinho junto com outro módulo — cobraria o mesmo
+ *  acesso duas vezes, e a API recusa. */
+export const EMPRESARIAL = "empresarial";
+
 export const MODULOS: Modulo[] = [
   {
-    // platform_app/main.py: rotas de extrato, posições e proventos, sem gate.
-    id: "carteira",
+    id: CARTEIRA,
     name: "Carteira",
     price: 0,
     carga: "Lê o extrato uma vez e guarda. Depois disso nada roda.",
   },
   {
-    // irpf_router — reprocessa os trades que já estão no banco.
     id: "irpf",
     name: "IRPF e DARF",
     price: 19,
     carga: "Reapura os seus próprios lançamentos, mês a mês. Sem dado externo.",
   },
   {
-    // tlh_router + whatif_router — dependem do preço de hoje de cada papel.
-    id: "prejuizo",
-    name: "Colheita de prejuízo e simulação",
-    price: 19,
-    carga: "Precisa do preço de hoje de cada papel que você tem para simular a venda.",
+    id: "mercado",
+    name: "Preço de mercado",
+    price: 29,
+    carga:
+      "Precisa do preço de hoje de cada papel: colheita de prejuízo, simulação de venda e distância do alvo de rebalanceamento.",
   },
   {
-    // portfolio_index_router — série diária da carteira contra os benchmarks.
     id: "indice",
     name: "Carteira contra IBOV e CDI",
     price: 12,
     carga: "Refaz a série diária da carteira e dos dois benchmarks todo dia.",
   },
   {
-    // backtests_router — o motor sobre o histórico inteiro, por execução.
     id: "bench",
-    name: "Backtests",
+    name: "Backtests e estratégias próprias",
     price: 49,
     carga: "Roda o motor sobre anos de histórico da B3 a cada execução sua.",
   },
   {
-    // As rotas de overlay: o mesmo backtest repetido por regime de mercado.
-    id: "overlays",
-    name: "Overlays por regime",
-    price: 39,
-    carga: "Cada regime é o backtest inteiro outra vez, sob outra condição de mercado.",
+    id: EMPRESARIAL,
+    name: "Empresarial",
+    price: 249,
+    carga:
+      "Todos os módulos, para carteiras de clientes ilimitadas — cada uma apurada por inteiro.",
   },
 ];
 
 export const BASE = MODULOS[0];
-export const PAGOS = MODULOS.slice(1);
+/** O que se liga um a um: sem a base (grátis) e sem o bundle (que é todos). */
+export const AVULSOS = MODULOS.filter((m) => m.id !== CARTEIRA && m.id !== EMPRESARIAL);
+export const BUNDLE = MODULOS.find((m) => m.id === EMPRESARIAL)!;
 
-/** Tudo ligado, sem o Empresarial. O piso que o Empresarial tem de superar. */
-export const TUDO = PAGOS.reduce((s, m) => s + m.price, 0);
+/** Tudo ligado avulso. O piso que o Empresarial tem de superar para o preço dele
+ *  fazer sentido em vez de parecer punição. */
+export const TUDO = AVULSOS.reduce((s, m) => s + m.price, 0);
 
-// O único plano fechado que sobra, porque não é um módulo: é todos os módulos
-// vezes N carteiras. Mais caro que ligar tudo, e é por isso que o preço faz
-// sentido em vez de parecer punição.
-export const EMPRESARIAL = {
-  name: "Empresarial",
-  price: 249,
-  carga: "Todos os módulos, para carteiras de clientes ilimitadas — cada uma apurada por inteiro.",
-};
+export const moduloDe = (id: string) => MODULOS.find((m) => m.id === id);
+export const nomeDe = (id: string) => moduloDe(id)?.name ?? id;
 
 export const somaModulos = (ids: string[]) =>
-  PAGOS.filter((m) => ids.includes(m.id)).reduce((s, m) => s + m.price, 0);
+  AVULSOS.filter((m) => ids.includes(m.id)).reduce((s, m) => s + m.price, 0);
+
+/** O preço do carrinho como a API vai cobrá-lo: o bundle substitui a soma. */
+export const precoDoCarrinho = (ids: string[]) =>
+  ids.includes(EMPRESARIAL) ? BUNDLE.price : somaModulos(ids);
+
+/** Marcar ou desmarcar um módulo no carrinho. O bundle não convive com nada: a API
+ *  400a um carrinho misto (cobraria o mesmo acesso duas vezes), então a tela não
+ *  pode nem montar um. */
+export const alternaModulo = (cart: string[], id: string): string[] => {
+  if (cart.includes(id)) return cart.filter((m) => m !== id);
+  if (id === EMPRESARIAL) return [EMPRESARIAL];
+  return [...cart.filter((m) => m !== EMPRESARIAL), id];
+};

@@ -26,7 +26,7 @@ async def _trader(client, email: str) -> dict[str, str]:
         "/auth/jwt/login", data={"username": email, "password": PASSWORD})
     assert r.status_code == 200, r.text
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    r = await client.post("/billing/dev-plan", json={"plan": "trader"}, headers=headers)
+    r = await client.post("/billing/dev-modules", json={"modules": ["bench"]}, headers=headers)
     assert r.status_code == 200, r.text
     return headers
 
@@ -66,7 +66,7 @@ async def test_only_unfinished_runs_count_against_the_quota():
     async with async_session_maker() as session:
         session.add(User(
             id=tid, email=f"inflight-{tid}@example.com", hashed_password="x",
-            is_active=True, is_verified=True, plan="trader", plan_status="active"))
+            is_active=True, is_verified=True, modules=["bench"], plan_status="active"))
         await session.commit()
 
     await _seed_runs(tid, ["pending", "running", "done", "error", "done"])
@@ -102,29 +102,29 @@ async def test_submitting_over_the_quota_is_refused_with_the_limit_named(client)
 
     headers = await _trader(client, "quota-full@example.com")
     account = await _me(client, headers)
-    await _seed_runs(account, ["pending"] * BACKTEST_QUOTA["trader"])
+    await _seed_runs(account, ["pending"] * BACKTEST_QUOTA["bench"])
 
     r = await client.post("/backtests", headers=headers, json={"strategy": "MomSharpe"})
     assert r.status_code == 429, r.text
     detail = r.json()["detail"]
     assert detail["error"] == "backtest_quota"
-    assert detail["limit"] == BACKTEST_QUOTA["trader"]
+    assert detail["limit"] == BACKTEST_QUOTA["bench"]
     # Refused before the gallery subprocess: a queue that is already full has no
     # reason to spend a python interpreter finding out whether the name is real.
     assert detail["running"] >= detail["limit"]
 
 
-async def test_a_higher_plan_buys_a_deeper_queue(client):
+async def test_the_bundle_buys_a_deeper_queue(client):
     from platform_app.routes import BACKTEST_QUOTA
 
     headers = await _trader(client, "quota-upgrade@example.com")
     account = await _me(client, headers)
-    await _seed_runs(account, ["pending"] * BACKTEST_QUOTA["trader"])
+    await _seed_runs(account, ["pending"] * BACKTEST_QUOTA["bench"])
     assert (await client.post(
         "/backtests", headers=headers, json={"strategy": "MomSharpe"})
     ).status_code == 429
 
-    r = await client.post("/billing/dev-plan", json={"plan": "enterprise"}, headers=headers)
+    r = await client.post("/billing/dev-modules", json={"modules": ["empresarial"]}, headers=headers)
     assert r.status_code == 200, r.text
     # Same runs in flight, more room for them — so the refusal is the quota and
     # not something else about this account.

@@ -9,7 +9,7 @@
 // prova "um lugar" é a entrada ser uma só — os mesmos dois relatórios respondem
 // as quatro perguntas.
 //
-// E as quatro perguntas são a escada de preços (lib/plans.ts), então o bloco de
+// E as quatro perguntas são as linhas da fatura (lib/modules.ts), então o bloco de
 // planos entra como parte do argumento em vez de apêndice.
 import { formatMoney, formatPercent } from "@/lib/format";
 import { ALIQUOTA, DARF } from "@/lib/apuracao";

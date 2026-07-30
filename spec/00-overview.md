@@ -20,16 +20,21 @@ follow it with your real portfolio, and the same tax engine that scored the back
 your IRPF. No competitor does all three (competitors do one slice each: Grana/IRPF,
 QuantBrasil/backtests, Kinvo/tracking).
 
-## Target users & tiers
+## Target users & modules
 
-| Tier | User | Gets |
+There are no tiers: entitlement is a set of modules, each priced by what it costs the
+server to run.
+
+| Module | User | Gets |
 |---|---|---|
-| `gratis` | Retail investor | Import extracts, portfolio, market status |
-| `investidor` R$29/mês | DIY investor at IRPF time | IRPF report, DARF tracking, TLH planner, what-if, sleeves/target/rebalance/index |
-| `trader` R$79/mês | Prosumer/quant hobbyist | Backtest bench, user-authored strategy specs |
-| `enterprise` R$249/mês | Assessor / escritório | The above, across many client books |
+| `carteira` grátis | Retail investor | Import extracts, portfolio, market status |
+| `irpf` R$19/mês | DIY investor at IRPF time | IRPF report, DARF tracking |
+| `mercado` R$29/mês | Year-round portfolio owner | TLH planner, what-if, sleeves/target/rebalance |
+| `indice` R$12/mês | Same | Carteira vs IBOV and CDI, daily |
+| `bench` R$49/mês | Prosumer/quant hobbyist | Backtest bench, user-authored strategy specs |
+| `empresarial` R$249/mês | Assessor / escritório | Every module, across unlimited client books |
 
-Shipped tiers and route gating are in `README.md`; entitlements are written only by the
+Shipped modules and route gating are in `README.md`; entitlements are written only by the
 Stripe webhook.
 
 IRPF is the seasonal acquisition hook (Jan–May); backtesting and portfolio care are the

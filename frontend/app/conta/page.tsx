@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { api, clearToken } from "@/lib/api";
 import { usePrivacySummary } from "@/lib/hooks";
-import { planName } from "@/lib/plans";
+import { nomeDe } from "@/lib/modules";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -108,7 +108,10 @@ export default function ContaPage() {
             <Card title="Cadastro" className="mb-6">
               <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
                 <Field label="Email" value={summary.data.account.email} />
-                <Field label="Plano" value={planName(summary.data.account.plan)} />
+                <Field
+                  label="Módulos"
+                  value={summary.data.account.modules.map(nomeDe).join(", ")}
+                />
                 <Field
                   label="Login social"
                   value={

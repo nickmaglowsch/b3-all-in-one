@@ -10,7 +10,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
-import { BASE, EMPRESARIAL, PAGOS, somaModulos, TUDO } from "@/lib/modules";
+import { AVULSOS, BASE, BUNDLE, somaModulos, TUDO } from "@/lib/modules";
 
 export function Assinatura() {
   // Abre com o IRPF ligado, não com nada: um total em R$ 0 na primeira pintura
@@ -45,7 +45,7 @@ export function Assinatura() {
           <p className="font-display text-xl font-extrabold text-ink tnum">R$ 0</p>
         </div>
 
-        {PAGOS.map((m) => {
+        {AVULSOS.map((m) => {
           const on = ligados.includes(m.id);
           return (
             <label
@@ -102,14 +102,14 @@ export function Assinatura() {
           inteira multiplicada por cliente. Por isso custa mais que ligar tudo. */}
       <div className="mt-4 flex flex-wrap items-center justify-between gap-x-8 gap-y-3 rounded-lg border border-hairline bg-panel px-5 py-4">
         <div className="min-w-0">
-          <p className="text-sm font-semibold text-ink">{EMPRESARIAL.name}</p>
+          <p className="text-sm font-semibold text-ink">{BUNDLE.name}</p>
           <p className="mt-1 max-w-[64ch] text-sm leading-relaxed text-muted">
-            {EMPRESARIAL.carga}
+            {BUNDLE.carga}
           </p>
         </div>
         <div className="flex items-center gap-5">
           <p className="font-display text-xl font-extrabold text-ink tnum">
-            R$ {EMPRESARIAL.price}
+            R$ {BUNDLE.price}
             <span className="ml-1 text-sm font-normal text-muted">/mês</span>
           </p>
           <Link

@@ -2,20 +2,19 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { isPlanRequired, PAYWALL_EVENT, type PlanRequired } from "@/lib/api";
-import { planOf } from "@/lib/plans";
-import { IconCheck } from "@/components/icons";
+import { isModuleRequired, type ModuleRequired, PAYWALL_EVENT } from "@/lib/api";
+import { moduloDe } from "@/lib/modules";
 
 /** Global answer to any 402: whatever the user clicked, they land here.
  *  Native <dialog> so focus trapping, Esc and the backdrop come from the platform. */
 export function Paywall() {
   const ref = useRef<HTMLDialogElement>(null);
-  const [gate, setGate] = useState<PlanRequired | null>(null);
+  const [gate, setGate] = useState<ModuleRequired | null>(null);
 
   useEffect(() => {
     const onPaywall = (e: Event) => {
       const detail = (e as CustomEvent).detail;
-      if (isPlanRequired(detail)) setGate(detail);
+      if (isModuleRequired(detail)) setGate(detail);
     };
     window.addEventListener(PAYWALL_EVENT, onPaywall);
     return () => window.removeEventListener(PAYWALL_EVENT, onPaywall);
@@ -25,8 +24,8 @@ export function Paywall() {
     if (gate) ref.current?.showModal();
   }, [gate]);
 
-  const plan = gate && planOf(gate.required_plan);
-  if (!gate || !plan) return null;
+  const modulo = gate && moduloDe(gate.required_module);
+  if (!gate || !modulo) return null;
 
   return (
     <dialog
@@ -36,36 +35,31 @@ export function Paywall() {
     >
       <div className="p-6">
         <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-          Plano {plan.name}
+          Módulo não assinado
         </p>
         <h2 className="mt-2 font-display text-xl font-extrabold tracking-tight">
-          Este recurso é do plano {plan.name}
+          Isto vem com {modulo.name}
         </h2>
-        <p className="mt-2 text-sm text-muted">{plan.tagline}</p>
+        <p className="mt-3 text-sm text-muted">{modulo.carga}</p>
 
-        <ul className="mt-5 space-y-2.5">
-          {plan.features.map((f) => (
-            <li key={f} className="flex items-start gap-2.5 text-sm">
-              <IconCheck size={18} className="mt-0.5 shrink-0 text-navy" />
-              <span>{f}</span>
-            </li>
-          ))}
-        </ul>
-
-        <p className="mt-5 flex items-baseline gap-1">
+        <div className="mt-5 flex items-baseline justify-between border-t border-hairline pt-4">
+          <span className="text-sm">{modulo.name}, por mês</span>
           <span className="font-display text-3xl font-extrabold tracking-tight tnum">
-            {plan.price}
+            R$ {modulo.price}
           </span>
-          <span className="text-sm text-muted">{plan.cadence}</span>
+        </div>
+        {/* O resto do carrinho continua como está: ligar um módulo não desliga outro. */}
+        <p className="mt-2 text-[13px] text-muted">
+          Somado ao que você já assina. Nada mais muda.
         </p>
 
         <div className="mt-6 flex gap-2">
           <Link
-            href="/assinatura"
+            href={`/assinatura?ligar=${modulo.id}`}
             onClick={() => ref.current?.close()}
             className="flex-1 rounded-md bg-navy px-4 py-2.5 text-center text-sm font-semibold text-white transition-colors hover:bg-navy/90"
           >
-            Ver planos
+            Ligar {modulo.name}
           </Link>
           <button
             type="button"

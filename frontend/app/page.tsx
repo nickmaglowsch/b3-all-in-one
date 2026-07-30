@@ -2,8 +2,7 @@ import Link from "next/link";
 import { Brand } from "@/components/Brand";
 import { Reveal } from "@/components/landing/Motion";
 import { formatMoney, formatPercent } from "@/lib/format";
-import { PLANS } from "@/lib/plans";
-import { IconCheck } from "@/components/icons";
+import { AVULSOS, BASE as CARTEIRA, BUNDLE, TUDO } from "@/lib/modules";
 
 // ── Direction contract ────────────────────────────────────────────────────────
 // THESIS: one tax engine, shown in cross-section. Refuses the SaaS stack this
@@ -893,66 +892,67 @@ export default function LandingPage() {
             <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
               Preço simples, em reais
             </h2>
-            {/* The four cards below say what each plan adds; the lede only has
-                to remove the two reasons not to start. */}
+            {/* No plan ladder to explain, so the lede does the one thing rows
+                cannot: say why the numbers differ from each other. */}
             <p className="mt-3 max-w-[65ch] text-muted">
-              Comece de graça. Cancele quando quiser.
+              A carteira organizada é de graça, para sempre. O resto você liga um a um, e
+              cada preço é o que aquele módulo custa de servidor: ler seu extrato uma vez
+              é barato, rodar o motor sobre anos de histórico da B3 não é.
             </p>
 
-            {/* One access panel divided by hairlines. */}
-            <div className="mt-10 grid overflow-hidden rounded-lg border border-hairline bg-panel md:grid-cols-2 xl:grid-cols-4">
-              {PLANS.map((plan, i) => (
+            {/* One access panel divided by hairlines — a fatura, não uma grade de
+                colunas: nada aqui se compara com nada, cada linha se liga sozinha. */}
+            <div className="mt-10 overflow-hidden rounded-lg border border-hairline bg-panel">
+              <div className="flex items-baseline justify-between gap-4 p-6">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">{CARTEIRA.name}</h3>
+                  <p className="mt-1 max-w-[52ch] text-sm text-muted">{CARTEIRA.carga}</p>
+                </div>
+                <span className="shrink-0 font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-navy">
+                  Sempre incluída
+                </span>
+              </div>
+
+              {AVULSOS.map((m) => (
                 <div
-                  key={plan.id}
-                  className={`flex flex-col p-6 ${
-                    i > 0 ? "border-t border-hairline md:border-t-0 xl:border-l" : ""
-                  } ${i === 1 ? "md:border-l" : ""} ${i >= 2 ? "md:border-t" : ""} ${
-                    i === 3 ? "md:border-l" : ""
-                  } ${plan.featured ? "bg-navy/[0.03]" : ""}`}
+                  key={m.id}
+                  className="flex items-baseline justify-between gap-4 border-t border-hairline p-6"
                 >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
-                    {plan.featured && (
-                      <span className="shrink-0 font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-navy">
-                        Mais popular
-                      </span>
-                    )}
+                  <div>
+                    <h3 className="text-sm font-semibold text-ink">{m.name}</h3>
+                    <p className="mt-1 max-w-[52ch] text-sm text-muted">{m.carga}</p>
                   </div>
-                  {/* Two-line floor: without it the one-line tagline pushes
-                      Grátis's price and whole feature list a line above the
-                      other three, in the one place on the page whose entire
-                      job is comparing across columns. */}
-                  <p className="mt-1 text-sm text-muted sm:min-h-[2.625rem]">{plan.tagline}</p>
-                  <p className="mt-5 flex items-baseline gap-1">
-                    <span className="font-display text-4xl font-extrabold tracking-tight text-ink tnum">
-                      {plan.price}
-                    </span>
-                    <span className="text-sm text-muted">{plan.cadence}</span>
+                  <p className="shrink-0 font-display text-2xl font-extrabold tracking-tight text-ink tnum">
+                    R$ {m.price}
                   </p>
-
-                  <ul className="mt-6 flex-1 space-y-3">
-                    {plan.features.map((f) => (
-                      <li key={f} className="flex items-start gap-2.5 text-sm text-ink">
-                        <IconCheck size={18} className="mt-0.5 shrink-0 text-navy" />
-                        <span>{f}</span>
-                      </li>
-                    ))}
-                  </ul>
-
-                  <Link
-                    href={plan.id === "gratis" ? "/login" : "/assinatura"}
-                    // The filled variant carries a transparent border so it is
-                    // the same height as the bordered ones sitting beside it.
-                    className={`mt-8 rounded-md border px-4 py-2.5 text-center text-sm font-semibold transition-colors ${
-                      plan.featured
-                        ? "border-transparent bg-navy text-white hover:bg-navy/90"
-                        : "border-hairline text-ink hover:bg-hairline/40"
-                    }`}
-                  >
-                    {plan.cta}
-                  </Link>
                 </div>
               ))}
+
+              <div className="flex items-baseline justify-between gap-4 border-t border-hairline bg-navy/[0.03] p-6">
+                <div>
+                  <h3 className="text-sm font-semibold text-ink">{BUNDLE.name}</h3>
+                  <p className="mt-1 max-w-[52ch] text-sm text-muted">{BUNDLE.carga}</p>
+                  <p className="mt-1 font-mono text-[11px] text-muted">
+                    os quatro módulos avulsos somam R$ {TUDO} — o Empresarial é para quem
+                    apura carteira de cliente
+                  </p>
+                </div>
+                <p className="shrink-0 font-display text-2xl font-extrabold tracking-tight text-ink tnum">
+                  R$ {BUNDLE.price}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
+              <Link
+                href="/login"
+                className="rounded-md bg-navy px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
+              >
+                Começar grátis
+              </Link>
+              <p className="text-sm text-muted">
+                Nenhum módulo é obrigatório. Cancele quando quiser.
+              </p>
             </div>
           </div>
         </section>

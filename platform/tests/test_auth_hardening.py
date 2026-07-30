@@ -63,7 +63,7 @@ def test_password_and_dev_routes_are_not_mounted_in_production():
     """`/auth/register` + `associate_by_email` let anyone claim a stranger's email
     and inherit the account when that person later signs in with Google — with no
     password-reset router mounted to evict them. Neither route is used by the SPA,
-    so production must not expose them (nor dev-login, nor dev-plan).
+    so production must not expose them (nor dev-login, nor dev-modules).
 
     A fresh interpreter, not importlib.reload: the dev-only routes are attached by
     module-level `if settings.is_dev` blocks that run exactly once per process, so
@@ -81,7 +81,7 @@ def test_password_and_dev_routes_are_not_mounted_in_production():
     assert out.returncode == 0, out.stderr
     paths = set(out.stdout.split())
     for route in ("/auth/register", "/auth/jwt/login", "/auth/dev-login",
-                  "/billing/dev-plan"):
+                  "/billing/dev-modules"):
         assert route not in paths, f"{route} is mounted in production"
     assert "/auth/google/authorize" in paths  # ...and Google login still is
 

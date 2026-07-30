@@ -37,13 +37,14 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     oauth_accounts: Mapped[list[OAuthAccount]] = relationship(lazy="joined")
 
     # Billing (spec/01: entitlements on the tenant row, written by the Stripe
-    # webhook only). `plan` is what was bought; access also needs plan_status —
-    # see billing.effective_plan.
+    # webhook only). `modules` is a set of bought ids: nothing ordered, nothing
+    # implied (billing.entitled owns `empresarial`), access still needs plan_status.
+    # Reassign it wholesale — in-place JSONB mutation is invisible to SQLAlchemy.
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String, unique=True, index=True, nullable=True
     )
-    plan: Mapped[str] = mapped_column(
-        String, nullable=False, default="gratis", server_default=text("'gratis'")
+    modules: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
     plan_status: Mapped[str | None] = mapped_column(String, nullable=True)
     plan_renews_at: Mapped[datetime.datetime | None] = mapped_column(

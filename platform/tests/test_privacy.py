@@ -34,7 +34,7 @@ async def _auth(client, email: str) -> dict[str, str]:
 async def _enterprise(client, email: str) -> dict[str, str]:
     headers = await _auth(client, email)
     r = await client.post(
-        "/billing/dev-plan", json={"plan": "enterprise"}, headers=headers
+        "/billing/dev-modules", json={"modules": ["empresarial"]}, headers=headers
     )
     assert r.status_code == 200, r.text
     return headers
@@ -75,7 +75,7 @@ async def test_summary_confirms_processing_and_counts_every_book(client):
     body = r.json()
 
     assert body["account"]["email"] == "summary@example.com"
-    assert body["account"]["plan"] == "enterprise"
+    assert body["account"]["billed_modules"] == ["empresarial"]
     assert body["contact"]  # the channel Art. 18 §1 requires
 
     books = {b["id"]: b for b in body["books"]}

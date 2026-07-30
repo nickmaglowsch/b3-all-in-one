@@ -1,6 +1,6 @@
 # Feature: user-created strategies (rule + portfolio)
 
-Status: **shipped** — `/strategies/user*` on the `trader` tier, migration
+Status: **shipped** — `/strategies/user*` on the `bench` module, migration
 `c7e2f4a9b1d8_user_strategies`. This doc is the architecture of record for the
 feature, not a plan.
 

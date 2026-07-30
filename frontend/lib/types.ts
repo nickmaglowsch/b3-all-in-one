@@ -24,11 +24,11 @@ export interface Health {
   status: string;
 }
 
-// GET /billing. `plan` is what the tenant can use *now* (billed_plan gated by
-// status), so the UI never has to reason about dunning itself.
+// GET /billing. `modules` is what the tenant can use *now* (billed_modules gated by
+// status, `empresarial` expanded), so the UI never reasons about dunning or bundles.
 export interface Subscription {
-  plan: string;
-  billed_plan: string;
+  modules: string[];
+  billed_modules: string[];
   status: string | null;
   renews_at: string | null;
   manageable: boolean;
@@ -42,8 +42,8 @@ export interface PrivacyAccount {
   email: string;
   is_active: boolean;
   is_verified: boolean;
-  plan: string;
-  billed_plan: string;
+  modules: string[];
+  billed_modules: string[];
   plan_status: string | null;
   plan_renews_at: string | null;
   has_stripe_customer: boolean;

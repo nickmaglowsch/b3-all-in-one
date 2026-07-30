@@ -27,7 +27,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app.billing import effective_plan
+from platform_app.billing import entitled
 from platform_app.config import settings
 from platform_app.db import Base, get_async_session
 from platform_app.models import OAuthAccount, Portfolio, User
@@ -75,8 +75,8 @@ def _account(user: User) -> dict:
         "email": user.email,
         "is_active": user.is_active,
         "is_verified": user.is_verified,
-        "plan": effective_plan(user),
-        "billed_plan": user.plan,
+        "modules": sorted(entitled(user)),
+        "billed_modules": sorted(user.modules or []),
         "plan_status": user.plan_status,
         "plan_renews_at": user.plan_renews_at.isoformat() if user.plan_renews_at else None,
         # The identifier itself lives at Stripe, the operator that has to keep it

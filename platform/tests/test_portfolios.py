@@ -27,14 +27,16 @@ async def _auth(client, email: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
-async def _set_plan(client, headers, plan: str) -> None:
-    r = await client.post("/billing/dev-plan", json={"plan": plan}, headers=headers)
+async def _set_modules(client, headers, *modules: str) -> None:
+    r = await client.post(
+        "/billing/dev-modules", json={"modules": list(modules)}, headers=headers
+    )
     assert r.status_code == 200, r.text
 
 
 async def _enterprise(client, email: str) -> dict[str, str]:
     headers = await _auth(client, email)
-    await _set_plan(client, headers, "enterprise")
+    await _set_modules(client, headers, "empresarial")
     return headers
 
 
@@ -73,16 +75,16 @@ async def test_every_account_has_exactly_one_self_portfolio(client):
     ]
 
 
-async def test_creating_a_client_portfolio_needs_enterprise(client):
+async def test_creating_a_client_portfolio_needs_empresarial(client):
     headers = await _auth(client, "notenterprise@example.com")
-    await _set_plan(client, headers, "trader")
+    await _set_modules(client, headers, "bench")
 
     r = await client.post("/portfolios", json={"label": "Cliente A"}, headers=headers)
     assert r.status_code == 402
     assert r.json()["detail"] == {
-        "error": "plan_required",
-        "required_plan": "enterprise",
-        "current_plan": "trader",
+        "error": "module_required",
+        "required_module": "empresarial",
+        "modules": ["bench", "carteira"],
     }
 
 
@@ -127,7 +129,7 @@ async def test_another_accounts_own_book_is_not_reachable(client):
     """The highest-value probe: an own book has no `portfolios` row, so the header
     is the only thing standing between 'my book' and 'anyone's book'."""
     victim = await _auth(client, "victim@example.com")
-    await _set_plan(client, victim, "investidor")
+    await _set_modules(client, victim, "mercado")
     victim_id = (await client.get("/me", headers=victim)).json()["id"]
     assert (await _put_overrides(client, victim, ["PETR4"])).status_code == 200
 
@@ -166,14 +168,17 @@ async def test_losing_enterprise_locks_the_managed_books(client):
     managed = (await _create(client, headers, "Cliente A"))["id"]
     assert (await _put_overrides(client, _acting(headers, managed), ["PETR4"])).status_code == 200
 
-    await _set_plan(client, headers, "trader")
+    # Fica com `mercado` (o módulo que a rota de settings pede) e perde o bundle:
+    # é a diferença entre "não pode mexer nesta rota" e "não pode mexer no livro
+    # de um cliente" que o teste tem de isolar.
+    await _set_modules(client, headers, "mercado")
 
-    # The data survives, but acting on it is what the tier sells.
+    # The data survives, but acting on it is what the bundle sells.
     r = await client.get(
         "/portfolio/settings/asset-overrides", headers=_acting(headers, managed)
     )
     assert r.status_code == 402
-    assert r.json()["detail"]["required_plan"] == "enterprise"
+    assert r.json()["detail"]["required_module"] == "empresarial"
     # Their own book is untouched by the downgrade.
     assert (
         await client.get("/portfolio/settings/asset-overrides", headers=headers)

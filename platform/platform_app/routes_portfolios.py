@@ -1,8 +1,8 @@
-"""The books an account manages (spec/07, enterprise tier).
+"""The books an account manages (spec/07, módulo empresarial).
 
 Everyone has exactly one own book, whose tenant_id is the user id and which has
 no row in `portfolios` — that is why nothing needed backfilling when this landed.
-The enterprise tier adds client books: rows here, whose id is the tenant_id the
+The empresarial module adds client books: rows here, whose id is the tenant_id the
 X-Portfolio-Id header selects (see tenancy.get_current_tenant).
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app.billing import needs_enterprise
+from platform_app.billing import needs_empresarial
 from platform_app.config import settings
 from platform_app.db import Base, get_async_session
 from platform_app.models import BacktestRun, Portfolio, User
@@ -115,7 +115,7 @@ async def list_portfolios(
 @portfolios_router.post("", status_code=201)
 async def create_portfolio(
     body: PortfolioIn,
-    tenant=Depends(needs_enterprise),
+    tenant=Depends(needs_empresarial),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     user, _ = tenant
@@ -133,7 +133,7 @@ async def create_portfolio(
 async def rename_portfolio(
     portfolio_id: uuid.UUID,
     body: PortfolioIn,
-    tenant=Depends(needs_enterprise),
+    tenant=Depends(needs_empresarial),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     user, _ = tenant
@@ -150,7 +150,7 @@ async def rename_portfolio(
 @portfolios_router.delete("/{portfolio_id}", status_code=204)
 async def delete_portfolio(
     portfolio_id: uuid.UUID,
-    tenant=Depends(needs_enterprise),
+    tenant=Depends(needs_empresarial),
     session: AsyncSession = Depends(get_async_session),
 ) -> Response:
     """Offboard a client: the book and everything keyed to it, in one transaction."""

@@ -113,8 +113,8 @@ new work but small, and it's the single biggest generalization required.
   `/auth/google`). Proven on this exact infra; no managed auth provider needed. JWT
   carries `tenant_id`. Config via env: `GOOGLE_OAUTH_CLIENT_ID/SECRET`, `SECRET_KEY`,
   `FRONTEND_URL`, `ALLOWED_ORIGINS`.
-- Billing: **Stripe, imobindex pattern** — subscription price IDs per tier
-  (`STRIPE_PRICE_ID`-style env vars for Pro monthly/annual and Quant), webhook endpoint
+- Billing: **Stripe, imobindex pattern** — one subscription price ID per module
+  (`STRIPE_PRICE_<module>` env vars), one line item per bought module, webhook endpoint
   with `STRIPE_WEBHOOK_SECRET`, entitlements column on the tenant row updated by webhook.
 - Postgres RLS on every tenant table; API sets `tenant_id` from the token, never from input.
 - Uploaded extracts and tax reports encrypted at rest; tenant data export + delete endpoints
@@ -149,7 +149,7 @@ backend.
 
 Next.js deployed to Cloudflare via **OpenNext** (`wrangler.toml` → `.open-next/worker.js`,
 exactly as imobindex's frontend; env vars set in the Cloudflare dashboard). Talks to the
-API on its own subdomain over CORS. Three areas matching the tiers: **Portfolio**
+API on its own subdomain over CORS. Three areas matching the modules: **Portfolio**
 (dashboard, positions, income, imports), **IRPF** (report viewer with copy-per-field,
 DARF ledger, checklist), **Bench** (strategy editor with YAML validation, run launcher,
 tear-sheet viewer). The tear sheets are rebuilt in the frontend from the run's curves

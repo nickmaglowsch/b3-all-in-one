@@ -22,20 +22,24 @@ import zipfile
 
 import pytest
 
+from platform_app.billing import SELLABLE as ALL_MODULES
+
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 PASSWORD = "correct-horse-battery-staple"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-async def _auth(client, email: str, plan: str = "trader") -> dict[str, str]:
+async def _auth(client, email: str, modules: list[str] | None = None) -> dict[str, str]:
     await client.post("/auth/register", json={"email": email, "password": PASSWORD})
     r = await client.post(
         "/auth/jwt/login", data={"username": email, "password": PASSWORD})
     assert r.status_code == 200, r.text
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert (await client.post("/billing/dev-plan", json={"plan": plan},
-                              headers=headers)).status_code == 200
+    assert (await client.post(
+        "/billing/dev-modules",
+        json={"modules": modules if modules is not None else list(ALL_MODULES)},
+        headers=headers)).status_code == 200
     return headers
 
 
@@ -87,7 +91,7 @@ async def test_upload_still_accepts_a_non_zip(client):
 
 @pytest.mark.parametrize("freq", ["s", "min", "h", "D"])
 async def test_whatif_rejects_a_resample_freq_off_the_cadence_enum(client, freq):
-    headers = await _auth(client, "bounds-whatif@example.com", plan="investidor")
+    headers = await _auth(client, "bounds-whatif@example.com", modules=["mercado"])
     r = await client.post(
         "/whatif", json={"strategy_ids": ["MomSharpe"], "freq": freq},
         headers=headers)

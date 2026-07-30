@@ -49,11 +49,15 @@ class Settings(BaseSettings):
     google_oauth_client_secret: str = ""
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
-    # One recurring price per paid tier (see billing.LADDER). Empty => that tier
-    # can't be bought; /billing/checkout 400s instead of half-creating a session.
-    stripe_price_investidor: str = ""
-    stripe_price_trader: str = ""
-    stripe_price_enterprise: str = ""
+    # One recurring price per sellable module (billing.SELLABLE — the field name
+    # is `stripe_price_<module id>`, which is how billing.price_for finds it).
+    # Empty => that module can't be bought; /billing/checkout 400s instead of
+    # half-creating a session.
+    stripe_price_irpf: str = ""
+    stripe_price_mercado: str = ""
+    stripe_price_indice: str = ""
+    stripe_price_bench: str = ""
+    stripe_price_empresarial: str = ""
 
     @property
     def origins(self) -> list[str]:

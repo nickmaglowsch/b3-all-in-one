@@ -1084,7 +1084,7 @@ async def _own_book(client, email: str) -> tuple[dict[str, str], uuid.UUID]:
     assert r.status_code == 200, r.text
     headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     r = await client.post(
-        "/billing/dev-plan", json={"plan": "investidor"}, headers=headers)
+        "/billing/dev-modules", json={"modules": ["indice", "mercado"]}, headers=headers)
     assert r.status_code == 200, r.text
     return headers, uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
 

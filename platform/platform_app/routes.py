@@ -28,7 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import b3run, enginerun, specstore, subprocs, tasks
-from platform_app.billing import ENTERPRISE, effective_plan, needs_investidor, needs_trader
+from platform_app.billing import EMPRESARIAL, entitled, needs_bench, needs_mercado
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import (
@@ -408,7 +408,7 @@ class SleeveIn(BaseModel):
 
 @portfolio_router.get("/sleeves")
 async def get_sleeves(
-    tenant=Depends(needs_investidor),
+    tenant=Depends(needs_mercado),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     _user, tid = tenant
@@ -422,7 +422,7 @@ async def get_sleeves(
 @portfolio_router.put("/sleeves")
 async def put_sleeves(
     body: list[SleeveIn],
-    tenant=Depends(needs_investidor),
+    tenant=Depends(needs_mercado),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Replace the whole sleeve set atomically. Validates percentages sum to 100
@@ -664,7 +664,7 @@ async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, di
 
 @portfolio_router.get("/target")
 async def get_target(
-    tenant=Depends(needs_investidor),
+    tenant=Depends(needs_mercado),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Combined target weights, current weights, and per-ticker drift. Prices the
@@ -755,7 +755,7 @@ def _cap_buys(buys: list[dict], budget: float) -> list[dict]:
 @portfolio_router.post("/rebalance-plans")
 async def create_rebalance_plan(
     body: RebalanceRequest,
-    tenant=Depends(needs_investidor),
+    tenant=Depends(needs_mercado),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Advisor v0 (single-shot, this month): combined target → integer trade list →
@@ -1340,7 +1340,7 @@ async def _tax_summary_payload(session: AsyncSession, tid: uuid.UUID) -> dict:
 
 @portfolio_router.get("/tax-summary")
 async def get_tax_summary(
-    tenant=Depends(needs_investidor),
+    tenant=Depends(needs_mercado),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1357,7 +1357,7 @@ _tax_refresh_locks: dict[uuid.UUID, asyncio.Lock] = {}
 
 @portfolio_router.post("/tax-summary/refresh")
 async def refresh_tax_summary(
-    tenant=Depends(needs_investidor),
+    tenant=Depends(needs_mercado),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1680,7 +1680,7 @@ async def _get_user_strategy(sid: str, tid: uuid.UUID, session: AsyncSession) ->
 
 @strategies_router.get("/user")
 async def list_user_strategies(
-    tenant=Depends(needs_trader),
+    tenant=Depends(needs_bench),
     session: AsyncSession = Depends(get_async_session),
 ) -> list[dict]:
     _user, tid = tenant
@@ -1693,7 +1693,7 @@ async def list_user_strategies(
 @strategies_router.post("/user")
 async def create_user_strategy(
     body: StrategyIn = Body(...),
-    tenant=Depends(needs_trader),
+    tenant=Depends(needs_bench),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1739,7 +1739,7 @@ async def _cascade_rename(
 async def update_user_strategy(
     sid: str,
     body: StrategyIn = Body(...),
-    tenant=Depends(needs_trader),
+    tenant=Depends(needs_bench),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1765,7 +1765,7 @@ async def update_user_strategy(
 @strategies_router.delete("/user/{sid}")
 async def delete_user_strategy(
     sid: str,
-    tenant=Depends(needs_trader),
+    tenant=Depends(needs_bench),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
@@ -1794,7 +1794,7 @@ async def delete_user_strategy(
 @strategies_router.post("/user/{sid}/promote")
 async def promote_user_strategy(
     sid: str,
-    tenant=Depends(needs_trader),
+    tenant=Depends(needs_bench),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Compile a portfolio strategy's sleeves into the live target (reuses the
@@ -1837,13 +1837,13 @@ class BacktestRequest(BaseModel):
 #
 # Per account, not per book: an empresarial login managing fifty client books is
 # one customer, and a per-book cap would sell fifty queues for the price of one.
-# The tiers below the two named here never reach this route (needs_trader).
+# Nobody without `bench` reaches this route (needs_bench), so 0 is unreachable.
 #
 # ponytail: a concurrency cap, not a monthly allowance. It protects the box,
 # which is the thing that actually breaks; a run/month meter is a billing
 # question and wants a billing period, a counter and a reset — build it when
 # runs cost money rather than latency.
-BACKTEST_QUOTA = {"trader": 3, ENTERPRISE: 10}
+BACKTEST_QUOTA = {EMPRESARIAL: 10, "bench": 3}
 
 
 async def inflight_backtests(session: AsyncSession, user) -> int:
@@ -1875,7 +1875,7 @@ async def create_backtest(
     user, tid = tenant
     # Before the gallery: that call shells into the engine venv, and a queue
     # already full has no reason to spend an interpreter on name validation.
-    limit = BACKTEST_QUOTA.get(effective_plan(user), 0)
+    limit = max((n for m, n in BACKTEST_QUOTA.items() if m in entitled(user)), default=0)
     running = await inflight_backtests(session, user)
     if running >= limit:
         raise HTTPException(429, detail={

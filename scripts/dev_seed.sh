@@ -34,10 +34,10 @@ AUTH=(-H "Authorization: Bearer $TOKEN")
 log "token acquired (${#TOKEN} chars)"
 
 # Seeding touches paid routes (sleeves, backtests). New dev tenants are born on the
-# top tier; this also lifts one that predates billing or was flipped to test a paywall.
-curl -sf "${AUTH[@]}" -X POST "$API/billing/dev-plan" \
-  -H 'Content-Type: application/json' -d '{"plan":"trader"}' >/dev/null
-log "plan: trader (dev)"
+# bundle; this also lifts one that predates billing or was flipped to test a paywall.
+curl -sf "${AUTH[@]}" -X POST "$API/billing/dev-modules" \
+  -H 'Content-Type: application/json' -d '{"modules":["empresarial"]}' >/dev/null
+log "modules: empresarial (dev)"
 
 step "Uploading B3 extracts from $IMPORTS_DIR"
 FILES=()

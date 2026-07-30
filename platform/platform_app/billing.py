@@ -1,14 +1,30 @@
-"""Stripe billing: the plan ladder, the entitlement dependency, and /billing routes.
+"""Stripe billing: the module catalogue, the entitlement dependency, /billing routes.
 
-Tiers mirror the landing page — gratis < investidor (R$29/mês) < trader (R$79/mês)
-< empresarial (R$249/mês, many client books under one login).
+There is no tier ladder. A subscription is a *set* of modules, each one a route
+group, each priced by what the server actually spends on it — storing an extract
+costs once, running the engine over years of history costs per click. So `bench`
+does not imply `irpf`, and no comparison of ranks can express that; entitlement is
+set membership.
+
+`empresarial` is the one bundle, and it is not a module you add to a cart: it is
+every module, for unlimited client books. Charging it alongside a module it already
+contains would bill the same access twice, so the cart refuses the mix.
+
 Entitlements live on the user row (== tenant row, spec/01) and are written *only* by
 the webhook: checkout returns a URL, it never grants access. That way a user who
 abandons Stripe's hosted page, or whose card later fails, is never entitled by us.
+
+One subscription per tenant is an invariant, not a habit: `mode="subscription"`
+always creates a *new* subscription, so a second checkout would bill two of them for
+overlapping access, and whichever fired last would rewrite `modules` from its own
+items — revoking what the other one is still charging for. So checkout is the first
+purchase only; changing the cart later is PUT /billing/modules, which edits the
+items of the live subscription.
 """
 
 import datetime
 import json
+import logging
 import uuid
 
 import stripe
@@ -20,45 +36,60 @@ from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import User
 from platform_app.tenancy import get_current_tenant
-# Identity-only routes take the user directly: depending on the tenant resolver
-# would make billing inherit its 402/404 on a stale book selection, i.e. paywall
-# the very page you fix a lapsed subscription on.
+# Identity-only routes take the user directly: depending on the tenant resolver would
+# make billing inherit its 402/404 on a stale book selection, i.e. paywall the very
+# page you fix a lapsed subscription on.
 from platform_app.users import current_active_user
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
+log = logging.getLogger(__name__)
 
-FREE = "gratis"
-ENTERPRISE = "enterprise"
-LADDER = (FREE, "investidor", "trader", ENTERPRISE)
-# Stripe keeps a subscription usable while it retries a failed charge (dunning).
-# Cutting access on the first decline churns customers over an expired card.
+CARTEIRA = "carteira"
+EMPRESARIAL = "empresarial"
+# Every id here is a route group that exists and is gated below: selling a module
+# with no code behind it is the failure this tuple prevents.
+MODULES = (CARTEIRA, "irpf", "mercado", "indice", "bench", EMPRESARIAL)
+SELLABLE = tuple(m for m in MODULES if m != CARTEIRA)  # carteira é o piso grátis
+# Dunning: Stripe keeps a subscription usable while it retries a failed charge, and
+# cutting access on the first decline churns customers over an expired card.
 ENTITLED = {"active", "trialing", "past_due"}
 
 stripe.api_key = settings.stripe_secret_key
 
 
-def price_for(plan: str) -> str:
-    return {
-        "investidor": settings.stripe_price_investidor,
-        "trader": settings.stripe_price_trader,
-        ENTERPRISE: settings.stripe_price_enterprise,
-    }.get(plan, "")
+def price_for(module: str) -> str:
+    """The recurring price id for a module. Empty => it cannot be bought, and
+    /billing/checkout 400s instead of half-creating a session."""
+    return getattr(settings, f"stripe_price_{module}", "") if module in SELLABLE else ""
 
 
-def plan_for_price(price_id: str | None) -> str:
-    """Reverse the price→tier map. An unknown price (an old or another product's
-    price) is worth no entitlement, so it reads as free."""
-    return next((p for p in LADDER[1:] if price_id and price_id == price_for(p)), FREE)
+def module_for_price(price_id: str | None) -> str | None:
+    """Reverse the price→module map. An unknown price (an old one, or another
+    product on the same Stripe account) is worth no entitlement — None, not the
+    free floor, so a cart of several items keeps the ones it does recognise."""
+    if not price_id:
+        return None
+    return next((m for m in SELLABLE if price_id == price_for(m)), None)
 
 
-def effective_plan(user: User) -> str:
-    """The tier the user can actually use: the paid plan while the subscription is
-    in good standing, free otherwise."""
-    return user.plan if user.plan_status in ENTITLED else FREE
+def entitled(user: User) -> frozenset[str]:
+    """The modules the tenant can use right now.
+
+    `carteira` is unconditional: the extracts they imported are theirs, and a
+    lapsed card is not a reason to hide the book. Everything else needs the
+    subscription in good standing — the bought set survives a cancellation in the
+    record (so /assinatura can show what lapsed) but grants nothing.
+    """
+    if user.plan_status not in ENTITLED:
+        return frozenset({CARTEIRA})
+    bought = frozenset(user.modules or ())
+    if EMPRESARIAL in bought:
+        return frozenset(MODULES)
+    return bought | {CARTEIRA}
 
 
-def require_plan(minimum: str):
-    """Dependency factory — 402 unless the tenant's effective plan >= `minimum`.
+def require_module(module: str):
+    """Dependency factory — 402 unless the tenant is entitled to `module`.
 
     Returns the same `(user, tenant_id)` tuple as get_current_tenant, so a gated
     route just swaps its dependency instead of growing a parameter.
@@ -67,26 +98,32 @@ def require_plan(minimum: str):
     async def dependency(
         tenant: tuple[User, uuid.UUID] = Depends(get_current_tenant),
     ) -> tuple[User, uuid.UUID]:
-        current = effective_plan(tenant[0])
-        if LADDER.index(current) < LADDER.index(minimum):
-            raise HTTPException(
-                402,
-                detail={
-                    "error": "plan_required",
-                    "required_plan": minimum,
-                    "current_plan": current,
-                },
-            )
+        have = entitled(tenant[0])
+        if module not in have:
+            raise HTTPException(402, detail=gate_detail(module, have))
         return tenant
 
     return dependency
 
 
+def gate_detail(module: str, have: frozenset[str]) -> dict:
+    """The 402 body. One shape, so the frontend has one paywall to render — and
+    it carries what the tenant *does* have, because "you need bench" is only
+    actionable next to "you have irpf"."""
+    return {
+        "error": "module_required",
+        "required_module": module,
+        "modules": sorted(have),
+    }
+
+
 # Module-level singletons: FastAPI caches a dependency per request by function
 # identity, so gated routes sharing these resolve get_current_tenant just once.
-needs_investidor = require_plan("investidor")
-needs_trader = require_plan("trader")
-needs_enterprise = require_plan(ENTERPRISE)
+needs_irpf = require_module("irpf")
+needs_mercado = require_module("mercado")
+needs_indice = require_module("indice")
+needs_bench = require_module("bench")
+needs_empresarial = require_module(EMPRESARIAL)
 
 
 def _require_stripe() -> None:
@@ -111,30 +148,65 @@ async def _ensure_customer(user: User, session: AsyncSession) -> str:
 @billing_router.get("")
 async def get_subscription(user: User = Depends(current_active_user)) -> dict:
     return {
-        "plan": effective_plan(user),
-        "billed_plan": user.plan,
+        # What is usable, and what is on the invoice. They differ whenever the
+        # subscription lapses, and the difference is the whole message the
+        # /assinatura page has to deliver.
+        "modules": sorted(entitled(user)),
+        "billed_modules": sorted(user.modules or []),
         "status": user.plan_status,
         "renews_at": user.plan_renews_at,
         # No customer yet => nothing for the billing portal to manage.
         "manageable": bool(user.stripe_customer_id),
+        # Which door a cart change goes through: PUT /billing/modules on a live
+        # subscription, hosted checkout on the first purchase.
+        "changeable": _has_live_subscription(user),
     }
+
+
+def _has_live_subscription(user: User) -> bool:
+    return bool(user.stripe_subscription_id) and user.plan_status in ENTITLED
+
+
+def _validate_cart(modules: list[str]) -> list[str]:
+    """Reject a cart before it becomes a Stripe session, because a half-valid
+    subscription is a refund conversation. Returns the prices to charge."""
+    if not modules:
+        raise HTTPException(400, "nenhum módulo selecionado.")
+    unknown = sorted(set(modules) - set(SELLABLE))
+    if unknown:
+        raise HTTPException(400, f"módulo não vendido: {', '.join(unknown)}")
+    if EMPRESARIAL in modules and len(set(modules)) > 1:
+        # The bundle already contains every module; billing both is billing twice.
+        raise HTTPException(
+            400, f"o plano {EMPRESARIAL} já inclui todos os módulos — assine só ele."
+        )
+    prices = []
+    for module in dict.fromkeys(modules):  # dedupe, keep the caller's order
+        price = price_for(module)
+        if not price:
+            raise HTTPException(400, f"módulo sem preço configurado: {module}")
+        prices.append(price)
+    return prices
 
 
 @billing_router.post("/checkout")
 async def create_checkout(
-    plan: str = Body(..., embed=True),
+    modules: list[str] = Body(..., embed=True),
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
-    """Hosted Checkout session for a paid tier. Returns the URL to redirect to."""
-    price = price_for(plan)
-    if not price:
-        raise HTTPException(400, f"plano sem preço configurado: {plan}")
+    """Hosted Checkout for the *first* subscription — one line item per module.
+    Returns the URL to redirect to; it grants nothing on its own."""
+    prices = _validate_cart(modules)
+    if _has_live_subscription(user):
+        # A second session means a second subscription: two invoices for the same
+        # access, and the loser's next event revoking the winner's modules.
+        raise HTTPException(409, "já existe uma assinatura ativa — altere os módulos dela.")
     _require_stripe()
     checkout = await stripe.checkout.Session.create_async(
         mode="subscription",
         customer=await _ensure_customer(user, session),
-        line_items=[{"price": price, "quantity": 1}],
+        line_items=[{"price": p, "quantity": 1} for p in prices],
         client_reference_id=str(user.id),
         # Fallback identity for the webhook if the customer id write ever loses a race.
         subscription_data={"metadata": {"tenant_id": str(user.id)}},
@@ -143,6 +215,48 @@ async def create_checkout(
         cancel_url=f"{settings.frontend_url}/assinatura?checkout=cancelado",
     )
     return {"url": checkout.url}
+
+
+@billing_router.put("/modules")
+async def set_modules(
+    modules: list[str] = Body(..., embed=True),
+    user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    """Change the cart of a live subscription by editing its items — no second
+    subscription, no second card entry, Stripe prorates the difference. Writes no
+    entitlement: that still arrives as the `customer.subscription.updated`
+    webhook, so there is exactly one writer."""
+    prices = _validate_cart(modules)
+    if not _has_live_subscription(user):
+        raise HTTPException(409, "nenhuma assinatura ativa para alterar.")
+    _require_stripe()
+    try:
+        sub = await stripe.Subscription.retrieve_async(user.stripe_subscription_id)
+    except stripe.InvalidRequestError as err:
+        # Só `resource_missing` é "sumiu": InvalidRequestError é qualquer 400, e uma
+        # chave de teste contra id de produção cai aqui para uma assinatura que
+        # existe — soltar o id ali liberaria o checkout a criar a segunda.
+        if err.code != "resource_missing":
+            raise
+        # Apagada no dashboard, ou id de dev velho. Soltar o id é o caminho de
+        # volta: preso, este PUT falha e o checkout responde 409 — as duas portas
+        # fechadas. Entitlement fica como está, só o webhook escreve.
+        log.warning("assinatura %s sumiu do Stripe; soltando o id", user.stripe_subscription_id)
+        user.stripe_subscription_id = None
+        await session.commit()
+        raise HTTPException(409, "a assinatura não existe mais no Stripe — assine de novo.") from None
+    # Only the difference: leaving an unchanged item alone keeps its billing anchor,
+    # where delete-and-re-add would churn the invoice for no reason.
+    current = {item["price"]["id"]: item["id"] for item in sub["items"]["data"]}
+    items = [{"id": i, "deleted": True} for price, i in current.items() if price not in prices]
+    items += [{"price": p, "quantity": 1} for p in prices if p not in current]
+    if not items:
+        return {"changed": False}
+    await stripe.Subscription.modify_async(
+        user.stripe_subscription_id, items=items, proration_behavior="create_prorations"
+    )
+    return {"changed": True}
 
 
 @billing_router.post("/portal")
@@ -183,21 +297,54 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
     if user.plan_event_at and fired_at < user.plan_event_at:
         return  # out-of-order delivery: a stale event must not resurrect a dead plan
 
-    item = (sub.get("items", {}).get("data") or [{}])[0]
+    sub_id = sub.get("id")
+    live = user.stripe_subscription_id
+    if live and sub_id and sub_id != live and user.plan_status in ENTITLED:
+        # A second subscription on the same customer (created in the dashboard, or a
+        # checkout that escaped the 409). The live one owns the entitlement: letting
+        # the intruder write would revoke modules the tenant is still being charged
+        # for, and its `deleted` would cancel an access that keeps billing.
+        log.warning("evento de %s ignorado: %s é a assinatura viva", sub_id, live)
+        return
+
+    items = sub.get("items", {}).get("data") or []
     canceled = event["type"].endswith(".deleted")
     # `current_period_end` sits on the subscription in older API versions and on the
     # item in newer ones (2025-03+); read whichever this account's version sends.
-    period_end = sub.get("current_period_end") or item.get("current_period_end")
+    period_end = sub.get("current_period_end") or (
+        items[0].get("current_period_end") if items else None
+    )
 
-    user.plan = FREE if canceled else plan_for_price((item.get("price") or {}).get("id"))
+    # Every item, not just the first: a cart of four modules is four line items, and
+    # reading one would silently entitle a quarter of what was paid. A new list,
+    # never a mutation — JSONB in place is invisible to SQLAlchemy.
+    bought = sorted(
+        {m for item in items if (m := module_for_price((item.get("price") or {}).get("id")))}
+    )
+    if canceled:
+        user.modules = []
+    elif bought:
+        user.modules = bought
+    else:
+        # Not a downgrade: Stripe subscriptions always carry at least one item, so an
+        # empty result means no item's price is configured here — a missing
+        # STRIPE_PRICE_* in this deploy. Clearing would charge in full and deliver
+        # nothing, silently. Keep the set and make noise.
+        log.error(
+            "assinatura %s: nenhum item bate com um STRIPE_PRICE_* conhecido; "
+            "entitlement mantido em %s", sub_id, user.modules
+        )
     user.plan_status = "canceled" if canceled else sub.get("status")
+    # Renovação só de quem tem acesso: um `updated` com status morto traz
+    # `current_period_end` no futuro, e a tela leria "Renova em <data>".
     user.plan_renews_at = (
         datetime.datetime.fromtimestamp(period_end, datetime.UTC)
-        if period_end and not canceled
+        if period_end and user.plan_status in ENTITLED
         else None
     )
     user.plan_event_at = fired_at
     user.stripe_customer_id = user.stripe_customer_id or sub.get("customer")
+    user.stripe_subscription_id = None if canceled else (sub_id or live)
     session.add(user)
     await session.commit()
 
@@ -233,18 +380,21 @@ async def webhook(
 
 if settings.is_dev:
 
-    @billing_router.post("/dev-plan")
-    async def dev_set_plan(
-        plan: str = Body(..., embed=True),
+    @billing_router.post("/dev-modules")
+    async def dev_set_modules(
+        modules: list[str] = Body(..., embed=True),
+        status: str = Body("active", embed=True),
         user: User = Depends(current_active_user),
         session: AsyncSession = Depends(get_async_session),
     ) -> dict:
-        """Dev-only: flip the tenant's plan without Stripe, so the paywall is
-        testable locally. Never mounted outside development."""
-        if plan not in LADDER:
-            raise HTTPException(400, f"plano desconhecido: {plan}")
-        user.plan = plan
-        user.plan_status = None if plan == FREE else "active"
+        """Dev-only: write the module set without Stripe, so the paywall is
+        testable locally. `status` is settable because dunning and cancellation
+        are entitlement states, not module states. Never mounted outside dev."""
+        unknown = sorted(set(modules) - set(MODULES))
+        if unknown:
+            raise HTTPException(400, f"módulo desconhecido: {', '.join(unknown)}")
+        user.modules = sorted(set(modules) - {CARTEIRA})
+        user.plan_status = status if user.modules else None
         session.add(user)
         await session.commit()
-        return {"plan": effective_plan(user)}
+        return {"modules": sorted(entitled(user))}

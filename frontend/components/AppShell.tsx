@@ -43,10 +43,15 @@ const NAV = [
 // required to be readable *before* signing up, so it belongs here.
 const STANDALONE = ["/", "/login", "/privacidade"];
 
+// `/variantes` and everything under it are landing pages under review, so they
+// are public for the same reason `/` is — a prefix, because they are a tree.
+const isStandalone = (pathname: string) =>
+  STANDALONE.includes(pathname) || pathname.startsWith("/variantes");
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (STANDALONE.includes(pathname)) return <>{children}</>;
+  if (isStandalone(pathname)) return <>{children}</>;
 
   return <ShellChrome pathname={pathname}>{children}</ShellChrome>;
 }

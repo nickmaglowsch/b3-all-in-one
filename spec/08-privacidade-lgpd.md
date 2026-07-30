@@ -14,10 +14,10 @@ plus `platform_app/privacy.py`.
 |---|---|---|
 | Titular | The investor whose B3 extracts these are | Always |
 | Controlador | Quantax | For accounts managing their own book |
-| Operador | Quantax | For the client books an `enterprise` account manages — there the escritório is the controller and we act on its instructions |
+| Operador | Quantax | For the client books an `empresarial` account manages — there the escritório is the controller and we act on its instructions |
 | Suboperadores | Google (login), Stripe (cobrança), the VPS/hosting provider | See below |
 
-The enterprise split matters: a firm's client never signed up here, so we have no direct
+The empresarial split matters: a firm's client never signed up here, so we have no direct
 relationship with them. `DELETE /privacy/account` therefore erases the firm's managed books
 too — an operator that kept them after the controller left would be processing without a
 basis.

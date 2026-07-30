@@ -22,7 +22,7 @@ export function clearToken() {
   clearPortfolioId();
 }
 
-// Which book the app is acting on (enterprise tier). Unset => the user's own,
+// Which book the app is acting on (módulo empresarial). Unset => the user's own,
 // which is every account below that tier.
 //
 // sessionStorage, deliberately: an advisor comparing two clients side by side
@@ -101,18 +101,19 @@ export class ApiError extends Error {
   }
 }
 
-// 402 body from platform_app/billing.require_plan.
-export type PlanRequired = {
-  error: "plan_required";
-  required_plan: string;
-  current_plan: string;
+// 402 body from platform_app/billing.gate_detail. `modules` is what the tenant
+// *does* have — "you need bench" is only actionable next to it.
+export type ModuleRequired = {
+  error: "module_required";
+  required_module: string;
+  modules: string[];
 };
 
-export function isPlanRequired(detail: unknown): detail is PlanRequired {
+export function isModuleRequired(detail: unknown): detail is ModuleRequired {
   return (
     typeof detail === "object" &&
     detail !== null &&
-    (detail as PlanRequired).error === "plan_required"
+    (detail as ModuleRequired).error === "module_required"
   );
 }
 
@@ -167,8 +168,8 @@ export async function api<T>(
       res.status === 402 &&
       typeof window !== "undefined" &&
       getPortfolioId() &&
-      isPlanRequired(detail) &&
-      detail.required_plan === "enterprise"
+      isModuleRequired(detail) &&
+      detail.required_module === "empresarial"
     ) {
       clearPortfolioId();
       window.location.reload();
@@ -212,7 +213,7 @@ async function errorDetail(res: Response): Promise<unknown> {
 
 function errorMessage(detail: unknown, res: Response): string {
   if (typeof detail === "string") return detail;
-  if (isPlanRequired(detail)) return "Recurso de um plano pago.";
+  if (isModuleRequired(detail)) return "Recurso de um módulo que você ainda não assina.";
   // Structured errors carry their own pt-BR sentence (the backtest quota's 429,
   // say). Preferred over the blob below, which puts JSON in front of a user.
   if (detail && typeof detail === "object" && "message" in detail

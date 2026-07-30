@@ -43,19 +43,12 @@ async def _acting_tenant(
         raise HTTPException(404, "carteira não encontrada")
 
     # Local import: billing depends on this module for get_current_tenant.
-    from platform_app.billing import ENTERPRISE, effective_plan
+    from platform_app.billing import EMPRESARIAL, entitled, gate_detail
 
-    current = effective_plan(user)
-    if current != ENTERPRISE:
-        # The books survive a downgrade; acting on them is what the tier sells.
-        raise HTTPException(
-            402,
-            detail={
-                "error": "plan_required",
-                "required_plan": ENTERPRISE,
-                "current_plan": current,
-            },
-        )
+    have = entitled(user)
+    if EMPRESARIAL not in have:
+        # The books survive a downgrade; acting on them is what the bundle sells.
+        raise HTTPException(402, detail=gate_detail(EMPRESARIAL, have))
     return portfolio_id
 
 
@@ -81,7 +74,7 @@ async def get_current_tenant(
 
     The user is *who you are* (identity, billing); the tenant_id is *whose book
     you are touching* — its own by default, or a managed client portfolio the
-    enterprise tier selects with the X-Portfolio-Id header. Scope every tenant
+    empresarial module selects with the X-Portfolio-Id header. Scope every tenant
     query by the returned tenant_id — never trust an id from the request body.
 
     RLS hook: when tenant tables land, set the Postgres session GUC here

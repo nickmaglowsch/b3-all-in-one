@@ -37,14 +37,18 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     oauth_accounts: Mapped[list[OAuthAccount]] = relationship(lazy="joined")
 
     # Billing (spec/01: entitlements on the tenant row, written by the Stripe
-    # webhook only). `plan` is what was bought; access also needs plan_status —
-    # see billing.effective_plan.
+    # webhook only). `modules` is a set of bought ids: nothing ordered, nothing
+    # implied (billing.entitled owns `empresarial`), access still needs plan_status.
+    # Reassign it wholesale — in-place JSONB mutation is invisible to SQLAlchemy.
     stripe_customer_id: Mapped[str | None] = mapped_column(
         String, unique=True, index=True, nullable=True
     )
-    plan: Mapped[str] = mapped_column(
-        String, nullable=False, default="gratis", server_default=text("'gratis'")
+    modules: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    # The one live subscription (billing.py's invariant): what PUT /billing/modules
+    # edits, and what lets the webhook ignore a second one's events.
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True)
     plan_status: Mapped[str | None] = mapped_column(String, nullable=True)
     plan_renews_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -57,7 +61,7 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
 
 
 class Portfolio(Base):
-    """A book an account manages on someone else's behalf (spec/07, enterprise tier).
+    """A book an account manages on someone else's behalf (spec/07, módulo empresarial).
 
     The row id IS the tenant_id the whole data plane is keyed by, so a managed
     portfolio is simply another tenant that a firm owns — no route, query or job

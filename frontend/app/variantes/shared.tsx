@@ -1,51 +1,36 @@
-// Chrome shared by the five landing variations, so each variant file holds only
-// what makes it different: hero form, proof form, order of the argument.
-// Same design system as the app (DESIGN.md): Bench Paper ground, Panel White
-// surfaces, hairlines doing the separation, scarce navy, tnum on every figure.
+// Chrome shared by the two surviving landing variations, so each variant file
+// holds only what makes it different: hero form, proof form, order of the
+// argument. Same design system as the app (DESIGN.md): Bench Paper ground, Panel
+// White surfaces, hairlines doing the separation, scarce navy, tnum on figures.
 import Link from "next/link";
 
 import { Brand } from "@/components/Brand";
-import { IconCheck } from "@/components/icons";
 import { ALIQUOTA, DARF, GANHO, linePath } from "@/lib/apuracao";
+import { summarize } from "@/lib/chartRange";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { PLANS } from "@/lib/plans";
 
-// `inverted` flips ink and paper rather than reaching for navy: --navy is a light
-// blue in dark mode, so white-on-navy would read at 2.4:1 there. Ink-on-paper
-// swapped is the one inversion that stays legible in both themes.
-export function Nav({ inverted = false }: { inverted?: boolean }) {
+export function Nav() {
   return (
-    <header
-      className={`sticky top-0 z-20 border-b ${
-        inverted ? "border-paper/20 bg-ink/95 text-paper" : "border-hairline bg-paper/85 text-ink"
-      } backdrop-blur`}
-    >
+    <header className="sticky top-0 z-20 border-b border-hairline bg-paper/85 text-ink backdrop-blur">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 md:px-8">
-        {/* The Q ring is navy inside Brand, which is invisible on the ink band —
-            the arbitrary child selector recolours it without forking Brand. */}
-        <Brand className={`text-lg ${inverted ? "text-paper [&_svg]:text-paper" : ""}`} />
+        <Brand className="text-lg" />
         <nav className="flex items-center gap-4 sm:gap-6">
           <a
             href="#planos"
-            className={`hidden py-2 text-sm font-medium transition-colors sm:block ${
-              inverted ? "text-paper/70 hover:text-paper" : "text-muted hover:text-ink"
-            }`}
+            className="hidden py-2 text-sm font-medium text-muted transition-colors hover:text-ink sm:block"
           >
             Planos
           </a>
           <Link
             href="/login"
-            className={`py-2 text-sm font-medium transition-colors ${
-              inverted ? "text-paper/70 hover:text-paper" : "text-muted hover:text-ink"
-            }`}
+            className="py-2 text-sm font-medium text-muted transition-colors hover:text-ink"
           >
             Entrar
           </Link>
           <Link
             href="/login"
-            className={`rounded-md px-4 py-2.5 text-sm font-semibold transition-colors ${
-              inverted ? "bg-paper text-ink hover:bg-paper/90" : "bg-navy text-white hover:bg-navy/90"
-            }`}
+            className="rounded-md bg-navy px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
           >
             Começar grátis
           </Link>
@@ -58,24 +43,16 @@ export function Nav({ inverted = false }: { inverted?: boolean }) {
 export function Cta({
   children,
   href = "/login",
-  variant = "primary",
   className = "",
 }: {
   children: React.ReactNode;
   href?: string;
-  variant?: "primary" | "quiet" | "inverted";
   className?: string;
 }) {
-  const skin =
-    variant === "primary"
-      ? "bg-navy text-white hover:bg-navy/90 border-transparent"
-      : variant === "inverted"
-        ? "bg-paper text-ink hover:bg-paper/90 border-transparent"
-        : "border-hairline bg-panel text-ink hover:bg-hairline/40";
   return (
     <Link
       href={href}
-      className={`inline-block rounded-md border px-5 py-3 text-center text-sm font-semibold transition-colors ${skin} ${className}`}
+      className={`inline-block rounded-md border border-transparent bg-navy px-5 py-3 text-center text-sm font-semibold text-white transition-colors hover:bg-navy/90 ${className}`}
     >
       {children}
     </Link>
@@ -84,105 +61,14 @@ export function Cta({
 
 export const TRUST = "Sem cartão. Só leitura — nada executa na sua corretora.";
 
-// The one figure the product exists to produce, as a readout. Used as the hero
-// object in three variations, so it is a component and not three copies.
-export function DarfCard({ className = "" }: { className?: string }) {
+// The chip that marks every figure on these pages as synthetic. One component so
+// no readout can be added without the marking (PRODUCT.md: never a number that
+// looks like the reader's own).
+export function ExemploChip({ children = "exemplo" }: { children?: string }) {
   return (
-    <div className={`rounded-lg border border-hairline bg-panel p-5 ${className}`}>
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-          DARF · código 6015
-        </p>
-        <span className="shrink-0 rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
-          exemplo
-        </span>
-      </div>
-      <p className="mt-2 font-display text-4xl font-extrabold tracking-tight text-ink tnum">
-        {formatMoney(DARF)}
-      </p>
-      <p className="mt-1 text-sm text-muted">Julho de 2026 · vence 31/08</p>
-    </div>
-  );
-}
-
-// The app's own readout, trimmed to what fits beside a headline: three rows and
-// the two totals. Every resultado is (último − médio) × qtde and both totals are
-// the exact sums, so the card survives a calculator.
-const POSICOES: [string, number, number, number][] = [
-  ["PETR4", 400, 34.1, 38.42],
-  ["VALE3", 100, 55.8, 61.1],
-  ["HGLG11", 120, 158.4, 152.9],
-];
-
-export function CarteiraCard({ className = "" }: { className?: string }) {
-  const rows = POSICOES.map(([ticker, qtd, medio, ultimo]) => ({
-    ticker,
-    valor: Math.round(ultimo * qtd * 100) / 100,
-    resultado: Math.round((ultimo - medio) * qtd * 100) / 100,
-  }));
-  const totalValor = rows.reduce((s, r) => s + r.valor, 0);
-  const totalResultado = rows.reduce((s, r) => s + r.resultado, 0);
-
-  return (
-    <div className={`overflow-hidden rounded-lg border border-hairline bg-panel ${className}`}>
-      <div className="flex items-center justify-between gap-4 border-b border-hairline px-4 py-2.5">
-        <p className="text-sm font-semibold text-ink">Carteira · posições</p>
-        <span className="shrink-0 rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
-          exemplo
-        </span>
-      </div>
-      <table className="w-full border-collapse text-xs">
-        <thead>
-          <tr className="border-b border-hairline">
-            {["Ativo", "Valor", "Resultado"].map((c, i) => (
-              <th
-                key={c}
-                scope="col"
-                className={`whitespace-nowrap px-4 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted ${
-                  i ? "text-right" : "text-left"
-                }`}
-              >
-                {c}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.ticker} className="border-b border-hairline/70">
-              <td className="px-4 py-2">
-                <span className="rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-tight text-ink">
-                  {r.ticker}
-                </span>
-              </td>
-              <td className="whitespace-nowrap px-4 py-2 text-right font-mono text-ink tnum">
-                {formatMoney(r.valor)}
-              </td>
-              {/* Signed: a resultado is exactly the figure whose sign is the
-                  information, so the sign leads and colour only reinforces. */}
-              <td
-                className={`whitespace-nowrap px-4 py-2 text-right font-mono tnum ${
-                  r.resultado < 0 ? "text-loss" : "text-gain"
-                }`}
-              >
-                {formatMoney(r.resultado, true)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="bg-paper">
-            <td className="px-4 py-2.5 font-medium text-ink">Total</td>
-            <td className="whitespace-nowrap px-4 py-2.5 text-right font-mono font-medium text-ink tnum">
-              {formatMoney(Math.round(totalValor * 100) / 100)}
-            </td>
-            <td className="whitespace-nowrap px-4 py-2.5 text-right font-mono font-medium text-gain tnum">
-              {formatMoney(Math.round(totalResultado * 100) / 100, true)}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
+    <span className="shrink-0 rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
+      {children}
+    </span>
   );
 }
 
@@ -204,6 +90,11 @@ export function TaxedCurve({ className = "" }: { className?: string }) {
         strokeDasharray="3 3"
         vectorEffect="non-scaling-stroke"
       />
+      {/* No `draw-line`: that class only animates under an `.is-visible`
+          ancestor, which the incumbent page's scroll observer sets and these
+          pages do not — so it left the curve stuck at dashoffset 1, drawn in
+          pieces. A static line is the honest version of an animation nothing
+          triggers. */}
       <path
         d={linePath(LIQUIDO, lo, hi)}
         fill="none"
@@ -212,10 +103,74 @@ export function TaxedCurve({ className = "" }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
-        pathLength={1}
-        className="draw-line"
       />
     </svg>
+  );
+}
+
+// The Bench readout the sparkline cell only gestures at: the same two curves plus
+// the three figures someone who backtests actually reads. Both rows come out of
+// `summarize` — the same port of the engine's own metric that the Bench screen
+// uses — so the landing cannot quote a figure the app would compute differently.
+// 9 months, so summarize withholds the CAGR by design and only the total shows.
+const MESES = 9 / 12;
+const BENCH_BRUTO = summarize(BRUTO, MESES);
+const BENCH_LIQUIDO = summarize(LIQUIDO, MESES);
+const asPct = (v: number | null) => (v === null ? "—" : formatPercent(v / 100));
+const METRICAS: [string, string, string?][] = [
+  ["Retorno bruto", asPct(BENCH_BRUTO.total_return_pct)],
+  ["Depois do imposto", asPct(BENCH_LIQUIDO.total_return_pct), "gain"],
+  ["Maior queda", asPct(BENCH_BRUTO.max_dd_pct), "loss"],
+];
+
+export function BenchCard({ className = "" }: { className?: string }) {
+  return (
+    <div
+      className={`grid overflow-hidden rounded-lg border border-hairline bg-panel lg:grid-cols-[1fr_16rem] ${className}`}
+    >
+      <div className="p-5 md:p-6">
+        <div className="flex items-baseline justify-between gap-3">
+          <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+            Bench · 9 meses
+          </p>
+          <ExemploChip />
+        </div>
+        <TaxedCurve className="mt-4 h-32 w-full" />
+        {/* The legend names which curve is which, because a dashed line and a
+            solid line are not self-describing. The swatch carries the data
+            colour; the label stays interface ink. */}
+        <div className="mt-3 flex flex-wrap gap-x-6 gap-y-1 font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+          <span className="flex items-center gap-2">
+            <span aria-hidden className="w-4 border-t border-dashed border-axis" />
+            bruto
+          </span>
+          <span className="flex items-center gap-2 text-ink">
+            <span aria-hidden className="h-[2px] w-4" style={{ background: "var(--series-1)" }} />
+            depois do imposto
+          </span>
+        </div>
+      </div>
+      <dl className="border-t border-hairline bg-paper p-5 md:p-6 lg:border-l lg:border-t-0">
+        {METRICAS.map(([label, value, tone], i) => (
+          <div key={label} className={i > 0 ? "mt-4" : ""}>
+            <dt className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+              {label}
+            </dt>
+            <dd
+              className={`font-display text-2xl font-extrabold tracking-tight tnum ${
+                tone === "gain" ? "text-gain" : tone === "loss" ? "text-loss" : "text-ink"
+              }`}
+            >
+              {value}
+            </dd>
+          </div>
+        ))}
+        <p className="mt-5 border-t border-hairline pt-4 text-xs leading-relaxed text-muted">
+          Contra IBOV e CDI, das séries da própria B3. A alíquota sai operação a operação, não do
+          resultado final.
+        </p>
+      </dl>
+    </div>
   );
 }
 
@@ -253,7 +208,26 @@ export const OUTLETS = [
   {
     tag: "Bench",
     line: "O backtest desconta os 15% operação a operação.",
-    Visual: () => <TaxedCurve className="h-full w-full" />,
+    // Two figures, not the curve: BenchCard already shows the curve further down
+    // the same scroll, and the gap between these two numbers IS the alíquota.
+    Visual: () => (
+      <dl className="flex h-full flex-col justify-center gap-3 rounded-[4px] bg-paper px-3">
+        {METRICAS.slice(0, 2).map(([label, value, tone]) => (
+          <div key={label}>
+            <dt className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+              {label}
+            </dt>
+            <dd
+              className={`font-display text-xl font-extrabold tnum ${
+                tone === "gain" ? "text-gain" : "text-ink"
+              }`}
+            >
+              {value}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    ),
   },
   {
     tag: "Carteira",
@@ -264,9 +238,10 @@ export const OUTLETS = [
     tag: "IRPF",
     line: "A ficha de renda variável já vem com o mesmo ganho.",
     Visual: () => (
-      <div className="flex h-full flex-col justify-center rounded-[4px] bg-paper px-3">
+      <div className="flex h-full flex-col items-start justify-center gap-1 rounded-[4px] bg-paper px-3">
         <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">DARF 6015</p>
         <p className="font-display text-2xl font-extrabold text-ink tnum">{formatMoney(DARF)}</p>
+        <ExemploChip />
       </div>
     ),
   },
@@ -333,14 +308,9 @@ export function Pricing({ compact = false }: { compact?: boolean }) {
               plan.featured ? "bg-navy/[0.03]" : ""
             }`}
           >
-            <div className="flex items-baseline justify-between gap-2">
-              <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
-              {plan.featured && (
-                <span className="shrink-0 font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-navy">
-                  Mais popular
-                </span>
-              )}
-            </div>
+            {/* No "mais popular" badge: the product is pre-launch, so there is
+                no popularity to report. The tint alone marks the tier. */}
+            <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
             <p className="mt-3 flex items-baseline gap-1">
               <span className="font-display text-3xl font-extrabold tracking-tight text-ink tnum">
                 {plan.price}
@@ -405,11 +375,12 @@ export function Footer() {
 }
 
 // Three claims traceable to the parser, as a figure band. Numbers do the talking
-// where the current page spends two paragraphs.
+// where the current page spends two paragraphs. Every figure here is countable in
+// the code — no timing claim, because nothing measures one.
 export const PROVAS: [string, string][] = [
   ["2", "relatórios da B3 entram inteiros"],
   ["24", "tipos de movimentação reconhecidos"],
-  ["1 min", "do extrato à DARF"],
+  ["3", "passos do extrato ao IRPF"],
 ];
 
 export function ProofBand({ className = "" }: { className?: string }) {
@@ -429,14 +400,5 @@ export function ProofBand({ className = "" }: { className?: string }) {
         </div>
       ))}
     </dl>
-  );
-}
-
-export function Bullet({ children }: { children: React.ReactNode }) {
-  return (
-    <li className="flex items-start gap-2.5 text-sm text-ink">
-      <IconCheck size={18} className="mt-0.5 shrink-0 text-navy" />
-      <span>{children}</span>
-    </li>
   );
 }

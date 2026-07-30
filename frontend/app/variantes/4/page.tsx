@@ -3,6 +3,7 @@
 // they produce. Everything after it is one line per claim, because the reader has
 // already seen the product work.
 import {
+  BenchCard,
   Close,
   Cta,
   Footer,
@@ -15,11 +16,13 @@ import {
 } from "../shared";
 import { Calculadora } from "./Calculadora";
 
+// Bench is not in this strip: it gets its own readout further down, because a
+// one-liner is what left it looking like a checklist item.
 const FEATURES: [string, string][] = [
   ["Importação", "Os dois relatórios da B3 entram inteiros — 24 tipos de movimentação."],
   ["Carteira", "Preço médio ajustado por desdobro, bonificação e amortização."],
   ["Colheita de prejuízo", "Acha os perdedores que derrubam a base antes do mês fechar."],
-  ["Bench", "Backtest que desconta o imposto que você pagaria de verdade."],
+  ["IRPF", "Ficha de renda variável e DARF 6015, mês a mês, com o prejuízo compensado."],
 ];
 
 export default function Variante4() {
@@ -68,6 +71,16 @@ export default function Variante4() {
           </h2>
           <Outlets className="mt-6" />
           <ProofBand className="mt-4" />
+        </section>
+
+        {/* The slider taught one month. This is the same rule over a série: what
+            the imposto costs a strategy, with the figures whoever backtests reads
+            before the retorno. */}
+        <section className="pt-12">
+          <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink">
+            E o que o imposto custa a uma estratégia
+          </h2>
+          <BenchCard className="mt-6" />
         </section>
 
         <Pricing />

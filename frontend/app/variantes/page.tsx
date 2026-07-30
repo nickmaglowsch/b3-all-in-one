@@ -1,34 +1,22 @@
-// Review index for the five landing variations. Not a marketing page — a switch
-// board, so all five can be compared side by side before one replaces `/`.
+// Review index for the surviving landing variations. Not a marketing page — a
+// switch board, so the two can be compared side by side before one replaces `/`.
+// Três das cinco foram descartadas: 1 e 5 reinstalavam a grade de cartões com
+// ícone que a landing atual existe para recusar, e 3 apoiava o argumento inteiro
+// em figuras de tempo que nada mede.
 import Link from "next/link";
 
 import { Brand } from "@/components/Brand";
 
 const VARIANTES: [string, string, string][] = [
   [
-    "1",
-    "Produto na cara",
-    "Hero dividido: promessa e ações à esquerda, carteira e DARF à direita. Três passos numa faixa, banda de provas, planos.",
-  ],
-  [
     "2",
     "Um número",
-    "A DARF em escala de display é o herói, com a cadeia da apuração ao lado. Diagrama de três nós e as três saídas.",
-  ],
-  [
-    "3",
-    "Aposente a planilha",
-    "Compara o fluxo de hoje com o do app lado a lado, depois lista o que a planilha erra calado.",
+    "A DARF em escala de display é o herói, com a cadeia da apuração ao lado — cinco linhas que fecham no próprio número. Depois as três saídas e o readout do Bench.",
   ],
   [
     "4",
     "Calculadora",
-    "O herói é interativo: dois sliders e a DARF que eles produzem, com a isenção desenhada.",
-  ],
-  [
-    "5",
-    "Declaração",
-    "Faixa invertida com uma frase em três linhas e uma ação. O produto aparece como quatro azulejos visuais, CTA fixo no mobile.",
+    "O herói é interativo: dois sliders e o imposto que eles produzem, com a isenção desenhada como uma travessia. Abre dentro da isenção, então o primeiro arrasto é a descoberta.",
   ],
 ];
 
@@ -41,8 +29,8 @@ export default function VariantesIndex() {
           Variações da landing
         </h1>
         <p className="mt-3 text-muted">
-          Cinco versões mais curtas e mais visuais que a atual. Todas usam o mesmo exemplo de julho
-          de 2026 e o mesmo sistema de design.
+          As duas que sobreviveram à crítica — mais curtas e mais visuais que a atual, com o mesmo
+          exemplo de julho de 2026 e o mesmo sistema de design.
         </p>
 
         <ul className="mt-10 overflow-hidden rounded-lg border border-hairline bg-panel">

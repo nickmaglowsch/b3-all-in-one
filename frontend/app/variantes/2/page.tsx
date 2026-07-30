@@ -1,10 +1,12 @@
 // ── Variação 2 · "um número" ──────────────────────────────────────────────────
-// Figure-first: the DARF at display scale is the hero, and the whole argument is
-// a three-node diagram under it. The apuração ledger stays, cut to five rows —
-// the evidence, not an essay about the evidence.
+// Figure-first: the DARF at display scale is the hero and the apuração ledger
+// under it is the whole argument — five rows that resolve upward into the figure.
+// The evidence, not an essay about the evidence. No pipeline diagram: the ledger
+// demonstrates the motor, so a box saying "um motor de imposto" only repeats it
+// in adjectives.
 import { formatMoney, formatPercent } from "@/lib/format";
 import { ALIQUOTA, BASE, CUSTO, DARF, GANHO, PREJUIZO, VENDAS } from "@/lib/apuracao";
-import { Close, Cta, Footer, Nav, Outlets, Pricing, ProofBand, TRUST } from "../shared";
+import { BenchCard, Close, Cta, Footer, Nav, Outlets, Pricing, ProofBand, TRUST } from "../shared";
 
 const CADEIA: [string, string, boolean?][] = [
   ["Vendas de ações em julho", formatMoney(VENDAS)],
@@ -12,12 +14,6 @@ const CADEIA: [string, string, boolean?][] = [
   ["Ganho apurado", formatMoney(GANHO, true), true],
   ["Prejuízo a compensar", `− ${formatMoney(PREJUIZO)}`],
   ["Base × alíquota", `${formatMoney(BASE)} × ${formatPercent(ALIQUOTA)}`],
-];
-
-const NODES = [
-  { tag: "Entra", title: "O extrato da B3", line: "2 relatórios, 24 tipos de movimentação." },
-  { tag: "Calcula", title: "Um motor de imposto", line: "Isenção, preço médio, prejuízo, eventos." },
-  { tag: "Sai", title: "Três telas", line: "Bench, carteira e IRPF leem o mesmo número." },
 ];
 
 export default function Variante2() {
@@ -73,43 +69,28 @@ export default function Variante2() {
           </div>
         </section>
 
-        {/* One motor, three saídas — as a diagram with arrows, which is the
-            claim the old page spent four scrolling stages to make. */}
-        <section className="pb-4">
-          <div className="grid items-stretch gap-3 md:grid-cols-[1fr_auto_1fr_auto_1fr] md:gap-0">
-            {NODES.map((n, i) => (
-              <div key={n.tag} className="contents">
-                <div
-                  className={`rounded-lg border border-hairline p-5 ${
-                    i === 1 ? "bg-navy/[0.05]" : "bg-panel"
-                  }`}
-                >
-                  <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-                    {n.tag}
-                  </p>
-                  <h2 className="mt-2 text-base font-semibold text-ink">{n.title}</h2>
-                  <p className="mt-1 text-sm leading-relaxed text-muted">{n.line}</p>
-                </div>
-                {i < 2 && (
-                  <div
-                    aria-hidden
-                    className="flex items-center justify-center py-1 md:px-3 md:py-0"
-                  >
-                    <span className="font-mono text-lg text-axis">→</span>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <Outlets className="mt-8" />
+        {/* The same apurado figure, in the three screens that read it. */}
+        <Outlets />
         <ProofBand className="mt-4" />
+
+        {/* The one screen that needs more than a cell: whoever backtests reads
+            figures, not a sparkline. Same alíquota as the ledger above, applied
+            operação a operação. */}
+        <section className="pt-12">
+          <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink">
+            O backtest paga o mesmo imposto
+          </h2>
+          <p className="mt-3 max-w-[52ch] text-muted">
+            A distância entre as duas curvas não é uma estimativa — é a alíquota descontada em cada
+            operação.
+          </p>
+          <BenchCard className="mt-6" />
+        </section>
 
         <Pricing />
         <Close
           title="Um cálculo, três telas."
-          line="Importe um extrato e veja o seu número em um minuto."
+          line="Importe um extrato e o número deixa de ser um chute."
         />
       </main>
       <Footer />

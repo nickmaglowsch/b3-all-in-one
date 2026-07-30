@@ -42,10 +42,13 @@ def _stripe_config():
         setattr(settings, f"stripe_price_{module}", price)
 
 
-async def _auth(client) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": EMAIL, "password": PASSWORD})
+async def _auth(client, email: str = EMAIL) -> dict[str, str]:
+    """Sem `email`, o usuário compartilhado do arquivo. Com, um tenant só seu — o
+    que os testes de webhook precisam: `stripe_subscription_id` é estado que sobra
+    de um teste para o outro, e é exatamente o estado que eles medem."""
+    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
     r = await client.post(
-        "/auth/jwt/login", data={"username": EMAIL, "password": PASSWORD}
+        "/auth/jwt/login", data={"username": email, "password": PASSWORD}
     )
     assert r.status_code == 200, r.text
     return {"Authorization": f"Bearer {r.json()['access_token']}"}
@@ -71,7 +74,9 @@ def _signed(payload: dict) -> tuple[str, dict[str, str]]:
     return body, {"stripe-signature": f"t={ts},v1={sig}", "content-type": "application/json"}
 
 
-def _sub_event(kind: str, *, prices: list[str], created: int, status="active", **ident) -> dict:
+def _sub_event(
+    kind: str, *, prices: list[str], created: int, status="active", sub_id="sub_billing_test", **ident
+) -> dict:
     """Uma assinatura com um item por módulo — é assim que o Stripe representa um
     carrinho montado, e é o que o webhook tem de ler por inteiro em vez de olhar
     só o primeiro item."""
@@ -83,6 +88,7 @@ def _sub_event(kind: str, *, prices: list[str], created: int, status="active", *
         "data": {
             "object": {
                 "object": "subscription",
+                "id": sub_id,
                 "status": status,
                 "items": {
                     "data": [
@@ -258,6 +264,57 @@ async def test_unknown_price_grants_nothing(client):
     assert (await client.get("/billing", headers=headers)).json()["billed_modules"] == ["irpf"]
 
 
+async def test_all_prices_unknown_keeps_the_modules_the_tenant_paid_for(client):
+    """Um `STRIPE_PRICE_*` errado no deploy faz todo item virar None. Zerar os
+    módulos aí seria cobrar em cheio e não entregar nada — sem erro, sem log, sem
+    ninguém percebendo. A assinatura ativa mantém o que tinha."""
+    headers = await _auth(client, "billing-preco-desconhecido@example.com")
+    tenant_id = (await client.get("/me", headers=headers)).json()["id"]
+    now = int(time.time()) + 200
+
+    body, sig = _signed(
+        _sub_event("created", prices=[PRICES["bench"]], created=now,
+                   customer="cus_unknown_price", metadata={"tenant_id": tenant_id})
+    )
+    assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+    assert (await client.get("/billing", headers=headers)).json()["billed_modules"] == ["bench"]
+
+    body, sig = _signed(
+        _sub_event("updated", prices=["price_de_outro_deploy"], created=now + 10,
+                   customer="cus_unknown_price", metadata={"tenant_id": tenant_id})
+    )
+    assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+    assert (await client.get("/billing", headers=headers)).json()["billed_modules"] == ["bench"]
+    assert (await client.get("/backtests", headers=headers)).status_code == 200
+
+
+async def test_a_second_subscription_cannot_overwrite_the_live_one(client):
+    """O invariante é uma assinatura por tenant. Se uma segunda aparecer mesmo assim
+    (criada no dashboard, ou um checkout que escapou), quem manda no entitlement é a
+    que está viva — senão o `updated` da intrusa revoga o que a viva paga, e o
+    `deleted` dela cancela um acesso que continua sendo cobrado."""
+    headers = await _auth(client, "billing-duas-subs@example.com")
+    tenant_id = (await client.get("/me", headers=headers)).json()["id"]
+    now = int(time.time()) + 300
+
+    body, sig = _signed(
+        _sub_event("created", prices=[PRICES["irpf"], PRICES["bench"]], created=now,
+                   sub_id="sub_viva", customer="cus_duas_subs",
+                   metadata={"tenant_id": tenant_id})
+    )
+    assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+
+    for kind, status in (("created", "active"), ("updated", "active"), ("deleted", "canceled")):
+        body, sig = _signed(
+            _sub_event(kind, prices=[PRICES["indice"]], created=now + 10, status=status,
+                       sub_id="sub_intrusa", customer="cus_duas_subs",
+                       metadata={"tenant_id": tenant_id})
+        )
+        assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+        got = (await client.get("/billing", headers=headers)).json()["billed_modules"]
+        assert got == ["bench", "irpf"], f"{kind} da intrusa mexeu no entitlement: {got}"
+
+
 # ── checkout ──────────────────────────────────────────────────────────────────
 
 
@@ -274,6 +331,30 @@ async def test_checkout_refuses_a_cart_that_cannot_be_charged(client, modules, r
     headers = await _auth(client)
     r = await client.post("/billing/checkout", json={"modules": modules}, headers=headers)
     assert r.status_code == 400, f"{reason}: {r.text}"
+
+
+async def test_checkout_refuses_a_second_subscription(client):
+    """`mode="subscription"` sempre cria uma assinatura nova. Um segundo checkout
+    cobraria as duas ao mesmo tempo pelo acesso sobreposto, e o `updated` de uma
+    revogaria os módulos da outra. Mudar de carrinho é PUT /billing/modules."""
+    headers = await _auth(client, "billing-ja-assina@example.com")
+    tenant_id = (await client.get("/me", headers=headers)).json()["id"]
+    body, sig = _signed(
+        _sub_event("created", prices=[PRICES["irpf"]], created=int(time.time()) + 400,
+                   sub_id="sub_ja_existe", customer="cus_ja_assina",
+                   metadata={"tenant_id": tenant_id})
+    )
+    assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+
+    r = await client.post("/billing/checkout", json={"modules": ["irpf", "bench"]}, headers=headers)
+    assert r.status_code == 409, r.text
+
+
+async def test_changing_modules_needs_a_live_subscription(client):
+    headers = await _auth(client)
+    await _set_modules(client, headers)
+    r = await client.put("/billing/modules", json={"modules": ["bench"]}, headers=headers)
+    assert r.status_code == 409, r.text
 
 
 async def test_checkout_refuses_a_module_without_a_configured_price(client):

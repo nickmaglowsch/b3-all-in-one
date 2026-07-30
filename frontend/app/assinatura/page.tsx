@@ -10,7 +10,9 @@ import {
   AVULSOS,
   BASE,
   BUNDLE,
+  cartInicial,
   EMPRESARIAL,
+  mesmoConjunto,
   nomeDe,
   precoDoCarrinho,
   TUDO,
@@ -51,19 +53,17 @@ function Aviso({ children, tone }: { children: string; tone?: "erro" }) {
 }
 
 function Avisos({
+  confirmando,
   outcome,
-  billed,
   error,
 }: {
+  confirmando: boolean;
   outcome: string | null;
-  billed?: string[];
   error: unknown;
 }) {
   return (
     <>
-      {outcome === "ok" && billed?.length === 0 && (
-        <Aviso>Pagamento recebido — confirmando com o Stripe…</Aviso>
-      )}
+      {confirmando && <Aviso>Recebido — confirmando com o Stripe…</Aviso>}
       {outcome === "cancelado" && <Aviso>Checkout cancelado. Nada foi cobrado.</Aviso>}
       {error && (
         <Aviso tone="erro">
@@ -165,7 +165,7 @@ function Fatura({ cart, toggle }: { cart: string[]; toggle: (id: string) => void
           </p>
           <p className="mt-1 text-[13px] text-muted">
             {bundle
-              ? `Todos os módulos. Avulsos, os quatro somam R$ ${TUDO}.`
+              ? `Todos os módulos. Avulsos, os ${AVULSOS.length} somam R$ ${TUDO}.`
               : `${cart.length} módulo${cart.length === 1 ? "" : "s"} marcado${cart.length === 1 ? "" : "s"}.`}
           </p>
         </div>
@@ -180,13 +180,21 @@ function Fatura({ cart, toggle }: { cart: string[]; toggle: (id: string) => void
   );
 }
 
-const mesmoConjunto = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((m) => b.includes(m));
+/** Uma assinatura viva se altera; ela não se compra de novo. mode="subscription"
+ *  sempre cria outra, e aí são duas faturas pelo mesmo acesso. */
+const destino = (cart: string[], changeable?: boolean) =>
+  changeable
+    ? { path: "/billing/modules", method: "PUT" as const, modules: cart }
+    : { path: "/billing/checkout", modules: cart };
 
-/** O que a tela mostra marcado antes de o usuário tocar em nada: o que já é
- *  cobrado, mais o módulo que o paywall pediu para ligar. */
-const cartInicial = (billed: string[] | undefined, ligar: string | null) =>
-  ligar ? [...new Set([...(billed ?? []), ligar])] : (billed ?? []);
+/** O conjunto cobrado contra o qual a mudança foi enviada: [] voltando do
+ *  checkout, o carrinho atual depois de alterar a assinatura viva. Só o webhook
+ *  escreve entitlement, então a tela espera o cobrado sair desse conjunto. */
+const esperandoPor = (enviado: string[] | null, outcome: string | null) =>
+  enviado ?? (outcome === "ok" ? [] : null);
+
+const aindaEsperando = (esperando: string[] | null, billed?: string[]) =>
+  !!esperando && mesmoConjunto(billed ?? [], esperando);
 
 function Portal({ sub, onClick, pending }: { sub?: Subscription; onClick: () => void; pending: boolean }) {
   if (!sub?.manageable) return null;
@@ -207,11 +215,13 @@ function Portal({ sub, onClick, pending }: { sub?: Subscription; onClick: () => 
 function Assinar({
   cart,
   igual,
+  alterar,
   pending,
   onClick,
 }: {
   cart: string[];
   igual: boolean;
+  alterar: boolean;
   pending: boolean;
   onClick: () => void;
 }) {
@@ -224,7 +234,7 @@ function Assinar({
     >
       {igual && cart.length > 0
         ? "É o que você já assina"
-        : `Assinar por R$ ${precoDoCarrinho(cart)}/mês`}
+        : `${alterar ? "Alterar" : "Assinar"} por R$ ${precoDoCarrinho(cart)}/mês`}
     </button>
   );
 }
@@ -232,7 +242,10 @@ function Assinar({
 export default function AssinaturaPage() {
   const outcome = useQueryParam("checkout");
   const ligar = useQueryParam("ligar");
-  const sub = useSubscription(outcome === "ok");
+
+  const [enviadoSobre, setEnviadoSobre] = useState<string[] | null>(null);
+  const esperando = esperandoPor(enviadoSobre, outcome);
+  const sub = useSubscription(esperando);
   const billed = sub.data?.billed_modules;
 
   // O carrinho parte do que já é cobrado — assinar de novo é "adicionar um
@@ -242,17 +255,22 @@ export default function AssinaturaPage() {
   const [chosen, setChosen] = useState<string[] | null>(null);
   const cart = chosen ?? cartInicial(billed, ligar);
 
-  // Both endpoints answer with a Stripe-hosted URL; we only redirect.
+  // Checkout and portal answer with a Stripe-hosted URL to redirect to; changing
+  // the modules of a live subscription happens server-side and answers
+  // {changed}, and then we wait for the webhook like after a checkout.
   const go = useMutation({
-    mutationFn: (body: { path: string; modules?: string[] }) =>
-      api<{ url: string }>(body.path, {
-        method: "POST",
+    mutationFn: (body: { path: string; method?: "PUT"; modules?: string[] }) =>
+      api<{ url?: string; changed?: boolean }>(body.path, {
+        method: body.method ?? "POST",
         body: body.modules ? JSON.stringify({ modules: body.modules }) : undefined,
       }),
-    onSuccess: ({ url }) => {
-      window.location.href = url;
+    onSuccess: (r) => {
+      if (r.url) window.location.href = r.url;
+      else if (r.changed) setEnviadoSobre(billed ?? []);
     },
   });
+
+
 
   return (
     <>
@@ -264,14 +282,19 @@ export default function AssinaturaPage() {
         />
       </PageHeader>
 
-      <Avisos outcome={outcome} billed={billed} error={go.error} />
+      <Avisos
+        confirmando={aindaEsperando(esperando, billed)}
+        outcome={outcome}
+        error={go.error}
+      />
       <Ligados sub={sub.data} />
       <Fatura cart={cart} toggle={(id) => setChosen(alternaModulo(cart, id))} />
       <Assinar
         cart={cart}
         igual={mesmoConjunto(billed ?? [], cart)}
+        alterar={!!sub.data?.changeable}
         pending={go.isPending}
-        onClick={() => go.mutate({ path: "/billing/checkout", modules: cart })}
+        onClick={() => go.mutate(destino(cart, sub.data?.changeable))}
       />
     </>
   );

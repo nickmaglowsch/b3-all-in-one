@@ -106,15 +106,26 @@ live on the tenant row (`user.modules` + `plan_status`) and are written **only**
 webhook: checkout hands back a URL, it never grants access.
 
 - `GET /billing` — `modules` (usable now), `billed_modules` (what Stripe charges for),
-  status, renewal date, whether a portal exists.
+  status, renewal date, whether a portal exists, and `changeable`: there is a live
+  subscription, so the cart is edited rather than bought again.
 - `POST /billing/checkout {modules: [...]}` — one line item per module → `{url}`.
   400 on an empty cart, an unknown module, a module with no configured price, or
-  `empresarial` mixed with another module.
+  `empresarial` mixed with another module. **409 when a subscription is already live** —
+  `mode="subscription"` always creates a new one, so a second checkout would bill twice
+  for the same access and its events would fight over the same module set.
+- `PUT /billing/modules {modules: [...]}` — the way an existing subscriber changes the
+  cart: retrieves the live subscription and sends only the item delta (added prices in,
+  removed item ids deleted, untouched items left alone so their billing anchor survives),
+  with `proration_behavior="create_prorations"` → `{changed}`. Access still arrives with
+  the webhook; the same 400s as checkout, plus 409 with no live subscription.
 - `POST /billing/portal` — Stripe billing portal (card, invoices, cancel, drop a module).
 - `POST /billing/webhook` — signature-verified; `customer.subscription.*` rewrites the
-  module set from **every** item on the subscription. Events older than the last applied
-  one are dropped (Stripe doesn't order them). `past_due` keeps access — dunning is not
-  a lockout; only `deleted` empties the set.
+  module set from **every** item on the subscription, and records that subscription's id
+  as the live one. Events older than the last applied one are dropped (Stripe doesn't
+  order them), as are events from a *different* subscription while one is live, and a
+  subscription whose items match no configured price leaves the set alone rather than
+  revoking it. `past_due` keeps access — dunning is not a lockout; only `deleted`
+  empties the set.
 - `POST /billing/dev-modules {modules, status}` — **development only**, sets the module
   set without Stripe so the paywall is testable locally.
 
@@ -126,7 +137,7 @@ What each module unlocks (gated routes answer `402` with
 |---|---|---|
 | `carteira` (grátis) | `/imports`, `/portfolio/{positions,trades,income,price-history}`, `/market` | reads the extract once, then nothing runs |
 | `irpf` R$19 | `/irpf` | re-apura the tenant's own rows, no external data |
-| `mercado` R$29 | `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings}` | needs today's price for every held ticker |
+| `mercado` R$29 | `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings,tax-summary}` | needs today's price for every held ticker |
 | `indice` R$12 | `/portfolio/index` | rebuilds the daily series of the book and both benchmarks |
 | `bench` R$49 | `/backtests`, `/strategies/user*` | runs the engine over years of B3 history per execution |
 | `empresarial` R$249 | every module above, plus `/portfolios` (client books) | the whole apuração, once per client book |

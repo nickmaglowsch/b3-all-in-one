@@ -933,7 +933,7 @@ export default function LandingPage() {
                   <h3 className="text-sm font-semibold text-ink">{BUNDLE.name}</h3>
                   <p className="mt-1 max-w-[52ch] text-sm text-muted">{BUNDLE.carga}</p>
                   <p className="mt-1 font-mono text-[11px] text-muted">
-                    os quatro módulos avulsos somam R$ {TUDO} — o Empresarial é para quem
+                    os {AVULSOS.length} módulos avulsos somam R$ {TUDO} — o Empresarial é para quem
                     apura carteira de cliente
                   </p>
                 </div>

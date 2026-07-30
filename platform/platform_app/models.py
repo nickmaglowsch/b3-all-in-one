@@ -46,6 +46,9 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
     modules: Mapped[list[str]] = mapped_column(
         JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
     )
+    # The one live subscription (billing.py's invariant): what PUT /billing/modules
+    # edits, and what lets the webhook ignore a second one's events.
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True)
     plan_status: Mapped[str | None] = mapped_column(String, nullable=True)
     plan_renews_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -58,7 +61,7 @@ class User(SQLAlchemyBaseUserTableUUID, Base):
 
 
 class Portfolio(Base):
-    """A book an account manages on someone else's behalf (spec/07, enterprise tier).
+    """A book an account manages on someone else's behalf (spec/07, módulo empresarial).
 
     The row id IS the tenant_id the whole data plane is keyed by, so a managed
     portfolio is simply another tenant that a firm owns — no route, query or job

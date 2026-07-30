@@ -1,9 +1,20 @@
 """entitlement por módulo: user.modules substitui user.plan
 
 A escada (gratis < investidor < trader < enterprise) vira um conjunto de módulos
-independentes. O backfill preserva o acesso de quem já paga: cada tier antigo se
-traduz nos módulos que ele abria, e `enterprise` vira o bundle `empresarial` (que
-billing.entitled expande para todos).
+independentes, mais `stripe_subscription_id` — a assinatura viva que
+PUT /billing/modules altera e que o webhook usa para ignorar uma segunda.
+
+Sem backfill de propósito. Traduzir os tiers antigos em módulos parece a coisa
+segura a fazer, mas seria proteger um usuário que não existe: `.env.prod.example`
+nasceu com `STRIPE_PRICE_INVESTIDOR=`/`TRADER=` vazios e nunca recebeu um id, e
+`billing._validate_cart` recusa (400) um módulo sem preço configurado — então
+nenhuma assinatura foi criada em produção. Os ids de preço antigos também não
+existem mais em `config.py`, logo um `plan` traduzido aqui não teria como ser
+reconfirmado pelo webhook depois. Um backfill que não pode disparar é pior que
+nenhum: afirma uma garantia que ninguém testou.
+
+Se algum banco de dev tiver um tier pago, `POST /billing/dev-modules` reescreve o
+conjunto (é o que `scripts/dev_seed.sh` faz a cada execução).
 
 Revision ID: c1e58a37b9d0
 Revises: f2a6c0d84b19
@@ -19,21 +30,6 @@ down_revision: Union[str, None] = 'f2a6c0d84b19'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# tier antigo -> módulos novos. `investidor` abria IRPF, TLH/simulação (mercado) e
-# o índice da carteira; `trader` somava o bench.
-BACKFILL = {
-    'gratis': [],
-    'investidor': ['indice', 'irpf', 'mercado'],
-    'trader': ['bench', 'indice', 'irpf', 'mercado'],
-    'enterprise': ['empresarial'],
-}
-# E o caminho de volta: o menor tier que cobre o conjunto, para um downgrade não
-# tirar acesso de quem paga.
-ROLLBACK = [
-    ('enterprise', 'empresarial'),
-    ('trader', 'bench'),
-]
-
 
 def upgrade() -> None:
     op.add_column(
@@ -45,19 +41,13 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    for plan, modules in BACKFILL.items():
-        if not modules:
-            continue
-        op.execute(
-            sa.text("UPDATE \"user\" SET modules = :mods WHERE plan = :plan").bindparams(
-                sa.bindparam('mods', value=modules, type_=postgresql.JSONB()),
-                sa.bindparam('plan', value=plan),
-            )
-        )
+    op.add_column('user', sa.Column('stripe_subscription_id', sa.String(), nullable=True))
     op.drop_column('user', 'plan')
 
 
 def downgrade() -> None:
+    # Volta ao default: o mapa inverso módulos->tier seria uma invenção, já que a
+    # subida não guardou de onde ninguém veio.
     op.add_column(
         'user',
         sa.Column(
@@ -67,21 +57,5 @@ def downgrade() -> None:
             nullable=False,
         ),
     )
-    # Do mais alto para o mais baixo: quem tem `empresarial` não deve virar trader.
-    for plan, module in ROLLBACK:
-        op.execute(
-            sa.text(
-                "UPDATE \"user\" SET plan = :plan "
-                "WHERE plan = 'gratis' AND modules @> :needle"
-            ).bindparams(
-                sa.bindparam('plan', value=plan),
-                sa.bindparam('needle', value=[module], type_=postgresql.JSONB()),
-            )
-        )
-    op.execute(
-        sa.text(
-            "UPDATE \"user\" SET plan = 'investidor' "
-            "WHERE plan = 'gratis' AND jsonb_array_length(modules) > 0"
-        )
-    )
+    op.drop_column('user', 'stripe_subscription_id')
     op.drop_column('user', 'modules')

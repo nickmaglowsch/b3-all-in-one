@@ -39,16 +39,30 @@ PRICE = {
 }
 
 
+SUB_ID = "sub_e2e"
+
+
 class _Stripe:
     """O que o Stripe teria recebido. Guardar a chamada é metade do teste: uma
     linha de checkout com o preço errado é indistinguível de uma correta se só
-    olharmos o status 200."""
+    olharmos o status 200.
+
+    `items` é o estado da assinatura viva do lado do Stripe, que `Subscription
+    .retrieve` devolve: é sobre ele que PUT /billing/modules calcula o diff."""
 
     def __init__(self, customer: str) -> None:
         self.customer = customer
         self.checkouts: list[dict] = []
         self.portals: list[dict] = []
         self.customers: list[dict] = []
+        self.modifies: list[dict] = []
+        self.items: list[str] = []
+
+    def as_subscription(self) -> dict:
+        return {
+            "id": SUB_ID,
+            "items": {"data": [{"id": f"si_{p}", "price": {"id": p}} for p in self.items]},
+        }
 
 
 @pytest.fixture
@@ -74,9 +88,19 @@ def fake_stripe(request, monkeypatch) -> _Stripe:
         calls.portals.append(kw)
         return type("P", (), {"url": "https://portal.stripe.test/session"})()
 
+    async def sub_retrieve(sub_id, **kw):
+        assert sub_id == SUB_ID, sub_id
+        return calls.as_subscription()
+
+    async def sub_modify(sub_id, **kw):
+        calls.modifies.append({"id": sub_id, **kw})
+        return calls.as_subscription()
+
     monkeypatch.setattr(stripe.Customer, "create_async", customer_create)
     monkeypatch.setattr(stripe.checkout.Session, "create_async", checkout_create)
     monkeypatch.setattr(stripe.billing_portal.Session, "create_async", portal_create)
+    monkeypatch.setattr(stripe.Subscription, "retrieve_async", sub_retrieve)
+    monkeypatch.setattr(stripe.Subscription, "modify_async", sub_modify)
     yield calls
     settings.stripe_secret_key = ""
 
@@ -100,6 +124,7 @@ def _sub(kind: str, modules: list[str], created: int, customer: str, status: str
         "data": {
             "object": {
                 "object": "subscription",
+                "id": SUB_ID,
                 "status": status,
                 "customer": customer,
                 "items": {
@@ -132,6 +157,7 @@ async def test_subscription_lifecycle(client, fake_stripe):
         "status": None,
         "renews_at": None,
         "manageable": False,
+        "changeable": False,
     }
     r = await client.get("/backtests", headers=headers)
     assert r.status_code == 402
@@ -166,11 +192,14 @@ async def test_subscription_lifecycle(client, fake_stripe):
     body, sig = _signed(_sub("created", ["irpf", "bench"], now, fake_stripe.customer))
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
 
+    fake_stripe.items = [PRICE["irpf"], PRICE["bench"]]  # o Stripe agora tem a sub
     sub = (await client.get("/billing", headers=headers)).json()
     assert sub["billed_modules"] == ["bench", "irpf"]
     assert sub["modules"] == sorted([CARTEIRA, "bench", "irpf"])
     assert sub["manageable"] is True
     assert sub["renews_at"]
+    # Com assinatura viva, mudar de carrinho é alterá-la, não abrir outra.
+    assert sub["changeable"] is True
 
     assert (await client.get("/backtests", headers=headers)).status_code == 200
     assert (await client.post("/irpf/reports", json={"year": 2025}, headers=headers)).status_code != 402
@@ -178,18 +207,49 @@ async def test_subscription_lifecycle(client, fake_stripe):
     assert (await client.get("/portfolio/index", headers=headers)).status_code == 402
     assert (await client.post("/portfolios", json={"label": "X"}, headers=headers)).status_code == 402
 
-    # ── 4. Ampliar o carrinho ─────────────────────────────────────────────────
+    # ── 4. Ampliar o carrinho: altera a assinatura viva, não cria a segunda ────
+    # Um segundo checkout criaria outra assinatura (mode="subscription" sempre cria):
+    # duas faturas pelo mesmo acesso, e o evento de uma revogando os módulos da outra.
+    checkouts_antes = len(fake_stripe.checkouts)
     r = await client.post(
         "/billing/checkout", json={"modules": ["irpf", "bench", "indice"]}, headers=headers
     )
-    assert r.status_code == 200
-    assert len(_prices_of(fake_stripe.checkouts[-1])) == 3
+    assert r.status_code == 409, r.text
+    assert len(fake_stripe.checkouts) == checkouts_antes, "checkout recusado ainda chamou o Stripe"
 
+    r = await client.put(
+        "/billing/modules", json={"modules": ["irpf", "bench", "indice"]}, headers=headers
+    )
+    assert r.status_code == 200, r.text
+    # Só o diff: o item novo entra, os dois que ficam não são recriados — recriar
+    # trocaria a âncora de cobrança deles por nada.
+    modify = fake_stripe.modifies[-1]
+    assert modify["id"] == SUB_ID
+    assert modify["items"] == [{"price": PRICE["indice"], "quantity": 1}]
+
+    # E o acesso continua vindo do webhook: alterar a assinatura não entitula.
+    assert (await client.get("/portfolio/index", headers=headers)).status_code == 402
+
+    fake_stripe.items = [PRICE["irpf"], PRICE["bench"], PRICE["indice"]]
     body, sig = _signed(_sub("updated", ["irpf", "bench", "indice"], now + 10, fake_stripe.customer))
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
     assert (await client.get("/portfolio/index", headers=headers)).status_code != 402
 
+    # Desligar um módulo: o item dele sai, e só ele.
+    r = await client.put("/billing/modules", json={"modules": ["irpf", "indice"]}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert fake_stripe.modifies[-1]["items"] == [{"id": f"si_{PRICE['bench']}", "deleted": True}]
+
+    # Reenviar o mesmo carrinho não é uma alteração — e não toca no Stripe.
+    modifies_antes = len(fake_stripe.modifies)
+    r = await client.put(
+        "/billing/modules", json={"modules": ["irpf", "bench", "indice"]}, headers=headers
+    )
+    assert r.status_code == 200 and r.json() == {"changed": False}
+    assert len(fake_stripe.modifies) == modifies_antes
+
     # ── 5. Desligar um módulo fecha só aquela porta ────────────────────────────
+    fake_stripe.items = [PRICE["irpf"], PRICE["indice"]]
     body, sig = _signed(_sub("updated", ["irpf", "indice"], now + 20, fake_stripe.customer))
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
     assert (await client.get("/backtests", headers=headers)).status_code == 402
@@ -206,6 +266,8 @@ async def test_subscription_lifecycle(client, fake_stripe):
     sub = (await client.get("/billing", headers=headers)).json()
     assert sub["modules"] == [CARTEIRA]
     assert sub["renews_at"] is None
+    # Cancelada não é alterável: o próximo carrinho volta pelo checkout.
+    assert sub["changeable"] is False
     assert (await client.post("/irpf/reports", json={"year": 2025}, headers=headers)).status_code == 402
     # A carteira sobrevive ao cancelamento: os dados importados são do tenant.
     assert (await client.get("/portfolio/positions", headers=headers)).status_code == 200

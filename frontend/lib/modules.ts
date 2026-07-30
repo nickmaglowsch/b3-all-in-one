@@ -88,6 +88,9 @@ export const somaModulos = (ids: string[]) =>
 export const precoDoCarrinho = (ids: string[]) =>
   ids.includes(EMPRESARIAL) ? BUNDLE.price : somaModulos(ids);
 
+export const mesmoConjunto = (a: string[], b: string[]) =>
+  a.length === b.length && a.every((m) => b.includes(m));
+
 /** Marcar ou desmarcar um módulo no carrinho. O bundle não convive com nada: a API
  *  400a um carrinho misto (cobraria o mesmo acesso duas vezes), então a tela não
  *  pode nem montar um. */
@@ -95,4 +98,13 @@ export const alternaModulo = (cart: string[], id: string): string[] => {
   if (cart.includes(id)) return cart.filter((m) => m !== id);
   if (id === EMPRESARIAL) return [EMPRESARIAL];
   return [...cart.filter((m) => m !== EMPRESARIAL), id];
+};
+
+/** O que a tela de assinatura mostra marcado antes de o usuário tocar em nada: o
+ *  que já é cobrado, mais o módulo que o paywall pediu para ligar. Via
+ *  `alternaModulo` porque `?ligar=empresarial` também tem de expulsar os avulsos;
+ *  um `ligar` que não é módulo é ignorado (a URL vem de fora). */
+export const cartInicial = (billed: string[] | undefined, ligar: string | null) => {
+  const base = billed ?? [];
+  return ligar && moduloDe(ligar) && !base.includes(ligar) ? alternaModulo(base, ligar) : base;
 };

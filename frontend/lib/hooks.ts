@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, getPortfolioId, subscribePortfolio } from "./api";
+import { mesmoConjunto } from "./modules";
 import type {
   Health,
   MarketStatus,
@@ -24,7 +25,7 @@ export function usePortfolios() {
 }
 
 /**
- * Which book the page is acting on. The enterprise tier is sold on a client's
+ * Which book the page is acting on. The empresarial module is sold on a client's
  * data never appearing under another client's name, so the surfaces that show
  * money have to say whose it is — a sidebar select behind a drawer is not an
  * answer on a printed page.
@@ -70,16 +71,17 @@ export function useActiveBook(): ActiveBook {
   return { state: "pending" };
 }
 
-export function useSubscription(awaitingCheckout = false) {
+// `esperandoMudancaDe` is the billed set we submitted against — [] coming back
+// from a first checkout, the current set after changing an existing subscription.
+// Either way only the webhook writes entitlements, so poll until the billed set
+// moves off that one. Capped so an abandoned checkout doesn't poll forever.
+export function useSubscription(esperandoMudancaDe?: string[] | null) {
   return useQuery({
     queryKey: ["subscription"],
     queryFn: () => api<Subscription>("/billing"),
-    // Coming back from Stripe, the modules only appear once the webhook lands —
-    // poll a few times instead of making the user reload. Capped so an abandoned
-    // checkout doesn't poll forever.
     refetchInterval: (q) =>
-      awaitingCheckout &&
-      q.state.data?.billed_modules.length === 0 &&
+      esperandoMudancaDe &&
+      mesmoConjunto(q.state.data?.billed_modules ?? [], esperandoMudancaDe) &&
       q.state.dataUpdateCount < 12
         ? 2000
         : false,

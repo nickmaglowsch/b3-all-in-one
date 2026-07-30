@@ -31,7 +31,7 @@ export function PortfolioSwitcher() {
     qc.clear();
   }, [stale, qc]);
 
-  // One book is the normal case below the enterprise tier: nothing to switch.
+  // One book is the normal case without the empresarial module: nothing to switch.
   if (!data || data.length < 2 || !self) return null;
 
   function pick(id: string) {

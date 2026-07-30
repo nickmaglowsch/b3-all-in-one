@@ -226,7 +226,7 @@ export default function PortfolioPage() {
             items={sections}
             // The client's name rides the sticky bar, so it survives the whole
             // page and lands in a screenshot of any section — the promise the
-            // enterprise tier is sold on, kept past the first 200px.
+            // empresarial module is sold on, kept past the first 200px.
             trailing={
               book.state === "client" ? (
                 <span className="whitespace-nowrap font-mono text-[11px] uppercase tracking-[0.14em] text-muted">

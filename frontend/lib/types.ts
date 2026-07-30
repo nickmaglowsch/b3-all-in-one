@@ -32,6 +32,9 @@ export interface Subscription {
   status: string | null;
   renews_at: string | null;
   manageable: boolean;
+  /** A live subscription to edit: the cart changes with PUT /billing/modules,
+   *  never a second checkout (Stripe would bill it on top of this one). */
+  changeable: boolean;
 }
 
 // GET /privacy/summary — LGPD Art. 18 I/II, the whole account (own book plus

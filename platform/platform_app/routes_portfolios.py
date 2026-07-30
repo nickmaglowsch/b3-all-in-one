@@ -1,8 +1,8 @@
-"""The books an account manages (spec/07, enterprise tier).
+"""The books an account manages (spec/07, módulo empresarial).
 
 Everyone has exactly one own book, whose tenant_id is the user id and which has
 no row in `portfolios` — that is why nothing needed backfilling when this landed.
-The enterprise tier adds client books: rows here, whose id is the tenant_id the
+The empresarial module adds client books: rows here, whose id is the tenant_id the
 X-Portfolio-Id header selects (see tenancy.get_current_tenant).
 """
 from __future__ import annotations

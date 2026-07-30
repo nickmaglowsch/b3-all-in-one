@@ -99,11 +99,11 @@ The strategy gallery stays public. Entitlements are written only by the Stripe w
 checkout never grants access.
 
 **One login, many books (`empresarial`).** A `tenant_id` is either a `user.id` — the
-account's own book, which every tier has and which needs no row anywhere — or a
-`portfolios.id`, a client book an enterprise account manages. The `X-Portfolio-Id` header
+account's own book, which every account has and which needs no row anywhere — or a
+`portfolios.id`, a client book an empresarial account manages. The `X-Portfolio-Id` header
 picks which one a request acts on, and `tenancy.get_current_tenant` is the only place that
 resolves it, so ownership and entitlement are checked exactly once no matter how many
-routes exist. Losing the tier leaves the client books intact but unreachable; deleting one
+routes exist. Losing the module leaves the client books intact but unreachable; deleting one
 takes its rows and its uploaded extracts with it.
 
 **Honest-gaps constraint:** the product reports what it cannot see rather than papering
@@ -187,7 +187,7 @@ data deletion, and a clear privacy statement — must be reachable in the interf
 only backend policy.
 
 **Shipped:** `GET /privacy/summary`, `GET /privacy/export` and `DELETE /privacy/account`
-(`platform_app/privacy.py`), free at every tier, served at `/conta` with the public policy
+(`platform_app/privacy.py`), free for every account, served at `/conta` with the public policy
 at `/privacidade`. Both export and erasure discover their tables from `Base.metadata`, so a
 new tenant table is covered without touching either. Encryption at rest and DB-level RLS
 are still open — see `spec/04-roadmap.md`.

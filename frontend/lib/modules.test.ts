@@ -4,10 +4,12 @@ import test from "node:test";
 import {
   alternaModulo,
   AVULSOS,
+  cartInicial,
   BASE,
   BUNDLE,
   CARTEIRA,
   EMPRESARIAL,
+  mesmoConjunto,
   MODULOS,
   precoDoCarrinho,
   somaModulos,
@@ -63,4 +65,29 @@ test("marcar o bundle esvazia o carrinho, e marcar um avulso solta o bundle", ()
   assert.deepEqual(alternaModulo(["irpf"], "bench"), ["irpf", "bench"]);
   assert.deepEqual(alternaModulo(["irpf", "bench"], "irpf"), ["bench"]);
   assert.deepEqual(alternaModulo([EMPRESARIAL], EMPRESARIAL), []);
+});
+
+// O carrinho inicial vem de duas fontes: a API (o que já é cobrado) e a URL (o
+// módulo que o paywall pediu). A segunda é de fora, então tem de ser filtrada.
+test("cartInicial parte do que já é cobrado", () => {
+  assert.deepEqual(cartInicial(["irpf"], null), ["irpf"]);
+  assert.deepEqual(cartInicial(undefined, null), []);
+});
+
+test("cartInicial liga o módulo pedido sem perder os outros, e sem desligá-lo", () => {
+  assert.deepEqual(cartInicial(["irpf"], "indice"), ["irpf", "indice"]);
+  assert.deepEqual(cartInicial(["irpf"], "irpf"), ["irpf"]);
+});
+
+test("cartInicial com ligar=empresarial expulsa os avulsos, como o carrinho", () => {
+  assert.deepEqual(cartInicial(["irpf", "bench"], EMPRESARIAL), [EMPRESARIAL]);
+});
+
+test("cartInicial ignora um ligar que não é módulo", () => {
+  assert.deepEqual(cartInicial(["irpf"], "../etc/passwd"), ["irpf"]);
+});
+
+test("mesmoConjunto compara conjunto, não ordem", () => {
+  assert.ok(mesmoConjunto(["irpf", "bench"], ["bench", "irpf"]));
+  assert.ok(!mesmoConjunto(["irpf"], ["irpf", "bench"]));
 });

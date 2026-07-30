@@ -160,13 +160,13 @@ if settings.is_dev:
     )
 
 app.include_router(billing_router)
-# LGPD Art. 18 rights over the whole account — free, at every tier, by law.
+# LGPD Art. 18 rights over the whole account — free for everyone, by law.
 app.include_router(privacy_router)
 
-# Free tier: import extracts, see the consolidated book, read market status.
+# The free base (`carteira`): import extracts, see the book, read market status.
 app.include_router(imports_router)
 app.include_router(market_router)
-# Listing your books is free (everyone has one); managing clients' is enterprise.
+# Listing your books is free (everyone has one); managing clients' is `empresarial`.
 app.include_router(portfolios_router)
 # Mixed — the paid /portfolio and /strategies routes carry their own gate (routes.py).
 app.include_router(portfolio_router)

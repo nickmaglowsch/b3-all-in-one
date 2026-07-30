@@ -100,7 +100,7 @@ async def test_never_computed_is_null_not_an_empty_payload(session):
 
 async def test_one_tenants_apuracao_never_answers_for_another(session):
     """The row is keyed by tenant and read by primary key, so there is no path
-    from A's request to B's figures — the property the enterprise tier is sold
+    from A's request to B's figures — the property the empresarial module is sold
     on, at the one table that caches money."""
     a, b = uuid.uuid4(), uuid.uuid4()
     month = _month_key(datetime.date.today())

@@ -74,7 +74,7 @@ async def get_current_tenant(
 
     The user is *who you are* (identity, billing); the tenant_id is *whose book
     you are touching* — its own by default, or a managed client portfolio the
-    enterprise tier selects with the X-Portfolio-Id header. Scope every tenant
+    empresarial module selects with the X-Portfolio-Id header. Scope every tenant
     query by the returned tenant_id — never trust an id from the request body.
 
     RLS hook: when tenant tables land, set the Postgres session GUC here

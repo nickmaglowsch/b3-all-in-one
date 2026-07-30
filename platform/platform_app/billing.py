@@ -13,10 +13,18 @@ contains would bill the same access twice, so the cart refuses the mix.
 Entitlements live on the user row (== tenant row, spec/01) and are written *only* by
 the webhook: checkout returns a URL, it never grants access. That way a user who
 abandons Stripe's hosted page, or whose card later fails, is never entitled by us.
+
+One subscription per tenant is an invariant, not a habit: `mode="subscription"`
+always creates a *new* subscription, so a second checkout would bill two of them for
+overlapping access, and whichever fired last would rewrite `modules` from its own
+items — revoking what the other one is still charging for. So checkout is the first
+purchase only; changing the cart later is PUT /billing/modules, which edits the
+items of the live subscription.
 """
 
 import datetime
 import json
+import logging
 import uuid
 
 import stripe
@@ -34,6 +42,7 @@ from platform_app.tenancy import get_current_tenant
 from platform_app.users import current_active_user
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
+log = logging.getLogger(__name__)
 
 CARTEIRA = "carteira"
 EMPRESARIAL = "empresarial"
@@ -151,7 +160,14 @@ async def get_subscription(user: User = Depends(current_active_user)) -> dict:
         "renews_at": user.plan_renews_at,
         # No customer yet => nothing for the billing portal to manage.
         "manageable": bool(user.stripe_customer_id),
+        # Which door a cart change goes through: PUT /billing/modules on a live
+        # subscription, hosted checkout on the first purchase.
+        "changeable": _has_live_subscription(user),
     }
+
+
+def _has_live_subscription(user: User) -> bool:
+    return bool(user.stripe_subscription_id) and user.plan_status in ENTITLED
 
 
 def _validate_cart(modules: list[str]) -> list[str]:
@@ -182,9 +198,14 @@ async def create_checkout(
     user: User = Depends(current_active_user),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
-    """Hosted Checkout for a cart of modules — one subscription, one line item per
-    module. Returns the URL to redirect to; it grants nothing on its own."""
+    """Hosted Checkout for the *first* subscription — one line item per module.
+    Returns the URL to redirect to; it grants nothing on its own."""
     prices = _validate_cart(modules)
+    if _has_live_subscription(user):
+        # A second session would create a second subscription: two invoices for
+        # overlapping access, and the loser's next event revoking the winner's
+        # modules. Changing an existing cart has its own route.
+        raise HTTPException(409, "já existe uma assinatura ativa — altere os módulos dela.")
     _require_stripe()
     checkout = await stripe.checkout.Session.create_async(
         mode="subscription",
@@ -198,6 +219,35 @@ async def create_checkout(
         cancel_url=f"{settings.frontend_url}/assinatura?checkout=cancelado",
     )
     return {"url": checkout.url}
+
+
+@billing_router.put("/modules")
+async def set_modules(
+    modules: list[str] = Body(..., embed=True),
+    user: User = Depends(current_active_user),
+) -> dict:
+    """Change the cart of a live subscription by editing its items — no second
+    subscription, no second card entry, Stripe prorates the difference.
+
+    Writes nothing on the tenant row: the entitlement still arrives as the
+    `customer.subscription.updated` webhook, so there is exactly one writer.
+    """
+    prices = _validate_cart(modules)
+    if not _has_live_subscription(user):
+        raise HTTPException(409, "nenhuma assinatura ativa para alterar.")
+    _require_stripe()
+    sub = await stripe.Subscription.retrieve_async(user.stripe_subscription_id)
+    # Only the difference: leaving an unchanged item alone keeps its billing anchor,
+    # where delete-and-re-add would churn the invoice for no reason.
+    current = {item["price"]["id"]: item["id"] for item in sub["items"]["data"]}
+    items = [{"id": i, "deleted": True} for price, i in current.items() if price not in prices]
+    items += [{"price": p, "quantity": 1} for p in prices if p not in current]
+    if not items:
+        return {"changed": False}
+    await stripe.Subscription.modify_async(
+        user.stripe_subscription_id, items=items, proration_behavior="create_prorations"
+    )
+    return {"changed": True}
 
 
 @billing_router.post("/portal")
@@ -238,6 +288,16 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
     if user.plan_event_at and fired_at < user.plan_event_at:
         return  # out-of-order delivery: a stale event must not resurrect a dead plan
 
+    sub_id = sub.get("id")
+    live = user.stripe_subscription_id
+    if live and sub_id and sub_id != live and user.plan_status in ENTITLED:
+        # A second subscription on the same customer (created in the dashboard, or a
+        # checkout that escaped the 409). The live one owns the entitlement: letting
+        # the intruder write would revoke modules the tenant is still being charged
+        # for, and its `deleted` would cancel an access that keeps billing.
+        log.warning("evento de %s ignorado: %s é a assinatura viva", sub_id, live)
+        return
+
     items = sub.get("items", {}).get("data") or []
     canceled = event["type"].endswith(".deleted")
     # `current_period_end` sits on the subscription in older API versions and on the
@@ -249,17 +309,22 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
     # Every item, not just the first: a cart of four modules is four line items,
     # and reading one of them would silently entitle a quarter of what was paid.
     # A new list, never a mutation — JSONB in place is invisible to SQLAlchemy.
-    user.modules = (
-        []
-        if canceled
-        else sorted(
-            {
-                m
-                for item in items
-                if (m := module_for_price((item.get("price") or {}).get("id")))
-            }
-        )
+    bought = sorted(
+        {m for item in items if (m := module_for_price((item.get("price") or {}).get("id")))}
     )
+    if canceled:
+        user.modules = []
+    elif bought:
+        user.modules = bought
+    else:
+        # Not a downgrade: Stripe subscriptions always carry at least one item, so an
+        # empty result means no item's price is configured here — a missing
+        # STRIPE_PRICE_* in this deploy. Clearing would charge in full and deliver
+        # nothing, silently. Keep the set and make noise.
+        log.error(
+            "assinatura %s: nenhum item bate com um STRIPE_PRICE_* conhecido; "
+            "entitlement mantido em %s", sub_id, user.modules
+        )
     user.plan_status = "canceled" if canceled else sub.get("status")
     user.plan_renews_at = (
         datetime.datetime.fromtimestamp(period_end, datetime.UTC)
@@ -268,6 +333,7 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
     )
     user.plan_event_at = fired_at
     user.stripe_customer_id = user.stripe_customer_id or sub.get("customer")
+    user.stripe_subscription_id = None if canceled else (sub_id or live)
     session.add(user)
     await session.commit()
 

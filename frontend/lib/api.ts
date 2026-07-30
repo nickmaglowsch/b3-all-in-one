@@ -22,7 +22,7 @@ export function clearToken() {
   clearPortfolioId();
 }
 
-// Which book the app is acting on (enterprise tier). Unset => the user's own,
+// Which book the app is acting on (módulo empresarial). Unset => the user's own,
 // which is every account below that tier.
 //
 // sessionStorage, deliberately: an advisor comparing two clients side by side

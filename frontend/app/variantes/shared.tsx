@@ -1,14 +1,12 @@
-// Chrome shared by the two surviving landing variations, so each variant file
-// holds only what makes it different: hero form, proof form, order of the
-// argument. Same design system as the app (DESIGN.md): Bench Paper ground, Panel
-// White surfaces, hairlines doing the separation, scarce navy, tnum on figures.
+// Chrome for the candidate landing. Same design system as the app (DESIGN.md):
+// Bench Paper ground, Panel White surfaces, hairlines doing the separation,
+// scarce navy, tnum on figures.
 import Link from "next/link";
 
 import { Brand } from "@/components/Brand";
-import { ALIQUOTA, DARF, GANHO, linePath, serieLiquida } from "@/lib/apuracao";
+import { linePath, serieLiquida } from "@/lib/apuracao";
 import { summarize } from "@/lib/chartRange";
-import { formatMoney, formatPercent } from "@/lib/format";
-import { PLANS } from "@/lib/plans";
+import { formatPercent } from "@/lib/format";
 
 export function Nav() {
   return (
@@ -69,26 +67,6 @@ export function ExemploChip({ children = "exemplo" }: { children?: string }) {
     <span className="shrink-0 rounded-[4px] border border-hairline bg-paper px-1.5 py-0.5 font-mono text-[11px] font-medium uppercase leading-none tracking-wide text-muted">
       {children}
     </span>
-  );
-}
-
-// The figure the same engine produces at the other end of the loop. On the bench
-// variant this is the resolution, not the hero: the backtest earns the attention
-// and the DARF is what the attention pays off in.
-export function DarfCard({ className = "" }: { className?: string }) {
-  return (
-    <div className={`rounded-lg border border-hairline bg-panel p-5 ${className}`}>
-      <div className="flex items-baseline justify-between gap-3">
-        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-          DARF · código 6015
-        </p>
-        <ExemploChip />
-      </div>
-      <p className="mt-2 font-display text-4xl font-extrabold tracking-tight text-ink tnum">
-        {formatMoney(DARF)}
-      </p>
-      <p className="mt-1 text-sm text-muted">Julho de 2026 · vence 31/08</p>
-    </div>
   );
 }
 
@@ -231,7 +209,7 @@ export function BenchCard({ className = "", hero = false }: { className?: string
   );
 }
 
-export const ALOCACAO = [
+const ALOCACAO = [
   { label: "Ações", pct: 0.55, color: "var(--series-1)" },
   { label: "FIIs", pct: 0.25, color: "var(--series-3)" },
   { label: "Renda fixa", pct: 0.15, color: "var(--series-4)" },
@@ -259,61 +237,6 @@ export function AllocationBars({ className = "" }: { className?: string }) {
   );
 }
 
-// The three screens the same apurado figure feeds, as one instrument split by
-// hairlines rather than three floating cards.
-export const OUTLETS = [
-  {
-    tag: "Bench",
-    line: `O backtest desconta os ${formatPercent(ALIQUOTA)} de cada mês com ganho.`,
-    // Two figures, not the curve: BenchCard already shows the curve further down
-    // the same scroll, and the gap between these two numbers IS the alíquota.
-    Visual: BenchFigures,
-  },
-  {
-    tag: "Carteira",
-    line: `O rebalanceamento sabe que a venda realiza ${formatMoney(GANHO)}.`,
-    Visual: () => <AllocationBars />,
-  },
-  {
-    tag: "IRPF",
-    line: "A ficha de renda variável já vem com o mesmo ganho.",
-    Visual: () => (
-      <div className="flex h-full flex-col items-start justify-center gap-1 rounded-[4px] bg-paper px-3">
-        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">DARF 6015</p>
-        <p className="font-display text-2xl font-extrabold text-ink tnum">{formatMoney(DARF)}</p>
-        <ExemploChip />
-      </div>
-    ),
-  },
-];
-
-export function Outlets({ className = "" }: { className?: string }) {
-  return (
-    <div
-      className={`grid overflow-hidden rounded-lg border border-hairline bg-panel md:grid-cols-3 ${className}`}
-    >
-      {OUTLETS.map(({ tag, line, Visual }, i) => (
-        <div
-          key={tag}
-          className={`flex flex-col gap-4 p-5 ${
-            i > 0 ? "border-t border-hairline md:border-l md:border-t-0" : ""
-          }`}
-        >
-          <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-            {tag}
-          </p>
-          {/* h-32 is the tallest visual (the four allocation bars); the other two
-              stretch into it, so the three panels' bands sit on the same lines. */}
-          <div className="h-32">
-            <Visual />
-          </div>
-          <p className="mt-auto text-sm leading-relaxed text-ink">{line}</p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 // Hairlines for a 4-cell panel that is 1 column on phones, 2 up from sm and 4 up
 // from xl — the only separation this system uses, so the rule lives in one place
 // instead of being re-derived per grid.
@@ -326,79 +249,6 @@ export const quadEdges = (i: number) =>
   ]
     .filter(Boolean)
     .join(" ");
-
-// Concise pricing: name, price, one line, one CTA. The full feature ladder lives
-// on /assinatura — a landing page that lists 18 bullets is not selling, it is
-// negotiating with itself.
-// The four jobs, in tier order. Not marketing labels: each one is the headline
-// entitlement its tier actually unlocks in lib/plans.ts, which is why the ladder
-// can carry the argument instead of sitting at the bottom as an afterthought.
-const TRABALHOS: Record<string, string> = {
-  gratis: "Sua carteira",
-  investidor: "Seu imposto",
-  trader: "Suas estratégias",
-  enterprise: "Carteiras de clientes",
-};
-
-export function Pricing({
-  compact = false,
-  jobs = false,
-  title = "Preço simples, em reais",
-}: {
-  compact?: boolean;
-  jobs?: boolean;
-  title?: string;
-}) {
-  return (
-    <section id="planos" className="scroll-mt-20 border-t border-hairline py-16 md:py-20">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <h2 className="font-display text-3xl font-extrabold tracking-tight text-ink">{title}</h2>
-        <p className="text-sm text-muted">Comece de graça. Cancele quando quiser.</p>
-      </div>
-
-      <div className="mt-8 grid overflow-hidden rounded-lg border border-hairline bg-panel sm:grid-cols-2 xl:grid-cols-4">
-        {PLANS.map((plan, i) => (
-          <div
-            key={plan.id}
-            className={`flex flex-col p-5 ${quadEdges(i)} ${
-              plan.featured ? "bg-navy/[0.03]" : ""
-            }`}
-          >
-            {/* No "mais popular" badge: the product is pre-launch, so there is
-                no popularity to report. The tint alone marks the tier. */}
-            {jobs && (
-              <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-navy">
-                {TRABALHOS[plan.id]}
-              </p>
-            )}
-            <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
-            <p className="mt-3 flex items-baseline gap-1">
-              <span className="font-display text-3xl font-extrabold tracking-tight text-ink tnum">
-                {plan.price}
-              </span>
-              <span className="text-sm text-muted">{plan.cadence}</span>
-            </p>
-            {/* One differentiator per tier, not the whole ladder. Two-line floor
-                so the four CTAs land on the same line. */}
-            <p className="mt-3 flex-1 text-sm leading-relaxed text-muted sm:min-h-[2.625rem]">
-              {compact ? plan.tagline : plan.features[i === 0 ? 0 : 1]}
-            </p>
-            <Link
-              href={plan.id === "gratis" ? "/login" : "/assinatura"}
-              className={`mt-5 rounded-md border px-4 py-2.5 text-center text-sm font-semibold transition-colors ${
-                plan.featured
-                  ? "border-transparent bg-navy text-white hover:bg-navy/90"
-                  : "border-hairline text-ink hover:bg-hairline/40"
-              }`}
-            >
-              {plan.cta}
-            </Link>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
 
 export function Close({ title, line }: { title: string; line: string }) {
   return (
@@ -435,31 +285,3 @@ export function Footer() {
   );
 }
 
-// Three claims traceable to the parser, as a figure band. Numbers do the talking
-// where the current page spends two paragraphs. Every figure here is countable in
-// the code — no timing claim, because nothing measures one.
-export const PROVAS: [string, string][] = [
-  ["2", "relatórios da B3 entram inteiros"],
-  ["24", "tipos de movimentação reconhecidos"],
-  ["3", "passos do extrato ao IRPF"],
-];
-
-export function ProofBand({ className = "" }: { className?: string }) {
-  return (
-    <dl
-      className={`grid overflow-hidden rounded-lg border border-hairline bg-panel sm:grid-cols-3 ${className}`}
-    >
-      {PROVAS.map(([figure, label], i) => (
-        <div
-          key={label}
-          className={`p-5 ${i > 0 ? "border-t border-hairline sm:border-l sm:border-t-0" : ""}`}
-        >
-          <dt className="font-display text-3xl font-extrabold tracking-tight text-ink tnum">
-            {figure}
-          </dt>
-          <dd className="mt-1 text-sm leading-snug text-muted">{label}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}

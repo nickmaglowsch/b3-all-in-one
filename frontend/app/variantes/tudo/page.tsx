@@ -15,16 +15,18 @@ import { formatMoney, formatPercent } from "@/lib/format";
 import { ALIQUOTA, DARF } from "@/lib/apuracao";
 import {
   AllocationBars,
+  BenchCard,
   BenchFigures,
   Close,
   Cta,
+  CUSTO_PP,
   ExemploChip,
   Footer,
   Nav,
-  Pricing,
   quadEdges,
   TRUST,
 } from "../shared";
+import { Assinatura } from "./Assinatura";
 
 // Rótulos de UI, não clientes de verdade: o produto é pré-lançamento e inventar
 // nomes de cliente numa landing seria fabricar prova social.
@@ -123,11 +125,8 @@ export default function VarianteTudo() {
             </dl>
           </div>
 
-          <p className="mt-4 max-w-[64ch] text-sm leading-relaxed text-ink">
-            Nada aqui é integração de quatro ferramentas: é um motor. A venda que fecha a posição na
-            carteira é a mesma que entra na apuração do mês e a mesma que o backtest tributa.
-          </p>
-
+          {/* O argumento "é um motor" saiu daqui: ele agora tem a seção abaixo,
+              com a curva que o prova. Repetir a frase aqui e lá era prosa. */}
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Cta>Começar grátis</Cta>
             <span className="text-sm text-muted">{TRUST}</span>
@@ -138,12 +137,30 @@ export default function VarianteTudo() {
             já estão na faixa de entrada do painel, que é onde eles significam
             algo. Repetir os mesmos dois logo abaixo seria enchimento. */}
 
-        {/* A escada de planos É a lista das quatro perguntas, então o cabeçalho
-            diz isso em vez de "preço simples". */}
-        <Pricing jobs title="Cada trabalho, num plano" />
+        {/* Uma evidência só, e a mais difícil de copiar: a curva bruta contra a
+            líquida. O painel acima afirma que é um motor; esta seção é onde a
+            afirmação fica visível, porque a distância entre as duas linhas é a
+            mesma alíquota que produz a DARF do mostrador de imposto. */}
+        <section className="pt-16">
+          <h2 className="max-w-2xl font-display text-3xl font-extrabold tracking-tight text-ink md:text-4xl">
+            Um motor, não quatro integrações.
+          </h2>
+          <p className="mt-4 max-w-[58ch] text-muted">
+            A venda que fecha a posição na carteira é a mesma que entra na apuração do mês — e a mesma
+            que o backtest tributa. Por isso o retorno que aparece aqui é o que sobra depois do
+            imposto, e não o número que nenhum backtest estrangeiro sabe descontar.
+          </p>
+          <BenchCard hero className="mt-8" />
+          <p className="mt-4 max-w-[60ch] text-sm leading-relaxed text-ink">
+            Neste exemplo o imposto custa <span className="font-semibold tnum">{CUSTO_PP}</span> de
+            retorno em dois anos. Nenhuma das quatro telas mostra essa linha sozinha.
+          </p>
+        </section>
+
+        <Assinatura />
         <Close
           title="Um extrato para as quatro perguntas."
-          line="O plano grátis já organiza a carteira, para sempre."
+          line="A carteira organizada é de graça, para sempre. O resto você liga quando usar."
         />
       </main>
       <Footer />

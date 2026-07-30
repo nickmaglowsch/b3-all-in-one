@@ -1,8 +1,12 @@
-// Review index for the surviving landing variations. Not a marketing page — a
-// switch board, so the two can be compared side by side before one replaces `/`.
-// Três das cinco foram descartadas: 1 e 5 reinstalavam a grade de cartões com
-// ícone que a landing atual existe para recusar, e 3 apoiava o argumento inteiro
-// em figuras de tempo que nada mede.
+// Review index for the candidate landing. Not a marketing page — a switch board,
+// so it can be compared against `/` before replacing it.
+//
+// Cinco variações entraram, uma sobrou. 1 e 5 reinstalavam a grade de cartões com
+// ícone que a landing atual existe para recusar; 3 apoiava o argumento em figuras
+// de tempo que nada mede; 2, 4 e bench eram boas, mas cada uma defendia um pedaço
+// (um número, uma calculadora, um backtest) — e a tese é que os pedaços são um
+// motor. Quatro landings competindo é artefato de review, não entrega: o que cada
+// uma provava melhor virou seção desta.
 import Link from "next/link";
 
 import { Brand } from "@/components/Brand";
@@ -11,22 +15,7 @@ const VARIANTES: [string, string, string][] = [
   [
     "tudo",
     "Um lugar para tudo na B3",
-    "Um painel só: a faixa de entrada atravessa a largura e as quatro leituras — carteira, imposto, estratégias, clientes — ficam embaixo dela. A escada de planos é a lista das quatro perguntas.",
-  ],
-  [
-    "bench",
-    "Backtest com imposto",
-    "O backtest é o herói: a curva bruta contra a líquida em escala grande, e o argumento é a distância entre as duas. A DARF aparece como desfecho, não como pitch.",
-  ],
-  [
-    "2",
-    "Um número",
-    "A DARF em escala de display é o herói, com a cadeia da apuração ao lado — cinco linhas que fecham no próprio número. Depois as três saídas e o readout do Bench.",
-  ],
-  [
-    "4",
-    "Calculadora",
-    "O herói é interativo: dois sliders e o imposto que eles produzem, com a isenção desenhada como uma travessia. Abre dentro da isenção, então o primeiro arrasto é a descoberta.",
+    "Um painel só: a faixa de entrada atravessa a largura e as quatro leituras — carteira, imposto, estratégias, clientes — ficam embaixo dela. Depois a curva bruta contra a líquida, que é a prova de que é um motor, e a assinatura montada módulo a módulo.",
   ],
 ];
 
@@ -36,11 +25,11 @@ export default function VariantesIndex() {
       <main className="mx-auto max-w-3xl px-4 py-16 md:px-8">
         <Brand className="text-lg" />
         <h1 className="mt-8 font-display text-3xl font-extrabold tracking-tight text-ink">
-          Variações da landing
+          Candidata a landing
         </h1>
         <p className="mt-3 text-muted">
-          As que sobreviveram à crítica, mais uma com o backtest em foco — todas mais curtas e mais
-          visuais que a atual, com o mesmo exemplo de julho de 2026 e o mesmo sistema de design.
+          Uma só, depois de cinco: mais curta e mais visual que a atual, com o mesmo exemplo de julho
+          de 2026 e o mesmo sistema de design.
         </p>
 
         <ul className="mt-10 overflow-hidden rounded-lg border border-hairline bg-panel">

@@ -372,17 +372,32 @@ async def test_a_subscription_stripe_no_longer_has_stops_locking_both_doors(clie
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
     assert (await client.get("/billing", headers=headers)).json()["changeable"] is True
 
-    async def gone(sub_id, **kw):
-        raise stripe.InvalidRequestError("No such subscription", "id")
+    def _raising(code: str):
+        async def raise_it(sub_id, **kw):
+            raise stripe.InvalidRequestError("No such subscription", "id", code=code)
 
-    key, settings.stripe_secret_key = settings.stripe_secret_key, "sk_test_fake"
-    retrieve = stripe.Subscription.retrieve_async
-    stripe.Subscription.retrieve_async = gone
-    try:
-        r = await client.put("/billing/modules", json={"modules": ["bench"]}, headers=headers)
-    finally:
-        stripe.Subscription.retrieve_async = retrieve
-        settings.stripe_secret_key = key
+        return raise_it
+
+    async def _put(code: str):
+        key, settings.stripe_secret_key = settings.stripe_secret_key, "sk_test_fake"
+        retrieve = stripe.Subscription.retrieve_async
+        stripe.Subscription.retrieve_async = _raising(code)
+        try:
+            return await client.put(
+                "/billing/modules", json={"modules": ["bench"]}, headers=headers
+            )
+        finally:
+            stripe.Subscription.retrieve_async = retrieve
+            settings.stripe_secret_key = key
+
+    # Qualquer outro 400 do Stripe (chave de teste contra id de produção, por
+    # exemplo) é sobre uma assinatura que existe: soltar o id ali liberaria o
+    # checkout a criar a segunda, que é o que este arquivo todo evita.
+    with pytest.raises(stripe.InvalidRequestError):
+        await _put("test_mode_live_mode_mismatch")
+    assert (await client.get("/billing", headers=headers)).json()["changeable"] is True
+
+    r = await _put("resource_missing")
     assert r.status_code == 409, r.text
     sub = (await client.get("/billing", headers=headers)).json()
     assert sub["changeable"] is False, "o id ficou preso e o checkout segue trancado"

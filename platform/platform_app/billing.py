@@ -36,9 +36,9 @@ from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import User
 from platform_app.tenancy import get_current_tenant
-# Identity-only routes take the user directly: depending on the tenant resolver
-# would make billing inherit its 402/404 on a stale book selection, i.e. paywall
-# the very page you fix a lapsed subscription on.
+# Identity-only routes take the user directly: depending on the tenant resolver would
+# make billing inherit its 402/404 on a stale book selection, i.e. paywall the very
+# page you fix a lapsed subscription on.
 from platform_app.users import current_active_user
 
 billing_router = APIRouter(prefix="/billing", tags=["billing"])
@@ -46,15 +46,12 @@ log = logging.getLogger(__name__)
 
 CARTEIRA = "carteira"
 EMPRESARIAL = "empresarial"
-# Every id here is a route group that exists and is gated below. Selling a module
-# with no code behind it is the failure mode this tuple prevents — "overlays por
-# regime" was dropped from the catalogue for exactly that reason: the engine has a
-# `regime` field on a strategy spec, not a surface anyone can be denied.
+# Every id here is a route group that exists and is gated below: selling a module
+# with no code behind it is the failure this tuple prevents.
 MODULES = (CARTEIRA, "irpf", "mercado", "indice", "bench", EMPRESARIAL)
-# What the cart can contain. `carteira` is the free floor, so it is never sold.
-SELLABLE = tuple(m for m in MODULES if m != CARTEIRA)
-# Stripe keeps a subscription usable while it retries a failed charge (dunning).
-# Cutting access on the first decline churns customers over an expired card.
+SELLABLE = tuple(m for m in MODULES if m != CARTEIRA)  # carteira é o piso grátis
+# Dunning: Stripe keeps a subscription usable while it retries a failed charge, and
+# cutting access on the first decline churns customers over an expired card.
 ENTITLED = {"active", "trialing", "past_due"}
 
 stripe.api_key = settings.stripe_secret_key
@@ -202,9 +199,8 @@ async def create_checkout(
     Returns the URL to redirect to; it grants nothing on its own."""
     prices = _validate_cart(modules)
     if _has_live_subscription(user):
-        # A second session would create a second subscription: two invoices for
-        # overlapping access, and the loser's next event revoking the winner's
-        # modules. Changing an existing cart has its own route.
+        # A second session means a second subscription: two invoices for the same
+        # access, and the loser's next event revoking the winner's modules.
         raise HTTPException(409, "já existe uma assinatura ativa — altere os módulos dela.")
     _require_stripe()
     checkout = await stripe.checkout.Session.create_async(
@@ -228,23 +224,25 @@ async def set_modules(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Change the cart of a live subscription by editing its items — no second
-    subscription, no second card entry, Stripe prorates the difference.
-
-    Writes nothing on the tenant row: the entitlement still arrives as the
-    `customer.subscription.updated` webhook, so there is exactly one writer.
-    """
+    subscription, no second card entry, Stripe prorates the difference. Writes no
+    entitlement: that still arrives as the `customer.subscription.updated`
+    webhook, so there is exactly one writer."""
     prices = _validate_cart(modules)
     if not _has_live_subscription(user):
         raise HTTPException(409, "nenhuma assinatura ativa para alterar.")
     _require_stripe()
     try:
         sub = await stripe.Subscription.retrieve_async(user.stripe_subscription_id)
-    except stripe.InvalidRequestError:
-        # O Stripe não conhece mais essa assinatura (apagada no dashboard, id de
-        # dev velho). Soltar o id é o caminho de volta: preso, este PUT falha e o
-        # checkout responde 409 — as duas portas fechadas. Entitlement fica como
-        # está, que continua sendo só do webhook.
-        log.warning("assinatura %s não existe no Stripe; soltando o id", user.stripe_subscription_id)
+    except stripe.InvalidRequestError as err:
+        # Só `resource_missing` é "sumiu": InvalidRequestError é qualquer 400, e uma
+        # chave de teste contra id de produção cai aqui para uma assinatura que
+        # existe — soltar o id ali liberaria o checkout a criar a segunda.
+        if err.code != "resource_missing":
+            raise
+        # Apagada no dashboard, ou id de dev velho. Soltar o id é o caminho de
+        # volta: preso, este PUT falha e o checkout responde 409 — as duas portas
+        # fechadas. Entitlement fica como está, só o webhook escreve.
+        log.warning("assinatura %s sumiu do Stripe; soltando o id", user.stripe_subscription_id)
         user.stripe_subscription_id = None
         await session.commit()
         raise HTTPException(409, "a assinatura não existe mais no Stripe — assine de novo.") from None
@@ -317,9 +315,9 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
         items[0].get("current_period_end") if items else None
     )
 
-    # Every item, not just the first: a cart of four modules is four line items,
-    # and reading one of them would silently entitle a quarter of what was paid.
-    # A new list, never a mutation — JSONB in place is invisible to SQLAlchemy.
+    # Every item, not just the first: a cart of four modules is four line items, and
+    # reading one would silently entitle a quarter of what was paid. A new list,
+    # never a mutation — JSONB in place is invisible to SQLAlchemy.
     bought = sorted(
         {m for item in items if (m := module_for_price((item.get("price") or {}).get("id")))}
     )
@@ -337,9 +335,11 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
             "entitlement mantido em %s", sub_id, user.modules
         )
     user.plan_status = "canceled" if canceled else sub.get("status")
+    # Renovação só de quem tem acesso: um `updated` com status morto traz
+    # `current_period_end` no futuro, e a tela leria "Renova em <data>".
     user.plan_renews_at = (
         datetime.datetime.fromtimestamp(period_end, datetime.UTC)
-        if period_end and not canceled
+        if period_end and user.plan_status in ENTITLED
         else None
     )
     user.plan_event_at = fired_at

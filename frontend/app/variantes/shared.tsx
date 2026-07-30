@@ -5,7 +5,7 @@
 import Link from "next/link";
 
 import { Brand } from "@/components/Brand";
-import { ALIQUOTA, DARF, GANHO, linePath } from "@/lib/apuracao";
+import { ALIQUOTA, DARF, GANHO, linePath, serieLiquida } from "@/lib/apuracao";
 import { summarize } from "@/lib/chartRange";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { PLANS } from "@/lib/plans";
@@ -72,9 +72,34 @@ export function ExemploChip({ children = "exemplo" }: { children?: string }) {
   );
 }
 
-// Bruto vs depois do imposto, on one scale. The gap IS the alíquota.
-const BRUTO = [100, 102, 101, 105, 108, 107, 112, 115, 118.2];
-const LIQUIDO = BRUTO.map((v) => 100 + (v - 100) * (1 - ALIQUOTA));
+// The figure the same engine produces at the other end of the loop. On the bench
+// variant this is the resolution, not the hero: the backtest earns the attention
+// and the DARF is what the attention pays off in.
+export function DarfCard({ className = "" }: { className?: string }) {
+  return (
+    <div className={`rounded-lg border border-hairline bg-panel p-5 ${className}`}>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
+          DARF · código 6015
+        </p>
+        <ExemploChip />
+      </div>
+      <p className="mt-2 font-display text-4xl font-extrabold tracking-tight text-ink tnum">
+        {formatMoney(DARF)}
+      </p>
+      <p className="mt-1 text-sm text-muted">Julho de 2026 · vence 31/08</p>
+    </div>
+  );
+}
+
+// Bruto vs depois do imposto, on one scale. The gap IS the alíquota. Two years of
+// monthly closes with a real drawdown in them — a curve that only goes up is not
+// a backtest, and the drawdown is where the prejuízo rule becomes visible.
+const BRUTO = [
+  100, 103, 101, 106, 110, 108, 104, 96, 99, 105, 111, 114, 112, 118, 123, 121, 127, 132, 129, 135,
+  140, 138, 144, 148,
+];
+const LIQUIDO = serieLiquida(BRUTO);
 
 export function TaxedCurve({ className = "" }: { className?: string }) {
   const all = [...BRUTO, ...LIQUIDO];
@@ -109,21 +134,32 @@ export function TaxedCurve({ className = "" }: { className?: string }) {
 }
 
 // The Bench readout the sparkline cell only gestures at: the same two curves plus
-// the three figures someone who backtests actually reads. Both rows come out of
+// the figures someone who backtests actually reads. Every row comes out of
 // `summarize` — the same port of the engine's own metric that the Bench screen
 // uses — so the landing cannot quote a figure the app would compute differently.
-// 9 months, so summarize withholds the CAGR by design and only the total shows.
-const MESES = 9 / 12;
-const BENCH_BRUTO = summarize(BRUTO, MESES);
-const BENCH_LIQUIDO = summarize(LIQUIDO, MESES);
+// 24 months, so the CAGR is above summarize's annualisation floor and shows.
+const ANOS = 2;
+const BENCH_BRUTO = summarize(BRUTO, ANOS);
+const BENCH_LIQUIDO = summarize(LIQUIDO, ANOS);
 const asPct = (v: number | null) => (v === null ? "—" : formatPercent(v / 100));
 const METRICAS: [string, string, string?][] = [
   ["Retorno bruto", asPct(BENCH_BRUTO.total_return_pct)],
   ["Depois do imposto", asPct(BENCH_LIQUIDO.total_return_pct), "gain"],
-  ["Maior queda", asPct(BENCH_BRUTO.max_dd_pct), "loss"],
+  ["Ao ano, líquido", asPct(BENCH_LIQUIDO.ann_return_pct)],
+  // Da série líquida, não da bruta: é a queda que o dinheiro de verdade viveu, e
+  // deixar isso implícito num painel que um quant lê de perto é o tipo de
+  // ambiguidade que desqualifica o resto dos números.
+  ["Maior queda · líquido", asPct(BENCH_LIQUIDO.max_dd_pct), "loss"],
 ];
 
-export function BenchCard({ className = "" }: { className?: string }) {
+// What the alíquota costs the strategy, in percentage points of total return —
+// the one figure this whole panel exists to produce, so it is derived here rather
+// than typed into a headline.
+export const CUSTO_PP = formatPercent(
+  ((BENCH_BRUTO.total_return_pct ?? 0) - (BENCH_LIQUIDO.total_return_pct ?? 0)) / 100,
+);
+
+export function BenchCard({ className = "", hero = false }: { className?: string; hero?: boolean }) {
   return (
     <div
       className={`grid overflow-hidden rounded-lg border border-hairline bg-panel lg:grid-cols-[1fr_16rem] ${className}`}
@@ -131,11 +167,11 @@ export function BenchCard({ className = "" }: { className?: string }) {
       <div className="p-5 md:p-6">
         <div className="flex items-baseline justify-between gap-3">
           <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
-            Bench · 9 meses
+            Bench · 24 meses · mensal
           </p>
           <ExemploChip />
         </div>
-        <TaxedCurve className="mt-4 h-32 w-full" />
+        <TaxedCurve className={`mt-4 w-full ${hero ? "h-56 md:h-72" : "h-32"}`} />
         {/* The legend names which curve is which, because a dashed line and a
             solid line are not self-describing. The swatch carries the data
             colour; the label stays interface ink. */}
@@ -166,8 +202,8 @@ export function BenchCard({ className = "" }: { className?: string }) {
           </div>
         ))}
         <p className="mt-5 border-t border-hairline pt-4 text-xs leading-relaxed text-muted">
-          Contra IBOV e CDI, das séries da própria B3. A alíquota sai operação a operação, não do
-          resultado final.
+          Contra IBOV e CDI, das séries da própria B3. A alíquota sai de cada mês com ganho, e um mês
+          negativo abate os seguintes — por isso a recuperação da queda vem sem imposto.
         </p>
       </dl>
     </div>
@@ -207,7 +243,7 @@ export function AllocationBars({ className = "" }: { className?: string }) {
 export const OUTLETS = [
   {
     tag: "Bench",
-    line: "O backtest desconta os 15% operação a operação.",
+    line: `O backtest desconta os ${formatPercent(ALIQUOTA)} de cada mês com ganho.`,
     // Two figures, not the curve: BenchCard already shows the curve further down
     // the same scroll, and the gap between these two numbers IS the alíquota.
     Visual: () => (

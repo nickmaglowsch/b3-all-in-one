@@ -24,6 +24,32 @@ export function impostoMes(vendas: number, ganho: number, prejuizo = 0) {
   return round2(Math.max(0, ganho - prejuizo) * ALIQUOTA);
 }
 
+// A curva depois do imposto. A alíquota sai de cada período com ganho, não do
+// resultado final — e um período negativo vira prejuízo a compensar nos
+// seguintes, que é a mesma regra da apuração mensal aplicada a uma série. A
+// diferença é visível justamente na recuperação de uma queda: ali o ganho volta
+// sem imposto até o prejuízo acumulado zerar.
+//
+// Descontar 15% do ganho acumulado no fim (o atalho óbvio) dá outro número e
+// contradiz a frase que a página usa para se diferenciar.
+export function serieLiquida(bruto: number[], aliquota = ALIQUOTA) {
+  const out = [bruto[0]];
+  let prejuizo = 0; // saldo a compensar, sempre positivo
+  for (let i = 1; i < bruto.length; i++) {
+    const anterior = out[i - 1];
+    const ganho = anterior * (bruto[i] / bruto[i - 1] - 1);
+    if (ganho <= 0) {
+      prejuizo -= ganho;
+      out.push(anterior + ganho);
+      continue;
+    }
+    const tributavel = Math.max(0, ganho - prejuizo);
+    prejuizo = Math.max(0, prejuizo - ganho);
+    out.push(anterior + ganho - tributavel * aliquota);
+  }
+  return out;
+}
+
 // Polyline through a series, normalized into a 100×40 viewBox with padding.
 // Shared by the variations' sparklines; `lo`/`hi` let two series share a scale.
 export function linePath(values: number[], lo?: number, hi?: number) {

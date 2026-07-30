@@ -9,6 +9,11 @@ import { Brand } from "@/components/Brand";
 
 const VARIANTES: [string, string, string][] = [
   [
+    "bench",
+    "Backtest com imposto",
+    "O backtest é o herói: a curva bruta contra a líquida em escala grande, e o argumento é a distância entre as duas. A DARF aparece como desfecho, não como pitch.",
+  ],
+  [
     "2",
     "Um número",
     "A DARF em escala de display é o herói, com a cadeia da apuração ao lado — cinco linhas que fecham no próprio número. Depois as três saídas e o readout do Bench.",
@@ -29,8 +34,8 @@ export default function VariantesIndex() {
           Variações da landing
         </h1>
         <p className="mt-3 text-muted">
-          As duas que sobreviveram à crítica — mais curtas e mais visuais que a atual, com o mesmo
-          exemplo de julho de 2026 e o mesmo sistema de design.
+          As que sobreviveram à crítica, mais uma com o backtest em foco — todas mais curtas e mais
+          visuais que a atual, com o mesmo exemplo de julho de 2026 e o mesmo sistema de design.
         </p>
 
         <ul className="mt-10 overflow-hidden rounded-lg border border-hairline bg-panel">
@@ -40,7 +45,7 @@ export default function VariantesIndex() {
                 href={`/variantes/${n}`}
                 className="flex gap-5 p-5 transition-colors hover:bg-hairline/30"
               >
-                <span className="font-display text-2xl font-extrabold tracking-tight text-navy tnum">
+                <span className="w-14 shrink-0 font-mono text-sm font-medium uppercase tracking-wide text-navy tnum">
                   {n}
                 </span>
                 <span className="min-w-0">

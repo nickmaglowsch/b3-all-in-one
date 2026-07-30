@@ -13,6 +13,7 @@ import {
   cartInicial,
   EMPRESARIAL,
   mesmoConjunto,
+  nadaAMudar,
   nomeDe,
   precoDoCarrinho,
   TUDO,
@@ -74,9 +75,19 @@ function Avisos({
   );
 }
 
+/** Status do Stripe que guardam os itens (e a data) sem entitular. `past_due`
+ *  não está aqui: dunning mantém o acesso, e tem aviso próprio. */
+const SUSPENSA = ["incomplete", "incomplete_expired", "unpaid", "paused"];
+
 function Renovacao({ sub }: { sub?: Subscription }) {
   if (sub?.status === "past_due") {
     return <>Pagamento pendente — atualize o cartão para não perder o acesso.</>;
+  }
+  // Cobrada e sem acesso: o Stripe manda a data de renovação junto, e a data
+  // sozinha leria como "está tudo em ordem". `canceled` fica de fora — aquele
+  // volta pelo checkout, e o texto abaixo já diz isso.
+  if (sub?.status && SUSPENSA.includes(sub.status)) {
+    return <>Assinatura suspensa — o acesso volta com o próximo pagamento.</>;
   }
   if (sub?.renews_at) return <>Renova em {formatDate(sub.renews_at)}</>;
   return <>Sem assinatura ativa.</>;
@@ -84,7 +95,7 @@ function Renovacao({ sub }: { sub?: Subscription }) {
 
 function Ligados({ sub }: { sub?: Subscription }) {
   return (
-    <Card title="O que está ligado hoje" className="mb-6">
+    <Card title="O que você assina" className="mb-6">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm text-ink">
           {sub?.billed_modules.length
@@ -291,7 +302,7 @@ export default function AssinaturaPage() {
       <Fatura cart={cart} toggle={(id) => setChosen(alternaModulo(cart, id))} />
       <Assinar
         cart={cart}
-        igual={mesmoConjunto(billed ?? [], cart)}
+        igual={nadaAMudar(cart, sub.data)}
         alterar={!!sub.data?.changeable}
         pending={go.isPending}
         onClick={() => go.mutate(destino(cart, sub.data?.changeable))}

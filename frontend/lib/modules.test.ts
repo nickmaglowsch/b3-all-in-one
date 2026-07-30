@@ -11,6 +11,7 @@ import {
   EMPRESARIAL,
   mesmoConjunto,
   MODULOS,
+  nadaAMudar,
   precoDoCarrinho,
   somaModulos,
   TUDO,
@@ -83,8 +84,21 @@ test("cartInicial com ligar=empresarial expulsa os avulsos, como o carrinho", ()
   assert.deepEqual(cartInicial(["irpf", "bench"], EMPRESARIAL), [EMPRESARIAL]);
 });
 
-test("cartInicial ignora um ligar que não é módulo", () => {
+test("cartInicial ignora um ligar que não é módulo vendável", () => {
   assert.deepEqual(cartInicial(["irpf"], "../etc/passwd"), ["irpf"]);
+  // carteira é módulo, mas é de graça: no carrinho só renderia um 400.
+  assert.deepEqual(cartInicial(["irpf"], CARTEIRA), ["irpf"]);
+  assert.deepEqual(cartInicial([], CARTEIRA), []);
+});
+
+// O botão só pode dizer "é o que você já assina" se houver assinatura viva. Sem
+// ela o conjunto cobrado é histórico, e travar o botão nele é trancar a compra.
+test("nadaAMudar exige assinatura viva, não só o mesmo conjunto", () => {
+  const cart = ["irpf", "bench"];
+  assert.ok(nadaAMudar(cart, { changeable: true, billed_modules: ["bench", "irpf"] }));
+  assert.ok(!nadaAMudar(cart, { changeable: false, billed_modules: ["bench", "irpf"] }));
+  assert.ok(!nadaAMudar(cart, { changeable: true, billed_modules: ["irpf"] }));
+  assert.ok(!nadaAMudar(cart, undefined));
 });
 
 test("mesmoConjunto compara conjunto, não ordem", () => {

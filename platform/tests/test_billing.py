@@ -16,6 +16,7 @@ import json
 import time
 
 import pytest
+import stripe
 
 from platform_app.billing import CARTEIRA, EMPRESARIAL, MODULES
 from platform_app.config import settings
@@ -355,6 +356,37 @@ async def test_changing_modules_needs_a_live_subscription(client):
     await _set_modules(client, headers)
     r = await client.put("/billing/modules", json={"modules": ["bench"]}, headers=headers)
     assert r.status_code == 409, r.text
+
+
+async def test_a_subscription_stripe_no_longer_has_stops_locking_both_doors(client):
+    """Apagada no dashboard, ou um id de dev velho: se o PUT falhasse mantendo o
+    id, o checkout continuaria respondendo 409 e o cliente não teria porta
+    nenhuma. Soltar o id devolve o caminho da compra."""
+    headers = await _auth(client, "billing-sub-fantasma@example.com")
+    tenant_id = (await client.get("/me", headers=headers)).json()["id"]
+    body, sig = _signed(
+        _sub_event("created", prices=[PRICES["irpf"]], created=int(time.time()) + 400,
+                   sub_id="sub_fantasma", customer="cus_fantasma",
+                   metadata={"tenant_id": tenant_id})
+    )
+    assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+    assert (await client.get("/billing", headers=headers)).json()["changeable"] is True
+
+    async def gone(sub_id, **kw):
+        raise stripe.InvalidRequestError("No such subscription", "id")
+
+    key, settings.stripe_secret_key = settings.stripe_secret_key, "sk_test_fake"
+    retrieve = stripe.Subscription.retrieve_async
+    stripe.Subscription.retrieve_async = gone
+    try:
+        r = await client.put("/billing/modules", json={"modules": ["bench"]}, headers=headers)
+    finally:
+        stripe.Subscription.retrieve_async = retrieve
+        settings.stripe_secret_key = key
+    assert r.status_code == 409, r.text
+    sub = (await client.get("/billing", headers=headers)).json()
+    assert sub["changeable"] is False, "o id ficou preso e o checkout segue trancado"
+    assert sub["billed_modules"] == ["irpf"], "soltar o id não é revogar acesso"
 
 
 async def test_checkout_refuses_a_module_without_a_configured_price(client):

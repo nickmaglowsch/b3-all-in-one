@@ -78,6 +78,9 @@ export const BUNDLE = MODULOS.find((m) => m.id === EMPRESARIAL)!;
  *  fazer sentido em vez de parecer punição. */
 export const TUDO = AVULSOS.reduce((s, m) => s + m.price, 0);
 
+/** Vendável, não só existente: `carteira` é módulo e é de graça, então um
+ *  `?ligar=carteira` na URL só renderia um 400 do checkout. */
+export const vendavel = (id: string) => id === EMPRESARIAL || AVULSOS.some((m) => m.id === id);
 export const moduloDe = (id: string) => MODULOS.find((m) => m.id === id);
 export const nomeDe = (id: string) => moduloDe(id)?.name ?? id;
 
@@ -106,5 +109,14 @@ export const alternaModulo = (cart: string[], id: string): string[] => {
  *  um `ligar` que não é módulo é ignorado (a URL vem de fora). */
 export const cartInicial = (billed: string[] | undefined, ligar: string | null) => {
   const base = billed ?? [];
-  return ligar && moduloDe(ligar) && !base.includes(ligar) ? alternaModulo(base, ligar) : base;
+  return ligar && vendavel(ligar) && !base.includes(ligar) ? alternaModulo(base, ligar) : base;
 };
+
+/** "É o que você já assina" só é verdade quando existe assinatura para alterar.
+ *  Um `incomplete` (3DS pendente), `unpaid` ou `paused` guarda o conjunto cobrado
+ *  sem dar acesso: travar o botão nele deixaria o cliente sem como comprar o que
+ *  ele justamente não tem. */
+export const nadaAMudar = (
+  cart: string[],
+  sub?: { changeable: boolean; billed_modules: string[] },
+) => !!sub?.changeable && mesmoConjunto(sub.billed_modules, cart);

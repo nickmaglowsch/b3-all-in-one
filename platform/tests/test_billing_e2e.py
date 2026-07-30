@@ -94,6 +94,13 @@ def fake_stripe(request, monkeypatch) -> _Stripe:
 
     async def sub_modify(sub_id, **kw):
         calls.modifies.append({"id": sub_id, **kw})
+        # Aplica o delta: sem isto o falso responde sempre o estado inicial e um
+        # segundo PUT mediria uma assinatura que o primeiro já mudou.
+        for item in kw.get("items", []):
+            if item.get("deleted"):
+                calls.items = [p for p in calls.items if f"si_{p}" != item["id"]]
+            else:
+                calls.items.append(item["price"])
         return calls.as_subscription()
 
     monkeypatch.setattr(stripe.Customer, "create_async", customer_create)
@@ -230,7 +237,6 @@ async def test_subscription_lifecycle(client, fake_stripe):
     # E o acesso continua vindo do webhook: alterar a assinatura não entitula.
     assert (await client.get("/portfolio/index", headers=headers)).status_code == 402
 
-    fake_stripe.items = [PRICE["irpf"], PRICE["bench"], PRICE["indice"]]
     body, sig = _signed(_sub("updated", ["irpf", "bench", "indice"], now + 10, fake_stripe.customer))
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
     assert (await client.get("/portfolio/index", headers=headers)).status_code != 402
@@ -240,16 +246,14 @@ async def test_subscription_lifecycle(client, fake_stripe):
     assert r.status_code == 200, r.text
     assert fake_stripe.modifies[-1]["items"] == [{"id": f"si_{PRICE['bench']}", "deleted": True}]
 
-    # Reenviar o mesmo carrinho não é uma alteração — e não toca no Stripe.
+    # Reenviar o carrinho que a assinatura já tem não é uma alteração — e não
+    # toca no Stripe. (O `bench` acabou de sair, então o carrinho é este.)
     modifies_antes = len(fake_stripe.modifies)
-    r = await client.put(
-        "/billing/modules", json={"modules": ["irpf", "bench", "indice"]}, headers=headers
-    )
+    r = await client.put("/billing/modules", json={"modules": ["irpf", "indice"]}, headers=headers)
     assert r.status_code == 200 and r.json() == {"changed": False}
     assert len(fake_stripe.modifies) == modifies_antes
 
     # ── 5. Desligar um módulo fecha só aquela porta ────────────────────────────
-    fake_stripe.items = [PRICE["irpf"], PRICE["indice"]]
     body, sig = _signed(_sub("updated", ["irpf", "indice"], now + 20, fake_stripe.customer))
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
     assert (await client.get("/backtests", headers=headers)).status_code == 402

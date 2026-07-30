@@ -225,6 +225,7 @@ async def create_checkout(
 async def set_modules(
     modules: list[str] = Body(..., embed=True),
     user: User = Depends(current_active_user),
+    session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Change the cart of a live subscription by editing its items — no second
     subscription, no second card entry, Stripe prorates the difference.
@@ -236,7 +237,17 @@ async def set_modules(
     if not _has_live_subscription(user):
         raise HTTPException(409, "nenhuma assinatura ativa para alterar.")
     _require_stripe()
-    sub = await stripe.Subscription.retrieve_async(user.stripe_subscription_id)
+    try:
+        sub = await stripe.Subscription.retrieve_async(user.stripe_subscription_id)
+    except stripe.InvalidRequestError:
+        # O Stripe não conhece mais essa assinatura (apagada no dashboard, id de
+        # dev velho). Soltar o id é o caminho de volta: preso, este PUT falha e o
+        # checkout responde 409 — as duas portas fechadas. Entitlement fica como
+        # está, que continua sendo só do webhook.
+        log.warning("assinatura %s não existe no Stripe; soltando o id", user.stripe_subscription_id)
+        user.stripe_subscription_id = None
+        await session.commit()
+        raise HTTPException(409, "a assinatura não existe mais no Stripe — assine de novo.") from None
     # Only the difference: leaving an unchanged item alone keeps its billing anchor,
     # where delete-and-re-add would churn the invoice for no reason.
     current = {item["price"]["id"]: item["id"] for item in sub["items"]["data"]}

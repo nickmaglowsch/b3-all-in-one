@@ -9,6 +9,11 @@ import { Brand } from "@/components/Brand";
 
 const VARIANTES: [string, string, string][] = [
   [
+    "tudo",
+    "Um lugar para tudo na B3",
+    "Um painel só: a faixa de entrada atravessa a largura e as quatro leituras — carteira, imposto, estratégias, clientes — ficam embaixo dela. A escada de planos é a lista das quatro perguntas.",
+  ],
+  [
     "bench",
     "Backtest com imposto",
     "O backtest é o herói: a curva bruta contra a líquida em escala grande, e o argumento é a distância entre as duas. A DARF aparece como desfecho, não como pitch.",

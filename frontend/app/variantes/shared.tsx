@@ -159,6 +159,27 @@ export const CUSTO_PP = formatPercent(
   ((BENCH_BRUTO.total_return_pct ?? 0) - (BENCH_LIQUIDO.total_return_pct ?? 0)) / 100,
 );
 
+// The two totals as a readout, for the cells too small to hold the curve. The
+// gap between them IS the alíquota, so the pair says what a sparkline only hints.
+export function BenchFigures() {
+  return (
+    <dl className="flex h-full flex-col justify-center gap-3 rounded-[4px] bg-paper px-3">
+      {METRICAS.slice(0, 2).map(([label, value, tone]) => (
+        <div key={label}>
+          <dt className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">{label}</dt>
+          <dd
+            className={`font-display text-xl font-extrabold tnum ${
+              tone === "gain" ? "text-gain" : "text-ink"
+            }`}
+          >
+            {value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
 export function BenchCard({ className = "", hero = false }: { className?: string; hero?: boolean }) {
   return (
     <div
@@ -246,24 +267,7 @@ export const OUTLETS = [
     line: `O backtest desconta os ${formatPercent(ALIQUOTA)} de cada mês com ganho.`,
     // Two figures, not the curve: BenchCard already shows the curve further down
     // the same scroll, and the gap between these two numbers IS the alíquota.
-    Visual: () => (
-      <dl className="flex h-full flex-col justify-center gap-3 rounded-[4px] bg-paper px-3">
-        {METRICAS.slice(0, 2).map(([label, value, tone]) => (
-          <div key={label}>
-            <dt className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-              {label}
-            </dt>
-            <dd
-              className={`font-display text-xl font-extrabold tnum ${
-                tone === "gain" ? "text-gain" : "text-ink"
-              }`}
-            >
-              {value}
-            </dd>
-          </div>
-        ))}
-      </dl>
-    ),
+    Visual: BenchFigures,
   },
   {
     tag: "Carteira",
@@ -326,13 +330,29 @@ export const quadEdges = (i: number) =>
 // Concise pricing: name, price, one line, one CTA. The full feature ladder lives
 // on /assinatura — a landing page that lists 18 bullets is not selling, it is
 // negotiating with itself.
-export function Pricing({ compact = false }: { compact?: boolean }) {
+// The four jobs, in tier order. Not marketing labels: each one is the headline
+// entitlement its tier actually unlocks in lib/plans.ts, which is why the ladder
+// can carry the argument instead of sitting at the bottom as an afterthought.
+const TRABALHOS: Record<string, string> = {
+  gratis: "Sua carteira",
+  investidor: "Seu imposto",
+  trader: "Suas estratégias",
+  enterprise: "Carteiras de clientes",
+};
+
+export function Pricing({
+  compact = false,
+  jobs = false,
+  title = "Preço simples, em reais",
+}: {
+  compact?: boolean;
+  jobs?: boolean;
+  title?: string;
+}) {
   return (
     <section id="planos" className="scroll-mt-20 border-t border-hairline py-16 md:py-20">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <h2 className="font-display text-3xl font-extrabold tracking-tight text-ink">
-          Preço simples, em reais
-        </h2>
+        <h2 className="font-display text-3xl font-extrabold tracking-tight text-ink">{title}</h2>
         <p className="text-sm text-muted">Comece de graça. Cancele quando quiser.</p>
       </div>
 
@@ -346,6 +366,11 @@ export function Pricing({ compact = false }: { compact?: boolean }) {
           >
             {/* No "mais popular" badge: the product is pre-launch, so there is
                 no popularity to report. The tint alone marks the tier. */}
+            {jobs && (
+              <p className="mb-2 font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-navy">
+                {TRABALHOS[plan.id]}
+              </p>
+            )}
             <h3 className="text-sm font-semibold text-ink">{plan.name}</h3>
             <p className="mt-3 flex items-baseline gap-1">
               <span className="font-display text-3xl font-extrabold tracking-tight text-ink tnum">

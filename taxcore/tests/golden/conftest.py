@@ -30,8 +30,20 @@ EXPECTED = Path(__file__).resolve().parent / "expected"
 # Auto-imported by every subprocess (it lands on PYTHONPATH). Proves the scripts
 # stay offline with these fixtures AND enforces it: any non-local connect fails loud.
 # ponytail: connect() hook, not a full sandbox — enough since the scripts do pure file IO.
+#
+# It also starts coverage in the child. Without that, this suite runs the two
+# biggest modules in the package end to end and none of it is measured — every
+# line of the 500-line IRPF report generator reads as untested because the only
+# thing that exercises it is a subprocess. `coverage.process_startup()` is a
+# no-op unless COVERAGE_PROCESS_START is set, which `run_script` only does when
+# the parent is itself under coverage.
 _NETGUARD = '''\
 import socket
+try:
+    import coverage
+    coverage.process_startup()
+except ImportError:
+    pass
 _orig = socket.socket.connect
 def _blocked(self, address):
     host = address[0] if isinstance(address, (tuple, list)) else address
@@ -59,9 +71,28 @@ def build_workspace(dst: Path, data_files: list[str]) -> Path:
     return dst
 
 
+def coverage_env() -> dict:
+    """``COVERAGE_PROCESS_START`` for the child, but only under a coverage run.
+
+    Set unconditionally it would make every subprocess write a stray
+    ``.coverage.*`` file into the repo on a plain ``pytest`` run.
+    """
+    try:
+        import coverage
+    except ImportError:
+        return {}
+    if coverage.Coverage.current() is None:
+        return {}
+    # COVERAGE_FILE too: the child runs in the throwaway workspace, so the default
+    # relative data file would be written there and thrown away with it.
+    return {"COVERAGE_PROCESS_START": str(TAXCORE / "pyproject.toml"),
+            "COVERAGE_FILE": str(TAXCORE / ".coverage")}
+
+
 def run_script(workspace: Path, module_args: list[str]) -> subprocess.CompletedProcess:
     """Run ``python -m <module> [args...]`` inside ``workspace`` (offline-guarded)."""
-    env = {**os.environ, "PYTHONPATH": str(workspace), "PYTHONWARNINGS": "ignore"}
+    env = {**os.environ, "PYTHONPATH": str(workspace), "PYTHONWARNINGS": "ignore",
+           **coverage_env()}
     return subprocess.run(
         [sys.executable, "-m", *module_args],
         cwd=workspace, env=env, capture_output=True, text=True,

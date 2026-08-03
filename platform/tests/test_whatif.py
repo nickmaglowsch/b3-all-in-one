@@ -93,6 +93,47 @@ async def test_whatif_replays_real_flows(client):
     assert any(p["aftertax"] > 0 for p in curve)   # the flows actually got deployed
 
 
+async def test_fund_from_first_positive_folds_leading_negatives():  # async: file-wide pytestmark
+    """The −99% bug: a book whose extract opens with dividends before the buys
+    that fund them starts the replay at a negative NAV, which the engine's
+    margin-call guard reads as bankruptcy and the UI reports as −99.99%.
+
+    Folding must open the window on the first net-funded date and preserve both
+    the total and every later flow untouched."""
+    from platform_app.routes_whatif import fund_from_first_positive
+
+    # Shape taken from the real prod book: income lands before the first buy, and
+    # the running total crosses into the black in December and back out in January
+    # — so anchoring on the FIRST positive prefix would leave the January dip.
+    flows = {"2019-11-14": -11.7, "2019-12-12": -10.0, "2019-12-30": 108.0,
+             "2020-01-02": -150.0, "2020-03-09": 2151.0}
+    out = fund_from_first_positive(flows)
+
+    assert out[0] == {"date": "2020-03-09", "amount": pytest.approx(2087.3)}
+    assert [f["date"] for f in out] == ["2020-03-09"]
+    # Exact: total_invested is computed off the unfolded dict and must still match.
+    assert sum(f["amount"] for f in out) == pytest.approx(sum(flows.values()))
+    # Every prefix stays funded — nothing left for the margin-call guard to trip on.
+    assert all(cum > 0 for cum in _running(out))
+
+    # An already-funded book is passed through unchanged.
+    ok = {"2023-01-16": 25_000.0, "2023-09-11": -9_000.0}
+    assert fund_from_first_positive(ok) == [
+        {"date": "2023-01-16", "amount": 25_000.0},
+        {"date": "2023-09-11", "amount": -9_000.0},
+    ]
+    # Never net-funded → nothing to replay (the route turns this into a 422).
+    assert fund_from_first_positive({"2023-01-16": -5.0, "2023-02-01": -1.0}) == []
+
+
+def _running(flows: list[dict]) -> list[float]:
+    cum, out = 0.0, []
+    for f in flows:
+        cum += f["amount"]
+        out.append(cum)
+    return out
+
+
 async def test_whatif_unknown_strategy_404(client):
     token = (await client.post("/auth/dev-login")).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}

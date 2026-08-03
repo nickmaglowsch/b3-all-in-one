@@ -19,6 +19,7 @@ import shutil
 import tempfile
 from collections import defaultdict
 from datetime import date
+from itertools import accumulate
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -88,6 +89,39 @@ async def _net_flows(session: AsyncSession, tid) -> dict[str, float]:
     return {d: v for d, v in flows.items()}
 
 
+def fund_from_first_positive(flows: dict[str, float]) -> list[dict]:
+    """`[{date, amount}, ...]` opening on the date after which the book stays
+    net-funded, with everything before it folded into that date. Empty when the
+    book is never net-funded.
+
+    A replay starts at zero capital, so the engine's margin-call guard
+    (simulation.py: `if pt_nav <= 0 ... break`) ends the whole simulation the
+    first time NAV touches zero — and a real B3 extract routinely opens
+    *negative*: dividends and small sells on positions bought before the extract
+    window land ahead of the buys that fund them. One such book went "bankrupt"
+    in its second month and reported −99.99% against R$1,7M invested.
+
+    The anchor is the LAST non-positive prefix, not the first positive one. Those
+    early months oscillate — the real book above crossed into the black in
+    December and back out in January — so folding at the first crossing leaves a
+    later dip for the guard to trip on and fixes nothing. Taking the last one
+    makes every remaining prefix positive by construction.
+
+    Folding is exact: the sum is unchanged, so `total_invested` and every later
+    flow's date survive. What is dropped is only the window before the extract
+    can describe a funded book — dividends on positions bought before it starts.
+    """
+    items = sorted(flows.items())
+    running = list(accumulate(a for _, a in items))
+    last_unfunded = max((i for i, c in enumerate(running) if c <= 0), default=-1)
+    i = last_unfunded + 1
+    if i >= len(items):
+        return []
+    return [{"date": items[i][0], "amount": running[i]}] + [
+        {"date": d, "amount": a} for d, a in items[i + 1:]
+    ]
+
+
 async def _actual_value(session: AsyncSession, tid) -> float:
     """Σ current positions × latest engine price — the real book's mark today
     (same price source as /portfolio/target and the rebalance advisor)."""
@@ -154,9 +188,12 @@ async def create_whatif(
     flows = await _net_flows(session, tid)
     if not flows:
         raise HTTPException(422, "no trades to replay — import a portfolio first")
-    flows_list = [{"date": d, "amount": a} for d, a in sorted(flows.items())]
+    flows_list = fund_from_first_positive(flows)
+    if not flows_list:
+        raise HTTPException(
+            422, "sem aporte líquido para replicar — as saídas cobrem todas as entradas")
     total_invested = round(sum(flows.values()), 2)
-    start = min(flows)  # earliest ISO date == the tenant's first trade
+    start = flows_list[0]["date"]  # the date the book is first net-funded
 
     extra_env = await specstore.user_specs_env(session, tid) or None
     scenarios = []

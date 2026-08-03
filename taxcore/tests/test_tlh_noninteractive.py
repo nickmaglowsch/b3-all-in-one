@@ -96,6 +96,26 @@ def test_json_gain_triggers_consistent_harvest():
     assert [h["qty"] for h in b["rebuys"]] == [h["qty"] for h in b["harvest"]]
 
 
+def test_json_reports_why_and_the_carry_left_over():
+    """(b2) Every bucket carries its rationale and the prejuízo left after the
+    plan. Without them a loss-harvesting sell renders as a bare "Nenhum TLH
+    necessário" with carry_used 0 — the plan looks like it did nothing, when it
+    just moved the whole loss into the carryforward."""
+    r = run_tlh(["--json", "--sells", "PETR4:459"])
+    assert r.returncode == 0, r.stderr
+    result = json.loads(r.stdout)
+
+    b = result["buckets"]["AÇÃO"]
+    carry = result["situation"]["AÇÃO"]["carry"]
+    assert b["rationale"].strip(), "the status alone does not say why"
+    # Carry spent comes off; a final PnL below zero goes back on.
+    assert b["carry_after"] == pytest.approx(
+        carry - b["carry_used"] + max(0.0, -b["final_pnl"]))
+    assert b["carry_after"] >= 0.0
+    # This book harvests down to a taxable residual, so the carry is consumed.
+    assert b["carry_after"] == pytest.approx(carry - b["carry_used"])
+
+
 @pytest.mark.parametrize("spec,needle", [
     ("FAKE3:100", "positions.csv"),      # ticker not held
     ("PETR4:999999", "cotas"),            # qty > held

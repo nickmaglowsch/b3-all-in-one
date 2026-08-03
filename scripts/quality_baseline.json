@@ -83,7 +83,7 @@
     "frontend/app/page.tsx": 995,
     "frontend/app/portfolio/IndexSection.tsx": 482,
     "frontend/app/portfolio/page.tsx": 455,
-    "frontend/app/tlh/page.tsx": 561,
+    "frontend/app/tlh/page.tsx": 574,
     "frontend/lib/types.ts": 417,
     "platform/platform_app/models.py": 458,
     "platform/platform_app/portfolio_index.py": 547,
@@ -91,6 +91,6 @@
     "platform/platform_app/routes_portfolio_index.py": 567,
     "taxcore/scripts/irpf_2026.py": 1033,
     "taxcore/scripts/load_b3.py": 1168,
-    "taxcore/scripts/tlh_plan.py": 629
+    "taxcore/scripts/tlh_plan.py": 637
   }
 }

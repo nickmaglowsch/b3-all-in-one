@@ -232,9 +232,17 @@ def build_result(sells_realized: list[dict], carry: dict, mtd: dict,
         plan = plans.get(cls, [])
         buckets[cls] = {
             "status": d["status"],
+            # Isento, month already at a loss and carry-covers-it all collapse
+            # into the one status "Nenhum TLH necessário" — without the rationale
+            # no caller but the markdown report can tell them apart.
+            "rationale": d["rationale"],
             "gross_after": d["gross_after"],
             "pnl_after": d["pnl_after"],
             "carry_used": d["carry_used"],
+            # Prejuízo left after the plan. Selling at a loss consumes no carry
+            # and *adds* to it, which carry_used alone never showed. Derived, so
+            # it is one formula rather than a sixth field each branch can forget.
+            "carry_after": carry[cls] - d["carry_used"] + max(0.0, -d["final_pnl"]),
             "target_loss": d["target_loss"],
             "final_gross": d["final_gross"],
             "final_pnl": d["final_pnl"],

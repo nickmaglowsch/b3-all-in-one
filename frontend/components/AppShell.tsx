@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { clearToken, getToken } from "@/lib/api";
 import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
+import { isPublicRoute } from "@/lib/routes";
 import { Brand } from "@/components/Brand";
 import { Paywall } from "@/components/Paywall";
 import { PortfolioSwitcher } from "@/components/PortfolioSwitcher";
@@ -39,19 +40,12 @@ const NAV = [
   { href: "/conta", label: "Meus dados", Icon: IconShield },
 ];
 
-// Public pages: no sidebar, no login guard. The privacy policy is legally
-// required to be readable *before* signing up, so it belongs here.
-const STANDALONE = ["/", "/login", "/privacidade"];
-
-// `/variantes` and everything under it are landing pages under review, so they
-// are public for the same reason `/` is — a prefix, because they are a tree.
-const isStandalone = (pathname: string) =>
-  STANDALONE.includes(pathname) || pathname.startsWith("/variantes");
-
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
-  if (isStandalone(pathname)) return <>{children}</>;
+  // Public pages: no sidebar, no login guard. See lib/routes.ts — the list is
+  // an auth decision, so it is tested.
+  if (isPublicRoute(pathname)) return <>{children}</>;
 
   return <ShellChrome pathname={pathname}>{children}</ShellChrome>;
 }

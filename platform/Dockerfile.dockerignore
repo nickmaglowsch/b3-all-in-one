@@ -16,7 +16,6 @@ platform/uploads
 !taxcore
 taxcore/*
 !taxcore/scripts
-!taxcore/methodologies
 !taxcore/pyproject.toml
 !taxcore/uv.lock
 taxcore/**/__pycache__

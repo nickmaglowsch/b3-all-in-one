@@ -92,20 +92,12 @@ time**, not stored. `--include-historical` adds the CAD company register
 survivorship hole for delisted names — but does **not** provide pre-2010
 financials.
 
-### 3. Pre-2010 fundamentals ("Download Múltiplo") — `b3_pipeline.dm_main`
-
-CVM's bulk CSVs only reach back to 2010. `dm_main` extends fundamentals to
-~2006–2009 via CVM's older credentialed delivery channel. It requires
-free CVM credentials (`CVM_DM_USER` / `CVM_DM_PASS`) and is **not yet
-integration-tested against live files** — see
-**[docs/download_multiplo.md](docs/download_multiplo.md)** for the full protocol,
-registration steps, DBF layout, and known limitations.
-
-```bash
-export CVM_DM_USER=... CVM_DM_PASS=...
-python -m b3_pipeline.dm_main --start 2006-01-01 --end 2010-12-31 --types ITR,DFP,IAN
-python -m b3_pipeline.dm_main --parse-only    # re-parse files already in data/dm/
-```
+Fundamentals therefore start at 2010. A credentialed CVM channel ("Download
+Múltiplo") that reaches back to ~2006 was built and removed: it needed
+per-operator `CVM_DM_USER` / `CVM_DM_PASS` credentials, was never
+integration-tested against live files, and nothing in the platform scheduled it —
+the ingest worker runs `b3_pipeline.main` and `b3_pipeline.cvm_main` only. Pull it
+from git history if pre-2010 fundamentals become a requirement.
 
 ## Database schema
 

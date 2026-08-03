@@ -26,11 +26,6 @@ Still open, in order:
 - **`b3_pipeline/main.py`'s closing banner** still prints `config.DB_PATH` (the SQLite
   fallback) in Postgres mode. Cosmetic — the data is written to PG correctly.
 
-### FATCOT quotation-factor support
-See `engine/docs/todo.md`. The COTAHIST parser ignores B3's quotation-factor field, so
-stocks that changed quotation basis get wrong adjustments. Currently papered over by
-sanity-capping in `adjustments.py`, which silently discards legitimate adjustments.
-
 ### Still-open risks from `00-overview.md`
 - **Encryption at rest and DB-level RLS** (risk 2). Per-tenant isolation and the LGPD
   data-subject routes are done (`08-privacidade-lgpd.md`); these two are not.

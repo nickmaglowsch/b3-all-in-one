@@ -87,7 +87,7 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - run: >-
           cd taxcore && uv run --frozen pytest -q
-          --cov=scripts --cov=methodologies --cov-fail-under=20
+          --cov=scripts --cov-fail-under=20
 
   quality-gates:
     name: Structural quality gates

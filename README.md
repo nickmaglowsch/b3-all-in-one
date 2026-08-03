@@ -7,9 +7,9 @@ Full spec in `spec/`. Local-only for now: everything runs via docker compose, no
 
 - `spec/` — the platform spec (read `spec/00-overview.md` first)
 - `engine/` — vendored from `b3-pipeline-data-and-backtest-framework` (data pipeline +
-  backtest engine + Rust COTAHIST parser). Being ported SQLite → Postgres.
-- `taxcore/` — vendored from `b3-portfolio` (B3 extract parsing, IRPF engine, TLH,
-  methodologies), including synthetic data fixtures for golden tests.
+  backtest engine). Being ported SQLite → Postgres.
+- `taxcore/` — vendored from `b3-portfolio` (B3 extract parsing, IRPF engine, TLH),
+  including synthetic data fixtures for golden tests.
 - `platform/` — the new FastAPI application (auth, tenants, jobs, API).
 
 ## Test fixtures are synthetic
@@ -28,7 +28,7 @@ docker compose up -d postgres              # infra only
 docker compose --profile app up --build -d # + api & worker (self-contained images)
 ```
 
-The images bake in taxcore's code (`scripts/`, `methodologies/`) and its deps in a
+The images bake in taxcore's code (`scripts/`) and its deps in a
 separate venv at `/opt/taxcore`, plus the backtest engine's code (`b3_pipeline/`,
 `backtests/`, `scripts/`) and its deps at `/opt/engine`, so the import → portfolio →
 IRPF loop AND the backtest bench run entirely inside the containers — no host

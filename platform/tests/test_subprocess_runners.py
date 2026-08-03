@@ -302,3 +302,10 @@ def test_last_json_returns_empty_by_default_when_there_is_no_payload():
 def test_last_json_strict_raises_when_there_is_no_payload():
     with pytest.raises(ValueError, match="no JSON object"):
         subprocs.last_json("no json here\n", strict=True)
+
+
+def test_last_json_keeps_looking_past_a_line_that_only_looks_like_json():
+    """A progress line truncated mid-object still opens with `{`. Stopping there
+    would lose the payload the run actually produced."""
+    text = '{"nav": 1}\n{"partial": tru\n'
+    assert subprocs.last_json(text) == {"nav": 1}

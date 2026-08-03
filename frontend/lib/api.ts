@@ -89,14 +89,18 @@ export function clearPortfolioId() {
 // login and every book under it, never over the one currently selected.
 const ACCOUNT_SCOPED = ["/portfolios", "/billing", "/privacy"];
 
+// Campos declarados e atribuídos à mão, não como parâmetros do construtor: o
+// `node --test` roda TypeScript em modo strip-only, que rejeita a forma curta —
+// e sem carregar este módulo não há teste para nada que passa por `api()`.
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-    /** parsed `detail` — an object for structured errors like the 402 paywall */
-    public detail?: unknown,
-  ) {
+  status: number;
+  /** parsed `detail` — an object for structured errors like the 402 paywall */
+  detail?: unknown;
+
+  constructor(status: number, message: string, detail?: unknown) {
     super(message);
+    this.status = status;
+    this.detail = detail;
     this.name = "ApiError";
   }
 }

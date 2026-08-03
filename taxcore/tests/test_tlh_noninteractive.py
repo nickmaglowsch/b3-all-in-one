@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -25,6 +27,11 @@ TAXCORE = Path(__file__).resolve().parents[1]
 # Same offline guard the golden suite injects: any connect() off-box fails loud.
 _NETGUARD = '''\
 import socket
+try:
+    import coverage
+    coverage.process_startup()
+except ImportError:
+    pass
 _orig = socket.socket.connect
 def _blocked(self, address):
     host = address[0] if isinstance(address, (tuple, list)) else address
@@ -38,12 +45,27 @@ _GUARD_DIR = Path(tempfile.mkdtemp())
 (_GUARD_DIR / "sitecustomize.py").write_text(_NETGUARD)
 
 
-def run_tlh(args: list[str]) -> subprocess.CompletedProcess:
+def _coverage_env() -> dict:
+    """Measure the child too, but only when the parent is under coverage —
+    otherwise a plain pytest run litters the repo with `.coverage.*` files."""
+    try:
+        import coverage
+    except ImportError:
+        return {}
+    if coverage.Coverage.current() is None:
+        return {}
+    return {"COVERAGE_PROCESS_START": str(TAXCORE / "pyproject.toml"),
+            "COVERAGE_FILE": str(TAXCORE / ".coverage")}
+
+
+def run_tlh(args: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess:
     """`python -m scripts.tlh_plan [args]` in the real tree, offline, no stdin."""
-    env = {**os.environ, "PYTHONPATH": str(_GUARD_DIR), "PYTHONWARNINGS": "ignore"}
+    root = cwd or TAXCORE
+    env = {**os.environ, "PYTHONPATH": f"{root}{os.pathsep}{_GUARD_DIR}",
+           "PYTHONWARNINGS": "ignore", **_coverage_env()}
     return subprocess.run(
         [sys.executable, "-m", "scripts.tlh_plan", *args],
-        cwd=TAXCORE, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+        cwd=root, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
     )
 
 
@@ -128,3 +150,96 @@ def test_invalid_sells_exit_nonzero(spec, needle):
     assert r.returncode != 0
     assert needle in r.stderr
     assert r.stdout.strip() == ""  # no JSON emitted on error
+
+
+# --------------------------------------------------------------------------
+# The markdown side. --json is what the platform calls; a human runs the CLI,
+# and none of that path — the decision branches, the report, the file it
+# writes — is reachable through the JSON contract above.
+# --------------------------------------------------------------------------
+
+def test_no_sells_prints_the_situation_and_stops():
+    """stdin closed: the interactive prompt gets EOF on the first read, which has
+    to end the session cleanly rather than loop or traceback."""
+    r = run_tlh([])
+    assert r.returncode == 0, r.stderr
+    assert "Situação MTD" in r.stdout
+    assert "Nenhuma venda informada" in r.stdout
+
+
+def test_a_sale_under_the_exemption_reports_it_as_isento_and_plans_nothing():
+    r = run_tlh(["--json", "--sells", "PETR4:100"])
+    assert r.returncode == 0, r.stderr
+    b = json.loads(r.stdout)["buckets"]["AÇÃO"]
+    assert b["gross_after"] <= ISENCAO_LIMIT
+    assert b["status"] == "Nenhum TLH necessário"
+    assert b["ir"] == 0.0 and b["carry_used"] == 0.0 and b["harvest"] == []
+    assert "isento" in b["rationale"]
+
+
+def test_a_loss_making_sale_needs_no_harvest_and_grows_the_carry():
+    """FIIs have no exemption, so a losing FII month lands straight on the
+    'already negative' branch — and the loss has to show up as carry gained."""
+    r = run_tlh(["--json", "--sells", "RECR11:150"])
+    assert r.returncode == 0, r.stderr
+    result = json.loads(r.stdout)
+    b = result["buckets"]["FII"]
+    carry_before = result["situation"]["FII"]["carry"]
+    assert b["pnl_after"] < 0
+    assert b["status"] == "Nenhum TLH necessário"
+    assert b["ir"] == 0.0 and b["harvest"] == []
+    assert b["carry_after"] == pytest.approx(carry_before - b["pnl_after"])
+
+
+def test_a_gain_the_carry_already_covers_is_left_alone():
+    """Harvesting here would sell a position to offset a gain that is already
+    offset — the carry is spent instead, and no order is emitted."""
+    r = run_tlh(["--json", "--sells", "VALE3:250,SBSP3:100"])
+    assert r.returncode == 0, r.stderr
+    result = json.loads(r.stdout)
+    b, carry = result["buckets"]["AÇÃO"], result["situation"]["AÇÃO"]["carry"]
+    # The fixture book is what puts this case in reach; if it drifts, say so here
+    # rather than in an unexplained status mismatch below.
+    assert b["gross_after"] > ISENCAO_LIMIT and 0 < b["pnl_after"] <= carry, (
+        "fixture book no longer produces a carry-covered taxable month")
+    assert b["status"] == "Nenhum TLH necessário"
+    assert b["carry_used"] == pytest.approx(b["pnl_after"])
+    assert b["ir"] == 0.0 and b["harvest"] == []
+
+
+def test_excluding_every_loser_reports_the_tax_instead_of_inventing_a_plan():
+    losers = "BBAS3,EGIE3,KLBN11,SBSP3,CMIG4,ITUB4,ABEV3,B3SA3,GOAU4,ISAE4,WEGE3,TAEE11"
+    r = run_tlh(["--json", "--exclude", losers, "--sells", "PETR4:700"])
+    assert r.returncode == 0, r.stderr
+    b = json.loads(r.stdout)["buckets"]["AÇÃO"]
+    assert b["status"] == "TLH desejável mas sem candidatos"
+    assert b["harvest"] == []
+    # The whole residual is taxable at 15%, and the report has to say the number.
+    assert b["ir"] == pytest.approx((b["pnl_after"] - b["carry_used"]) * 0.15)
+    assert b["ir"] > 0
+
+
+def test_no_save_prints_the_report_without_writing_one():
+    before = {p.name for p in (TAXCORE / "reports").glob("*.md")}
+    r = run_tlh(["--sells", "PETR4:700", "--no-save"])
+    assert r.returncode == 0, r.stderr
+    assert "# TLH plan" in r.stdout and "T+1" in r.stdout
+    assert {p.name for p in (TAXCORE / "reports").glob("*.md")} == before
+
+
+def test_a_second_report_on_the_same_day_does_not_overwrite_the_first(tmp_path):
+    """The filename is the date, so without the suffix loop the morning's plan is
+    silently replaced by the afternoon's."""
+    ws = tmp_path / "ws"
+    (ws / "reports").mkdir(parents=True)
+    shutil.copytree(TAXCORE / "scripts", ws / "scripts")
+    shutil.copytree(TAXCORE / "data", ws / "data")
+
+    for _ in range(2):
+        r = run_tlh(["--sells", "PETR4:700"], cwd=ws)
+        assert r.returncode == 0, r.stderr
+        assert "Relatório salvo" in r.stdout
+
+    written = {p.name for p in (ws / "reports").glob("*.md")}
+    stem = f"{date.today().isoformat()}-tlh-plan"
+    assert written == {f"{stem}.md", f"{stem}-2.md"}

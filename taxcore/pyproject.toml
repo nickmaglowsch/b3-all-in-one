@@ -22,6 +22,18 @@ dev = [
     "pytest-cov>=7.1.0",
 ]
 
+# The golden suite and the TLH --json contract run the scripts as subprocesses in a
+# throwaway tree, which is the only thing that exercises irpf_2026's report generator
+# and tlh_plan's main() end to end. `parallel` lets those children write their own
+# data files and `paths` folds the tmp-workspace copy back onto scripts/ — without
+# the remap the child's lines land under a /tmp path and merge into nothing.
+[tool.coverage.run]
+parallel = true
+source = ["scripts"]
+
+[tool.coverage.paths]
+scripts = ["scripts", "*/scripts"]
+
 [tool.pytest.ini_options]
 # mutmut copies the whole tree into ./mutants, tests included. Left collectable, its
 # duplicate test basenames shadow the real ones on sys.path and every module that does

@@ -11,6 +11,7 @@ import sys
 import textwrap
 
 import pytest
+from starlette.requests import Request
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -101,3 +102,107 @@ def test_production_refuses_an_unsafe_secret_key(monkeypatch, secret):
 
     monkeypatch.undo()
     importlib.reload(config)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_the_authorize_response_commits_this_browser_to_that_state(client):
+    """The other half of the CSRF binding: the cookie has to be issued, and it has
+    to be issued over the state actually inside the URL the browser is sent to.
+    A digest of anything else 400s every real login instead of only the forged one.
+    """
+    from urllib.parse import parse_qs, urlparse
+
+    r = await client.get("/auth/google/authorize")
+    state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
+    cookie = r.headers["set-cookie"]
+
+    assert f"oauth_state={hashlib.sha256(state.encode()).hexdigest()}" in cookie
+    # The value is only ever compared server-side; script access buys nothing but
+    # an XSS a step closer to a login.
+    assert "HttpOnly" in cookie
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_matching_state_is_let_through_and_the_cookie_is_spent(
+    client, monkeypatch
+):
+    """A callback URL is not a secret — it lands in history, in a referrer, in a
+    screenshot. Clearing the cookie on the way out is what stops a second use of
+    the same one from logging anyone in."""
+    from urllib.parse import parse_qs, urlparse
+
+    from httpx_oauth.clients.google import GoogleOAuth2
+    from httpx_oauth.oauth2 import GetAccessTokenError
+
+    async def refuse(self, *a, **k):
+        raise GetAccessTokenError("google not reachable from a test")
+
+    monkeypatch.setattr(GoogleOAuth2, "get_access_token", refuse)
+
+    r = await client.get("/auth/google/authorize")
+    state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
+
+    first = await client.get(
+        "/auth/google/callback", params={"code": "c", "state": state}
+    )
+    # It reached the real handler — which is where the (stubbed) exchange failed.
+    assert first.json().get("detail") != "INVALID_STATE_TOKEN"
+
+    replay = await client.get(
+        "/auth/google/callback", params={"code": "c", "state": state}
+    )
+    assert replay.status_code == 400
+    assert replay.json()["detail"] == "INVALID_STATE_TOKEN"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_an_authorize_body_without_a_state_still_reaches_the_browser():
+    """The state is read back out of a response this middleware does not own. If
+    that shape ever changes, login must degrade to "no cookie" — not to a 500 on
+    the only way into the product."""
+    from starlette.responses import StreamingResponse
+
+    from platform_app import main
+
+    async def body():
+        yield b'{"nothing_we_recognise": true}'
+
+    async def call_next(_request):
+        return StreamingResponse(body(), status_code=200, media_type="application/json")
+
+    request = Request({
+        "type": "http", "method": "GET", "path": main._AUTHORIZE_PATH,
+        "query_string": b"", "headers": [], "scheme": "http", "server": ("test", 80),
+    })
+    out = await main.bind_oauth_state(request, call_next)
+
+    assert out.status_code == 200
+    assert out.body == b'{"nothing_we_recognise": true}'
+    assert "oauth_state" not in out.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_the_session_token_is_handed_over_in_the_url_fragment():
+    """A query string is written verbatim into Cloudflare's access log and every
+    proxy in between, and this token is an hour of full account access that
+    nothing can revoke. Fragments are never sent to a server at all."""
+    from platform_app.users import RedirectTransport
+
+    r = await RedirectTransport("https://app.example/auth/callback").get_login_response(
+        "jwt-123"
+    )
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://app.example/auth/callback#token=jwt-123"
+    assert "?" not in r.headers["location"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_there_is_no_server_side_logout_to_pretend_otherwise():
+    """JWTStrategy cannot revoke a token, so a /logout route would tell the user
+    the session is over while the token keeps working until it expires."""
+    from fastapi_users.authentication.transport import TransportLogoutNotSupportedError
+
+    from platform_app.users import RedirectTransport
+
+    with pytest.raises(TransportLogoutNotSupportedError):
+        await RedirectTransport("https://app.example").get_logout_response()

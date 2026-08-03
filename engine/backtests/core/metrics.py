@@ -36,8 +36,12 @@ def ann_vol(ret: pd.Series, periods_per_year: int = 12) -> float:
 
 
 def sharpe(ret: pd.Series, risk_free: float = 0.0, periods_per_year: int = 12) -> float:
+    # `!= 0` only caught a std of *exactly* zero. A constant non-zero series —
+    # a flat CDI sleeve, a park row repeated — lands on ~5e-19 instead, and the
+    # division printed a Sharpe of 1.9e16 that sorts first in any gallery.
+    sd = ret.std()
     mean_ret = ret.mean() - (risk_free / periods_per_year)
-    return (mean_ret / ret.std()) * np.sqrt(periods_per_year) if ret.std() != 0 else 0.0
+    return (mean_ret / sd) * np.sqrt(periods_per_year) if sd > 1e-12 else 0.0
 
 
 def max_dd(ret: pd.Series) -> float:

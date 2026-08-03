@@ -35,9 +35,24 @@ PY_SOURCES = [
     "engine/scripts",
 ]
 TS_SOURCES = ["frontend/app", "frontend/components", "frontend/lib"]
+# Scanned for references only (orphans()), never gated on themselves.
+TEST_SOURCES = ["platform/tests", "engine/tests", "taxcore/tests", "scripts"]
 
 MAX_COMPLEXITY = 10
 MAX_MODULE_LINES = 400
+
+# Modules discovered at runtime instead of imported by name. The strategy registry
+# walks its package with pkgutil.iter_modules (strategy_registry.discover) and
+# alembic loads migrations by revision id, so in both cases a module nothing
+# imports is still reachable — without this the orphan gate reports all twenty
+# strategies and every migration.
+DYNAMIC_ROOTS = ["engine/backtests/strategies", "platform/platform_app/migrations"]
+
+# Standalone modules that no code imports or shells, kept on purpose. Empty, and
+# the entry costs a line of justification, because that is the point: three of
+# these accumulated unnoticed (a SQLite-era DB auditor, a superseded backtest
+# runner, and a credentialed CVM channel) and each one read as load-bearing.
+ENTRY_POINTS: dict[str, str] = {}
 
 # (importer root, forbidden top-level module, why). All hold today — there is no
 # baseline for these, a violation is always a regression.
@@ -159,6 +174,77 @@ def module_lines() -> dict[str, int]:
     return {k: n for k, n in counts.items() if n > MAX_MODULE_LINES}
 
 
+def _refs(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """(module names imported, string literals that are not docstrings).
+
+    A module is reached one of two ways: something imports it, or a live code path
+    names it as a subprocess target — b3run hands ``"scripts.load_b3"`` to
+    ``python -m``, enginerun hands ``"bench_series.py"`` to the engine interpreter.
+
+    Docstrings are excluded on purpose. ``run_single_backtest.py`` was named in two
+    strategy docstrings and nowhere else; a module someone wrote a sentence about is
+    not a module anything runs.
+    """
+    docstrings = set()
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if isinstance(body, list) and body and isinstance(body[0], ast.Expr):
+            first = body[0].value
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                docstrings.add(id(first))
+
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                imported.update(a.name.split("."))
+        elif isinstance(node, ast.ImportFrom):
+            imported.update((node.module or "").split("."))
+            imported.update(a.name for a in node.names)
+
+    strings = {
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings
+    }
+    return imported, strings
+
+
+def orphans() -> list[str]:
+    """Source modules that nothing imports and no code path shells.
+
+    Scans every .py in the repo, tests included — a module only its own test
+    imports is still counted as reached. This gate is deliberately the loose
+    version: it fires only on code with no reference anywhere at all, which is
+    the state dead vendored subtrees actually decay into.
+    """
+    # Per file, so a module's own text cannot vouch for it. audit_db.py names
+    # itself in an error message ("audit_db.py is a sqlite-only diagnostic") and
+    # a repo-wide reference set would have read that as a caller.
+    refs = {
+        _rel(p): _refs(ast.parse(p.read_text(encoding="utf-8"), filename=str(p)))
+        for p in _py_files([*PY_SOURCES, *TEST_SOURCES])
+    }
+
+    dynamic = {ROOT / d for d in DYNAMIC_ROOTS}
+    out = []
+    for path in _py_files(PY_SOURCES):
+        if path.name == "__init__.py" or any(d in path.parents for d in dynamic):
+            continue
+        rel, stem = _rel(path), path.stem
+        if rel in ENTRY_POINTS:
+            continue
+        # Substring, not equality, on the string side: the reference is
+        # "scripts.load_b3" or "bench_series.py", never the bare stem. Loose on
+        # purpose — this gate should not cry wolf.
+        if any(
+            stem in imported or any(stem in s for s in strings)
+            for other, (imported, strings) in refs.items() if other != rel
+        ):
+            continue
+        out.append(rel)
+    return out
+
+
 def contract_breaks() -> list[str]:
     breaks = []
     for importer, forbidden, why in CONTRACTS:
@@ -218,6 +304,11 @@ def main() -> int:
             improved.append(f"{gate}: {key} now under the limit")
 
     failures += [f"dependency: {b}" for b in contract_breaks()]
+    failures += [
+        f"orphan: {m} — nothing imports it and no code path shells it. Delete it, "
+        f"or add it to ENTRY_POINTS with the reason it stays."
+        for m in orphans()
+    ]
 
     for line in improved:
         print(f"  improved  {line}")

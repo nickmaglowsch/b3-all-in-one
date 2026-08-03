@@ -31,9 +31,11 @@ interface HarvestRow {
 }
 interface Bucket {
   status: string;
+  rationale: string;
   gross_after: number;
   pnl_after: number;
   carry_used: number;
+  carry_after: number;
   target_loss: number;
   final_gross: number;
   final_pnl: number;
@@ -486,7 +488,11 @@ function BucketCard({
         </span>
       }
     >
-      <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-4">
+      {/* "Nenhum TLH necessário" covers isenção, a loss month and carry that
+          already absorbs the gain — the status alone cannot say which. */}
+      <p className="mb-4 text-sm text-muted">{bucket.rationale}</p>
+
+      <div className="grid grid-cols-2 gap-x-6 gap-y-2 sm:grid-cols-5">
         <Metric label="Vendas brutas">
           <span className="font-mono text-sm tnum tabular-nums text-ink">
             {formatMoney(bucket.final_gross)}
@@ -498,6 +504,13 @@ function BucketCard({
         <Metric label="Compensado">
           <span className="font-mono text-sm tnum tabular-nums text-ink">
             {formatMoney(bucket.carry_used)}
+          </span>
+        </Metric>
+        {/* Selling at a loss consumes no carry and adds to it — without this a
+            harvest looks like it did nothing. */}
+        <Metric label="Prejuízo restante">
+          <span className="font-mono text-sm tnum tabular-nums text-ink">
+            {formatMoney(bucket.carry_after)}
           </span>
         </Metric>
         <Metric label="Imposto estimado">

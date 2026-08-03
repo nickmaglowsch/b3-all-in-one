@@ -242,6 +242,36 @@ def test_runners_do_not_raise_timeoutexpired(
             pytest.fail("runner leaked TimeoutExpired instead of returning 124")
 
 
+# ── What a tenant workspace is allowed to contain ─────────────────────────────
+# Every import, IRPF report and TLH plan builds a fresh workspace and copies
+# taxcore into it, so whatever taxcore ships is copied per run, per tenant. The
+# platform shells exactly three modules; anything else in taxcore/scripts is
+# carried by every one of those copies to be imported by nobody.
+#
+# This is the invariant the vendored tree is trimmed against, so it is pinned
+# here rather than left to a reviewer's memory: adding a script to taxcore is
+# fine, adding one the platform does not shell should be a decision, not a
+# silent per-run copy.
+
+SHELLED_MODULES = {"load_b3", "irpf_2026", "tlh_plan"}
+
+
+def test_seed_workspace_copies_only_what_the_shelled_modules_import(tmp_path):
+    b3run.seed_workspace(tmp_path)
+    modules = {p.stem for p in (tmp_path / "scripts").glob("*.py")} - {"__init__"}
+    # _common and apuracao are imported by the three above; nothing else may ride along.
+    assert modules == SHELLED_MODULES | {"_common", "apuracao"}, (
+        f"unshelled taxcore scripts copied into every tenant workspace: "
+        f"{sorted(modules - SHELLED_MODULES - {'_common', 'apuracao'})}"
+    )
+
+
+def test_seed_workspace_does_not_copy_the_methodologies_package(tmp_path):
+    """No shelled module imports `methodologies` — only the ranking scripts did."""
+    b3run.seed_workspace(tmp_path)
+    assert not (tmp_path / "methodologies").exists()
+
+
 # ── One JSON reader for both stdout conventions ───────────────────────────────
 # The engine scripts print progress lines and then one line of JSON; taxcore's
 # load_b3 pretty-prints its summary across many lines. Two readers used to exist

@@ -27,8 +27,9 @@ interfaces are replaced.
 ## Portfolio dashboard
 
 Ports of the existing scripts, as API + UI instead of stdout markdown:
-- **Positions & status** (`portfolio_status.py`): current positions, avg cost, market value
-  (from shared market plane — replaces per-user snapshot CSVs), P&L, income received.
+- **Positions & status** — shipped as `GET /positions` (`routes.py`): current positions,
+  avg cost, market value (from the shared market plane — replaces per-user snapshot
+  CSVs), P&L, income received.
 - **Benchmarking**: portfolio vs IBOV/CDI. Two complementary views, both shipped:
   `GET /portfolio/index` (`routes_portfolio_index.py`) charts the book the tenant
   actually holds as a daily time-weighted index — holdings rebuilt from their own
@@ -48,10 +49,13 @@ Ports of the existing scripts, as API + UI instead of stdout markdown:
   (`b3_pipeline/index_series.py`). Anything left undrawable — a custody freeze,
   an unmodelled amortização, a missing indexer — is named contract by contract,
   with its reason, in the response's `excluded.renda_fixa`.
-- **Sector exposure** (`sector_exposure.py`).
-- **Rankings & allocation** (`rank*.py` + `methodologies/`): platform-wide equity/FII
-  rankings computed once per market-data refresh and cached (methodologies are pure
-  `score(df, weights)` — trivially shared); per-tenant allocation suggestions on top.
+- **Sector exposure** — not built. The taxcore script that did this read a Fundamentus
+  CSV cache, which the market plane replaces; a port would be written fresh, not ported.
+- **Rankings & allocation** — not built. Same story: the `rank*.py` + `methodologies/`
+  scripts ranked off scraped snapshot CSVs and were deleted with them. The shape still
+  holds if this is picked up — pure `score(df, weights)` over the plane, computed once
+  per market-data refresh and cached, with per-tenant allocation suggestions on top —
+  but there is no code to port, and `POST /rebalance` already covers "what should I buy".
 - **TLH planner** (`tlh_plan.py`): refactor from stdin-interactive to parameterized —
   request carries the choices (target month, candidates to include/exclude), response is
   the harvest + T+1 rebuy plan. Same greedy algorithm. Long-term this merges into the

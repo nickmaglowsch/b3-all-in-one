@@ -1,4 +1,4 @@
-"""Shared helpers across the analysis / portfolio scripts.
+"""Today's price per ticker, for tlh_plan.
 
 Kept dependency-free of the scripts that use it (no imports from sibling
 scripts) so it can be imported anywhere without cycles.
@@ -16,26 +16,11 @@ FII_SNAPSHOTS = DATA / "fii_snapshots"
 EXTERNAL_PRICES = DATA / "external_prices"
 
 
-def latest_csv_path(d: Path) -> Path | None:
+def latest_csv(d: Path) -> pd.DataFrame | None:
     """Most recent CSV in directory `d` (snapshots are named by ISO date, so
     lexicographic sort is chronological), or None if there are none."""
     files = sorted(d.glob("*.csv")) if d.exists() else []
-    return files[-1] if files else None
-
-
-def latest_csv(d: Path) -> pd.DataFrame | None:
-    """Most recent CSV in directory `d`, or None if there are none."""
-    p = latest_csv_path(d)
-    return pd.read_csv(p) if p is not None else None
-
-
-def parse_weights(s: str) -> dict[str, float]:
-    """Parse 'value=0.5,quality=0.3' → {'value': 0.5, 'quality': 0.3}."""
-    out: dict[str, float] = {}
-    for part in s.split(","):
-        k, v = part.split("=")
-        out[k.strip()] = float(v)
-    return out
+    return pd.read_csv(files[-1]) if files else None
 
 
 def price_lookup() -> pd.DataFrame:
@@ -56,14 +41,3 @@ def price_lookup() -> pd.DataFrame:
         .rename(columns={"papel": "ticker", "cotacao": "price"})
         .drop_duplicates(subset=["ticker"], keep="first")
     )
-
-
-def annualize(pct: float, years: float) -> float:
-    """CAGR (% per year) from a total return %. NaN if undefined (≤0 years or
-    a loss worse than -100%)."""
-    if years <= 0:
-        return float("nan")
-    growth = 1.0 + pct / 100.0
-    if growth <= 0:
-        return float("nan")
-    return (growth ** (1.0 / years) - 1.0) * 100.0

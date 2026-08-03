@@ -19,7 +19,6 @@ COPY taxcore/pyproject.toml taxcore/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 # taxcore CODE (NO b3_imports/data/reports/tests — see Dockerfile.dockerignore).
 COPY taxcore/scripts ./scripts
-COPY taxcore/methodologies ./methodologies
 
 # --- engine: backtest bench CODE + its own venv (/opt/engine/.venv), deps from
 # requirements-bench.txt (slim set — the backtest path needs no research/ui deps).

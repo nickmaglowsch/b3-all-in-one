@@ -30,7 +30,6 @@ BASELINE = Path(__file__).with_name("quality_baseline.json")
 PY_SOURCES = [
     "platform/platform_app",
     "taxcore/scripts",
-    "taxcore/methodologies",
     "engine/b3_pipeline",
     "engine/backtests",
     "engine/scripts",
@@ -49,10 +48,8 @@ CONTRACTS = [
      "platform shells into the engine venv (enginerun), it never imports it"),
     ("platform/platform_app", "backtests",
      "platform shells into the engine venv (enginerun), it never imports it"),
-    ("platform/platform_app", "methodologies",
+    ("platform/platform_app", "scripts",
      "platform shells into the taxcore venv (b3run), it never imports it"),
-    ("taxcore/methodologies", "scripts",
-     "a methodology is a pure ranking rule — no I/O, no pipeline"),
 ]
 
 

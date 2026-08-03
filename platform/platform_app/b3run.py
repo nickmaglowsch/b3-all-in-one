@@ -3,8 +3,8 @@
 The scripts (``scripts/load_b3.py``, ``scripts/irpf_2026.py``) resolve every path
 from ``ROOT = parent of scripts/`` and read/write ``ROOT/data`` + ``ROOT/b3_imports``.
 We don't touch taxcore: each run builds a throwaway workspace (copy of scripts +
-methodologies + the tenant's inputs), runs the module there, and reads its outputs.
-This is the same technique as ``taxcore/tests/golden/conftest.py``.
+the tenant's inputs), runs the module there, and reads its outputs. This is the
+same technique as ``taxcore/tests/golden/conftest.py``.
 """
 from __future__ import annotations
 
@@ -64,9 +64,8 @@ def workspace_root(tenant_id: object) -> Path:
 
 
 def seed_workspace(ws: Path) -> Path:
-    """Copy scripts + methodologies + the offline guard; make data/ and b3_imports/."""
+    """Copy scripts + the offline guard; make data/ and b3_imports/."""
     shutil.copytree(TAXCORE / "scripts", ws / "scripts")
-    shutil.copytree(TAXCORE / "methodologies", ws / "methodologies")
     (ws / "data").mkdir(parents=True, exist_ok=True)
     (ws / "b3_imports").mkdir(parents=True, exist_ok=True)
     (ws / "sitecustomize.py").write_text(_NETGUARD)

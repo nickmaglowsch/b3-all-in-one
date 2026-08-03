@@ -3,7 +3,7 @@
 ## Guiding principle
 
 The research code in both repos is good; the infra is single-user. So: **wrap, don't
-rewrite.** Keep `backtests/core/*`, `methodologies/*`, and the tax/parsing logic as pure
+rewrite.** Keep `backtests/core/*` and the tax/parsing logic as pure
 Python libraries; replace only the storage layer, entry points, and configuration around
 them. Every rewrite of domain logic (tax rules, corporate actions) is a chance to introduce
 bugs the originals don't have — avoid it.

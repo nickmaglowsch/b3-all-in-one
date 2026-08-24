@@ -64,6 +64,46 @@ def keep_most_liquid_per_root(scores: pd.Series, adtv_row: pd.Series) -> pd.Seri
     return scores.loc[keep.values]
 
 
+def cap_and_renormalize(w: pd.Series, cap: float) -> pd.Series:
+    """Clip weights at ``cap`` and redistribute the excess across the uncapped
+    names, repeating until nothing exceeds the cap (standard cap-and-redistribute).
+
+    Shared by every weighting scheme that needs a per-name ceiling — inverse-vol
+    (ibov_low_vol) and the Boltzmann ensemble (max_entropy). Redistribution is
+    proportional, so it preserves the *shape* of whatever the scheme produced
+    among the names still below the cap.
+
+    A capped name is frozen, not merely clipped. Clipping alone does not
+    terminate: a name sitting exactly at the cap is not *above* it, so the next
+    round counts it as a recipient and tops it straight back up, and the loop can
+    run out of iterations with weights still over the ceiling. Freezing retires
+    at least one name per round, so this converges in at most ``len(w)`` rounds.
+
+    When the ceiling is unreachable (``cap * len(w) < 1`` — no weight vector
+    summing to 1 can respect it) the flattest book that exists is equal weight,
+    so that is what comes back.
+    """
+    w = w.astype(float).copy()
+    if len(w) == 0:
+        return w
+    if cap * len(w) <= 1.0:
+        return pd.Series(1.0 / len(w), index=w.index)
+
+    frozen = pd.Series(False, index=w.index)
+    for _ in range(len(w)):
+        over = (w > cap) & ~frozen
+        if not over.any():
+            break
+        excess = (w[over] - cap).sum()
+        w[over] = cap
+        frozen |= over
+        free = ~frozen
+        if not free.any() or w[free].sum() == 0:
+            break
+        w[free] += excess * w[free] / w[free].sum()
+    return w
+
+
 def dedup_target_weights(tw: pd.DataFrame, adtv: pd.DataFrame) -> pd.DataFrame:
     """Global safety net applied to EVERY strategy's target weights before the sim.
 

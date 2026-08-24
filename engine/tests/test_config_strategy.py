@@ -20,7 +20,8 @@ import backtests.core.data as core_data
 
 SPECS = Path(__file__).resolve().parent.parent / "backtests" / "strategies" / "specs"
 
-RANK_SPECS = ["low_vol.yaml", "multifactor.yaml", "smallcap_momentum.yaml", "momentum_sharpe.yaml"]
+RANK_SPECS = ["low_vol.yaml", "multifactor.yaml", "smallcap_momentum.yaml", "momentum_sharpe.yaml",
+              "bottom_vol.yaml"]
 
 
 def _spec(fname: str) -> dict:
@@ -37,9 +38,15 @@ def _synthetic_shared(n_periods: int = 72, n_tickers: int = 40, seed: int = 7) -
     raw_close = pd.DataFrame(rng.uniform(2.0, 100.0, (n_periods, n_tickers)), index=idx, columns=cols)
     has_glitch = pd.DataFrame(0, index=idx, columns=cols)
     has_glitch.iloc[10, 3] = 1
+    # Daily prices too: a factor may be measured on daily returns and pulled onto
+    # the monthly grid with at_rebalance() (bottom_vol.yaml).
+    days = pd.bdate_range("2005-01-03", idx[-1])
+    adj_close = pd.DataFrame(
+        100 * np.cumprod(1 + rng.normal(0.0004, 0.015, (len(days), n_tickers)), axis=0),
+        index=days, columns=cols)
     return {
         "ret": ret, "log_ret": np.log1p(ret), "adtv": adtv,
-        "raw_close": raw_close, "has_glitch": has_glitch,
+        "raw_close": raw_close, "has_glitch": has_glitch, "adj_close": adj_close,
     }
 
 
@@ -56,6 +63,38 @@ def test_rank_and_hold_places_equal_weights(spec_file):
         assert np.allclose(nz.to_numpy(), nz.iloc[0])
     # never over-allocate
     assert (tw.sum(axis=1) <= 1.0 + 1e-9).all()
+
+
+def test_bottom_vol_holds_the_calmest_names_and_drops_a_stale_price_series():
+    """BottomVol ranks on daily realised vol, so the book is the bottom slice of
+    a vol ladder — except the flat series, which scores a perfect zero vol and is
+    exactly what the `range:` floor exists to throw out."""
+    cols = [f"T{i:02d}" for i in range(20)]
+    days = pd.bdate_range("2021-01-01", periods=400)
+    rng = np.random.default_rng(11)
+    # T00 never moves (an untraded name carried forward); T01..T19 climb a vol
+    # ladder, so the 15 calmest real names are T01..T15.
+    vols = np.array([0.0] + [0.004 + 0.002 * i for i in range(1, 20)])
+    adj = pd.DataFrame(
+        100 * np.cumprod(1 + rng.normal(0.0, 1.0, (len(days), 20)) * vols, axis=0),
+        index=days, columns=cols)
+
+    ret = adj.resample("ME").last().pct_change()
+    idx = ret.index
+    shared = {
+        "ret": ret, "log_ret": np.log1p(ret), "adj_close": adj,
+        "adtv": pd.DataFrame(5e6, index=idx, columns=cols),
+        "raw_close": pd.DataFrame(50.0, index=idx, columns=cols),
+        "has_glitch": pd.DataFrame(0.0, index=idx, columns=cols),
+    }
+
+    _, tw = RankAndHold(_spec("bottom_vol.yaml")).generate_signals(shared, {})
+
+    row = tw.iloc[-1]
+    held = sorted(row[row > 0].index)
+    assert held == [f"T{i:02d}" for i in range(1, 16)]
+    assert row["T00"] == 0.0                      # flat series: caught by range:
+    assert np.allclose(row[held].to_numpy(), 1 / 15)
 
 
 def test_regime_overlay_parks_in_cdi_when_gate_off():

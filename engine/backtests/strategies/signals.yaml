@@ -40,3 +40,13 @@ win_rate_mean_rev:
   win_rate_window: 20
   win_rate_low_threshold: 0.75
   win_rate_high_threshold: 1.25
+
+# Realised volatility measured on DAILY returns over `lookback` months (21
+# trading days each), pulled onto the rebalance grid, negated (higher = calmer).
+# `low_vol` above measures the same thing off MONTHLY returns, so a 12-month
+# lookback gives it 12 observations to estimate a standard deviation from —
+# noisy enough that the ranking reshuffles on sampling error. The daily frame
+# gives ~252 observations for the same window at the same horizon.
+daily_low_vol:
+  expr: "-at_rebalance(roll_std(pct_change(adj_close), lookback * 21))"
+  lookback: 6

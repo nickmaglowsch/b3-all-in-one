@@ -158,6 +158,7 @@ Python to add a factor.
    low_vol:    {expr: "-roll_std(ret, lookback)", lookback: 12}
    sharpe_mom: {expr: "roll_sum(shift(log_ret,1),lookback) / roll_std(shift(ret,1),lookback)", lookback: 12}
    blended_vol:{expr: "-(0.5*vol_60d + 0.5*vol_20d)"}
+   daily_low_vol:{expr: "-at_rebalance(roll_std(pct_change(adj_close), lookback * 21))", lookback: 6}
    ```
 
 3. A bare **`shared_data` key** — any precomputed frame (`mf_composite`,
@@ -254,6 +255,8 @@ Common regime flags in `shared_data`: `is_easing`, `above_ma200`, `ibov_above`,
 | You want | Start from |
 |----------|-----------|
 | Single technical factor | `specs/low_vol.yaml` |
+| Volatility measured on *daily* returns, monthly grid | `specs/bottom_vol.yaml` |
+| Fixed bottom-N book (`top_n`) instead of a percentile | `specs/bottom_vol.yaml` |
 | Blend of factors (rank-average) | `specs/multifactor.yaml` |
 | Small-cap tilt | `specs/smallcap_momentum.yaml` |
 | Macro on/off gate | `specs/regime_switching.yaml` |
@@ -261,7 +264,7 @@ Common regime flags in `shared_data`: `is_easing`, `above_ma200`, `ibov_above`,
 | N-of-M regime vote | `specs/research_multifactor.yaml` |
 | Hold *every* qualifying name (no top slice) | `specs/cdi_ma200.yaml` |
 | Fundamentals ranker (needs `dedup_roots`) | `specs/low_pe.yaml`, `specs/value_quality.yaml` |
-| Band filter on the factor value | `specs/low_pe.yaml` (`range:`) |
+| Band filter on the factor value | `specs/low_pe.yaml`, `specs/bottom_vol.yaml` (`range:`) |
 | Daily-derived factor on a monthly grid | `signals.yaml: win_rate_mean_rev` |
 | Fixed ETF/CDI blend | `specs/divo_ivvb_cdi_40_40_20.yaml` |
 | Blend that waits for all ETFs | `specs/baseline_thirds.yaml` |

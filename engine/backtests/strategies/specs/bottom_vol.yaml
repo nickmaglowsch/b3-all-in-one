@@ -1,0 +1,27 @@
+name: BottomVol
+description: >-
+  The calmest names on the board and nothing else: ranks the liquid universe on
+  realised volatility of daily returns over the last 6 months and holds the
+  bottom 15, equal weight, rebalanced monthly. No momentum leg, no value leg, no
+  regime overlay — volatility is the only thing it looks at.
+kind: rank_and_hold
+rebalance: ME
+# lookback(6) + 1. The factor reads daily prices, so the 126-trading-day window
+# is already full by the 6th monthly row; the pad is only for `ret`'s first NaN.
+warmup_pad: 1
+universe:
+  min_adtv: 1000000
+  min_price: 1.0
+signal:
+  factor: daily_low_vol
+  lookback: 6
+  # The signal is NEGATED daily vol, so this band reads "keep 0.2%–100% daily
+  # vol". The floor is the point: a name that barely trades prints a flat
+  # ffilled price series, scores a near-zero volatility, and would otherwise top
+  # a min-vol ranking on stale data rather than on calm. min_adtv catches most
+  # of them; this catches the rest.
+  range: [-1.0, -0.002]
+selection:
+  top_n: 15
+  min_names: 5
+weighting: equal

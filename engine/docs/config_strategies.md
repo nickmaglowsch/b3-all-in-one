@@ -341,12 +341,16 @@ table in `backtests/core/signal_dsl.py`. That's rare; factors are data.
 
 The config engines deliberately cover the homogeneous cases. Write a normal
 `StrategyBase` subclass in `backtests/strategies/` when the strategy needs any
-of: iterative or inverse-vol weighting, index reconstruction (market-cap
-constituent selection), vol-targeting, long/short books, a rolling-IC stability
-guard, pure asset-switch rotation, or an embedded sub-strategy. Forcing those
-into YAML makes a worse language, not less code. Examples kept as code:
+of: iterative or inverse-vol weighting, any other weighting the two schemes
+(`equal` / `adtv`) do not cover, index reconstruction (market-cap constituent
+selection), vol-targeting, long/short books, a rolling-IC stability guard, pure
+asset-switch rotation, or an embedded sub-strategy. Forcing those into YAML makes
+a worse language, not less code. Examples kept as code:
 `top_mcap`, `ibov_low_vol`, `qmv`, `mean_reversion` (MeanRevComposite),
-`sp500_b3`, `two_leg_value`, `copom_easing`, `dual_momentum`, `sma_momentum_tilt`.
+`sp500_b3`, `two_leg_value`, `copom_easing`, `dual_momentum`, `sma_momentum_tilt`,
+`max_entropy` (Gibbs/Boltzmann weights — `w ∝ exp(-variance / temperature)`, with
+a per-name cap; the selection half of it *would* be a spec, the allocation is why
+it is not).
 
 Fundamental cross-sectional ranking and sticky selection are *no longer* on that
 list — `low_pe`, `value_quality`, `cdi_ma200`, `frog_in_pan`, `volume_breakout`,

@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from backtests.core.strategy_base import (
-    StrategyBase, ParameterSpec,
+    StrategyBase, ParameterSpec, cap_and_renormalize,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
@@ -25,24 +25,9 @@ def ewma_annualized_vol(daily_close: pd.DataFrame, n: int = 252) -> pd.DataFrame
 
 
 def inverse_vol_capped(vol: pd.Series, cap: float = 0.10) -> pd.Series:
-    """Inverse-vol weights, each capped at `cap`, renormalized to sum to 1.
-
-    Iteratively clips names at the cap and redistributes the excess across the
-    uncapped names (standard cap-and-redistribute).
-    """
+    """Inverse-vol weights, each capped at `cap`, renormalized to sum to 1."""
     w = (1.0 / vol)
-    w = w / w.sum()
-    for _ in range(len(w)):
-        over = w > cap
-        if not over.any():
-            break
-        excess = (w[over] - cap).sum()
-        w[over] = cap
-        under = ~over
-        if not under.any() or w[under].sum() == 0:
-            break
-        w[under] += excess * w[under] / w[under].sum()
-    return w
+    return cap_and_renormalize(w / w.sum(), cap)
 
 
 class IbovLowVolStrategy(StrategyBase):

@@ -13,7 +13,7 @@ import pandas as pd
 
 from b3_pipeline import storage
 
-from backtests.core import universe
+from backtests.core import markets, universe
 
 
 def _safe_dsn(dsn) -> str:
@@ -259,17 +259,26 @@ import requests
 BENCHMARK_ALIASES = {"^BVSP": "$IBOV", "IBOV": "$IBOV"}
 
 
-def _plane_series(table: str, column: str, symbol: str,
-                  start: str, end: str) -> pd.Series:
+def _plane_series(table: str, column: str, symbol: str, start: str, end: str,
+                  market: str = None, symbol_column: str = "ticker") -> pd.Series:
     """One ticker's daily column out of the plane, as a date-indexed Series.
 
     Empty when the plane has no rows for it — never a fabricated flat line, which
     a chart would render as "the benchmark did not move".
+
+    `market_prices` keys on (market, symbol), so a non-B3 read scopes on both;
+    `prices` and `external_prices` key on ticker alone and pass market=None.
     """
-    query = (f"SELECT date, {column} FROM {table} "                  # noqa: S608
-             "WHERE ticker = ? AND date >= ? AND date <= ? ORDER BY date")
+    col = "adj_close_brl" if (market and column == "adj_close") else column
+    scope = " AND market = :market" if market else ""
+    query = (f"SELECT date, {col} AS {column} FROM {table} "         # noqa: S608
+             f"WHERE {symbol_column} = :symbol AND date >= :start"
+             f" AND date <= :end{scope} ORDER BY date")
+    params = {"symbol": symbol, "start": start, "end": end}
+    if market:
+        params["market"] = market
     with storage.get_connection() as conn:
-        df = storage.read_sql(query, conn, params=[symbol, start, end])
+        df = storage.read_sql(query, conn, params=params)
 
     if df.empty:
         return pd.Series(dtype=float, index=pd.DatetimeIndex([]), name=symbol)
@@ -279,19 +288,31 @@ def _plane_series(table: str, column: str, symbol: str,
     return out[out.notna()]
 
 
-def download_benchmark(ticker: str, start: str, end: str) -> pd.Series:
-    """Daily total-return series for a benchmark, from B3's own price plane.
+def download_benchmark(ticker: str, start: str, end: str, *,
+                      market: str = markets.DEFAULT) -> pd.Series:
+    """Daily total-return series for a benchmark, from the market's own plane.
 
     `adj_close`, not `close`, for the traded sleeves: the callers compare a
     strategy's total return against it, and that is what Yahoo's
     `auto_adjust=True` used to hand back. A stored index has no corporate
     actions to adjust for and only carries `close`.
+
+    `market` is keyword-only with a default on purpose. The offline bench stub in
+    run_backtest_json monkeypatches this function positionally, and advise_weights
+    imports it by name — a positional third argument would break every
+    ENGINE_BENCH_OFFLINE run at once.
     """
+    spec = markets.get(market)
     symbol = ticker.strip().upper()
-    symbol = BENCHMARK_ALIASES.get(symbol, symbol.removesuffix(".SA"))
+    symbol = spec.aliases.get(
+        symbol, symbol.removesuffix(spec.suffix_strip) if spec.suffix_strip else symbol)
     if symbol.startswith("$"):
+        # The `$` namespace is global by shape — $CDI, $IPCA, $USDBRL and the
+        # stored indices belong to no single market, so they are not scoped.
         return download_index_level(symbol, start, end)
-    return _plane_series("prices", "adj_close", symbol, start, end)
+    return _plane_series(spec.table, "adj_close", symbol, start, end,
+                         market=None if spec.table == "prices" else spec.key,
+                         symbol_column=spec.symbol_column)
 
 
 def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
@@ -305,34 +326,51 @@ def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
                          ticker.strip().upper(), start, end)
 
 
-def load_b3_hlc_data(db_path: str, start: str, end: str) -> tuple:
-    """
-    Load split-adjusted HLC + adj_close + raw close + financial volume for ATR computation.
+# What to SELECT per market, aliased to the B3 column names every downstream
+# reader already speaks. Two things happen in the non-B3 projection:
+#
+#   * BRL, not native. The simulation's numeraire is reais for every market (see
+#     markets.py), so the close, the range and the turnover are all converted
+#     here rather than in six callers. `fx_rate` is NULL where PTAX could not
+#     cover the date, which makes the whole row NULL — the honest outcome, and
+#     visible as `unconverted_brl` in GET /market/status. There is deliberately
+#     no COALESCE back to the native number: silently pricing a US book in
+#     dollars is worse than reporting it unpriced.
+#   * `high`/`low` stand in for `split_adj_high`/`split_adj_low`. Crypto spot
+#     has no splits at all, and the US feed's bars arrive already adjusted, so
+#     there is no second adjustment to keep separate.
+_B3_COLUMNS = ("split_adj_high, split_adj_low, split_adj_close, adj_close,"
+               " close, volume")
+_CONVERTED_COLUMNS = (
+    "high * fx_rate AS split_adj_high, low * fx_rate AS split_adj_low,"
+    " split_adj_close * fx_rate AS split_adj_close, adj_close_brl AS adj_close,"
+    " close_brl AS close, volume * fx_rate AS volume")
 
-    Uses split_adj_* (split-only adjustment) for ATR to avoid false True Range
-    spikes from ex-dividend gaps. Returns adj_close separately for the returns
-    matrix (simulation needs dividend-adjusted returns).
 
-    Returns:
-        tuple: (adj_close, split_adj_high, split_adj_low, split_adj_close, close_px, fin_vol)
-        All as wide DataFrames with shape (date, ticker)
-    """
-    print(f"⬇  Loading B3 HLC data from {_safe_dsn(db_path)} ({start} to {end})...")
+def load_market_hlc_data(db_path: str, start: str, end: str,
+                         market: str = markets.DEFAULT) -> tuple:
+    """The six price frames for any market, in the historical B3 order.
 
-    query = """
-        SELECT date, ticker, split_adj_high, split_adj_low, split_adj_close,
-               adj_close, close, volume
-        FROM prices
-        WHERE date >= ? AND date <= ?
-        AND (
-            (LENGTH(ticker) = 5 AND SUBSTR(ticker, 5, 1) IN ('3', '4', '5', '6'))
-            OR
-            (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11')
-        )
+    `load_b3_hlc_data` is this with market="B3"; the B3 path is unchanged.
     """
+    spec = markets.get(market)
+    print(f"⬇  Loading {spec.key} HLC data from {_safe_dsn(db_path)} "
+          f"({start} to {end})...")
+
+    b3 = spec.table == "prices"
+    shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
+    scope = "" if b3 else " AND market = :market"
+    query = (
+        f"SELECT date, {spec.symbol_column} AS ticker,"                          # noqa: S608
+        f" {_B3_COLUMNS if b3 else _CONVERTED_COLUMNS}"
+        f" FROM {spec.table} WHERE date >= :start AND date <= :end{scope}{shape}"
+    )
+    params = {"start": start, "end": end}
+    if not b3:
+        params["market"] = spec.key
 
     with storage.get_connection(db_path) as conn:
-        df = storage.read_sql(query, conn, params=[start, end])
+        df = storage.read_sql(query, conn, params=params)
 
     df["date"] = pd.to_datetime(df["date"])
     # DB `volume` is already in reais (parser handles VOLTOT's implied decimals)
@@ -348,13 +386,24 @@ def load_b3_hlc_data(db_path: str, start: str, end: str) -> tuple:
     # Forward fill prices to handle missing days, leave volume as-is. Stops at
     # each name's delisting — see load_b3_data.
     tradable = universe.tradable_mask(
-        universe.load_listing_intervals(db_path), adj_close.index, adj_close.columns)
+        universe.load_listing_intervals(db_path, spec.key),
+        adj_close.index, adj_close.columns)
     adj_close, split_high, split_low, split_close, close_px = (
         universe.ffill_until_delisting(f, tradable)
         for f in (adj_close, split_high, split_low, split_close, close_px))
 
-    print(f"✅  Loaded HLC for {adj_close.shape[1]} unique standard tickers.")
+    print(f"✅  Loaded HLC for {adj_close.shape[1]} unique {spec.key} tickers.")
     return adj_close, split_high, split_low, split_close, close_px, fin_vol
+
+
+def load_b3_hlc_data(db_path: str, start: str, end: str) -> tuple:
+    """Split-adjusted HLC + adj_close + raw close + financial volume, B3.
+
+    Uses split_adj_* (split-only adjustment) for ATR to avoid false True Range
+    spikes from ex-dividend gaps. Returns adj_close separately for the returns
+    matrix (simulation needs dividend-adjusted returns).
+    """
+    return load_market_hlc_data(db_path, start, end, "B3")
 
 
 from dateutil.relativedelta import relativedelta

@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # SEC fundamentals move on a filing calendar; weekly is plenty, and the
     # incremental pass is thousands of small requests under a 10/s limit.
     ingest_us_fundamentals_cron: str = "0 8 * * 0"
+    # The US listing snapshot, on the other hand, is a daily obligation: there is
+    # no free historical archive of these files, so a day not captured is listing
+    # history that cannot be recovered. Late enough that the day's file is up.
+    ingest_us_symbols_cron: str = "0 23 * * 1-5"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

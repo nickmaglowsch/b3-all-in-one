@@ -210,6 +210,21 @@ async def ingest_crypto(timestamp: int = 0) -> dict:  # see ingest_prices re: de
     return await _record_ingest("crypto", ["crypto_pipeline.crypto_main"])
 
 
+@app.periodic(cron=settings.ingest_us_symbols_cron)
+@app.task(name="ingest_us_symbols", queue="ingest",
+          queueing_lock="ingest_us_symbols")
+async def ingest_us_symbols(timestamp: int = 0) -> dict:  # see ingest_prices
+    """Capture today's consolidated US symbol directory.
+
+    This is what makes the US plane survivorship-free going forward: a symbol's
+    appearance and disappearance across these daily captures is its listing
+    interval, and nobody publishes them historically for free. A day not captured
+    is listing history that cannot be recovered — the same reason B3's daily file
+    is a daily obligation rather than a backfill.
+    """
+    return await _record_ingest("us_symbols", ["us_pipeline.symbol_directory"])
+
+
 @app.periodic(cron=settings.ingest_us_fundamentals_cron)
 @app.task(name="ingest_us_fundamentals", queue="ingest",
           queueing_lock="ingest_us_fundamentals")

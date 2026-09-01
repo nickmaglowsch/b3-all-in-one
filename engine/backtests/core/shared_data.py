@@ -398,6 +398,10 @@ def build_shared_data(
         # ── survivorship (see backtests.core.universe) ────────────────────────
         "tradable": _tradable,
         "delist_ret": _delist_ret,
+        # What this window's data cannot support, as codes. Unconditional and
+        # self-contained: every branch lives inside coverage_notes, which
+        # degrades to an empty list rather than costing a backtest its run.
+        "data_warnings": universe.coverage_notes(db_path, spec.key, start, end),
     }
 
     # ── Point-in-time CVM sector classification (survivorship-free, from FCA) ──

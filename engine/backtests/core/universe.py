@@ -189,3 +189,111 @@ def realise_write_offs(positions: dict) -> float:
     """
     dead = [t for t, p in positions.items() if p["current_value"] == 0]
     return sum(max(0.0, positions.pop(t)["cost_basis"]) for t in dead)
+
+
+# ── What this window can and cannot support ──────────────────────────────────
+#
+# Codes, not sentences. The frontend owns the pt-BR copy, and a message built
+# here would be an English sentence in a Portuguese product; a code plus its
+# numbers can be rendered anywhere and asserted in a test.
+#
+# The spec commits the platform to reporting its gaps as loudly as its results,
+# and until now the US plane had no channel to do it through: a backtest whose
+# window opened before the price archive did returned a number that looked
+# exactly as clean as one that did not.
+
+# A window opening a few days before the first bar is a weekend or a holiday,
+# not a coverage gap — and "2024-01-01" is how everyone writes a year. A real
+# gap on this plane is measured in months or years, so a grace this small
+# cannot hide one while it removes the noise that would train people to ignore
+# the warning entirely.
+_COVERAGE_GRACE_DAYS = 7
+
+
+def _late_by(first, start) -> int:
+    """Calendar days between the requested start and the first bar available."""
+    return (pd.Timestamp(str(first)[:10]) - pd.Timestamp(str(start)[:10])).days
+
+
+def _first_bar(conn, market: str):
+    from b3_pipeline import storage
+
+    df = storage.read_sql(
+        "SELECT MIN(date) AS d FROM market_prices WHERE market = ?",
+        conn, params=(market,))
+    return None if df.empty else df.iloc[0]["d"]
+
+
+def _unconverted(conn, market: str, start: str, end: str) -> int:
+    from b3_pipeline import storage
+
+    df = storage.read_sql(
+        "SELECT COUNT(*) AS n FROM market_prices WHERE market = ?"
+        " AND date >= ? AND date <= ? AND close_brl IS NULL",
+        conn, params=(market, start, end))
+    return 0 if df.empty else int(df.iloc[0]["n"])
+
+
+def _intervals_missing(conn, market: str) -> tuple:
+    from b3_pipeline import storage
+
+    df = storage.read_sql(
+        "SELECT COUNT(*) AS n,"
+        " SUM(CASE WHEN delisting_date IS NULL AND listing_date IS NULL"
+        "          THEN 1 ELSE 0 END) AS bare"
+        " FROM instruments WHERE market = ?", conn, params=(market,))
+    if df.empty:
+        return 0, 0
+    return int(df.iloc[0]["n"] or 0), int(df.iloc[0]["bare"] or 0)
+
+
+def _adjust_states(conn) -> dict:
+    from b3_pipeline import us_storage
+
+    return us_storage.adjust_state_counts(conn)
+
+
+def coverage_notes(db_path, market: str, start: str, end: str) -> list:
+    """Structured caveats about what this window's data can support.
+
+    Degrades to `[]` on any failure, the same posture as
+    `load_listing_intervals`: an older plane missing a table must not stop a
+    backtest, and a caveat that cannot be computed is not a caveat.
+    """
+    from b3_pipeline import storage
+
+    notes = []
+    try:
+        with storage.get_connection(db_path) as conn:
+            first = _first_bar(conn, market)
+            if first is not None and _late_by(first, start) > _COVERAGE_GRACE_DAYS:
+                notes.append({
+                    "code": "price_coverage_starts_late",
+                    "detail": {"requested_start": str(start)[:10],
+                               "coverage_start": str(first)[:10],
+                               "market": market}})
+
+            total, bare = _intervals_missing(conn, market)
+            if total and bare:
+                notes.append({
+                    "code": "listing_intervals_incomplete",
+                    "detail": {"instruments": total, "without_interval": bare,
+                               "market": market}})
+
+            unconverted = _unconverted(conn, market, start, end)
+            if unconverted:
+                notes.append({
+                    "code": "unconverted_brl",
+                    "detail": {"rows": unconverted, "market": market}})
+
+            if market == "US":
+                states = _adjust_states(conn)
+                partial = {k: v for k, v in states.items()
+                           if k != "total_return"}
+                if partial:
+                    notes.append({
+                        "code": "adj_close_partial",
+                        "detail": {"by_state": states}})
+    except Exception:                                   # noqa: BLE001
+        return []
+    return notes

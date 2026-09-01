@@ -204,6 +204,10 @@ def main() -> None:
         # holder, and not comparable to a native-currency Sharpe. Stated in the
         # payload so a reader comparing two runs can see which is which.
         "currency": "BRL",
+        # The gaps, reported as loudly as the results. A US window that opens
+        # before the price archive did used to return a number that looked
+        # exactly as clean as one that did not.
+        "data_warnings": shared.get("data_warnings", []),
         "periods": int(len(idx)),
         "initial_capital": initial_capital,
         "final_pretax_nav": float(result["pretax_values"].iloc[-1]),

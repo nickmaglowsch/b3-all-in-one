@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 BULK_FACTS_URL = "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:0>10}.json"
 COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+# The other bulk archive. Note the path is not under `xbrl/` like the facts one
+# — EDGAR's bulk-data layout is not uniform, so this is worth a HEAD before a
+# gigabyte-and-change download.
+SUBMISSIONS_URL = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip"
 
 _PAUSE = 0.12          # ~8 req/s against a published limit of 10
 _TIMEOUT = 120
@@ -101,15 +105,37 @@ def iter_bulk_facts(zip_path: str):
             yield str(doc.get("cik", "")).zfill(10), doc
 
 
-def download_bulk_facts(dest: str) -> str:
-    """Fetch `companyfacts.zip` to `dest`, streamed to disk."""
-    logger.info(f"downloading {BULK_FACTS_URL} -> {dest}")
-    with requests.get(BULK_FACTS_URL, stream=True, timeout=_TIMEOUT,
+def iter_bulk_submissions(zip_path: str):
+    """Yield (cik, submission document) from a downloaded `submissions.zip`.
+
+    Same streaming shape as `iter_bulk_facts`, and same reason. The members that
+    matter are `CIK##########.json`; the archive also carries `*-submissions-
+    ###.json` continuation files holding older filing pages, which repeat the
+    entity metadata and would double-count.
+    """
+    with zipfile.ZipFile(zip_path) as zf:
+        for name in zf.namelist():
+            base = name.rsplit("/", 1)[-1]
+            if not base.startswith("CIK") or not base.endswith(".json") \
+                    or "-submissions-" in base:
+                continue
+            try:
+                with zf.open(name) as fh:
+                    doc = json.load(fh)
+            except (json.JSONDecodeError, zipfile.BadZipFile) as e:
+                logger.warning(f"{name}: unreadable ({e})")
+                continue
+            yield str(doc.get("cik", "")).zfill(10), doc
+
+
+def download_bulk(url: str, dest: str) -> str:
+    """Fetch one of EDGAR's bulk archives to `dest`, streamed to disk."""
+    logger.info(f"downloading {url} -> {dest}")
+    with requests.get(url, stream=True, timeout=_TIMEOUT,
                       headers={"User-Agent": user_agent()}) as r:
         r.raise_for_status()
         with open(dest, "wb") as fh:
-            for chunk in r.iter_content(chunk_size=1 << 20):
-                fh.write(chunk)
+            fh.writelines(r.iter_content(chunk_size=1 << 20))
     if not zipfile.is_zipfile(dest):
         # EDGAR answers 200 with an HTML error page when it throttles, so a
         # successful status code is not evidence the bytes are an archive.
@@ -118,6 +144,16 @@ def download_bulk_facts(dest: str) -> str:
             "page. Check SEC_USER_AGENT and the request rate.")
     logger.info(f"downloaded {os.path.getsize(dest):,} bytes")
     return dest
+
+
+def download_bulk_facts(dest: str) -> str:
+    """Fetch `companyfacts.zip` to `dest`."""
+    return download_bulk(BULK_FACTS_URL, dest)
+
+
+def download_bulk_submissions(dest: str) -> str:
+    """Fetch `submissions.zip` to `dest`."""
+    return download_bulk(SUBMISSIONS_URL, dest)
 
 
 def read_bulk_member(blob: bytes) -> dict:

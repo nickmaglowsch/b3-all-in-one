@@ -26,7 +26,6 @@ import io
 import logging
 
 import pandas as pd
-
 from b3_pipeline import market_storage, storage
 
 logger = logging.getLogger(__name__)
@@ -72,9 +71,19 @@ def parse_directory(text: str) -> pd.DataFrame:
 
 
 def fetch_directory() -> pd.DataFrame:
+    """Today's consolidated directory.
+
+    Declares itself, like the SEC client does. Nasdaq does not publish a rule
+    the way the SEC does, but a bare client is what gets blocked first and an
+    unidentified scraper is not what this project wants to be — the same
+    reasoning that gave `sec_downloader` a User-Agent that resolves.
+    """
     import requests
 
-    r = requests.get(DIRECTORY_URL, timeout=60)
+    from .sec_downloader import user_agent
+
+    r = requests.get(DIRECTORY_URL, timeout=60,
+                     headers={"User-Agent": user_agent()})
     r.raise_for_status()
     return parse_directory(r.text)
 

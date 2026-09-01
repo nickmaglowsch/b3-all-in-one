@@ -45,6 +45,12 @@ _TIMEOUT = 120
 # A real, resolvable identifier for this project. Not an email, because inventing
 # one would name a mailbox nobody reads; a repository URL is a contact channel
 # that exists and that a SEC administrator can act on.
+#
+# Worth knowing before the first real run: the SEC documents the format as a
+# name *and* a contact address. This has never been refused in practice and the
+# rule as published is about being identifiable, but if EDGAR ever 403s a run
+# whose rate is within the limit, set SEC_USER_AGENT to a real mailbox — that is
+# what the variable is for, and .env.prod.example already asks for one.
 DEFAULT_USER_AGENT = "Quantax/1.0 (+https://github.com/nickmaglowsch/b3-all-in-one)"
 
 

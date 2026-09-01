@@ -101,8 +101,9 @@ services:
       WORKER_QUEUES: ingest
       # Deliberately NOT ENGINE_BENCH_OFFLINE: this is the one service whose whole
       # job is to reach B3, CVM, Binance and the SEC.
-      # EDGAR requires a declaring contact address and answers 403 without one;
-      # the ingest job refuses to start rather than send a made-up header.
+      # EDGAR requires a declaring User-Agent. The client defaults to one naming
+      # this project, so the job runs unconfigured; set this to a contact of your
+      # own when running against your own domain.
       SEC_USER_AGENT: ${SEC_USER_AGENT:-}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts

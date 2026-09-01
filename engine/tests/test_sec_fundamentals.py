@@ -295,3 +295,84 @@ def test_the_root_broadcast_does_not_run_off_b3(tmp_path):
     out = load_all_fundamentals(db_path, "2023-01-01", "2023-12-31",
                                 tickers=["GOOG", "GOOGL"], market="US")
     assert "GOOG" not in out["net_income"].columns
+
+
+# ── the pipeline decides its own mode ─────────────────────────────────────────
+
+def test_an_empty_plane_bootstraps_from_the_bulk_archive(tmp_path, monkeypatch):
+    """The bug this replaces: the weekly job walked the CIKs already on the
+    plane, so on a box nobody had bootstrapped by hand it walked an empty list
+    and reported success — every week, silently, forever."""
+    from us_pipeline import us_main
+
+    db_path = str(tmp_path / "us.sqlite")
+    called = {}
+
+    def fake_ensure(path):
+        called["path"] = str(path)
+        return "bulk.zip"
+
+    monkeypatch.setattr(us_main, "_ensure_bulk", fake_ensure)
+    monkeypatch.setattr(us_main.sec, "fetch_company_tickers", lambda: {})
+    monkeypatch.setattr(us_main.sec, "iter_bulk_facts", lambda p: iter([
+        ("0000320193", doc(NetIncomeLoss=[
+            fact(96_995e6, start="2022-10-01", **FY23)]))]))
+
+    out = us_main.run_pipeline(db_path)
+    assert called, "an empty plane must take the bulk pass"
+    assert out["rows"] == 1
+
+
+def test_a_populated_plane_stays_incremental(tmp_path, monkeypatch):
+    """The bulk archive is ~1.5 GB. Re-fetching it weekly to refresh filings that
+    move on a quarterly calendar would be a standing cost for nothing."""
+    from us_pipeline import us_main
+
+    db_path = str(tmp_path / "us.sqlite")
+    conn = sqlite3.connect(db_path)
+    storage.init_db(conn)
+    ingest_company(conn, "0000320193", doc(
+        NetIncomeLoss=[fact(96_995e6, start="2022-10-01", **FY23)]), "AAPL")
+    conn.commit()
+    conn.close()
+
+    def boom(path):
+        raise AssertionError("must not fetch the bulk archive")
+
+    monkeypatch.setattr(us_main, "_ensure_bulk", boom)
+    monkeypatch.setattr(us_main.sec, "fetch_company_tickers", lambda: {})
+    monkeypatch.setattr(us_main.sec, "fetch_company_facts", lambda cik: doc(
+        NetIncomeLoss=[fact(96_000e6, end="2024-09-30", accn="acc-2024",
+                            filed="2024-11-01", start="2023-10-01")]))
+
+    out = us_main.run_pipeline(db_path)
+    assert out["filers"] == 1 and out["rows"] == 1
+
+
+def test_a_downloaded_archive_is_reused_not_refetched(tmp_path, monkeypatch):
+    """It lands on the engine data volume for the same reason the COTAHIST and
+    CVM archives do: so a container restart is not a re-download."""
+    import zipfile
+
+    from us_pipeline import us_main
+
+    archive = tmp_path / "sec_companyfacts.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("CIK0000320193.json", "{}")
+
+    def boom(dest):
+        raise AssertionError("must not re-download an archive already on disk")
+
+    monkeypatch.setattr(us_main.sec, "download_bulk_facts", boom)
+    assert us_main._ensure_bulk(archive) == str(archive)
+
+
+def test_a_corrupt_archive_is_replaced(tmp_path, monkeypatch):
+    """EDGAR answers 200 with an HTML error page when it throttles, so a file
+    left behind by an earlier run is not evidence of a usable archive."""
+    from us_pipeline import us_main
+
+    archive = tmp_path / "sec_companyfacts.zip"
+    archive.write_text("<html>rate limited</html>")
+    monkeypatch.setattr(us_main.sec, "download_bulk_facts", lambda dest: dest)
+    assert us_main._ensure_bulk(archive) == str(archive)

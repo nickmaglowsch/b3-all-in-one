@@ -231,12 +231,13 @@ async def ingest_us_symbols(timestamp: int = 0) -> dict:  # see ingest_prices
 async def ingest_us_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices
     """Refresh US point-in-time fundamentals from SEC XBRL.
 
-    Incremental by default — it walks the CIKs already on the plane. The first
-    load is the bulk `companyfacts.zip`, run by hand with `--download-bulk`,
-    because that is the pass that gets the companies which stopped filing and it
-    is a 1.5 GB download, not something to put on a weekly cron.
+    Bootstraps itself: an empty plane takes the bulk `companyfacts.zip` pass —
+    the one that gets the companies which stopped filing — and a populated one
+    walks the CIKs it already has. Deciding from the plane rather than from a
+    flag is what stops this reporting success having walked an empty list.
 
-    Needs SEC_USER_AGENT: EDGAR answers 403 without a declaring contact address.
+    The archive lands on the engine data volume, so the ~1.5 GB download happens
+    on the first run and not again.
     """
     return await _record_ingest("us_fundamentals", ["us_pipeline.us_main"])
 

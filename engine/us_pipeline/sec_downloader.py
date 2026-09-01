@@ -8,10 +8,12 @@ Two entry points, for the two shapes the same data comes in:
     advance. Streamed member by member; it is never held in memory whole.
   * `companyfacts/CIK##########.json` — one company, for the incremental pass.
 
-SEC requires a declaring User-Agent with a contact address on every request and
-returns 403 without one. `SEC_USER_AGENT` carries it; there is no default,
-because a made-up address is worse than a clear failure — it would work until it
-got the whole VPS blocked.
+SEC requires a declaring User-Agent on every request and returns 403 without one.
+`SEC_USER_AGENT` carries it. The default identifies the project by a URL that
+actually resolves rather than by an invented mailbox — a fabricated address is
+worse than none, because it works right up until it gets the host blocked and
+nobody can be told. An operator running this against their own domain should set
+the variable to a real contact of theirs.
 
 The rate limit is 10 requests/second, published and enforced. `_PAUSE` keeps a
 single-threaded caller under it with room to spare; do not parallelise this
@@ -36,16 +38,19 @@ COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _PAUSE = 0.12          # ~8 req/s against a published limit of 10
 _TIMEOUT = 120
 
+# A real, resolvable identifier for this project. Not an email, because inventing
+# one would name a mailbox nobody reads; a repository URL is a contact channel
+# that exists and that a SEC administrator can act on.
+DEFAULT_USER_AGENT = "Quantax/1.0 (+https://github.com/nickmaglowsch/b3-all-in-one)"
+
 
 def user_agent() -> str:
-    ua = os.environ.get("SEC_USER_AGENT", "").strip()
-    if not ua:
-        raise RuntimeError(
-            "SEC_USER_AGENT is unset. EDGAR requires a declaring User-Agent with "
-            "a contact address (e.g. 'Quantax ingest contato@exemplo.com.br') and "
-            "answers 403 without one. There is no default on purpose: a made-up "
-            "address would work right up until it got this host blocked.")
-    return ua
+    """The declaring User-Agent EDGAR requires.
+
+    Defaults so the scheduled job runs on a box nobody configured; override with
+    a contact of your own when running this against your own domain.
+    """
+    return os.environ.get("SEC_USER_AGENT", "").strip() or DEFAULT_USER_AGENT
 
 
 def _get(url: str) -> requests.Response:

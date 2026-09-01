@@ -1,12 +1,22 @@
 """Ingest SEC fundamentals into the market plane.
 
-Linear, like the other two pipelines. Two modes, both idempotent:
+Linear, like the other two pipelines, and it bootstraps itself.
 
-  --bulk PATH   every filer in a downloaded companyfacts.zip. This is the mode
-                that makes the plane survivorship-free: it enumerates from the
-                archive, which still contains the companies that stopped filing,
-                rather than from a list of who trades today.
-  (default)     the CIKs already on the plane, refreshed one by one.
+  bulk          every filer in `companyfacts.zip`, downloaded if it is not
+                already on disk. This is the mode that makes the plane
+                survivorship-free: it enumerates from the archive, which still
+                contains the companies that stopped filing, rather than from a
+                list of who trades today.
+  incremental   the CIKs already on the plane, refreshed one by one.
+
+**Which one runs is decided by the plane, not by a flag.** An empty plane gets
+the bulk pass; a populated one gets the incremental. That is the difference
+between a scheduled job that works on a box nobody prepared and one that walks an
+empty CIK list forever and reports success — which is what a bulk-only-by-hand
+default would have done, weekly, silently.
+
+The archive lands in the same data directory the COTAHIST and CVM downloads use,
+so the volume that already exists to stop those re-downloading covers this too.
 
 Instruments are written from what the facts prove: a filer with facts is a
 company that existed, and the earliest and latest period it reported bound its
@@ -18,15 +28,21 @@ one column the backtest universe reads.
 
 import argparse
 import logging
+import zipfile
+from pathlib import Path
 
 import pandas as pd
 
-from b3_pipeline import market_storage, storage
+from b3_pipeline import config, market_storage, storage
 
 from . import sec_downloader as sec
 from .sec_parser import MARKET, parse_companyfacts
 
 logger = logging.getLogger(__name__)
+
+# Lands beside the COTAHIST and CVM archives, under the volume that already
+# exists to keep those from re-downloading on every container restart.
+BULK_FILENAME = "sec_companyfacts.zip"
 
 
 def _instrument(cik: str, ticker: str, rows: pd.DataFrame) -> dict:
@@ -63,12 +79,31 @@ def _known_ciks(conn) -> list:
     return df["cik"].dropna().tolist() if not df.empty else []
 
 
+def _ensure_bulk(path: Path) -> str:
+    """The bulk archive, downloaded if it is not already on disk.
+
+    Re-used rather than re-fetched: it is ~1.5 GB, and the run that needs it is
+    the one bootstrapping an empty plane. Delete the file to force a refresh.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and zipfile.is_zipfile(path):
+        logger.info(f"reusing {path} ({path.stat().st_size:,} bytes)")
+        return str(path)
+    return sec.download_bulk_facts(str(path))
+
+
 def run_pipeline(db_path=None, bulk_zip: str = None, limit: int = 0) -> dict:
     logger.info(f"US fundamentals -> {storage.describe_target(db_path)}")
     facts, failed, rows = 0, [], 0
 
     with storage.get_connection(db_path) as conn:
         storage.init_db(conn)
+
+        if bulk_zip is None and not _known_ciks(conn):
+            # Nothing on the plane yet. Walking an empty CIK list would report
+            # success having done nothing, every week, forever.
+            logger.info("no US filers on the plane — bootstrapping from bulk")
+            bulk_zip = _ensure_bulk(config.DATA_DIR / BULK_FILENAME)
 
         logger.info("Step 1/2: ticker labels (current filers only)...")
         try:
@@ -105,9 +140,10 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db-path", default=None)
     ap.add_argument("--bulk-zip", default=None,
-                    help="path to a downloaded companyfacts.zip")
-    ap.add_argument("--download-bulk", default=None,
-                    help="fetch companyfacts.zip to this path first")
+                    help="use this companyfacts.zip instead of deciding from "
+                         "the plane (downloads it if the path does not exist)")
+    ap.add_argument("--force-bulk", action="store_true",
+                    help="take the bulk pass even on a populated plane")
     ap.add_argument("--limit", type=int, default=0,
                     help="smoke-test only: stop after N filers")
     args = ap.parse_args()
@@ -115,8 +151,10 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     bulk = args.bulk_zip
-    if args.download_bulk:
-        bulk = sec.download_bulk_facts(args.download_bulk)
+    if args.force_bulk and not bulk:
+        bulk = str(config.DATA_DIR / BULK_FILENAME)
+    if bulk:
+        bulk = _ensure_bulk(Path(bulk))
     run_pipeline(args.db_path, bulk, args.limit)
 
 

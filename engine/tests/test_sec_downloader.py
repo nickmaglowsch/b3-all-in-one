@@ -16,25 +16,32 @@ import pytest
 from us_pipeline import sec_downloader as sec
 
 
-def test_a_missing_user_agent_is_refused_before_the_request(monkeypatch):
-    """EDGAR requires a contact address and answers 403 without one. There is no
-    default on purpose: a made-up address would work right up until it got the
-    host blocked, which is a worse failure and a later one."""
+def test_an_unconfigured_box_still_declares_something(monkeypatch):
+    """EDGAR answers 403 without a declaring User-Agent, so a default is what
+    makes the scheduled job run on a box nobody prepared."""
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
-    with pytest.raises(RuntimeError, match="SEC_USER_AGENT"):
-        sec.user_agent()
+    assert sec.user_agent() == sec.DEFAULT_USER_AGENT
 
 
-def test_a_blank_user_agent_counts_as_missing(monkeypatch):
-    """Compose interpolates an unset variable to the empty string."""
+def test_a_blank_variable_falls_back_to_the_default(monkeypatch):
+    """Compose interpolates an unset variable to the empty string, which would
+    otherwise reach EDGAR as a blank header and earn a 403."""
     monkeypatch.setenv("SEC_USER_AGENT", "   ")
-    with pytest.raises(RuntimeError, match="SEC_USER_AGENT"):
-        sec.user_agent()
+    assert sec.user_agent() == sec.DEFAULT_USER_AGENT
 
 
-def test_a_declared_user_agent_is_used(monkeypatch):
+def test_the_default_identifies_something_that_actually_exists(monkeypatch):
+    """A fabricated mailbox is worse than none: it works right up until it gets
+    the host blocked, and then nobody can be told. The default is a repository
+    URL — a contact channel that resolves."""
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    assert "https://" in sec.user_agent()
+    assert "@" not in sec.user_agent(), "no invented email address"
+
+
+def test_an_operators_own_contact_wins(monkeypatch):
     monkeypatch.setenv("SEC_USER_AGENT", "Quantax ingest contato@exemplo.com.br")
-    assert "contato@exemplo.com.br" in sec.user_agent()
+    assert sec.user_agent() == "Quantax ingest contato@exemplo.com.br"
 
 
 def test_a_non_zip_download_is_rejected(tmp_path, monkeypatch):

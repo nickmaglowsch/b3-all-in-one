@@ -115,8 +115,10 @@ def test_each_market_carries_the_isencao_its_holder_actually_gets():
     numbers that score a backtest are the numbers that file the IRPF."""
     assert markets.MARKETS["B3"].monthly_sales_exemption == 20_000.0
     assert markets.MARKETS["CRYPTO"].monthly_sales_exemption == 35_000.0
-    # Lei 14.754/2023 has no monthly isenção — and no monthly DARF either.
-    assert markets.MARKETS["US"].monthly_sales_exemption == 0.0
+    # Lei 14.754/2023 has no monthly isenção — and no monthly DARF either. None
+    # rather than 0.0: a class with no isenção and a class whose isenção is zero
+    # behave differently on a period with no sales, and only one of them is real.
+    assert markets.MARKETS["US"].monthly_sales_exemption is None
 
 
 def test_every_market_has_a_rate():
@@ -142,9 +144,14 @@ def test_the_rates_match_the_taxcore_rules_they_are_copied_from():
     text = src.read_text()
     # Read the literals rather than importing: taxcore has its own venv and
     # importing it from here would need pandas resolved in this one.
-    assert '"AÇÃO": Regra(("AÇÃO",), 0.15, 20_000.0' in text, (
+    # The full Regra call, not just the head of it. The old seam pinned the
+    # rate and the isenção — which were never the fields that diverged. `carry`
+    # and `periodo` were, and MARKETS' own comments used to admit it: exterior
+    # settling at every rebalance instead of once a year, and cripto being given
+    # a loss carry ganho de capital does not grant.
+    assert '"AÇÃO": Regra(("AÇÃO",), 0.15, 20_000.0, True, "6015", "mensal")' in text, (
         "taxcore's ações rule moved — update markets.MARKETS['B3']")
-    assert '"CRIPTO": Regra(("CRIPTO",), 0.15, 35_000.0' in text, (
+    assert '"CRIPTO": Regra(("CRIPTO",), 0.15, 35_000.0, False, "4600", "mensal",' in text, (
         "taxcore's cripto rule moved — update markets.MARKETS['CRYPTO']")
-    assert '"EXTERIOR": Regra(("EXTERIOR",), 0.15, None' in text, (
+    assert '"EXTERIOR": Regra(("EXTERIOR",), 0.15, None, True, "-", "anual")' in text, (
         "taxcore's exterior rule moved — update markets.MARKETS['US']")

@@ -212,11 +212,11 @@ def market_param(default: str = markets.DEFAULT) -> "ParameterSpec":
     )
 
 
-COMMON_MONTHLY_SALES_EXEMPTION = ParameterSpec(
-    "monthly_sales_exemption", "Monthly Sales Exemption (BRL)", "float", 20_000.0,
-    description="Brazilian tax exemption threshold for monthly sales (R$20K)",
-    min_value=0.0, step=5_000.0,
-)
+# There is deliberately no COMMON_MONTHLY_SALES_EXEMPTION. The isenção is the
+# asset class's rule, not a strategy knob, and shipping it as a parameter with a
+# hard-coded 20_000 default meant any strategy declaring it wrote that literal
+# into `params` — where it beat the market's own value and charged a crypto or
+# US book the isenção of ações. `markets.resolve_tax` is the one source now.
 
 
 # ── Abstract Base Class ───────────────────────────────────────────────────────

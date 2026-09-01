@@ -8,6 +8,7 @@ import pytest
 import copy
 
 from backtests.core.metrics import value_to_ret
+from backtests.core import tax
 from backtests.core.simulation import (
     run_simulation, _apply_returns, _execute_rebalance, compute_trades,
 )
@@ -67,7 +68,8 @@ def test_excess_drag_deducted_from_nav():
     positions = {"A": {"cost_basis": 100.0, "current_value": 100.0}}
     tw = pd.Series({"A": 0.9, "B": 0.1})
     _execute_rebalance(
-        positions, tw, 100.0, slippage=0.6, tax_rate=0.0, loss_carryforward=0.0
+        positions, tw, 100.0, slippage=0.6, ledger=tax.free_ledger(),
+        when=pd.Timestamp("2024-01-31"),
     )
     nav = sum(p["current_value"] for p in positions.values())
     assert nav == pytest.approx(90.0 - 2.0)
@@ -142,7 +144,8 @@ def test_compute_trades_turnover_matches_execute_rebalance():
     sells, buys = compute_trades(pos, tw, nav)
     turnover_cash = sum(sells.values()) + sum(abs(v) for v in buys.values())
     *_, turnover_pct = _execute_rebalance(
-        copy.deepcopy(pos), tw, nav, slippage=0.0, tax_rate=0.0, loss_carryforward=0.0
+        copy.deepcopy(pos), tw, nav, slippage=0.0, ledger=tax.free_ledger(),
+        when=pd.Timestamp("2024-01-31"),
     )
     assert turnover_pct * max(nav, 1.0) == pytest.approx(turnover_cash)
 
@@ -171,7 +174,8 @@ def test_contribution_buys_more_of_the_underweight():
     before = {t: p["current_value"] for t, p in pos.items()}
     _execute_rebalance(
         pos, pd.Series({"A": 0.5, "B": 0.5}), 150.0 + 100.0,   # NAV + buy-in
-        slippage=0.0, tax_rate=0.0, loss_carryforward=0.0,
+        slippage=0.0, ledger=tax.free_ledger(),
+        when=pd.Timestamp("2024-01-31"),
     )
     bought = {t: pos[t]["current_value"] - before[t] for t in pos}
     assert bought["B"] == pytest.approx(75.0)

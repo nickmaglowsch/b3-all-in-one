@@ -3,10 +3,10 @@ Generic backtest simulation engine.
 """
 
 import math
-import pandas as pd
-from typing import Dict, Tuple
 
-from backtests.core import universe
+import pandas as pd
+
+from backtests.core import tax as taxmod
 
 
 def _apply_returns(
@@ -41,82 +41,11 @@ def _apply_returns(
         pos["current_value"] *= 1.0 + r
 
 
-def _compute_tax(
-    sales: Dict[str, float],
-    positions: dict,
-    loss_carryforward: float,
-    tax_rate: float,
-    ignore_short_losses: bool = True,
-) -> Tuple[float, float]:
-    """
-    Compute Brazilian capital gains tax (with loss carryforward) on partial or full sales.
-
-    Args:
-        sales: Dict of {ticker: amount_sold_in_cash}
-        positions: The current ledger (must contain cost_basis and current_value)
-    Returns:
-        (tax_paid, new_loss_carryforward)
-    """
-    gross_gain = 0.0
-    gross_loss = 0.0
-
-    for t, amount_sold in sales.items():
-        if t not in positions or amount_sold <= 0:
-            continue
-
-        pos = positions[t]
-
-        # Calculate what percentage of the position is being sold
-        if pos["current_value"] == 0:
-            continue
-
-        fraction_sold = min(1.0, amount_sold / abs(pos["current_value"]))
-
-        # PnL is always the difference between the value extracted and the cost
-        # basis, long or short; on a short the basis is negative (cash received).
-
-        cost_of_sold_portion = pos["cost_basis"] * fraction_sold
-
-        if pos["current_value"] > 0:
-            # Long position
-            pnl = amount_sold - cost_of_sold_portion
-        else:
-            # Short position. We spent 'amount_sold' cash to cover.
-            # cost_basis is negative (the cash we originally received).
-            # So PnL = abs(cost_basis) - amount_sold (cash spent)
-            pnl = abs(cost_of_sold_portion) - amount_sold
-
-        # Receita Federal does not allow deducting margin interest/short losses from capital gains
-        if ignore_short_losses and cost_of_sold_portion < 0 and pnl < 0:
-            pass  # ignore
-        else:
-            if pnl > 0:
-                gross_gain += pnl
-            else:
-                gross_loss += abs(pnl)
-
-    net_pnl = gross_gain - gross_loss
-
-    if net_pnl > 0:
-        net_after_cf = net_pnl - loss_carryforward
-        if net_after_cf > 0:
-            tax = tax_rate * net_after_cf
-            loss_carryforward = 0.0
-        else:
-            tax = 0.0
-            loss_carryforward = abs(net_after_cf)
-    else:
-        tax = 0.0
-        loss_carryforward += abs(net_pnl)
-
-    return tax, loss_carryforward
-
-
 def compute_trades(
     positions: dict,
     target_weights: pd.Series,
     nav: float,
-) -> Tuple[Dict[str, float], Dict[str, float]]:
+) -> tuple[dict[str, float], dict[str, float]]:
     """Pure rebalance diff: BRL to sell and buy per ticker to hit target weights.
 
     Args:
@@ -141,8 +70,8 @@ def compute_trades(
     Pure: no mutation of `positions`. Set-iteration order is irrelevant — the
     outputs are per-ticker dict entries, no cross-ticker accumulation here.
     """
-    sells: Dict[str, float] = {}  # {ticker: cash_to_raise}
-    buys: Dict[str, float] = {}   # {ticker: cash_to_deploy}
+    sells: dict[str, float] = {}  # {ticker: cash_to_raise}
+    buys: dict[str, float] = {}   # {ticker: cash_to_deploy}
 
     target_tickers = set(target_weights[target_weights != 0].index)
     current_tickers = set(positions.keys())
@@ -185,49 +114,33 @@ def _execute_rebalance(
     target_weights: pd.Series,
     portfolio_nav: float,
     slippage: float,
-    tax_rate: float,
-    loss_carryforward: float,
-    monthly_sales_exemption: float = 0.0,
-    defer_tax: bool = False,
-    pending_tax_payment: float = 0.0,
-) -> Tuple[float, float, float, float]:
+    ledger: "taxmod.Ledger",
+    when,
+) -> tuple[float, float, float]:
     """
     Execute a strict rebalance to match target weights.
-    Returns (tax_paid, new_loss_carryforward, cash_drag, turnover)
+    Returns (tax_paid, cash_drag, turnover)
+
+    `tax_paid` is the bill for the apuração period that just closed, not for
+    this row's sells — the period is the unit, and it cannot be settled until it
+    is over. See backtests.core.tax.
     """
     # 1. Identify current weights and determine buys/sells (pure diff)
     sells, buys = compute_trades(positions, target_weights, portfolio_nav)
-    loss_carryforward += universe.realise_write_offs(positions)
+    ledger.realise_write_offs(positions)
 
     # Turnover is the gross BRL traded: every sell is positive, every buy value is
     # positive for a long and negative for an opened short — abs() folds both.
     # (Same total as the original in-loop accumulation; a pure sum, order-invariant.)
     turnover_cash = sum(sells.values()) + sum(abs(v) for v in buys.values())
 
-    # 2. Calculate Tax on Sales
-    # If total sell proceeds <= exemption threshold, skip tax entirely.
-    # Under Brazilian law, exempt months don't consume loss carryforward.
-    exempt = (
-        monthly_sales_exemption > 0
-        and sum(sells.values()) <= monthly_sales_exemption
-    )
-
-    if exempt:
-        tax_paid = 0.0
-    else:
-        tax_paid, loss_carryforward = _compute_tax(
-            sells, positions, loss_carryforward, tax_rate
-        )
+    # 2. Book this row and collect whatever the closed period owes.
+    tax_paid = ledger.accrue(when, sells, positions)
 
     # We must pay tax out of the cash we raised. If there isn't enough cash,
     # we simulate an automatic drag on the portfolio NAV.
     # We also deduct slippage from all trades.
-    total_slippage = turnover_cash * slippage
-    if defer_tax:
-        # Don't pay current tax now; pay last month's deferred tax instead
-        cash_drag = total_slippage + pending_tax_payment
-    else:
-        cash_drag = tax_paid + total_slippage
+    cash_drag = tax_paid + turnover_cash * slippage
 
     # 3. Update the Ledger
     for t, sell_amount in sells.items():
@@ -286,7 +199,7 @@ def _execute_rebalance(
 
     turnover_pct = turnover_cash / max(portfolio_nav, 1.0)
 
-    return tax_paid, loss_carryforward, cash_drag, turnover_pct
+    return tax_paid, cash_drag, turnover_pct
 
 
 def run_simulation(
@@ -296,8 +209,9 @@ def run_simulation(
     tax_rate: float = 0.15,
     slippage: float = 0.0,
     name: str = "Strategy",
-    monthly_sales_exemption: float = 0.0,
-    defer_tax: bool = False,
+    monthly_sales_exemption: "float | None" = None,
+    tax_period: str = taxmod.MONTHLY,
+    loss_carry: str = taxmod.FORWARD,
     contribution: "float | pd.Series" = 0.0,
 ) -> dict:
     """
@@ -309,6 +223,14 @@ def run_simulation(
                        Rows must sum to 1.0 (or >1.0 if using negative leverage).
         initial_capital: Starting BRL
         tax_rate: Capital gains tax rate applied to net realized gains
+        monthly_sales_exemption: gross sales below which a **calendar month** is
+                       isento. None means the class has no isenção at all, which
+                       is not the same as zero — see backtests.core.tax.Rule.
+        tax_period: "mensal" or "anual". Exterior (Lei 14.754/2023) nets the
+                       whole year and settles once, in the ajuste.
+        loss_carry: "forward", "period" or "none". Ganho de capital (cripto)
+                       compensates nothing; exterior nets inside the year and
+                       carries nothing across it.
         slippage: Transaction cost applied per trade (e.g., 0.001 for 0.1%)
         contribution: Periodic buy-in in BRL (aporte). Two forms:
                      • scalar — a flat amount **per calendar month**; deposits
@@ -344,8 +266,10 @@ def run_simulation(
     pt_pos = {}  # Pre-tax ledger
     at_pos = {}  # After-tax ledger
 
-    loss_carryforward = 0.0
-    pending_tax = 0.0
+    ledger = taxmod.Ledger(taxmod.Rule(
+        rate=tax_rate, exemption=monthly_sales_exemption,
+        period=tax_period, carry=loss_carry))
+    pt_ledger = taxmod.free_ledger()
 
     pretax_values, aftertax_values = [], []
     tax_paid_list, loss_cf_list, turnover_list, dates = [], [], [], []
@@ -463,38 +387,24 @@ def run_simulation(
             pretax_values.append(pt_nav)
             aftertax_values.append(at_nav)
             tax_paid_list.append(0.0)
-            loss_cf_list.append(loss_carryforward)
+            loss_cf_list.append(ledger.carry)
             turnover_list.append(0.0)
             contrib_list.append(0.0)
             dates.append(date)
             continue
 
         # ── Step 2: Strict Rebalance (Pre-Tax Ledger: Zero Tax) ──
-        _, _, pt_drag, _ = _execute_rebalance(
-            pt_pos,
-            t_weights,
-            pt_nav,
-            slippage=slippage,
-            tax_rate=0.0,
-            loss_carryforward=0.0,
-        )
+        # The pre-tax ledger runs the same rebalance with a zero-rate ledger,
+        # so it still drops its write-offs. Its drag and turnover are the
+        # after-tax book's to report.
+        _execute_rebalance(pt_pos, t_weights, pt_nav, slippage=slippage,
+                           ledger=pt_ledger, when=date)
 
         # ── Step 3: Strict Rebalance (After-Tax Ledger: Real Tax) ──
-        tax_paid, loss_carryforward, at_drag, turnover = _execute_rebalance(
-            at_pos,
-            t_weights,
-            at_nav,
-            slippage=slippage,
-            tax_rate=tax_rate,
-            loss_carryforward=loss_carryforward,
-            monthly_sales_exemption=monthly_sales_exemption,
-            defer_tax=defer_tax,
-            pending_tax_payment=pending_tax if defer_tax else 0.0,
+        tax_paid, _, turnover = _execute_rebalance(
+            at_pos, t_weights, at_nav, slippage=slippage,
+            ledger=ledger, when=date,
         )
-
-        # Update pending tax for next period
-        if defer_tax:
-            pending_tax = tax_paid
 
         pt_final_nav = sum(p["current_value"] for p in pt_pos.values())
         at_final_nav = sum(p["current_value"] for p in at_pos.values())
@@ -503,14 +413,20 @@ def run_simulation(
         pretax_values.append(pt_final_nav)
         aftertax_values.append(at_final_nav)
         tax_paid_list.append(tax_paid)
-        loss_cf_list.append(loss_carryforward)
+        loss_cf_list.append(ledger.carry)
         turnover_list.append(turnover)
         contrib_list.append(cash)
         dates.append(date)
 
-    # Deduct any remaining deferred tax from final NAV
-    if defer_tax and pending_tax > 0:
-        aftertax_values[-1] -= pending_tax
+    # The last period never had a following rebalance to be charged on, so it
+    # is settled here. Folded into tax_paid as well as NAV: the old deferred
+    # path deducted it from the curve and forgot the total, so `total_tax_paid`
+    # in metrics.json came up short by exactly the final month.
+    final_tax = ledger.close()
+    if final_tax and aftertax_values:
+        aftertax_values[-1] -= final_tax
+        tax_paid_list[-1] += final_tax
+        loss_cf_list[-1] = ledger.carry
 
     idx = pd.DatetimeIndex(dates)
     contribs = pd.Series(contrib_list, index=idx, name="Contribution (BRL)")

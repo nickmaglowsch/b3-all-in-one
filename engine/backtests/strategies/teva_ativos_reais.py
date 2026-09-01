@@ -40,7 +40,6 @@ from backtests.core.strategy_base import (
     COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE,
     COMMON_SLIPPAGE,
-    COMMON_MONTHLY_SALES_EXEMPTION,
 )
 
 _DB_PATH = Path(__file__).resolve().parents[2] / "b3_market_data.sqlite"
@@ -200,7 +199,6 @@ class TevaAtivosReaisStrategy(StrategyBase):
             COMMON_INITIAL_CAPITAL,
             COMMON_TAX_RATE,
             COMMON_SLIPPAGE,
-            COMMON_MONTHLY_SALES_EXEMPTION,
             ParameterSpec(
                 "rebalance_freq", "Rebalance Frequency", "choice", "QE",
                 description="Rebalance cadence (methodology is semiannual; QE≈closest quarterly proxy)",

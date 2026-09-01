@@ -33,6 +33,13 @@ PY_SOURCES = [
     "engine/b3_pipeline",
     "engine/backtests",
     "engine/scripts",
+    # The two non-B3 ingest packages. They were outside the gate — and outside
+    # CI's --cov list — from the day they were written, which is how a whole
+    # market's pipeline can grow without anything measuring it. Every module in
+    # both is comfortably inside the limits today, so this costs nothing now and
+    # stops the next one drifting.
+    "engine/us_pipeline",
+    "engine/crypto_pipeline",
 ]
 TS_SOURCES = ["frontend/app", "frontend/components", "frontend/lib"]
 # Scanned for references only (orphans()), never gated on themselves.

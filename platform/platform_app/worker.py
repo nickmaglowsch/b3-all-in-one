@@ -10,11 +10,16 @@ two slots: sharing a queue would let a nightly refresh block every user-facing
 import and backtest behind it. Only a worker that listens on a queue defers its
 periodic tasks, so the ingest service is also what puts the cron schedule in
 motion.
+
+The `tasks_ingest` import is load-bearing rather than cosmetic: procrastinate
+registers a periodic when the decorator runs, so a module nobody imports is a
+cron that silently never fires.
 """
 
 import asyncio
 import os
 
+from platform_app import tasks_ingest  # noqa: F401  (registers the periodics)
 from platform_app.tasks import app
 
 

@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     # no free historical archive of these files, so a day not captured is listing
     # history that cannot be recovered. Late enough that the day's file is up.
     ingest_us_symbols_cron: str = "0 23 * * 1-5"
+    # Before the directory capture at 23:00, so a same-day disagreement between
+    # the claimed interval and the observed one lands in that order.
+    ingest_us_listing_cron: str = "0 22 * * 1-5"
+    # After the US close and after the crypto job has refreshed PTAX. Daily
+    # rather than weekday-only: the free tier's 25 requests a day are the
+    # constraint, and a skipped day is a day of backfill that never happens.
+    ingest_us_prices_cron: str = "0 5 * * *"
+    ingest_spx_cron: str = "30 5 * * 1-5"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

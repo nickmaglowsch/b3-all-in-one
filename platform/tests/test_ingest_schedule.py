@@ -7,12 +7,21 @@ seven months stale with nothing reporting it.
 import datetime
 
 import pytest
-from sqlalchemy import select
-
-from platform_app import enginerun, tasks
+from platform_app import enginerun, tasks, tasks_ingest
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import IngestRun
+from sqlalchemy import select
+
+
+def test_the_claimed_listing_interval_is_captured_before_the_observed_one():
+    """`us_listing` writes listing_date/delisting_date from a vendor claim;
+    `us_symbols` writes first_seen/last_seen from what the plane watched. When
+    the two disagree on a day, the order they ran in is the only way to read
+    `ingest_runs` and tell which saw what."""
+    listing_hour = int(settings.ingest_us_listing_cron.split()[1])
+    symbols_hour = int(settings.ingest_us_symbols_cron.split()[1])
+    assert listing_hour < symbols_hour
 
 
 def test_periodic_tasks_are_registered_on_the_ingest_queue():
@@ -23,7 +32,9 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
 
     assert set(by_name) == {"ingest_prices", "ingest_fundamentals",
                             "ingest_instruments", "ingest_crypto",
-                            "ingest_us_fundamentals", "ingest_us_symbols"}
+                            "ingest_us_fundamentals", "ingest_us_symbols",
+                            "ingest_us_listing", "ingest_us_prices",
+                            "ingest_spx"}
     assert by_name["ingest_prices"].cron == settings.ingest_prices_cron
     assert by_name["ingest_fundamentals"].cron == settings.ingest_fundamentals_cron
     assert by_name["ingest_instruments"].cron == settings.ingest_instruments_cron
@@ -31,6 +42,9 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
     assert (by_name["ingest_us_fundamentals"].cron
             == settings.ingest_us_fundamentals_cron)
     assert by_name["ingest_us_symbols"].cron == settings.ingest_us_symbols_cron
+    assert by_name["ingest_us_listing"].cron == settings.ingest_us_listing_cron
+    assert by_name["ingest_us_prices"].cron == settings.ingest_us_prices_cron
+    assert by_name["ingest_spx"].cron == settings.ingest_spx_cron
     for pt in by_name.values():
         assert pt.task.queue == "ingest", (
             "ingestion must not share the default queue — a multi-hour run would "
@@ -50,8 +64,9 @@ def test_the_security_master_is_rebuilt_after_the_prices_it_reads():
 
 @pytest.mark.parametrize("task", ["ingest_prices", "ingest_fundamentals",
                                  "ingest_instruments", "ingest_crypto",
-                                 "ingest_us_fundamentals",
-                                 "ingest_us_symbols"])
+                                 "ingest_us_fundamentals", "ingest_us_symbols",
+                                 "ingest_us_listing", "ingest_us_prices",
+                                 "ingest_spx"])
 def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     """The periodic scheduler injects `timestamp`; a manual defer_async() does not.
     Without a default the worker raises before the ingest_runs row is written, so
@@ -59,7 +74,7 @@ def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     actually deferring the job, not by a unit test — hence this one."""
     import inspect
 
-    sig = inspect.signature(getattr(tasks, task).func)
+    sig = inspect.signature(getattr(tasks_ingest, task).func)
     assert sig.parameters["timestamp"].default is not inspect.Parameter.empty
 
 
@@ -85,7 +100,7 @@ async def test_prices_job_forces_the_current_year_download(monkeypatch):
 
     monkeypatch.setattr(enginerun, "run_module", fake_run_module)
 
-    await tasks.ingest_prices.func(timestamp=0)
+    await tasks_ingest.ingest_prices.func(timestamp=0)
 
     assert seen["args"][0] == "b3_pipeline.main"
     assert "--force-download" in seen["args"]
@@ -106,7 +121,7 @@ async def test_a_failed_run_is_recorded_not_swallowed(monkeypatch):
 
     monkeypatch.setattr(enginerun, "run_module", failing)
 
-    result = await tasks.ingest_prices.func(timestamp=0)
+    result = await tasks_ingest.ingest_prices.func(timestamp=0)
     assert result["status"] == "error"
 
     async with async_session_maker() as session:

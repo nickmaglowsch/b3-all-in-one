@@ -4,7 +4,6 @@ from __future__ import annotations
 import datetime
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import fx_series
 

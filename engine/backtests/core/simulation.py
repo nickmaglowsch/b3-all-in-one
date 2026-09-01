@@ -6,16 +6,18 @@ import math
 import pandas as pd
 from typing import Dict, Tuple
 
+from backtests.core import universe
+
 
 def _apply_returns(
     positions: dict, ret_row: pd.Series, max_ret: float = 5.0, min_ret: float = -0.90
 ) -> None:
-    """Apply returns to all open positions with clipping for safety against artifacts.
+    """Apply returns to all open positions, clipped against data artifacts.
 
-    max_ret is a last-resort guard against data artifacts (e.g. unadjusted
-    reverse splits showing as +N00%); genuine multi-hundred-percent periods
-    below +500% pass through uncapped. Glitch filtering proper belongs
-    upstream (has_glitch / split detection).
+    max_ret guards artifacts (unadjusted reverse splits as +N00%); real periods
+    below +500% pass uncapped, and glitch filtering belongs upstream. min_ret
+    guards the same downward — but -100% is not an artifact, it is a write-off,
+    and clipping it hands a tenth of a wiped-out position back forever.
     """
     for t, pos in positions.items():
         if t not in ret_row.index:
@@ -28,7 +30,7 @@ def _apply_returns(
             except (ValueError, TypeError):
                 r = 0.0
 
-        r = min(max(r, min_ret), max_ret)
+        r = -1.0 if r <= -1.0 else min(max(r, min_ret), max_ret)
 
         # If it is a short position (negative current value), apply a forced Stop Loss.
         # If the stock goes up more than 50% in a single period, the broker forcefully
@@ -70,13 +72,8 @@ def _compute_tax(
 
         fraction_sold = min(1.0, amount_sold / abs(pos["current_value"]))
 
-        # Calculate the proportional PnL for this sale
-        # If short, cost_basis is negative. Covering a short means buying back the shares.
-        # Say cost basis is -100. Current value is -80 (it dropped, we made money).
-        # We sell/cover all 80. amount_sold = 80.
-        # Pnl = cost_basis - current_value = (-100) - (-80) = -20
-        # Actually standard long: amount_sold=80, cost=100 -> PnL = 80-100 = -20.
-        # So PnL is ALWAYS the difference between extracted value and cost basis.
+        # PnL is always the difference between the value extracted and the cost
+        # basis, long or short; on a short the basis is negative (cash received).
 
         cost_of_sold_portion = pos["cost_basis"] * fraction_sold
 
@@ -200,6 +197,7 @@ def _execute_rebalance(
     """
     # 1. Identify current weights and determine buys/sells (pure diff)
     sells, buys = compute_trades(positions, target_weights, portfolio_nav)
+    loss_carryforward += universe.realise_write_offs(positions)
 
     # Turnover is the gross BRL traded: every sell is positive, every buy value is
     # positive for a long and negative for an opened short — abs() folds both.

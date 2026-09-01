@@ -14,7 +14,6 @@ from __future__ import annotations
 import io
 import zipfile
 
-import pandas as pd
 import pytest
 
 from crypto_pipeline import binance_archive as archive

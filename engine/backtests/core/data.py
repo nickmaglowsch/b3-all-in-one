@@ -13,6 +13,8 @@ import pandas as pd
 
 from b3_pipeline import storage
 
+from backtests.core import universe
+
 
 def _safe_dsn(dsn) -> str:
     """A Postgres URL with the password masked, for anything that gets printed.
@@ -159,73 +161,6 @@ def sector_membership_asof(
     return wide.notna() & (wide > 0)
 
 
-def load_active_tickers(db_path: str, as_of_date: str) -> set:
-    """
-    Return the set of ticker roots that were active (not yet delisted)
-    as of as_of_date, according to cvm_companies.
-
-    A ticker root is active if:
-      - Its delisting_date IS NULL (still listed), OR
-      - Its delisting_date >= as_of_date
-
-    Returns a set of 4-character ticker roots (e.g. 'PETR', 'VALE').
-    Tickers not in cvm_companies are NOT returned here; the caller's
-    conservative filter handles those separately.
-
-    Graceful degradation: returns empty set if cvm_companies lacks
-    delisting_date column (un-migrated DB) — no exception is raised.
-    """
-    sql = """
-        SELECT DISTINCT ticker FROM cvm_companies
-        WHERE ticker IS NOT NULL
-          AND (delisting_date IS NULL OR delisting_date >= ?)
-    """
-    try:
-        with storage.get_connection(db_path) as conn:
-            df = storage.read_sql(sql, conn, params=[as_of_date])
-        return set(df["ticker"].dropna().tolist())
-    except Exception:
-        return set()
-
-
-def _get_all_known_roots(db_path: str) -> set:
-    """Return all ticker roots present in cvm_companies (with or without delisting_date)."""
-    sql = "SELECT DISTINCT ticker FROM cvm_companies WHERE ticker IS NOT NULL"
-    try:
-        with storage.get_connection(db_path) as conn:
-            df = storage.read_sql(sql, conn)
-        return set(df["ticker"].dropna().tolist())
-    except Exception:
-        return set()
-
-
-def _apply_delisted_filter(
-    db_path: str, start: str, *dataframes: pd.DataFrame
-) -> tuple:
-    """Apply the survivorship bias filter to a set of wide DataFrames.
-
-    Drops columns (tickers) where:
-    - The ticker's 4-char root is in cvm_companies (i.e., it's a known company), AND
-    - The root's delisting_date is before `start` (i.e., it delisted before the backtest start)
-
-    Tickers whose roots are NOT in cvm_companies at all are kept (conservative).
-    """
-    active_roots = load_active_tickers(db_path, start)
-    all_known_roots = _get_all_known_roots(db_path)
-
-    result = []
-    for df in dataframes:
-        if df is None or df.empty:
-            result.append(df)
-            continue
-        keep = [
-            t for t in df.columns
-            if t[:4] in active_roots or t[:4] not in all_known_roots
-        ]
-        result.append(df[keep])
-    return tuple(result)
-
-
 def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
     """One (date x ticker) reshape covering every value column.
 
@@ -249,17 +184,16 @@ def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
     return [wide[v] for v in values]
 
 
-def load_b3_data(
-    db_path: str, start: str, end: str, filter_delisted: bool = False
-) -> tuple:
+def load_b3_data(db_path: str, start: str, end: str) -> tuple:
     """
     Load data from the local B3 SQLite database.
     Filters for valid standard lot tickers (ending in 3, 4, 5, 6, 11).
     Calculates daily financial volume correctly.
 
-    Args:
-        filter_delisted: If True, drop tickers that were delisted before `start`.
-                         Default False — no change to existing behavior.
+    Prices are forward-filled only while each name was listed: see
+    `universe.ffill_until_delisting`. On a plane whose `instruments` table is not
+    yet backfilled every ticker counts as always-listed, so this is the plain
+    ffill it has always been.
 
     Returns:
         tuple: (adj_close, close_px, fin_vol)
@@ -297,14 +231,13 @@ def load_b3_data(
         df, ["adj_close", "close", "fin_volume"])
 
     # Forward fill prices to handle missing days, but leave volume as NaN/0
-    # to accurately calculate averages
-    adj_close = adj_close.ffill()
-    close_px = close_px.ffill()
-
-    if filter_delisted:
-        adj_close, close_px, fin_vol = _apply_delisted_filter(
-            db_path, start, adj_close, close_px, fin_vol
-        )
+    # to accurately calculate averages. The fill stops at each name's delisting;
+    # carried past it, it would invent a price for something that no longer
+    # trades and hand a book holding it a flat, riskless position forever.
+    tradable = universe.tradable_mask(
+        universe.load_listing_intervals(db_path), adj_close.index, adj_close.columns)
+    adj_close = universe.ffill_until_delisting(adj_close, tradable)
+    close_px = universe.ffill_until_delisting(close_px, tradable)
 
     print(f"✅  Loaded {adj_close.shape[1]} unique standard tickers.")
     return adj_close, close_px, fin_vol
@@ -372,19 +305,13 @@ def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
                          ticker.strip().upper(), start, end)
 
 
-def load_b3_hlc_data(
-    db_path: str, start: str, end: str, filter_delisted: bool = False
-) -> tuple:
+def load_b3_hlc_data(db_path: str, start: str, end: str) -> tuple:
     """
     Load split-adjusted HLC + adj_close + raw close + financial volume for ATR computation.
 
     Uses split_adj_* (split-only adjustment) for ATR to avoid false True Range
     spikes from ex-dividend gaps. Returns adj_close separately for the returns
     matrix (simulation needs dividend-adjusted returns).
-
-    Args:
-        filter_delisted: If True, drop tickers that were delisted before `start`.
-                         Default False — no change to existing behavior.
 
     Returns:
         tuple: (adj_close, split_adj_high, split_adj_low, split_adj_close, close_px, fin_vol)
@@ -418,18 +345,13 @@ def load_b3_hlc_data(
              "split_adj_close", "close", "fin_volume"],
     )
 
-    # Forward fill prices to handle missing days, leave volume as-is
-    adj_close = adj_close.ffill()
-    split_high = split_high.ffill()
-    split_low = split_low.ffill()
-    split_close = split_close.ffill()
-    close_px = close_px.ffill()
-
-    if filter_delisted:
-        adj_close, split_high, split_low, split_close, close_px, fin_vol = _apply_delisted_filter(
-            db_path, start,
-            adj_close, split_high, split_low, split_close, close_px, fin_vol
-        )
+    # Forward fill prices to handle missing days, leave volume as-is. Stops at
+    # each name's delisting — see load_b3_data.
+    tradable = universe.tradable_mask(
+        universe.load_listing_intervals(db_path), adj_close.index, adj_close.columns)
+    adj_close, split_high, split_low, split_close, close_px = (
+        universe.ffill_until_delisting(f, tradable)
+        for f in (adj_close, split_high, split_low, split_close, close_px))
 
     print(f"✅  Loaded HLC for {adj_close.shape[1]} unique standard tickers.")
     return adj_close, split_high, split_low, split_close, close_px, fin_vol

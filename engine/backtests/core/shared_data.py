@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtests.core import universe
 from backtests.core.data import (
     load_b3_hlc_data, download_benchmark, download_cdi_daily,
     load_all_fundamentals, load_all_fundamentals_monthly,
@@ -225,7 +226,6 @@ def build_shared_data(
     end: str,
     freq: str = "ME",
     include_fundamentals: bool = False,
-    filter_delisted: bool = False,
 ) -> dict:
     """
     Load and precompute all shared DataFrames needed by strategy plugins.
@@ -235,8 +235,6 @@ def build_shared_data(
         start:    Start date string, e.g. '2005-01-01'.
         end:      End date string, e.g. '2025-12-31' or 'today'.
         freq:     Resampling frequency (default 'ME' = month-end).
-        filter_delisted: If True, drop tickers that were delisted before `start`.
-                         Default False — no change to existing behavior.
 
     Returns:
         Dict containing all precomputed DataFrames and Series.
@@ -245,8 +243,9 @@ def build_shared_data(
 
     # ── 1. Load raw data ──────────────────────────────────────────────────────
     adj_close, split_adj_high, split_adj_low, split_adj_close, close_px, fin_vol = (
-        load_b3_hlc_data(db_path, start, end, filter_delisted=filter_delisted)
+        load_b3_hlc_data(db_path, start, end)
     )
+    _tradable, _delist_ret = universe.survivorship(db_path, adj_close)
     cdi_daily = download_cdi_daily(start, end)
     ibov_px = download_benchmark("^BVSP", start, end)
 
@@ -376,8 +375,9 @@ def build_shared_data(
         "cdi_cumul_63d": cdi_cumul_63d,
         "ibov_vol_20d_daily": ibov_vol_20d_daily,
         "ibov_ret_20d_daily": ibov_ret_20d_daily,
-        # ── survivorship bias filter flag ─────────────────────────────────────
-        "filter_delisted": filter_delisted,
+        # ── survivorship (see backtests.core.universe) ────────────────────────
+        "tradable": _tradable,
+        "delist_ret": _delist_ret,
     }
 
     # ── Point-in-time CVM sector classification (survivorship-free, from FCA) ──

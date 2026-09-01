@@ -112,6 +112,7 @@ def main() -> None:
     from backtests.core.strategy_registry import get_registry
     from backtests.core.strategy_base import dedup_target_weights
     from backtests.core.simulation import run_simulation
+    from backtests.core import universe
     from backtests.core.metrics import (
         build_metrics, value_to_ret, strategy_daily_values,
     )
@@ -137,7 +138,10 @@ def main() -> None:
     ret_matrix, tw = strat.generate_signals(shared, params)
     tw = dedup_target_weights(tw, shared["adtv"])
     result = run_simulation(
-        returns_matrix=ret_matrix.fillna(0.0),
+        # Not a bare fillna(0.0): once the price fill stops at delisting a
+        # dead name's return is NaN, and zeroing it would freeze the position
+        # at its last value forever. fill_returns books the terminal return.
+        returns_matrix=universe.fill_returns(ret_matrix, shared["delist_ret"]),
         target_weights=tw,
         initial_capital=initial_capital,
         tax_rate=float(params.get("tax_rate", 0.15)),

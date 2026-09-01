@@ -185,6 +185,31 @@ async def ingest_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices 
     return await _record_ingest("fundamentals", ["b3_pipeline.cvm_main"])
 
 
+@app.periodic(cron=settings.ingest_instruments_cron)
+@app.task(name="ingest_instruments", queue="ingest", queueing_lock="ingest_instruments")
+async def ingest_instruments(timestamp: int = 0) -> dict:  # see ingest_prices re: default
+    """Rebuild the B3 security master from the price plane.
+
+    This is what switches survivorship correction on for B3: until `instruments`
+    has rows, `backtests.core.universe` treats every ticker as always-listed and
+    the loaders behave exactly as they did before it existed. Separate from
+    ingest_prices, and later in the day, because it reads what that job wrote.
+    """
+    return await _record_ingest("instruments", ["b3_pipeline.instruments_backfill"])
+
+
+@app.periodic(cron=settings.ingest_crypto_cron)
+@app.task(name="ingest_crypto", queue="ingest", queueing_lock="ingest_crypto")
+async def ingest_crypto(timestamp: int = 0) -> dict:  # see ingest_prices re: default
+    """Refresh the crypto plane from Binance's public archive.
+
+    Enumerates every spot pair the archive has ever held, delisted ones included
+    — that enumeration is the survivorship property, so there is no "only the
+    live ones" fast path to add here later.
+    """
+    return await _record_ingest("crypto", ["crypto_pipeline.crypto_main"])
+
+
 @app.task(name="process_imports")
 async def process_imports(tenant_id: str) -> dict:
     """Run taxcore's load_b3 over ALL of a tenant's uploaded extracts, then full-replace

@@ -27,7 +27,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, specstore, subprocs, tasks
+from platform_app import b3run, enginerun, market_planes, specstore, subprocs, tasks
 from platform_app.billing import EMPRESARIAL, entitled, needs_bench, needs_mercado
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool
@@ -2022,37 +2022,11 @@ async def _last_ingest(session: AsyncSession) -> dict[str, dict]:
 # status endpoint used to 500 on exactly the environment that most needs to report
 # "there is no data yet". Same posture as /positions and /price-history: the plane
 # is optional, its absence is a fact to report, not an error.
-_EMPTY_PLANE = {
-    "prices": {"rows": 0, "tickers": 0, "min_date": None, "max_date": None},
-    "tables": {},
-}
+_EMPTY_PLANE = market_planes._EMPTY_PLANE
 
 
 async def _market_status_uncached() -> dict:
-    pool = await get_engine_pool()
-    prices = await pool.fetchrow(
-        "SELECT count(*) AS rows, count(DISTINCT ticker) AS tickers, "
-        "min(date) AS min_date, max(date) AS max_date FROM prices"
-    )
-    tables = {}
-    for name, datecol in (("corporate_actions", "event_date"),
-                          ("fundamentals_pit", "filing_date")):
-        row = await pool.fetchrow(
-            f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}"
-        )
-        tables[name] = {
-            "rows": row["rows"],
-            "fresh": row["fresh"].isoformat() if row["fresh"] else None,
-        }
-    return {
-        "prices": {
-            "rows": prices["rows"],
-            "tickers": prices["tickers"],
-            "min_date": prices["min_date"].isoformat() if prices["min_date"] else None,
-            "max_date": prices["max_date"].isoformat() if prices["max_date"] else None,
-        },
-        "tables": tables,
-    }
+    return await market_planes.status(await get_engine_pool())
 
 
 # Prices are expected every trading day. Four calendar days absorbs a long weekend

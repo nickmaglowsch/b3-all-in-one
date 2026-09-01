@@ -46,12 +46,17 @@ CDI_TICKER, IPCA_TICKER = "$CDI", "$IPCA"
 INDEX_SERIES_START = datetime.date(2010, 1, 1)
 
 
-def fetch_sgs(series: int, start: datetime.date, end: datetime.date) -> pd.Series:
-    """One BCB SGS series as a date-indexed Series of fractions (1% -> 0.01).
+def fetch_sgs(series: int, start: datetime.date, end: datetime.date,
+              scale: float = 100.0) -> pd.Series:
+    """One BCB SGS series as a date-indexed Series, divided by `scale`.
 
     Chunked because SGS caps a daily query at ten years, and retried because it
     throttles intermittently and answers with HTML — a silently dropped chunk
     would leave a hole that reads as "the CDI paid nothing that year".
+
+    `scale` defaults to 100 because the rate series this was written for publish
+    percent (1% -> 0.01). A price series such as PTAX (series 1, BRL per USD)
+    publishes the number itself and passes scale=1.0; see fx_series.py.
     """
     chunks: list[pd.Series] = []
     cursor = start
@@ -67,7 +72,7 @@ def fetch_sgs(series: int, start: datetime.date, end: datetime.date) -> pd.Serie
                     df = pd.DataFrame(data)
                     df["data"] = pd.to_datetime(df["data"], format="%d/%m/%Y")
                     chunks.append(
-                        df.set_index("data")["valor"].astype(float) / 100.0)
+                        df.set_index("data")["valor"].astype(float) / scale)
                 break
             except Exception as e:                      # noqa: BLE001
                 if attempt == 2:

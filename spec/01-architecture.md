@@ -87,6 +87,29 @@ Direct port of the pipeline repo's 12 SQLite tables (`b3_pipeline/storage.py`,
 dialect changes (`INSERT OR REPLACE` → `ON CONFLICT DO UPDATE`) + connection injection.
 `storage.get_connection()` already accepts a path — extend to accept a DSN.
 
+**Markets other than B3 sit in sibling tables, not inside those.** `prices` is
+`PRIMARY KEY (ticker, date)` with `isin_code NOT NULL`, and `quotation_factor` /
+`split_adj_*` are COTAHIST concepts — adding a market dimension to it means a
+primary-key rebuild from an additive-only migrator. So `b3_pipeline/market_storage.py`
+adds three tables, all purely additive DDL:
+
+- `instruments (market, symbol)` — the security master for every market including
+  B3, carrying the listing/delisting interval that `backtests/core/universe.py`
+  slices the point-in-time universe by. B3's rows are derived from `prices` +
+  CVM/FCA by `b3_pipeline/instruments_backfill.py`.
+- `market_prices (market, symbol, date)` — daily bars for US and crypto, in the
+  venue's currency **and** a BRL projection, with the PTAX rate that produced it
+  in the same row (`b3_pipeline/fx_series.py`, `$USDBRL` in `external_prices`).
+- `fundamentals_pit_us (fact_id)` — SEC XBRL, column-for-column comparable with
+  `fundamentals_pit` so `backtests/core/data.py`'s PIT readers serve both.
+
+Ingestion follows the same downloader/parser/storage triple: `engine/crypto_pipeline/`
+(Binance public archive) and `engine/us_pipeline/` (SEC EDGAR + the consolidated
+symbol directory), each with its own procrastinate periodic task and `ingest_runs`
+kind. `engine/backtests/core/markets.py` holds what differs per market — the
+universe shape rule, the benchmark, the glitch thresholds, whether split detection
+may run, and the tax rate and isenção the bench scores with.
+
 ### Tenant-plane schema
 Direct port of b3-portfolio's CSV schemas, plus tenancy and provenance:
 

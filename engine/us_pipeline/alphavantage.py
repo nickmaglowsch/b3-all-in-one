@@ -183,6 +183,11 @@ class Client:
     itself between requests. Construct one per run and pass it down; two
     clients on the same connection share the same budget correctly, which is
     the point of keeping it out of the instance.
+
+    `conn=None` is for a one-off tool that runs nowhere near a plane — the
+    fixture capture script. It means there is nothing to count against, so
+    there is no local ceiling either, and the vendor's own refusal becomes the
+    only limit. Never the right thing for a pipeline.
     """
 
     def __init__(self, conn, *, key=None, per_min=None, budget=None,
@@ -190,16 +195,20 @@ class Client:
         self._conn = conn
         self._key = key or api_key()
         self._per_min = float(per_min if per_min is not None else rate_per_min())
-        self._budget = int(budget if budget is not None else daily_budget())
+        self._budget = 0 if conn is None else int(
+            budget if budget is not None else daily_budget())
         self._today = today or datetime.date.today()
         # Headroom left for the other jobs sharing this key. The price backfill
         # would otherwise spend the whole day's allowance before the listing and
         # benchmark jobs ever run.
         self._reserve = int(reserve)
         self._last = 0.0
+        self._untracked = 0
 
     @property
     def spent(self) -> int:
+        if self._conn is None:
+            return self._untracked
         return us_storage.calls_spent(self._conn, SOURCE, self._today)
 
     @property
@@ -215,6 +224,9 @@ class Client:
                 f"{what}: {self.spent}/{self._budget} requests spent today"
                 f"{f' (reserving {self._reserve})' if self._reserve else ''}. "
                 "Not a failure — the backfill resumes tomorrow from the cursor.")
+        if self._conn is None:
+            self._untracked += 1
+            return
         us_storage.charge_call(self._conn, SOURCE, self._today)
 
     def _pace(self) -> None:

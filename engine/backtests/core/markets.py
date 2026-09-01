@@ -50,6 +50,14 @@ class MarketSpec:
     default_min_adtv: float
     default_min_price: float
     fundamentals: bool            # is there a PIT fundamentals table for it
+    # What the holder pays on a gain here, and how much of a month's gross sales
+    # is isento. The authority is taxcore/scripts/apuracao.py REGRAS; these are a
+    # deliberate copy, because the engine and taxcore run in separate venvs and
+    # cannot import each other. Keep them in step — a divergence makes the bench
+    # score a strategy under taxes the IRPF report would not charge, which is the
+    # one thing this product's positioning cannot afford.
+    tax_rate: float
+    monthly_sales_exemption: float
 
 
 # Character-for-character the predicate the two B3 loaders and
@@ -68,6 +76,8 @@ MARKETS = {
         suffix_strip=".SA",
         glitch_up=1.0, glitch_down=-0.45, detect_splits=True, root_len=4,
         default_min_adtv=1_000_000.0, default_min_price=1.0, fundamentals=True,
+        # Ações: 15%, isento até R$20k de vendas no mês.
+        tax_rate=0.15, monthly_sales_exemption=20_000.0,
     ),
     "US": MarketSpec(
         key="US", currency="USD", table="market_prices", symbol_column="symbol",
@@ -77,6 +87,16 @@ MARKETS = {
         # In BRL, like every threshold on this plane. ~US$200k/day of turnover
         # and a US$1 price — the usual penny-stock floor — at a ~5.5 rate.
         default_min_adtv=1_000_000.0, default_min_price=5.0, fundamentals=True,
+        # Aplicações financeiras no exterior, Lei 14.754/2023: 15% flat and no
+        # monthly isenção — there is no monthly DARF at all.
+        #
+        # The rate is right; the *timing* is an approximation. The law nets the
+        # whole year and settles once in the ajuste, while the simulator settles
+        # at each rebalance. Its loss carryforward approximates the netting, so
+        # the yearly total is close, but a run that pays tax in March and recovers
+        # the loss in November is charged earlier than the holder would be. That
+        # is roadmap item 5 (asset-class tax model), and it belongs there.
+        tax_rate=0.15, monthly_sales_exemption=0.0,
     ),
     "CRYPTO": MarketSpec(
         key="CRYPTO", currency="USDT", table="market_prices",
@@ -88,6 +108,17 @@ MARKETS = {
         # A -45% day is not a glitch here and a +100% day is not either.
         glitch_up=5.0, glitch_down=-0.90, detect_splits=False, root_len=None,
         default_min_adtv=1_000_000.0, default_min_price=0.0,
+        # Cripto: ganho de capital, isento até R$35k de alienações no mês.
+        #
+        # 15% is the first band of the progressive table, which covers every gain
+        # up to R$5.000.000 — so it is exact for any book this bench will run and
+        # understates the tax only above that. The progressive table itself lives
+        # in taxcore (gcap_aliquota); the simulator takes one rate.
+        #
+        # It also has no loss compensation, which the simulator's carryforward
+        # does model — so a losing crypto book is scored slightly kinder here than
+        # the Receita would. Both gaps are roadmap item 5.
+        tax_rate=0.15, monthly_sales_exemption=35_000.0,
         # No filings, no fundamentals. validate_spec rejects a crypto spec that
         # asks for them rather than handing it silently empty frames.
         fundamentals=False,

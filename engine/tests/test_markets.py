@@ -105,3 +105,46 @@ def test_the_global_dedup_still_merges_on_b3():
     out = dedup_target_weights(tw, adtv, market="B3")
     assert out.loc[idx[0], "PETR4"] == 1.0
     assert out.loc[idx[0], "PETR3"] == 0.0
+
+
+# ── Tax defaults, which must not silently disagree with taxcore ───────────────
+
+def test_each_market_carries_the_isencao_its_holder_actually_gets():
+    """A crypto book scored with the R$20k isenção of ações is scored under taxes
+    its holder does not pay — and this bench's whole positioning is that the
+    numbers that score a backtest are the numbers that file the IRPF."""
+    assert markets.MARKETS["B3"].monthly_sales_exemption == 20_000.0
+    assert markets.MARKETS["CRYPTO"].monthly_sales_exemption == 35_000.0
+    # Lei 14.754/2023 has no monthly isenção — and no monthly DARF either.
+    assert markets.MARKETS["US"].monthly_sales_exemption == 0.0
+
+
+def test_every_market_has_a_rate():
+    for spec in markets.MARKETS.values():
+        assert 0.0 < spec.tax_rate < 1.0
+
+
+def test_the_rates_match_the_taxcore_rules_they_are_copied_from():
+    """The engine and taxcore run in separate venvs and cannot import each other,
+    so these values are a deliberate copy. This test is the seam: it reads
+    taxcore's REGRAS off disk and fails when the two drift.
+
+    Skipped rather than failed when taxcore is not on the box — the engine is
+    deployed on its own, and a missing sibling is not a wrong number.
+    """
+    import pathlib
+
+    src = (pathlib.Path(__file__).resolve().parents[2]
+           / "taxcore" / "scripts" / "apuracao.py")
+    if not src.exists():
+        pytest.skip("taxcore not present alongside the engine")
+
+    text = src.read_text()
+    # Read the literals rather than importing: taxcore has its own venv and
+    # importing it from here would need pandas resolved in this one.
+    assert '"AÇÃO": Regra(("AÇÃO",), 0.15, 20_000.0' in text, (
+        "taxcore's ações rule moved — update markets.MARKETS['B3']")
+    assert '"CRIPTO": Regra(("CRIPTO",), 0.15, 35_000.0' in text, (
+        "taxcore's cripto rule moved — update markets.MARKETS['CRYPTO']")
+    assert '"EXTERIOR": Regra(("EXTERIOR",), 0.15, None' in text, (
+        "taxcore's exterior rule moved — update markets.MARKETS['US']")

@@ -150,9 +150,12 @@ def main() -> None:
         returns_matrix=universe.fill_returns(ret_matrix, shared["delist_ret"]),
         target_weights=tw,
         initial_capital=initial_capital,
-        tax_rate=float(params.get("tax_rate", 0.15)),
+        # Defaults from the market, not a literal: a crypto book scored with the
+        # R$20k isenção of ações is scored under taxes its holder does not pay.
+        tax_rate=float(params.get("tax_rate", markets.get(market).tax_rate)),
         slippage=float(params.get("slippage", 0.001)),
-        monthly_sales_exemption=float(params.get("monthly_sales_exemption", 20_000)),
+        monthly_sales_exemption=float(params.get(
+            "monthly_sales_exemption", markets.get(market).monthly_sales_exemption)),
         contribution=contribution,
         name=name,
     )

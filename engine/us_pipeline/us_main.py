@@ -32,7 +32,6 @@ import zipfile
 from pathlib import Path
 
 import pandas as pd
-
 from b3_pipeline import config, market_storage, storage, us_storage
 
 from . import sec_downloader as sec

@@ -152,6 +152,34 @@ INDEX_US_TICKER_PIT_TICKER = (
 )
 
 
+# Splits and dividends, kept rather than re-fetched.
+#
+# The daily series is refreshed far more often than corporate actions change,
+# and re-asking for both every time would spend two thirds of a free tier's
+# budget on answers that did not move. But the adjustment has to be recomputed
+# whenever the bars are rewritten, so the events have to be *somewhere* — and
+# storing them is also what #40 asks for in its own right.
+#
+# `value` is a ratio for a split (old-over-new, so a 4:1 is 0.25) and a
+# per-share amount for a dividend. One column because they are never mixed in a
+# calculation; `kind` says which reading applies.
+SCHEMA_US_CORPORATE_ACTIONS = """
+CREATE TABLE IF NOT EXISTS us_corporate_actions (
+    symbol TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ex_date DATE NOT NULL,
+    value REAL NOT NULL,
+    source TEXT NOT NULL,
+    PRIMARY KEY (symbol, kind, ex_date)
+);
+"""
+
+INDEX_US_CORPORATE_ACTIONS_SYMBOL = (
+    "CREATE INDEX IF NOT EXISTS idx_us_corporate_actions_symbol"
+    " ON us_corporate_actions(symbol);"
+)
+
+
 FUNDAMENTALS_PIT_US_COLUMNS = [
     "fact_id", "cik", "ticker", "period_end", "filing_date", "accn", "form",
     "fiscal_year", "fiscal_period", "revenue", "net_income", "ebitda",
@@ -208,6 +236,8 @@ DDL = [
     SCHEMA_US_TICKER_PIT,
     INDEX_US_TICKER_PIT_CIK,
     INDEX_US_TICKER_PIT_TICKER,
+    SCHEMA_US_CORPORATE_ACTIONS,
+    INDEX_US_CORPORATE_ACTIONS_SYMBOL,
 ]
 
 
@@ -330,9 +360,35 @@ def upsert_ticker_pit(conn, df: pd.DataFrame) -> int:
 def load_ticker_pit(conn, cik: str | None = None) -> pd.DataFrame:
     from . import storage
 
-    if cik is None:
-        return storage.read_sql(
-            "SELECT * FROM us_ticker_pit ORDER BY cik, start_date", conn)
+    where, params = ("", ()) if cik is None else (" WHERE cik = ?", (cik,))
     return storage.read_sql(
-        "SELECT * FROM us_ticker_pit WHERE cik = ? ORDER BY start_date",
-        conn, params=(cik,))
+        f"SELECT * FROM us_ticker_pit{where} ORDER BY cik, start_date",
+        conn, params=params)
+
+
+# ── Corporate actions ─────────────────────────────────────────────────────────
+
+_ACTIONS_STAGE_TYPES = (
+    "symbol TEXT, kind TEXT, ex_date DATE, value DOUBLE PRECISION, source TEXT")
+
+
+def upsert_corporate_actions(conn, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    df = df.copy()
+    df["ex_date"] = pd.to_datetime(df["ex_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    df = df.dropna(subset=["symbol", "kind", "ex_date", "value"])
+    return _upsert_frame(
+        conn, "us_corporate_actions", df, ["symbol", "kind", "ex_date"],
+        ["symbol", "kind", "ex_date", "value", "source"],
+        _ACTIONS_STAGE_TYPES, "_usca_stage")
+
+
+def load_corporate_actions(conn, symbol: str, kind: str) -> pd.DataFrame:
+    """One symbol's stored events of one kind, oldest first."""
+    from . import storage
+
+    return storage.read_sql(
+        "SELECT ex_date, value FROM us_corporate_actions"
+        " WHERE symbol = ? AND kind = ? ORDER BY ex_date",
+        conn, params=(symbol, kind))

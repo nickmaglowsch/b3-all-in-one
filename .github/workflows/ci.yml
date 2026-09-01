@@ -75,9 +75,13 @@ jobs:
           python-version: "3.12"
       - run: pip install -r engine/requirements.txt
       # The Rust extension and Postgres-backed tests skip themselves when absent.
+      # us_pipeline and crypto_pipeline were outside this list from the day they
+      # were written — a whole market's ingest growing with nothing measuring it.
+      # Adding them raises the total rather than lowering it, which is the point.
       - run: >-
           cd engine && pytest -q
-          --cov=b3_pipeline --cov=backtests --cov=scripts --cov-fail-under=70
+          --cov=b3_pipeline --cov=backtests --cov=scripts
+          --cov=us_pipeline --cov=crypto_pipeline --cov-fail-under=70
 
   taxcore-tests:
     name: Taxcore tests

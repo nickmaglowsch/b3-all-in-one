@@ -414,6 +414,6 @@ def build_shared_data(
     # Fundamentals are loaded and attached by their own module — see
     # backtests.core.fundamentals for the PIT semantics and the ratio inputs.
     if include_fundamentals:
-        fundamentals.attach(shared, db_path, start, end, freq, ret)
+        fundamentals.attach(shared, db_path, start, end, freq, ret, spec.key)
 
     return shared

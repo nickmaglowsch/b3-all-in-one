@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     # Crypto trades every day of the year, so this has no weekend to skip. Late
     # enough that the previous UTC day's daily kline files have been published.
     ingest_crypto_cron: str = "0 4 * * *"
+    # SEC fundamentals move on a filing calendar; weekly is plenty, and the
+    # incremental pass is thousands of small requests under a 10/s limit.
+    ingest_us_fundamentals_cron: str = "0 8 * * 0"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

@@ -27,10 +27,12 @@ engine/*
 !engine/b3_pipeline
 !engine/backtests
 !engine/crypto_pipeline
+!engine/us_pipeline
 !engine/scripts
 !engine/requirements-bench.txt
 engine/b3_pipeline/**/__pycache__
 engine/backtests/**/__pycache__
 engine/crypto_pipeline/**/__pycache__
+engine/us_pipeline/**/__pycache__
 engine/scripts/**/__pycache__
 engine/backtests/output

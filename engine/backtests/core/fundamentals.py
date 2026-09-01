@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def attach(shared: dict, db_path: str, start: str, end: str, freq: str,
-           ret: pd.DataFrame) -> None:
+           ret: pd.DataFrame, market: str = "B3") -> None:
     """Add every `f_*` frame to `shared`, in place.
 
     `ret` supplies the rebalance calendar and the ticker universe; every frame
@@ -38,7 +38,8 @@ def attach(shared: dict, db_path: str, start: str, end: str, freq: str,
     # Pass the ticker universe so the root-keyed fundamentals_pit frames are
     # broadcast onto full tickers (else they silently fail to join — the bug
     # that made ValueQuality never invest).
-    fundamentals = load_all_fundamentals(db_path, start, end, freq=freq, tickers=ret.columns)
+    fundamentals = load_all_fundamentals(db_path, start, end, freq=freq,
+                                         tickers=ret.columns, market=market)
     for metric, df_fund in fundamentals.items():
         shared["f_" + metric] = df_fund
     logger.info(f"Added {len(fundamentals)} fundamentals DataFrames with 'f_' prefix")

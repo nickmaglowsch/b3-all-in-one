@@ -79,6 +79,12 @@ services:
       ENVIRONMENT: production
       SECRET_KEY: ${SECRET_KEY}
       WORKER_QUEUES: ingest
+      # EDGAR requires a declaring contact address and answers 403 without one.
+      # Passed through unset rather than `:?`-required: an interpolation error
+      # here would refuse to start the whole stack over a variable only one
+      # scheduled job reads. The job itself raises with the reason, so the
+      # failure lands on the run that needs it and nowhere else.
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
     volumes:

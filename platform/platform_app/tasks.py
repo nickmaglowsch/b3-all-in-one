@@ -210,6 +210,22 @@ async def ingest_crypto(timestamp: int = 0) -> dict:  # see ingest_prices re: de
     return await _record_ingest("crypto", ["crypto_pipeline.crypto_main"])
 
 
+@app.periodic(cron=settings.ingest_us_fundamentals_cron)
+@app.task(name="ingest_us_fundamentals", queue="ingest",
+          queueing_lock="ingest_us_fundamentals")
+async def ingest_us_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices
+    """Refresh US point-in-time fundamentals from SEC XBRL.
+
+    Incremental by default — it walks the CIKs already on the plane. The first
+    load is the bulk `companyfacts.zip`, run by hand with `--download-bulk`,
+    because that is the pass that gets the companies which stopped filing and it
+    is a 1.5 GB download, not something to put on a weekly cron.
+
+    Needs SEC_USER_AGENT: EDGAR answers 403 without a declaring contact address.
+    """
+    return await _record_ingest("us_fundamentals", ["us_pipeline.us_main"])
+
+
 @app.task(name="process_imports")
 async def process_imports(tenant_id: str) -> dict:
     """Run taxcore's load_b3 over ALL of a tenant's uploaded extracts, then full-replace

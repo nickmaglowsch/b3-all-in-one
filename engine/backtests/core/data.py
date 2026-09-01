@@ -489,20 +489,27 @@ _FUNDAMENTALS_METRICS = [
 _FUNDAMENTALS_MONTHLY_METRICS = set(_FUNDAMENTALS_METRICS)
 
 
-def _get_rebalance_dates(db_path: str, start: str, end: str, freq: str) -> pd.DatetimeIndex:
-    """Build the rebalance date grid from the span the prices table covers.
+def _get_rebalance_dates(db_path, start, end, freq, market="B3") -> pd.DatetimeIndex:
+    """Build the rebalance date grid from the span that market's prices cover.
 
     Only the first and last traded day are used, so ask the database for those
     two rather than for every distinct date in the window — the old query read
     the whole table (through idx_prices_date, but still every row) and threw all
     of it away except min() and max(), once per fundamentals metric.
+
+    Scoped to the market: B3 trading days are not the US calendar, and a plane
+    holding only one of the two would otherwise get an empty grid and, silently,
+    empty fundamentals.
     """
+    spec = markets.get(market)
+    scope = "" if spec.table == "prices" else " AND market = :market"
+    params = {"start": start, "end": end}
+    params.update({"market": spec.key} if scope else {})
     with storage.get_connection(db_path) as conn:
         span = storage.read_sql(
-            "SELECT MIN(date) AS lo, MAX(date) AS hi FROM prices "
-            "WHERE date >= ? AND date <= ?",
-            conn,
-            params=[start, end],
+            f"SELECT MIN(date) AS lo, MAX(date) AS hi FROM {spec.table} "       # noqa: S608
+            f"WHERE date >= :start AND date <= :end{scope}",
+            conn, params=params,
         )
     lo, hi = (span.iloc[0]["lo"], span.iloc[0]["hi"]) if not span.empty else (None, None)
     if lo is None or hi is None or pd.isna(lo) or pd.isna(hi):
@@ -510,27 +517,43 @@ def _get_rebalance_dates(db_path: str, start: str, end: str, freq: str) -> pd.Da
     return pd.date_range(start=pd.to_datetime(lo), end=pd.to_datetime(hi), freq=freq)
 
 
-def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str) -> pd.DataFrame:
-    """Long-format fundamentals_pit rows for `metrics`, filed on or before `end`.
+# Which table holds a market's point-in-time fundamentals, and what orders two
+# rows filed on the same day. CVM numbers a restatement (`filing_version`); XBRL
+# does not, because there a restatement is a whole new accession with a later
+# `filed` — so `accn` is the tiebreaker, and the semantics are identical.
+_PIT_TABLES = {"B3": ("fundamentals_pit", "filing_version"),
+               "US": ("fundamentals_pit_us", "accn")}
+
+
+def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str,
+                            market: str = "B3") -> pd.DataFrame:
+    """Long-format point-in-time rows for `metrics`, filed on or before `end`.
 
     One query for every metric the caller wants. Per-metric loading ran this
     scan once per metric and each carried its own `AND {metric} IS NOT NULL`;
     that predicate moves to a per-metric dropna in _pit_frame, which selects the
     same rows.
+
+    A market with no fundamentals table (crypto) returns an empty frame rather
+    than raising: `validate_spec` already rejects a spec that asks for f_* there,
+    and a backtest that reaches here anyway should get empty frames, not a crash.
     """
+    if market not in _PIT_TABLES:
+        return pd.DataFrame()
+    table, version_col = _PIT_TABLES[market]
     cols = ", ".join(f"f.{m}" for m in metrics)
     sql = f"""
         SELECT
             f.ticker,
             f.filing_date,
             f.period_end,
-            f.filing_version,
+            f.{version_col} AS filing_version,
             {cols}
-        FROM fundamentals_pit f
+        FROM {table} f
         WHERE f.ticker IS NOT NULL
           AND f.filing_date <= :end
-        ORDER BY f.ticker, f.filing_date, f.filing_version
-    """
+        ORDER BY f.ticker, f.filing_date, f.{version_col}
+    """                                                                          # noqa: S608
     with storage.get_connection(db_path) as conn:
         return storage.read_sql(sql, conn, params={"end": end})
 
@@ -656,16 +679,22 @@ def load_all_fundamentals(
     end: str,
     freq: str = "ME",
     tickers=None,
+    market: str = "B3",
 ) -> dict:
     """
     Load all fundamentals metrics and return them as a dict of wide DataFrames.
 
-    fundamentals_pit is keyed by 4-char company **root**. When ``tickers`` is
-    given, each frame is broadcast onto the full tickers sharing that root so it
-    joins directly against the full-ticker price/return matrix; without it the
+    On B3, fundamentals_pit is keyed by 4-char company **root**. When ``tickers``
+    is given, each frame is broadcast onto the full tickers sharing that root so
+    it joins directly against the full-ticker price/return matrix; without it the
     frames stay root-keyed — a footgun that silently fails to join (bit
     ValueQuality + the research discovery path). Callers that have a ticker
     universe (build_shared_data, research.data_loader) should pass it.
+
+    The root broadcast is B3-specific and must not run elsewhere. Off B3 the rows
+    are already keyed by the traded symbol, and a four-character prefix would
+    merge GOOG's numbers into GOOGL's — two real companies' worth of one
+    company's financials.
 
     Returns:
         dict with keys matching _FUNDAMENTALS_METRICS:
@@ -676,13 +705,13 @@ def load_all_fundamentals(
     # One scan of fundamentals_pit and one of prices for the whole set. Looping
     # load_fundamentals_pit meant eight of each — sixteen passes over two large
     # tables to fill one dict, on every backtest that needs fundamentals.
+    rebal_dates = _get_rebalance_dates(db_path, start, end, freq, market)
     try:
-        df = _query_fundamentals_pit(db_path, _FUNDAMENTALS_METRICS, end)
-        rebal_dates = _get_rebalance_dates(db_path, start, end, freq)
+        df = _query_fundamentals_pit(db_path, _FUNDAMENTALS_METRICS, end, market)
     except Exception as e:
         import warnings
         warnings.warn(f"Failed to load fundamentals: {e}")
-        df, rebal_dates = pd.DataFrame(), _get_rebalance_dates(db_path, start, end, freq)
+        df = pd.DataFrame()
 
     result = {}
     for metric in _FUNDAMENTALS_METRICS:
@@ -692,7 +721,7 @@ def load_all_fundamentals(
             import warnings
             warnings.warn(f"Failed to load fundamentals metric '{metric}': {e}")
             result[metric] = pd.DataFrame()
-    if tickers is not None:
+    if tickers is not None and market == "B3":
         result = {m: _broadcast_roots_to_tickers(df_m, tickers) for m, df_m in result.items()}
     return result
 

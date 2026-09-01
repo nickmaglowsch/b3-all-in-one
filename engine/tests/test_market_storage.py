@@ -11,8 +11,9 @@ import sqlite3
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from b3_pipeline import market_storage, storage
+from b3_pipeline import market_storage, storage, us_storage
 
 
 def _db(tmp_path: Path) -> sqlite3.Connection:
@@ -160,7 +161,7 @@ def test_empty_frame_writes_nothing(tmp_path):
     conn = _db(tmp_path)
     assert market_storage.upsert_market_prices(conn, pd.DataFrame()) == 0
     assert market_storage.upsert_instruments(conn, pd.DataFrame()) == 0
-    assert market_storage.upsert_fundamentals_pit_us(conn, pd.DataFrame()) == 0
+    assert us_storage.upsert_fundamentals_pit_us(conn, pd.DataFrame()) == 0
 
 
 # ── fundamentals_pit_us ───────────────────────────────────────────────────────
@@ -179,7 +180,7 @@ def test_restatement_is_a_second_row_not_an_overwrite(tmp_path):
     backtest dated before the restatement still reads the number the market had.
     """
     conn = _db(tmp_path)
-    market_storage.upsert_fundamentals_pit_us(conn, pd.DataFrame([
+    us_storage.upsert_fundamentals_pit_us(conn, pd.DataFrame([
         _fact(),
         _fact(fact_id="acc-2:NetIncomeLoss:2023", accn="acc-2",
               filing_date="2024-11-01", net_income=96_000_000_000.0),
@@ -198,7 +199,7 @@ def test_rows_without_the_bitemporal_keys_are_dropped(tmp_path):
     """period_end and filing_date are what make a row point-in-time. A fact
     missing either cannot be placed in time and must not enter the table."""
     conn = _db(tmp_path)
-    n = market_storage.upsert_fundamentals_pit_us(conn, pd.DataFrame([
+    n = us_storage.upsert_fundamentals_pit_us(conn, pd.DataFrame([
         _fact(),
         _fact(fact_id="acc-3:x", filing_date=None),
         _fact(fact_id="acc-4:x", period_end=None),
@@ -209,7 +210,65 @@ def test_rows_without_the_bitemporal_keys_are_dropped(tmp_path):
 def test_us_fundamentals_upsert_is_idempotent(tmp_path):
     conn = _db(tmp_path)
     facts = pd.DataFrame([_fact()])
-    market_storage.upsert_fundamentals_pit_us(conn, facts)
-    market_storage.upsert_fundamentals_pit_us(conn, facts)
+    us_storage.upsert_fundamentals_pit_us(conn, facts)
+    us_storage.upsert_fundamentals_pit_us(conn, facts)
     assert storage.read_sql(
         "SELECT COUNT(*) c FROM fundamentals_pit_us", conn).iloc[0]["c"] == 1
+
+
+# ── Partial writes: four writers share `instruments` and none knows all of it ──
+
+def test_a_narrow_write_does_not_erase_what_another_writer_knew(tmp_path):
+    """The bug this pins cost the US plane its join key six days out of seven.
+
+    `upsert_instruments` used to fill every absent column with NULL and overwrite
+    unconditionally. The consolidated symbol directory runs nightly and knows
+    name/venue/kind; the SEC ingest runs weekly and knows the CIK. So every
+    weeknight at 23:00 the directory blanked the CIK the Sunday ingest had
+    written — and `instruments.cik` is the only thing joining US fundamentals to
+    US prices.
+    """
+    conn = _db(tmp_path)
+    # Sunday: the SEC ingest knows the CIK and nothing else.
+    market_storage.upsert_instruments(conn, pd.DataFrame([
+        dict(market="US", symbol="AAPL", currency="USD", kind="EQUITY",
+             cik="0000320193")]))
+    # Monday night: the directory knows the name and the venue, not the CIK.
+    market_storage.upsert_instruments(conn, pd.DataFrame([
+        dict(market="US", symbol="AAPL", currency="USD", name="Apple Inc.",
+             venue="NASDAQ", first_seen="2026-01-05", last_seen="2026-01-05")]))
+
+    row = storage.read_sql(
+        "SELECT * FROM instruments WHERE market='US' AND symbol='AAPL'", conn).iloc[0]
+    assert row["cik"] == "0000320193"      # survived the nightly snapshot
+    assert row["name"] == "Apple Inc."     # and the nightly snapshot still landed
+    assert row["venue"] == "NASDAQ"
+    assert str(row["first_seen"]) == "2026-01-05"
+
+
+def test_a_new_row_still_lands_with_every_column_the_caller_did_not_supply(tmp_path):
+    """Narrowing applies to the UPDATE, not the INSERT: a first sighting has no
+    prior row to protect, and the absent columns are genuinely unknown."""
+    conn = _db(tmp_path)
+    market_storage.upsert_instruments(conn, pd.DataFrame([
+        dict(market="US", symbol="NEWCO", currency="USD", cik="0001234567")]))
+    row = storage.read_sql(
+        "SELECT * FROM instruments WHERE symbol='NEWCO'", conn).iloc[0]
+    assert row["cik"] == "0001234567"
+    assert row["name"] is None and row["venue"] is None
+    # DEFAULT 0 columns are filled explicitly — an explicit NULL bypasses a
+    # column default, and `universe.delisting_returns` reads is_worthless.
+    assert int(row["is_worthless"]) == 0
+    assert int(row["is_test_issue"]) == 0
+
+
+def test_a_write_without_currency_is_refused_by_name(tmp_path):
+    """`currency` is NOT NULL, so a narrow write that omits it cannot create a
+    row. Failing here names the column; failing in the driver names it three
+    frames down, inside SQL the caller never wrote."""
+    conn = _db(tmp_path)
+    market_storage.upsert_instruments(conn, pd.DataFrame([
+        dict(market="US", symbol="AAPL", currency="USD", name="Apple Inc.")]))
+    with pytest.raises(ValueError, match="currency"):
+        market_storage.upsert_instruments(conn, pd.DataFrame([
+            dict(market="US", symbol="AAPL", cik="0000320193")]))

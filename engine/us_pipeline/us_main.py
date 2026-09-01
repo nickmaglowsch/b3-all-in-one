@@ -33,7 +33,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from b3_pipeline import config, market_storage, storage
+from b3_pipeline import config, market_storage, storage, us_storage
 
 from . import sec_downloader as sec
 from .sec_parser import MARKET, parse_companyfacts
@@ -45,21 +45,27 @@ logger = logging.getLogger(__name__)
 BULK_FILENAME = "sec_companyfacts.zip"
 
 
-def _instrument(cik: str, ticker: str, rows: pd.DataFrame) -> dict:
-    periods = pd.to_datetime(rows["period_end"], errors="coerce").dropna()
+def _instrument(cik: str, ticker: str) -> dict:
+    """The security-master row this ingest is entitled to claim, and no more.
+
+    Deliberately narrow. `upsert_instruments` now writes only the columns it is
+    given, so every key here is a claim over whatever another writer knew, and
+    this job only knows two things: that a CIK exists and what it is called.
+
+    In particular it no longer writes `first_seen`/`last_seen`. Those are
+    *observed in the market* — the consolidated symbol directory and the price
+    archive own them, and `/market/status` reports them as the plane's coverage
+    boundary. The first period a company reported is not the day its shares
+    started trading, so filling them from filing periods made that boundary mean
+    one thing on Sunday and another on Monday. The filing range is not lost: it
+    is `min/max(period_end)` in `fundamentals_pit_us`, keyed by the same CIK.
+    """
     return {
         "market": MARKET,
         "symbol": ticker or f"CIK{cik}",
-        "venue": None,
         "currency": "USD",
         "kind": "EQUITY",
         "cik": cik,
-        # Observed from the filings, and only that. `listing_date` is what the
-        # backtest universe reads, and the first period a company reported is
-        # not the day its shares started trading — so this fills `first_seen`
-        # and leaves the listing interval to whatever ingests prices.
-        "first_seen": periods.min().date() if len(periods) else None,
-        "last_seen": periods.max().date() if len(periods) else None,
     }
 
 
@@ -68,8 +74,8 @@ def ingest_company(conn, cik: str, doc: dict, ticker: str = None) -> int:
     if rows.empty:
         return 0
     market_storage.upsert_instruments(
-        conn, pd.DataFrame([_instrument(cik, ticker, rows)]))
-    return market_storage.upsert_fundamentals_pit_us(conn, rows)
+        conn, pd.DataFrame([_instrument(cik, ticker)]))
+    return us_storage.upsert_fundamentals_pit_us(conn, rows)
 
 
 def _known_ciks(conn) -> list:

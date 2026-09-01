@@ -129,52 +129,6 @@ INDEX_MARKET_PRICES_DATE = (
     "CREATE INDEX IF NOT EXISTS idx_market_prices_date ON market_prices(market, date);"
 )
 
-# US point-in-time fundamentals, from SEC XBRL.
-#
-# Deliberately column-for-column comparable with fundamentals_pit so the readers
-# in backtests/core/data.py (_query_fundamentals_pit, _pit_frame) work on both
-# without a second implementation. Two differences, both forced by the source:
-#   - the key is `cik`, not `cnpj`;
-#   - there is no filing_version. In XBRL a restatement is a new accession with a
-#     later `filed`, which is exactly the semantics fundamentals_pit already
-#     relies on: versions are never deduplicated, so a restatement only becomes
-#     visible after its own filing_date.
-# Values are in the units the filer reported (USD, raw), NOT the thousands that
-# CVM reports — see the note above fundamentals_monthly.
-SCHEMA_FUNDAMENTALS_PIT_US = """
-CREATE TABLE IF NOT EXISTS fundamentals_pit_us (
-    fact_id TEXT NOT NULL PRIMARY KEY,
-    cik TEXT NOT NULL,
-    ticker TEXT,
-    period_end DATE NOT NULL,
-    filing_date DATE NOT NULL,
-    accn TEXT NOT NULL,
-    form TEXT,
-    fiscal_year INTEGER,
-    fiscal_period TEXT,
-    revenue REAL,
-    net_income REAL,
-    ebitda REAL,
-    total_assets REAL,
-    equity REAL,
-    net_debt REAL,
-    shares_outstanding REAL,
-    net_income_ttm REAL
-);
-"""
-
-INDEX_FUNDAMENTALS_PIT_US_CIK = (
-    "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_us_cik ON fundamentals_pit_us(cik);"
-)
-INDEX_FUNDAMENTALS_PIT_US_TICKER = (
-    "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_us_ticker"
-    " ON fundamentals_pit_us(ticker);"
-)
-INDEX_FUNDAMENTALS_PIT_US_FILING_DATE = (
-    "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_us_filing_date"
-    " ON fundamentals_pit_us(filing_date);"
-)
-
 
 # Appended to storage.init_db's ddl_statements, so these run in the same pass and
 # through the same _pg_ddl translation as every other CREATE in the plane.
@@ -185,14 +139,11 @@ DDL = [
     INDEX_INSTRUMENTS_DELISTING,
     SCHEMA_MARKET_PRICES,
     INDEX_MARKET_PRICES_DATE,
-    SCHEMA_FUNDAMENTALS_PIT_US,
-    INDEX_FUNDAMENTALS_PIT_US_CIK,
-    INDEX_FUNDAMENTALS_PIT_US_TICKER,
-    INDEX_FUNDAMENTALS_PIT_US_FILING_DATE,
 ]
 
 def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
-                  cols: list[str], stage_coltypes: str, stage_name: str) -> int:
+                  cols: list[str], stage_coltypes: str, stage_name: str,
+                  update_cols: list[str] | None = None) -> int:
     """Upsert `df[cols]` into `table` on `key`, on either backend.
 
     Factored out because the three multi-market tables want exactly the pattern
@@ -202,13 +153,26 @@ def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
     IS DISTINCT FROM guard carry over for the same reasons documented there: a
     batch may legally carry the same key twice (last wins), and re-ingesting an
     unchanged period should touch no rows.
+
+    `update_cols` narrows what an existing row gets overwritten with, without
+    narrowing the INSERT — a new row still lands with every column the table
+    has, NULL where the caller knew nothing. That difference is the whole point:
+    a writer that only knows some of the columns must be able to say so, or it
+    erases what another writer knew. See `upsert_instruments`.
     """
     from . import storage
 
     if df.empty:
         return 0
 
-    value_cols = [c for c in cols if c not in key]
+    value_cols = [c for c in (update_cols if update_cols is not None else cols)
+                  if c not in key]
+    if not value_cols:
+        raise ValueError(
+            f"upsert into {table} was given nothing to write beyond the key "
+            f"{key} — an INSERT that can only ever conflict is a caller bug, "
+            "not a no-op worth hiding.")
+
     placeholders = ", ".join("?" for _ in cols)
     updates_sqlite = ", ".join(f"{c} = excluded.{c}" for c in value_cols)
     sql = (
@@ -225,10 +189,10 @@ def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
             ([*r, i] for i, r in enumerate(rows)),
         )
         collist = ", ".join(cols)
+        keylist = ", ".join(key)
         updates = ", ".join(f"{c} = excluded.{c}" for c in value_cols)
         unchanged = " OR ".join(
             f"{table}.{c} IS DISTINCT FROM excluded.{c}" for c in value_cols)
-        keylist = ", ".join(key)
         storage.execute(conn, f"""
             INSERT INTO {table} ({collist})
             SELECT {collist} FROM (
@@ -260,21 +224,48 @@ _INSTRUMENTS_STAGE_TYPES = (
 
 
 def upsert_instruments(conn, df: pd.DataFrame) -> int:
-    """Upsert rows into the security master. Missing optional columns become NULL."""
+    """Upsert rows into the security master, touching only the columns given.
+
+    A new row lands with every column the table has, NULL where the caller knew
+    nothing. An *existing* row is updated only on the columns actually present
+    in `df`, and this is the whole reason the function is written this way.
+
+    Four writers share this table and none of them knows all of it. The
+    consolidated symbol directory knows name/venue/kind and the observed bounds;
+    the SEC ingest knows the CIK; the listing-status feed knows the listing
+    interval; the B3 backfill knows ISIN and CNPJ. Filling every absent column
+    with NULL and overwriting unconditionally — which is what this did — meant
+    the nightly directory snapshot erased the CIK the weekly SEC ingest had
+    written, so `instruments.cik` (the join between US fundamentals and US
+    prices) was null six days out of seven.
+    """
     if df.empty:
         logger.warning("No instrument records to upsert")
         return 0
+    supplied = [c for c in INSTRUMENT_COLUMNS if c in df.columns]
+    # `currency` is NOT NULL, so a first sighting without it fails deep inside
+    # the driver with an IntegrityError naming a column the caller never
+    # mentioned. Say it here instead.
+    if "currency" not in supplied:
+        raise ValueError(
+            "upsert_instruments needs `currency` on every row: it is NOT NULL, "
+            "and a writer that does not know what the venue quotes in cannot "
+            "create the row. Columns given: " + str(sorted(df.columns)))
     df = df.copy()
     for col in INSTRUMENT_COLUMNS:
         if col not in df.columns:
             df[col] = None
     for col in ("listing_date", "delisting_date", "first_seen", "last_seen"):
         df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+    # The two flags are NOT NULL-in-spirit (DEFAULT 0), and an explicit NULL
+    # bypasses a column default — so they are filled for the INSERT even when
+    # the caller did not supply them. They stay out of `supplied`, so an
+    # unsupplied flag is never written over an existing row.
     for col in ("is_worthless", "is_test_issue"):
         df[col] = df[col].fillna(0).astype(int)
     n = _upsert_frame(
         conn, "instruments", df, ["market", "symbol"], INSTRUMENT_COLUMNS,
-        _INSTRUMENTS_STAGE_TYPES, "_instr_stage",
+        _INSTRUMENTS_STAGE_TYPES, "_instr_stage", update_cols=supplied,
     )
     logger.info(f"Upserted {n:,} instrument records")
     return n
@@ -328,47 +319,4 @@ def upsert_market_prices(conn, df: pd.DataFrame) -> int:
         _MARKET_PRICES_STAGE_TYPES, "_mpx_stage",
     )
     logger.info(f"Upserted {n:,} market price records")
-    return n
-
-
-FUNDAMENTALS_PIT_US_COLUMNS = [
-    "fact_id", "cik", "ticker", "period_end", "filing_date", "accn", "form",
-    "fiscal_year", "fiscal_period", "revenue", "net_income", "ebitda",
-    "total_assets", "equity", "net_debt", "shares_outstanding", "net_income_ttm",
-]
-
-_FUNDAMENTALS_PIT_US_STAGE_TYPES = (
-    "fact_id TEXT, cik TEXT, ticker TEXT, period_end DATE, filing_date DATE,"
-    " accn TEXT, form TEXT, fiscal_year BIGINT, fiscal_period TEXT,"
-    " revenue DOUBLE PRECISION, net_income DOUBLE PRECISION,"
-    " ebitda DOUBLE PRECISION, total_assets DOUBLE PRECISION,"
-    " equity DOUBLE PRECISION, net_debt DOUBLE PRECISION,"
-    " shares_outstanding DOUBLE PRECISION, net_income_ttm DOUBLE PRECISION"
-)
-
-
-def upsert_fundamentals_pit_us(conn, df: pd.DataFrame) -> int:
-    """Upsert SEC-derived point-in-time fundamentals.
-
-    Rows are never merged across accessions: a restatement arrives as its own
-    fact_id with its own (later) filing_date, so a backtest dated before that
-    date still reads the number the market actually had. That is the whole point
-    of the table — see the note above SCHEMA_FUNDAMENTALS_PIT_US.
-    """
-    if df.empty:
-        logger.warning("No US fundamentals records to upsert")
-        return 0
-    df = df.copy()
-    for col in FUNDAMENTALS_PIT_US_COLUMNS:
-        if col not in df.columns:
-            df[col] = None
-    for col in ("period_end", "filing_date"):
-        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
-    df = df.dropna(subset=["fact_id", "cik", "period_end", "filing_date"])
-
-    n = _upsert_frame(
-        conn, "fundamentals_pit_us", df, ["fact_id"], FUNDAMENTALS_PIT_US_COLUMNS,
-        _FUNDAMENTALS_PIT_US_STAGE_TYPES, "_fus_stage",
-    )
-    logger.info(f"Upserted {n:,} US fundamentals records")
     return n

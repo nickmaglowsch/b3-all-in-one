@@ -98,6 +98,10 @@ def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
     traded.
 
     Refuses an implausibly small snapshot rather than delisting the market.
+
+    Both writes are narrow on purpose: `upsert_instruments` touches only the
+    columns it is handed, so this job never restates the CIK the SEC ingest
+    owns or the listing interval the listing-status feed owns.
     """
     if len(snapshot) < MIN_PLAUSIBLE_SYMBOLS:
         raise ValueError(
@@ -129,8 +133,6 @@ def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
             "market": MARKET,
             "symbol": rows["symbol"],
             "currency": "USD",
-            "first_seen": rows["first_seen"],
-            "last_seen": rows["last_seen"],
             # The last day the plane can prove it traded, not today.
             "delisting_date": rows["last_seen"],
             "delist_reason": "absent from the consolidated symbol directory",

@@ -145,12 +145,18 @@ def _derived(slot: dict) -> tuple:
     return ebitda, net_debt
 
 
-def parse_companyfacts(doc: dict, ticker: str = None) -> pd.DataFrame:
+def parse_companyfacts(doc: dict, ticker=None) -> pd.DataFrame:
     """One company's facts -> `fundamentals_pit_us` rows.
 
     Returns an empty frame for a company with no usable periodic facts — a real
     state for a filer that has only ever filed an S-1, and not an error.
+
+    `ticker` is either a string or a callable from a filing date to the ticker
+    the market knew then. The callable form is what lets a company that renamed
+    itself produce two labelled columns that each line up with their own price
+    history, instead of one column under today's name that lines up with half.
     """
+    at = ticker if callable(ticker) else (lambda _filed: ticker)
     cik = str(doc.get("cik", "")).zfill(10)
     periods = _merge(_collect(doc, _DURATION_TAGS), _collect(doc, _INSTANT_TAGS))
 
@@ -165,7 +171,7 @@ def parse_companyfacts(doc: dict, ticker: str = None) -> pd.DataFrame:
         rows.append({
             "fact_id": f"{accn}:{end}",
             "cik": cik,
-            "ticker": ticker,
+            "ticker": at(filed),
             "period_end": end,
             "filing_date": filed,
             "accn": accn,

@@ -150,12 +150,11 @@ def main() -> None:
         returns_matrix=universe.fill_returns(ret_matrix, shared["delist_ret"]),
         target_weights=tw,
         initial_capital=initial_capital,
-        # Defaults from the market, not a literal: a crypto book scored with the
-        # R$20k isenção of ações is scored under taxes its holder does not pay.
-        tax_rate=float(params.get("tax_rate", markets.get(market).tax_rate)),
+        # Rate, isenção, apuração period and carry policy all come from the
+        # market's rule, not from a literal: a crypto book scored with the R$20k
+        # isenção of ações is scored under taxes its holder does not pay.
+        **markets.resolve_tax(market, params),
         slippage=float(params.get("slippage", 0.001)),
-        monthly_sales_exemption=float(params.get(
-            "monthly_sales_exemption", markets.get(market).monthly_sales_exemption)),
         contribution=contribution,
         name=name,
     )
@@ -205,6 +204,10 @@ def main() -> None:
         # holder, and not comparable to a native-currency Sharpe. Stated in the
         # payload so a reader comparing two runs can see which is which.
         "currency": "BRL",
+        # The gaps, reported as loudly as the results. A US window that opens
+        # before the price archive did used to return a number that looked
+        # exactly as clean as one that did not.
+        "data_warnings": shared.get("data_warnings", []),
         "periods": int(len(idx)),
         "initial_capital": initial_capital,
         "final_pretax_nav": float(result["pretax_values"].iloc[-1]),

@@ -308,7 +308,7 @@ def test_an_empty_plane_bootstraps_from_the_bulk_archive(tmp_path, monkeypatch):
     db_path = str(tmp_path / "us.sqlite")
     called = {}
 
-    def fake_ensure(path):
+    def fake_ensure(path, fetch):
         called["path"] = str(path)
         return "bulk.zip"
 
@@ -336,7 +336,7 @@ def test_a_populated_plane_stays_incremental(tmp_path, monkeypatch):
     conn.commit()
     conn.close()
 
-    def boom(path):
+    def boom(path, fetch):
         raise AssertionError("must not fetch the bulk archive")
 
     monkeypatch.setattr(us_main, "_ensure_bulk", boom)
@@ -363,8 +363,7 @@ def test_a_downloaded_archive_is_reused_not_refetched(tmp_path, monkeypatch):
     def boom(dest):
         raise AssertionError("must not re-download an archive already on disk")
 
-    monkeypatch.setattr(us_main.sec, "download_bulk_facts", boom)
-    assert us_main._ensure_bulk(archive) == str(archive)
+    assert us_main._ensure_bulk(archive, boom) == str(archive)
 
 
 def test_a_corrupt_archive_is_replaced(tmp_path, monkeypatch):
@@ -374,5 +373,4 @@ def test_a_corrupt_archive_is_replaced(tmp_path, monkeypatch):
 
     archive = tmp_path / "sec_companyfacts.zip"
     archive.write_text("<html>rate limited</html>")
-    monkeypatch.setattr(us_main.sec, "download_bulk_facts", lambda dest: dest)
-    assert us_main._ensure_bulk(archive) == str(archive)
+    assert us_main._ensure_bulk(archive, lambda dest: dest) == str(archive)

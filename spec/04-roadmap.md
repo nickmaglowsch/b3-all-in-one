@@ -16,42 +16,60 @@ Still open, in order:
 5. Asset-class tax model — per-class rates and carry buckets, plus the ações isenção applied
    per **calendar month**. This also fixes a known inaccuracy in the bench itself: today the
    isenção is applied per rebalance row and FII uses a single flat rate.
-   Partly shipped: `taxcore/scripts/apuracao.py` now holds a per-class `Regra`
-   table covering CRIPTO (ganho de capital, progressive, R$35k, no carry) and
-   EXTERIOR (Lei 14.754/2023, annual, netted within the year), and the bench takes
-   its rate and isenção from the market. Still open here: the per-calendar-month
-   isenção, and two approximations the bench makes — it compensates crypto losses,
-   which ganho de capital does not, and it settles exterior at each rebalance
-   rather than once in the ajuste.
+   Shipped. `backtests/core/tax.py` holds `Rule` + `Ledger`: the apuração period
+   is the unit, so the isenção is measured on a calendar month's gross sales
+   rather than one rebalance row's, exterior accrues across the year and settles
+   once, and cripto compensates nothing. Two bugs fell out of the same change —
+   an isento *loss* used to be dropped instead of feeding the carry, and
+   `strategy_base` shipped a `monthly_sales_exemption` parameter whose 20_000
+   default beat the market's own rule. Consequence to know about: every stored
+   B3 backtest's after-tax curve moves, because the timing and the isenção were
+   both wrong before.
 
-### US prices — the one open decision
+### US prices — decided, and what is still thin
 
-The US plane has its fundamentals (SEC XBRL, point-in-time, survivorship-free,
-public domain) and its security master (the consolidated symbol directory,
-captured daily). It has no prices, and that is a decision rather than a missing
-module: deep US history *including the delisted* is the part that is not free.
+Decided: **Alpha Vantage**, free tier first, the same code on a paid key. Two
+things that were believed impossible turned out not to be.
 
-Three paths, in the order they cost:
+The 403s the previous pass hit were the build environment's egress allowlist, at
+the CONNECT tunnel — `sec.gov`, `alphavantage.co`, `polygon.io`, `stooq.com` and
+`nasdaqtrader.com` alike, while `github.com` and `pypi.org` answered. A fact
+about that sandbox, not about the internet, and not about the SEC's User-Agent
+rule (`sec_downloader` has always sent one).
 
-1. **Forward-only, free.** Capture EOD from a free feed into `market_prices`
-   daily. Survivorship-free from the day the capture starts, exactly as the
-   symbol directory is, and thin behind it. Needs a feed chosen and its format
-   verified — no free source was reachable from the environment this was built
-   in, so nothing was written against an unverified shape.
-2. **Sharadar** (~US$100–150/mo, Nasdaq Data Link). SEP + TICKERS + ACTIONS:
-   ~21k active and delisted tickers back to 1998, point-in-time ready. The
-   closest fit to what the B3 plane already is.
-3. **Polygon.io flat files** (~US$199/mo). Grouped daily bars — every ticker that
-   traded that day — so survivorship-free by construction, the same shape as
-   COTAHIST. No fundamentals; pairs with the SEC ingest already built.
+And the historical universe is free. `LISTING_STATUS` returns every US stock and
+ETF ever listed, alive *or delisted*, with an IPO date and a delisting date, in
+two requests. The security master no longer has to be built forward only, which
+was the premise the whole "US history is not free" argument rested on.
 
-Whichever is chosen writes `market_prices` rows with `market='US'`; the loaders,
-the universe and the tax model already read them.
+What landed:
 
-Two gaps to state in the product either way, per the honest-gaps commitment:
-US `adj_close` is split-adjusted only until a dividend source is bought, so
-total-return comparisons are understated; and crypto delisting means *delisted
-from Binance spot*, not that the token stopped trading anywhere.
+- `us_listing` — the listing record backwards; `symbol_directory` still owns the
+  observed bounds and this owns the claimed intervals, and neither restates the
+  other;
+- `us_prices` — daily bars under a durable request budget, with a per-symbol
+  cursor so a free tier's 25 requests a day add up instead of restarting;
+- `us_adjust` + `us_corporate_actions` — splits and dividends fetched, stored
+  and applied, because the free daily series is unadjusted and `adj_close =
+  close` would fabricate a −75% day across Apple's 2020 split;
+- `spx_series` — `$SPX` as SPY's BRL total return, labelled a proxy;
+- `ticker_pit` — CIK↔ticker with validity, so the dead filers' fundamentals join
+  their prices.
+
+Three things stay thin, and all three are reported rather than assumed —
+`GET /market/status` per market, and `metrics.json.data_warnings` per run:
+
+1. **Price depth.** The free tier is 25 requests a day against ~11k symbols.
+   The plane is correct from the first day and *shallow* for a long time; a
+   window that opens before the archive says so in its own result. A paid key is
+   two environment variables.
+2. **Whether the vendor serves delisted symbols' history.** If it does not, the
+   universe is survivorship-free and the *prices* are not, which is a materially
+   different claim and the one place Sharadar's argument survives. Measured on
+   the first real run, not assumed here.
+3. **`adj_close` is per-symbol honest.** `total_return` where both actions
+   endpoints answered, `split_only` or `unadjusted` where they did not, counted
+   and reported. Crypto delisting still means *delisted from Binance spot*.
 
 ### Postgres gaps
 - **Connection pooling.** `storage.get_connection` opens a fresh `psycopg` connection per

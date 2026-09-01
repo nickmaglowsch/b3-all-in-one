@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from backtests.core import markets
+
 from b3_pipeline import market_storage, storage
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,13 +92,31 @@ def test_it_writes_the_artifacts_the_platform_reads_back(crypto_plane, tmp_path)
     assert (tmp_path / "curves.csv").exists()
 
 
-def test_the_crypto_isencao_is_the_one_that_applies(crypto_plane, tmp_path):
-    """R$35k of monthly alienações, not the R$20k of ações. Overriding it to a
-    token amount has to change the tax, which proves the value reaching the
-    simulator is a parameter and not a constant baked into it."""
+def test_a_stored_exemption_cannot_override_the_market_rule(crypto_plane, tmp_path):
+    """The isenção is the asset class's rule, not a strategy knob.
+
+    It used to be both. `strategy_base` shipped a COMMON_MONTHLY_SALES_EXEMPTION
+    whose default was a hard-coded R$20.000, so any spec that exposed it wrote
+    that literal into `params` — where `params.get(...)` beat the market's own
+    value and charged a crypto book the isenção of ações. Passing it now changes
+    nothing, which is the whole point.
+    """
     default = _run(crypto_plane, "CRYPTO", tmp_path)
-    taxed = _run(crypto_plane, "CRYPTO", tmp_path, monthly_sales_exemption=0.0)
-    assert taxed["total_tax_paid"] > default["total_tax_paid"]
+    override = _run(crypto_plane, "CRYPTO", tmp_path, monthly_sales_exemption=0.0)
+    assert override["total_tax_paid"] == default["total_tax_paid"]
+    assert markets.resolve_tax(
+        "CRYPTO", {"monthly_sales_exemption": 20_000.0}
+    )["monthly_sales_exemption"] == 35_000.0
+
+
+def test_a_losing_crypto_book_carries_no_loss_forward(crypto_plane, tmp_path):
+    """Ganho de capital compensates nothing: a crypto loss is simply lost.
+
+    The simulator used to keep one unbounded carryforward for every market, so a
+    losing crypto book was scored more kindly than the Receita would score it.
+    """
+    out = _run(crypto_plane, "CRYPTO", tmp_path)
+    assert out["final_loss_carryforward"] == 0.0
 
 
 def test_an_unknown_market_fails_loudly(crypto_plane, tmp_path):

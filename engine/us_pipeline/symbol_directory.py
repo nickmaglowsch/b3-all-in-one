@@ -26,7 +26,6 @@ import io
 import logging
 
 import pandas as pd
-
 from b3_pipeline import market_storage, storage
 
 logger = logging.getLogger(__name__)
@@ -72,9 +71,19 @@ def parse_directory(text: str) -> pd.DataFrame:
 
 
 def fetch_directory() -> pd.DataFrame:
+    """Today's consolidated directory.
+
+    Declares itself, like the SEC client does. Nasdaq does not publish a rule
+    the way the SEC does, but a bare client is what gets blocked first and an
+    unidentified scraper is not what this project wants to be — the same
+    reasoning that gave `sec_downloader` a User-Agent that resolves.
+    """
     import requests
 
-    r = requests.get(DIRECTORY_URL, timeout=60)
+    from .sec_downloader import user_agent
+
+    r = requests.get(DIRECTORY_URL, timeout=60,
+                     headers={"User-Agent": user_agent()})
     r.raise_for_status()
     return parse_directory(r.text)
 
@@ -98,6 +107,10 @@ def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
     traded.
 
     Refuses an implausibly small snapshot rather than delisting the market.
+
+    Both writes are narrow on purpose: `upsert_instruments` touches only the
+    columns it is handed, so this job never restates the CIK the SEC ingest
+    owns or the listing interval the listing-status feed owns.
     """
     if len(snapshot) < MIN_PLAUSIBLE_SYMBOLS:
         raise ValueError(
@@ -129,8 +142,6 @@ def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
             "market": MARKET,
             "symbol": rows["symbol"],
             "currency": "USD",
-            "first_seen": rows["first_seen"],
-            "last_seen": rows["last_seen"],
             # The last day the plane can prove it traded, not today.
             "delisting_date": rows["last_seen"],
             "delist_reason": "absent from the consolidated symbol directory",

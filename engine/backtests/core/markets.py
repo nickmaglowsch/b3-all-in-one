@@ -57,7 +57,15 @@ class MarketSpec:
     # score a strategy under taxes the IRPF report would not charge, which is the
     # one thing this product's positioning cannot afford.
     tax_rate: float
-    monthly_sales_exemption: float
+    # None means the class has no isenção; zero would be a different rule, and
+    # `apuracao.Regra.isencao` makes the same distinction for the same reason.
+    monthly_sales_exemption: float | None
+    # "mensal" or "anual", and "forward" / "period" / "none" — taxcore's
+    # `Regra.periodo` and `Regra.carry`. Copied here alongside the rate because
+    # a rate on its own was never the whole rule: exterior settles once a year
+    # and cripto compensates no loss at all, and the bench used to do neither.
+    tax_period: str
+    loss_carry: str
 
 
 # Character-for-character the predicate the two B3 loaders and
@@ -76,8 +84,10 @@ MARKETS = {
         suffix_strip=".SA",
         glitch_up=1.0, glitch_down=-0.45, detect_splits=True, root_len=4,
         default_min_adtv=1_000_000.0, default_min_price=1.0, fundamentals=True,
-        # Ações: 15%, isento até R$20k de vendas no mês.
+        # Ações: 15%, isento até R$20k de vendas no mês-calendário, prejuízo
+        # compensável sem prazo.
         tax_rate=0.15, monthly_sales_exemption=20_000.0,
+        tax_period="mensal", loss_carry="forward",
     ),
     "US": MarketSpec(
         key="US", currency="USD", table="market_prices", symbol_column="symbol",
@@ -87,16 +97,12 @@ MARKETS = {
         # In BRL, like every threshold on this plane. ~US$200k/day of turnover
         # and a US$1 price — the usual penny-stock floor — at a ~5.5 rate.
         default_min_adtv=1_000_000.0, default_min_price=5.0, fundamentals=True,
-        # Aplicações financeiras no exterior, Lei 14.754/2023: 15% flat and no
-        # monthly isenção — there is no monthly DARF at all.
-        #
-        # The rate is right; the *timing* is an approximation. The law nets the
-        # whole year and settles once in the ajuste, while the simulator settles
-        # at each rebalance. Its loss carryforward approximates the netting, so
-        # the yearly total is close, but a run that pays tax in March and recovers
-        # the loss in November is charged earlier than the holder would be. That
-        # is roadmap item 5 (asset-class tax model), and it belongs there.
-        tax_rate=0.15, monthly_sales_exemption=0.0,
+        # Aplicações financeiras no exterior, Lei 14.754/2023: 15% flat, no
+        # monthly isenção — there is no monthly DARF at all — and an apuração
+        # that nets the whole calendar year and settles once, in the ajuste.
+        # The excess loss does not become a carry, which is what "period" means.
+        tax_rate=0.15, monthly_sales_exemption=None,
+        tax_period="anual", loss_carry="period",
     ),
     "CRYPTO": MarketSpec(
         key="CRYPTO", currency="USDT", table="market_prices",
@@ -115,10 +121,12 @@ MARKETS = {
         # understates the tax only above that. The progressive table itself lives
         # in taxcore (gcap_aliquota); the simulator takes one rate.
         #
-        # It also has no loss compensation, which the simulator's carryforward
-        # does model — so a losing crypto book is scored slightly kinder here than
-        # the Receita would. Both gaps are roadmap item 5.
+        # And no loss compensation whatsoever: a crypto loss is simply lost. That
+        # is the single most surprising rule in the table, and the bench used to
+        # give the carry away for free — scoring a losing crypto book more kindly
+        # than the Receita would.
         tax_rate=0.15, monthly_sales_exemption=35_000.0,
+        tax_period="mensal", loss_carry="none",
         # No filings, no fundamentals. validate_spec rejects a crypto spec that
         # asks for them rather than handing it silently empty frames.
         fundamentals=False,
@@ -140,3 +148,24 @@ def get(key: str | None) -> MarketSpec:
 
 def keys() -> list:
     return sorted(MARKETS)
+
+
+def resolve_tax(key: str | None, params: dict | None = None) -> dict:
+    """The tax kwargs `run_simulation` needs, taken from the law.
+
+    The rate stays overridable — asking "what would this book look like at 20%"
+    is a legitimate what-if. The isenção, the apuração period and the carry
+    policy are not knobs: they are the class's rule, and a strategy that carried
+    its own copy of one was a strategy that could quietly score a crypto or US
+    book under the isenção of ações. That is exactly what happened — a spec
+    declaring `monthly_sales_exemption` put a literal 20000 into `params`, which
+    then won over the market's own value.
+    """
+    spec = get(key)
+    params = params or {}
+    return {
+        "tax_rate": float(params.get("tax_rate", spec.tax_rate)),
+        "monthly_sales_exemption": spec.monthly_sales_exemption,
+        "tax_period": spec.tax_period,
+        "loss_carry": spec.loss_carry,
+    }

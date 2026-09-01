@@ -43,7 +43,7 @@ async def _tables(pool) -> dict:
     for name, datecol in _TABLES:
         try:
             row = await pool.fetchrow(
-                f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}")  # noqa: S608
+                f"SELECT count(*) AS rows, max({datecol}) AS fresh FROM {name}")
         except Exception:                               # noqa: BLE001
             # A plane created by an older engine has not got the table yet. That
             # is "not present", not an outage, and it must not take the whole
@@ -59,7 +59,10 @@ async def _markets(pool) -> dict:
     B3 prices live in `prices`, not `market_prices`, so its price window is read
     from there; every other market reads its own rows. Both halves are LEFT-ish:
     a market with instruments but no prices yet is a real state during a first
-    backfill, and it should show as such rather than vanish.
+    backfill, and it should show as such rather than vanish — and so is the
+    reverse, which this used to get wrong by iterating the instruments rows and
+    only looking prices up. A market with bars and an empty security master
+    disappeared from the response entirely.
     """
     try:
         rows = await pool.fetch(
@@ -71,28 +74,63 @@ async def _markets(pool) -> dict:
             "SELECT market, count(*) AS rows, min(date) AS min_date,"
             " max(date) AS max_date, count(*) FILTER (WHERE close_brl IS NULL)"
             " AS unconverted FROM market_prices GROUP BY market")
+        adjust = await _adjust_states(pool)
     except Exception:                                   # noqa: BLE001
         return {}
 
-    by_market = {r["market"]: r for r in priced}
+    by_instruments = {r["market"]: r for r in rows}
+    by_price = {r["market"]: r for r in priced}
     out = {}
-    for r in rows:
-        px = by_market.get(r["market"])
-        out[r["market"]] = {
-            "instruments": r["instruments"],
-            # The survivorship number. Zero here after a real backfill means the
-            # plane is dropping its dead somewhere upstream.
-            "delisted": r["delisted"],
-            "first_seen": _iso(r["first_seen"]),
-            "last_seen": _iso(r["last_seen"]),
-            "price_rows": px["rows"] if px else 0,
-            "min_date": _iso(px["min_date"]) if px else None,
-            "max_date": _iso(px["max_date"]) if px else None,
-            # Bars the plane could not convert to BRL — no PTAX for the date, or
-            # a quote asset with no route to the real. Reported, not hidden.
-            "unconverted_brl": px["unconverted"] if px else 0,
-        }
+    for name in sorted(set(by_instruments) | set(by_price)):
+        out[name] = _plane(name, by_instruments.get(name), by_price.get(name),
+                           adjust)
     return out
+
+
+def _plane(name, r, px, adjust: dict) -> dict:
+    """One market's block. Either half may be missing and both are real states."""
+    block = {
+        "instruments": r["instruments"] if r else 0,
+        # The survivorship number. Zero here after a real backfill means the
+        # plane is dropping its dead somewhere upstream.
+        "delisted": r["delisted"] if r else 0,
+        "first_seen": _iso(r["first_seen"]) if r else None,
+        "last_seen": _iso(r["last_seen"]) if r else None,
+        "price_rows": px["rows"] if px else 0,
+        "min_date": _iso(px["min_date"]) if px else None,
+        "max_date": _iso(px["max_date"]) if px else None,
+        # Bars the plane could not convert to BRL — no PTAX for the date, or
+        # a quote asset with no route to the real. Reported, not hidden.
+        "unconverted_brl": px["unconverted"] if px else 0,
+        # Where a survivorship-free backtest can honestly start. Before this
+        # date the plane has listing intervals but no bars.
+        "price_coverage_start": _iso(px["min_date"]) if px else None,
+    }
+    if name == "US":
+        # What `adj_close` on this plane actually is, per symbol. The free daily
+        # series is unadjusted, so a total-return comparison is only supported
+        # where the corporate-actions endpoints answered — and a product that
+        # did not say so would be claiming a number it does not have.
+        block["adj_close"] = adjust
+        block["benchmark"] = {"ticker": "$SPX", "proxy": "SPY",
+                              "note": "ETF proxy, BRL, total return"}
+    return block
+
+
+async def _adjust_states(pool) -> dict:
+    """How many US symbols carry each adjustment state.
+
+    Its own query and its own failure: `us_price_cursor` arrives with the price
+    ingest, and a plane that predates it should report the rest of the block
+    rather than nothing.
+    """
+    try:
+        rows = await pool.fetch(
+            "SELECT adjust_state, count(*) AS n FROM us_price_cursor"
+            " WHERE adjust_state IS NOT NULL GROUP BY adjust_state")
+    except Exception:                                   # noqa: BLE001
+        return {}
+    return {r["adjust_state"]: r["n"] for r in rows}
 
 
 async def status(pool) -> dict:

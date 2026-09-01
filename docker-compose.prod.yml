@@ -83,6 +83,11 @@ services:
       # naming this project, so the scheduled job runs unconfigured; set this to
       # a contact of your own when running against your own domain.
       SEC_USER_AGENT: ${SEC_USER_AGENT:-}
+      # Alpha Vantage keys the US price, listing and benchmark ingests. Kept out
+      # of the committed env_file like the Stripe secrets; compose interpolates.
+      ALPHAVANTAGE_API_KEY: ${ALPHAVANTAGE_API_KEY:-}
+      ALPHAVANTAGE_RATE_PER_MIN: ${ALPHAVANTAGE_RATE_PER_MIN:-}
+      ALPHAVANTAGE_DAILY_BUDGET: ${ALPHAVANTAGE_DAILY_BUDGET:-}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
     volumes:

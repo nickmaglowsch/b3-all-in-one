@@ -69,6 +69,89 @@ INDEX_FUNDAMENTALS_PIT_US_FILING_DATE = (
 )
 
 
+# Where the per-symbol price backfill has got to.
+#
+# The US plane buys its bars one symbol at a time from a metered API. On the
+# free tier that is 25 requests a day against ~11k symbols, so a run is always a
+# slice of the job and the only thing that makes the slices add up is writing
+# down where each one stopped — inside the loop, before the next request, so a
+# run killed at request 12 of 25 resumes at 13 tomorrow instead of at 1.
+#
+# `adjust_state` is not a plan, it is a receipt. The free daily series is
+# unadjusted, so `adj_close` is only a total-return number where the corporate
+# actions endpoints actually answered. 'total_return' means both did,
+# 'split_only' means the dividend half refused, 'unadjusted' means neither
+# answered and adj_close is the raw close — a fact the product has to say out
+# loud rather than let a backtest imply.
+SCHEMA_US_PRICE_CURSOR = """
+CREATE TABLE IF NOT EXISTS us_price_cursor (
+    symbol TEXT NOT NULL PRIMARY KEY,
+    first_bar DATE,
+    last_bar DATE,
+    prices_fetched_at TIMESTAMP,
+    actions_fetched_at TIMESTAMP,
+    adjust_state TEXT,
+    status TEXT,
+    error TEXT,
+    attempts INTEGER DEFAULT 0
+);
+"""
+
+INDEX_US_PRICE_CURSOR_STATUS = (
+    "CREATE INDEX IF NOT EXISTS idx_us_price_cursor_status"
+    " ON us_price_cursor(status);"
+)
+
+
+# Requests spent against a metered API, per day.
+#
+# Kept in the database rather than in the client because an in-memory counter
+# double-spends: the nightly job and someone running the ingest by hand on the
+# same day would each believe they had the whole budget. At 25 requests a day
+# that is the difference between progress and none.
+SCHEMA_API_CALL_BUDGET = """
+CREATE TABLE IF NOT EXISTS api_call_budget (
+    source TEXT NOT NULL,
+    day DATE NOT NULL,
+    spent INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (source, day)
+);
+"""
+
+
+# Which ticker a CIK traded under, and when.
+#
+# `company_tickers.json` is a snapshot of who trades today, so a company that
+# stopped filing in 2009 has no ticker in it at all and its facts land under
+# `CIK0000806085` — reachable by nobody, joinable to no price series. This table
+# is the CVM side's `company_tickers_pit` for the US: an interval per (cik,
+# ticker), filled backward from the bulk submissions archive and forward from
+# the daily snapshot.
+#
+# NULL `start_date` means "as far back as the source reaches", NULL `end_date`
+# means "still current". `source` records which feed made the claim, because the
+# backward one is coarse (bounded by filing history, not by trading) and a
+# reader deserves to know which kind it is holding.
+SCHEMA_US_TICKER_PIT = """
+CREATE TABLE IF NOT EXISTS us_ticker_pit (
+    cik TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    start_date DATE,
+    end_date DATE,
+    exchange TEXT,
+    source TEXT NOT NULL,
+    PRIMARY KEY (cik, ticker)
+);
+"""
+
+INDEX_US_TICKER_PIT_CIK = (
+    "CREATE INDEX IF NOT EXISTS idx_us_ticker_pit_cik ON us_ticker_pit(cik);"
+)
+INDEX_US_TICKER_PIT_TICKER = (
+    "CREATE INDEX IF NOT EXISTS idx_us_ticker_pit_ticker ON us_ticker_pit(ticker);"
+)
+
+
 FUNDAMENTALS_PIT_US_COLUMNS = [
     "fact_id", "cik", "ticker", "period_end", "filing_date", "accn", "form",
     "fiscal_year", "fiscal_period", "revenue", "net_income", "ebitda",
@@ -119,4 +202,137 @@ DDL = [
     INDEX_FUNDAMENTALS_PIT_US_CIK,
     INDEX_FUNDAMENTALS_PIT_US_TICKER,
     INDEX_FUNDAMENTALS_PIT_US_FILING_DATE,
+    SCHEMA_US_PRICE_CURSOR,
+    INDEX_US_PRICE_CURSOR_STATUS,
+    SCHEMA_API_CALL_BUDGET,
+    SCHEMA_US_TICKER_PIT,
+    INDEX_US_TICKER_PIT_CIK,
+    INDEX_US_TICKER_PIT_TICKER,
 ]
+
+
+# ── The metered-API budget ────────────────────────────────────────────────────
+
+def calls_spent(conn, source: str, day) -> int:
+    """Requests already charged to `source` today."""
+    from . import storage
+
+    df = storage.read_sql(
+        "SELECT spent FROM api_call_budget WHERE source = ? AND day = ?",
+        conn, params=(source, str(day)))
+    return int(df.iloc[0]["spent"]) if not df.empty else 0
+
+
+def charge_call(conn, source: str, day) -> int:
+    """Charge one request and return the new total.
+
+    Charged before the request goes out, not after. An attempt that times out
+    still consumed the vendor's allowance as far as anyone here can tell, and a
+    budget that undercounts is one that gets the key throttled — the failure
+    mode a counter exists to prevent.
+    """
+    from . import storage
+
+    storage.execute(
+        conn,
+        "INSERT INTO api_call_budget (source, day, spent) VALUES (?, ?, 1)"
+        " ON CONFLICT(source, day) DO UPDATE SET spent = api_call_budget.spent + 1",
+        (source, str(day)))
+    conn.commit()
+    return calls_spent(conn, source, day)
+
+
+# ── The per-symbol price cursor ───────────────────────────────────────────────
+
+CURSOR_COLUMNS = [
+    "symbol", "first_bar", "last_bar", "prices_fetched_at", "actions_fetched_at",
+    "adjust_state", "status", "error", "attempts",
+]
+
+_CURSOR_STAGE_TYPES = (
+    "symbol TEXT, first_bar DATE, last_bar DATE, prices_fetched_at TIMESTAMP,"
+    " actions_fetched_at TIMESTAMP, adjust_state TEXT, status TEXT, error TEXT,"
+    " attempts BIGINT"
+)
+
+
+def upsert_price_cursor(conn, df: pd.DataFrame) -> int:
+    """Record where the backfill got to, one symbol at a time.
+
+    Narrow like `upsert_instruments`, and for the same reason: a run that only
+    refreshed corporate actions must not blank the bar range a previous run
+    established.
+    """
+    if df.empty:
+        return 0
+    supplied = [c for c in CURSOR_COLUMNS if c in df.columns]
+    df = df.copy()
+    for col in CURSOR_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    for col in ("first_bar", "last_bar"):
+        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+    return _upsert_frame(
+        conn, "us_price_cursor", df, ["symbol"], CURSOR_COLUMNS,
+        _CURSOR_STAGE_TYPES, "_uspc_stage", update_cols=supplied)
+
+
+def load_price_cursor(conn) -> pd.DataFrame:
+    """The whole cursor table. Small — one row per US symbol."""
+    from . import storage
+
+    return storage.read_sql("SELECT * FROM us_price_cursor", conn)
+
+
+def adjust_state_counts(conn) -> dict:
+    """How many symbols carry each adjustment state.
+
+    This is what `GET /market/status` reports and what the backtest warns on: a
+    plane where most symbols are 'unadjusted' cannot support a total-return
+    comparison, and saying so is cheaper than being wrong quietly.
+    """
+    from . import storage
+
+    df = storage.read_sql(
+        "SELECT adjust_state, COUNT(*) AS n FROM us_price_cursor"
+        " WHERE adjust_state IS NOT NULL GROUP BY adjust_state", conn)
+    return {r["adjust_state"]: int(r["n"]) for _, r in df.iterrows()}
+
+
+# ── CIK -> ticker, with validity ──────────────────────────────────────────────
+
+TICKER_PIT_COLUMNS = ["cik", "ticker", "start_date", "end_date", "exchange", "source"]
+
+_TICKER_PIT_STAGE_TYPES = (
+    "cik TEXT, ticker TEXT, start_date DATE, end_date DATE, exchange TEXT,"
+    " source TEXT"
+)
+
+
+def upsert_ticker_pit(conn, df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    supplied = [c for c in TICKER_PIT_COLUMNS if c in df.columns]
+    df = df.copy()
+    for col in TICKER_PIT_COLUMNS:
+        if col not in df.columns:
+            df[col] = None
+    for col in ("start_date", "end_date"):
+        df[col] = pd.to_datetime(df[col], errors="coerce").dt.strftime("%Y-%m-%d")
+    df = df.dropna(subset=["cik", "ticker", "source"])
+    n = _upsert_frame(
+        conn, "us_ticker_pit", df, ["cik", "ticker"], TICKER_PIT_COLUMNS,
+        _TICKER_PIT_STAGE_TYPES, "_utp_stage", update_cols=supplied)
+    logger.info(f"Upserted {n:,} CIK->ticker intervals")
+    return n
+
+
+def load_ticker_pit(conn, cik: str | None = None) -> pd.DataFrame:
+    from . import storage
+
+    if cik is None:
+        return storage.read_sql(
+            "SELECT * FROM us_ticker_pit ORDER BY cik, start_date", conn)
+    return storage.read_sql(
+        "SELECT * FROM us_ticker_pit WHERE cik = ? ORDER BY start_date",
+        conn, params=(cik,))

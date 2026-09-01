@@ -100,7 +100,11 @@ services:
       ENGINE_DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-devpassword}@postgres:5432/b3
       WORKER_QUEUES: ingest
       # Deliberately NOT ENGINE_BENCH_OFFLINE: this is the one service whose whole
-      # job is to reach B3 and CVM.
+      # job is to reach B3, CVM, Binance and the SEC.
+      # EDGAR requires a declaring User-Agent. The client defaults to one naming
+      # this project, so the job runs unconfigured; set this to a contact of your
+      # own when running against your own domain.
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
     volumes:

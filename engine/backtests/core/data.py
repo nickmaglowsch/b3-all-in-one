@@ -13,6 +13,8 @@ import pandas as pd
 
 from b3_pipeline import storage
 
+from backtests.core import markets, universe
+
 
 def _safe_dsn(dsn) -> str:
     """A Postgres URL with the password masked, for anything that gets printed.
@@ -159,73 +161,6 @@ def sector_membership_asof(
     return wide.notna() & (wide > 0)
 
 
-def load_active_tickers(db_path: str, as_of_date: str) -> set:
-    """
-    Return the set of ticker roots that were active (not yet delisted)
-    as of as_of_date, according to cvm_companies.
-
-    A ticker root is active if:
-      - Its delisting_date IS NULL (still listed), OR
-      - Its delisting_date >= as_of_date
-
-    Returns a set of 4-character ticker roots (e.g. 'PETR', 'VALE').
-    Tickers not in cvm_companies are NOT returned here; the caller's
-    conservative filter handles those separately.
-
-    Graceful degradation: returns empty set if cvm_companies lacks
-    delisting_date column (un-migrated DB) — no exception is raised.
-    """
-    sql = """
-        SELECT DISTINCT ticker FROM cvm_companies
-        WHERE ticker IS NOT NULL
-          AND (delisting_date IS NULL OR delisting_date >= ?)
-    """
-    try:
-        with storage.get_connection(db_path) as conn:
-            df = storage.read_sql(sql, conn, params=[as_of_date])
-        return set(df["ticker"].dropna().tolist())
-    except Exception:
-        return set()
-
-
-def _get_all_known_roots(db_path: str) -> set:
-    """Return all ticker roots present in cvm_companies (with or without delisting_date)."""
-    sql = "SELECT DISTINCT ticker FROM cvm_companies WHERE ticker IS NOT NULL"
-    try:
-        with storage.get_connection(db_path) as conn:
-            df = storage.read_sql(sql, conn)
-        return set(df["ticker"].dropna().tolist())
-    except Exception:
-        return set()
-
-
-def _apply_delisted_filter(
-    db_path: str, start: str, *dataframes: pd.DataFrame
-) -> tuple:
-    """Apply the survivorship bias filter to a set of wide DataFrames.
-
-    Drops columns (tickers) where:
-    - The ticker's 4-char root is in cvm_companies (i.e., it's a known company), AND
-    - The root's delisting_date is before `start` (i.e., it delisted before the backtest start)
-
-    Tickers whose roots are NOT in cvm_companies at all are kept (conservative).
-    """
-    active_roots = load_active_tickers(db_path, start)
-    all_known_roots = _get_all_known_roots(db_path)
-
-    result = []
-    for df in dataframes:
-        if df is None or df.empty:
-            result.append(df)
-            continue
-        keep = [
-            t for t in df.columns
-            if t[:4] in active_roots or t[:4] not in all_known_roots
-        ]
-        result.append(df[keep])
-    return tuple(result)
-
-
 def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
     """One (date x ticker) reshape covering every value column.
 
@@ -249,17 +184,16 @@ def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
     return [wide[v] for v in values]
 
 
-def load_b3_data(
-    db_path: str, start: str, end: str, filter_delisted: bool = False
-) -> tuple:
+def load_b3_data(db_path: str, start: str, end: str) -> tuple:
     """
     Load data from the local B3 SQLite database.
     Filters for valid standard lot tickers (ending in 3, 4, 5, 6, 11).
     Calculates daily financial volume correctly.
 
-    Args:
-        filter_delisted: If True, drop tickers that were delisted before `start`.
-                         Default False — no change to existing behavior.
+    Prices are forward-filled only while each name was listed: see
+    `universe.ffill_until_delisting`. On a plane whose `instruments` table is not
+    yet backfilled every ticker counts as always-listed, so this is the plain
+    ffill it has always been.
 
     Returns:
         tuple: (adj_close, close_px, fin_vol)
@@ -297,14 +231,13 @@ def load_b3_data(
         df, ["adj_close", "close", "fin_volume"])
 
     # Forward fill prices to handle missing days, but leave volume as NaN/0
-    # to accurately calculate averages
-    adj_close = adj_close.ffill()
-    close_px = close_px.ffill()
-
-    if filter_delisted:
-        adj_close, close_px, fin_vol = _apply_delisted_filter(
-            db_path, start, adj_close, close_px, fin_vol
-        )
+    # to accurately calculate averages. The fill stops at each name's delisting;
+    # carried past it, it would invent a price for something that no longer
+    # trades and hand a book holding it a flat, riskless position forever.
+    tradable = universe.tradable_mask(
+        universe.load_listing_intervals(db_path), adj_close.index, adj_close.columns)
+    adj_close = universe.ffill_until_delisting(adj_close, tradable)
+    close_px = universe.ffill_until_delisting(close_px, tradable)
 
     print(f"✅  Loaded {adj_close.shape[1]} unique standard tickers.")
     return adj_close, close_px, fin_vol
@@ -326,17 +259,26 @@ import requests
 BENCHMARK_ALIASES = {"^BVSP": "$IBOV", "IBOV": "$IBOV"}
 
 
-def _plane_series(table: str, column: str, symbol: str,
-                  start: str, end: str) -> pd.Series:
+def _plane_series(table: str, column: str, symbol: str, start: str, end: str,
+                  market: str = None, symbol_column: str = "ticker") -> pd.Series:
     """One ticker's daily column out of the plane, as a date-indexed Series.
 
     Empty when the plane has no rows for it — never a fabricated flat line, which
     a chart would render as "the benchmark did not move".
+
+    `market_prices` keys on (market, symbol), so a non-B3 read scopes on both;
+    `prices` and `external_prices` key on ticker alone and pass market=None.
     """
-    query = (f"SELECT date, {column} FROM {table} "                  # noqa: S608
-             "WHERE ticker = ? AND date >= ? AND date <= ? ORDER BY date")
+    col = "adj_close_brl" if (market and column == "adj_close") else column
+    scope = " AND market = :market" if market else ""
+    query = (f"SELECT date, {col} AS {column} FROM {table} "         # noqa: S608
+             f"WHERE {symbol_column} = :symbol AND date >= :start"
+             f" AND date <= :end{scope} ORDER BY date")
+    params = {"symbol": symbol, "start": start, "end": end}
+    if market:
+        params["market"] = market
     with storage.get_connection() as conn:
-        df = storage.read_sql(query, conn, params=[symbol, start, end])
+        df = storage.read_sql(query, conn, params=params)
 
     if df.empty:
         return pd.Series(dtype=float, index=pd.DatetimeIndex([]), name=symbol)
@@ -346,19 +288,31 @@ def _plane_series(table: str, column: str, symbol: str,
     return out[out.notna()]
 
 
-def download_benchmark(ticker: str, start: str, end: str) -> pd.Series:
-    """Daily total-return series for a benchmark, from B3's own price plane.
+def download_benchmark(ticker: str, start: str, end: str, *,
+                      market: str = markets.DEFAULT) -> pd.Series:
+    """Daily total-return series for a benchmark, from the market's own plane.
 
     `adj_close`, not `close`, for the traded sleeves: the callers compare a
     strategy's total return against it, and that is what Yahoo's
     `auto_adjust=True` used to hand back. A stored index has no corporate
     actions to adjust for and only carries `close`.
+
+    `market` is keyword-only with a default on purpose. The offline bench stub in
+    run_backtest_json monkeypatches this function positionally, and advise_weights
+    imports it by name — a positional third argument would break every
+    ENGINE_BENCH_OFFLINE run at once.
     """
+    spec = markets.get(market)
     symbol = ticker.strip().upper()
-    symbol = BENCHMARK_ALIASES.get(symbol, symbol.removesuffix(".SA"))
+    symbol = spec.aliases.get(
+        symbol, symbol.removesuffix(spec.suffix_strip) if spec.suffix_strip else symbol)
     if symbol.startswith("$"):
+        # The `$` namespace is global by shape — $CDI, $IPCA, $USDBRL and the
+        # stored indices belong to no single market, so they are not scoped.
         return download_index_level(symbol, start, end)
-    return _plane_series("prices", "adj_close", symbol, start, end)
+    return _plane_series(spec.table, "adj_close", symbol, start, end,
+                         market=None if spec.table == "prices" else spec.key,
+                         symbol_column=spec.symbol_column)
 
 
 def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
@@ -372,40 +326,51 @@ def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
                          ticker.strip().upper(), start, end)
 
 
-def load_b3_hlc_data(
-    db_path: str, start: str, end: str, filter_delisted: bool = False
-) -> tuple:
+# What to SELECT per market, aliased to the B3 column names every downstream
+# reader already speaks. Two things happen in the non-B3 projection:
+#
+#   * BRL, not native. The simulation's numeraire is reais for every market (see
+#     markets.py), so the close, the range and the turnover are all converted
+#     here rather than in six callers. `fx_rate` is NULL where PTAX could not
+#     cover the date, which makes the whole row NULL — the honest outcome, and
+#     visible as `unconverted_brl` in GET /market/status. There is deliberately
+#     no COALESCE back to the native number: silently pricing a US book in
+#     dollars is worse than reporting it unpriced.
+#   * `high`/`low` stand in for `split_adj_high`/`split_adj_low`. Crypto spot
+#     has no splits at all, and the US feed's bars arrive already adjusted, so
+#     there is no second adjustment to keep separate.
+_B3_COLUMNS = ("split_adj_high, split_adj_low, split_adj_close, adj_close,"
+               " close, volume")
+_CONVERTED_COLUMNS = (
+    "high * fx_rate AS split_adj_high, low * fx_rate AS split_adj_low,"
+    " split_adj_close * fx_rate AS split_adj_close, adj_close_brl AS adj_close,"
+    " close_brl AS close, volume * fx_rate AS volume")
+
+
+def load_market_hlc_data(db_path: str, start: str, end: str,
+                         market: str = markets.DEFAULT) -> tuple:
+    """The six price frames for any market, in the historical B3 order.
+
+    `load_b3_hlc_data` is this with market="B3"; the B3 path is unchanged.
     """
-    Load split-adjusted HLC + adj_close + raw close + financial volume for ATR computation.
+    spec = markets.get(market)
+    print(f"⬇  Loading {spec.key} HLC data from {_safe_dsn(db_path)} "
+          f"({start} to {end})...")
 
-    Uses split_adj_* (split-only adjustment) for ATR to avoid false True Range
-    spikes from ex-dividend gaps. Returns adj_close separately for the returns
-    matrix (simulation needs dividend-adjusted returns).
-
-    Args:
-        filter_delisted: If True, drop tickers that were delisted before `start`.
-                         Default False — no change to existing behavior.
-
-    Returns:
-        tuple: (adj_close, split_adj_high, split_adj_low, split_adj_close, close_px, fin_vol)
-        All as wide DataFrames with shape (date, ticker)
-    """
-    print(f"⬇  Loading B3 HLC data from {_safe_dsn(db_path)} ({start} to {end})...")
-
-    query = """
-        SELECT date, ticker, split_adj_high, split_adj_low, split_adj_close,
-               adj_close, close, volume
-        FROM prices
-        WHERE date >= ? AND date <= ?
-        AND (
-            (LENGTH(ticker) = 5 AND SUBSTR(ticker, 5, 1) IN ('3', '4', '5', '6'))
-            OR
-            (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11')
-        )
-    """
+    b3 = spec.table == "prices"
+    shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
+    scope = "" if b3 else " AND market = :market"
+    query = (
+        f"SELECT date, {spec.symbol_column} AS ticker,"                          # noqa: S608
+        f" {_B3_COLUMNS if b3 else _CONVERTED_COLUMNS}"
+        f" FROM {spec.table} WHERE date >= :start AND date <= :end{scope}{shape}"
+    )
+    params = {"start": start, "end": end}
+    if not b3:
+        params["market"] = spec.key
 
     with storage.get_connection(db_path) as conn:
-        df = storage.read_sql(query, conn, params=[start, end])
+        df = storage.read_sql(query, conn, params=params)
 
     df["date"] = pd.to_datetime(df["date"])
     # DB `volume` is already in reais (parser handles VOLTOT's implied decimals)
@@ -418,21 +383,27 @@ def load_b3_hlc_data(
              "split_adj_close", "close", "fin_volume"],
     )
 
-    # Forward fill prices to handle missing days, leave volume as-is
-    adj_close = adj_close.ffill()
-    split_high = split_high.ffill()
-    split_low = split_low.ffill()
-    split_close = split_close.ffill()
-    close_px = close_px.ffill()
+    # Forward fill prices to handle missing days, leave volume as-is. Stops at
+    # each name's delisting — see load_b3_data.
+    tradable = universe.tradable_mask(
+        universe.load_listing_intervals(db_path, spec.key),
+        adj_close.index, adj_close.columns)
+    adj_close, split_high, split_low, split_close, close_px = (
+        universe.ffill_until_delisting(f, tradable)
+        for f in (adj_close, split_high, split_low, split_close, close_px))
 
-    if filter_delisted:
-        adj_close, split_high, split_low, split_close, close_px, fin_vol = _apply_delisted_filter(
-            db_path, start,
-            adj_close, split_high, split_low, split_close, close_px, fin_vol
-        )
-
-    print(f"✅  Loaded HLC for {adj_close.shape[1]} unique standard tickers.")
+    print(f"✅  Loaded HLC for {adj_close.shape[1]} unique {spec.key} tickers.")
     return adj_close, split_high, split_low, split_close, close_px, fin_vol
+
+
+def load_b3_hlc_data(db_path: str, start: str, end: str) -> tuple:
+    """Split-adjusted HLC + adj_close + raw close + financial volume, B3.
+
+    Uses split_adj_* (split-only adjustment) for ATR to avoid false True Range
+    spikes from ex-dividend gaps. Returns adj_close separately for the returns
+    matrix (simulation needs dividend-adjusted returns).
+    """
+    return load_market_hlc_data(db_path, start, end, "B3")
 
 
 from dateutil.relativedelta import relativedelta
@@ -518,20 +489,27 @@ _FUNDAMENTALS_METRICS = [
 _FUNDAMENTALS_MONTHLY_METRICS = set(_FUNDAMENTALS_METRICS)
 
 
-def _get_rebalance_dates(db_path: str, start: str, end: str, freq: str) -> pd.DatetimeIndex:
-    """Build the rebalance date grid from the span the prices table covers.
+def _get_rebalance_dates(db_path, start, end, freq, market="B3") -> pd.DatetimeIndex:
+    """Build the rebalance date grid from the span that market's prices cover.
 
     Only the first and last traded day are used, so ask the database for those
     two rather than for every distinct date in the window — the old query read
     the whole table (through idx_prices_date, but still every row) and threw all
     of it away except min() and max(), once per fundamentals metric.
+
+    Scoped to the market: B3 trading days are not the US calendar, and a plane
+    holding only one of the two would otherwise get an empty grid and, silently,
+    empty fundamentals.
     """
+    spec = markets.get(market)
+    scope = "" if spec.table == "prices" else " AND market = :market"
+    params = {"start": start, "end": end}
+    params.update({"market": spec.key} if scope else {})
     with storage.get_connection(db_path) as conn:
         span = storage.read_sql(
-            "SELECT MIN(date) AS lo, MAX(date) AS hi FROM prices "
-            "WHERE date >= ? AND date <= ?",
-            conn,
-            params=[start, end],
+            f"SELECT MIN(date) AS lo, MAX(date) AS hi FROM {spec.table} "       # noqa: S608
+            f"WHERE date >= :start AND date <= :end{scope}",
+            conn, params=params,
         )
     lo, hi = (span.iloc[0]["lo"], span.iloc[0]["hi"]) if not span.empty else (None, None)
     if lo is None or hi is None or pd.isna(lo) or pd.isna(hi):
@@ -539,27 +517,43 @@ def _get_rebalance_dates(db_path: str, start: str, end: str, freq: str) -> pd.Da
     return pd.date_range(start=pd.to_datetime(lo), end=pd.to_datetime(hi), freq=freq)
 
 
-def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str) -> pd.DataFrame:
-    """Long-format fundamentals_pit rows for `metrics`, filed on or before `end`.
+# Which table holds a market's point-in-time fundamentals, and what orders two
+# rows filed on the same day. CVM numbers a restatement (`filing_version`); XBRL
+# does not, because there a restatement is a whole new accession with a later
+# `filed` — so `accn` is the tiebreaker, and the semantics are identical.
+_PIT_TABLES = {"B3": ("fundamentals_pit", "filing_version"),
+               "US": ("fundamentals_pit_us", "accn")}
+
+
+def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str,
+                            market: str = "B3") -> pd.DataFrame:
+    """Long-format point-in-time rows for `metrics`, filed on or before `end`.
 
     One query for every metric the caller wants. Per-metric loading ran this
     scan once per metric and each carried its own `AND {metric} IS NOT NULL`;
     that predicate moves to a per-metric dropna in _pit_frame, which selects the
     same rows.
+
+    A market with no fundamentals table (crypto) returns an empty frame rather
+    than raising: `validate_spec` already rejects a spec that asks for f_* there,
+    and a backtest that reaches here anyway should get empty frames, not a crash.
     """
+    if market not in _PIT_TABLES:
+        return pd.DataFrame()
+    table, version_col = _PIT_TABLES[market]
     cols = ", ".join(f"f.{m}" for m in metrics)
     sql = f"""
         SELECT
             f.ticker,
             f.filing_date,
             f.period_end,
-            f.filing_version,
+            f.{version_col} AS filing_version,
             {cols}
-        FROM fundamentals_pit f
+        FROM {table} f
         WHERE f.ticker IS NOT NULL
           AND f.filing_date <= :end
-        ORDER BY f.ticker, f.filing_date, f.filing_version
-    """
+        ORDER BY f.ticker, f.filing_date, f.{version_col}
+    """                                                                          # noqa: S608
     with storage.get_connection(db_path) as conn:
         return storage.read_sql(sql, conn, params={"end": end})
 
@@ -685,16 +679,22 @@ def load_all_fundamentals(
     end: str,
     freq: str = "ME",
     tickers=None,
+    market: str = "B3",
 ) -> dict:
     """
     Load all fundamentals metrics and return them as a dict of wide DataFrames.
 
-    fundamentals_pit is keyed by 4-char company **root**. When ``tickers`` is
-    given, each frame is broadcast onto the full tickers sharing that root so it
-    joins directly against the full-ticker price/return matrix; without it the
+    On B3, fundamentals_pit is keyed by 4-char company **root**. When ``tickers``
+    is given, each frame is broadcast onto the full tickers sharing that root so
+    it joins directly against the full-ticker price/return matrix; without it the
     frames stay root-keyed — a footgun that silently fails to join (bit
     ValueQuality + the research discovery path). Callers that have a ticker
     universe (build_shared_data, research.data_loader) should pass it.
+
+    The root broadcast is B3-specific and must not run elsewhere. Off B3 the rows
+    are already keyed by the traded symbol, and a four-character prefix would
+    merge GOOG's numbers into GOOGL's — two real companies' worth of one
+    company's financials.
 
     Returns:
         dict with keys matching _FUNDAMENTALS_METRICS:
@@ -705,13 +705,13 @@ def load_all_fundamentals(
     # One scan of fundamentals_pit and one of prices for the whole set. Looping
     # load_fundamentals_pit meant eight of each — sixteen passes over two large
     # tables to fill one dict, on every backtest that needs fundamentals.
+    rebal_dates = _get_rebalance_dates(db_path, start, end, freq, market)
     try:
-        df = _query_fundamentals_pit(db_path, _FUNDAMENTALS_METRICS, end)
-        rebal_dates = _get_rebalance_dates(db_path, start, end, freq)
+        df = _query_fundamentals_pit(db_path, _FUNDAMENTALS_METRICS, end, market)
     except Exception as e:
         import warnings
         warnings.warn(f"Failed to load fundamentals: {e}")
-        df, rebal_dates = pd.DataFrame(), _get_rebalance_dates(db_path, start, end, freq)
+        df = pd.DataFrame()
 
     result = {}
     for metric in _FUNDAMENTALS_METRICS:
@@ -721,7 +721,7 @@ def load_all_fundamentals(
             import warnings
             warnings.warn(f"Failed to load fundamentals metric '{metric}': {e}")
             result[metric] = pd.DataFrame()
-    if tickers is not None:
+    if tickers is not None and market == "B3":
         result = {m: _broadcast_roots_to_tickers(df_m, tickers) for m, df_m in result.items()}
     return result
 

@@ -280,7 +280,7 @@ the fine-grained unit suite; the feature file is the readable contract on top of
 
 **Mutation testing is scoped, and it is a real gate on every PR.** Target:
 `taxcore/scripts/apuracao.py`, the isenção / alíquota / compensação rules, against the
-two apuração suites — 96 mutants, **90 killed and 6 surviving**. The whole job is ~20s
+two apuração suites — 128 mutants, **122 killed and 6 surviving**. The whole job is ~20s
 in CI (12s of that mutating); it is on the PR path because it is that cheap, not
 despite it.
 
@@ -295,9 +295,16 @@ that only differs at `pnl == 0`, where the two branches do the same arithmetic
 (`carry += -0.0` and `base = 0 - 0` are both no-ops):
 
 ```
-41 `pnl > 0`→`pnl >= 0`   44 `pnl < 0`→`pnl <= 0`   45 `pnl < 0`→`pnl < 1`
-49 `pnl > 0`→`pnl >= 0`   61 `pnl < 0`→`pnl <= 0`   62 `pnl < 0`→`pnl < 1`
+17 `pnl > 0`→`pnl >= 0`   21 `pnl < 0`→`pnl <= 0`   22 `pnl < 0`→`pnl < 1`
+26 `pnl > 0`→`pnl >= 0`   38 `pnl < 0`→`pnl <= 0`   39 `pnl < 0`→`pnl < 1`
 ```
+
+The count grew from 96 to 128 when `CRIPTO` and `EXTERIOR` joined `REGRAS`, and the six
+survivors are still the same six clauses: the new rules are all plain values (a float
+rate plus a `progressiva` flag, an `isencao` that is `None` rather than zero) precisely
+so that they *can* be killed. A rate held in a closure and an isenção of zero each
+produced a mutant no test could reach, and an untestable line in a tax rule is a line
+nobody can trust.
 
 No test can kill them, so 6 is the bound the job enforces: it reads
 `mutmut export-cicd-stats` and fails at 7. A seventh survivor is a real hole in the
@@ -309,7 +316,7 @@ it claims — because `survived` alone is easy to hold at 6 while the work disap
 
 - **`no_tests == 0`** — a mutant no test even *executes*. Those are not survivors, so
   an uncovered new branch in `monthly_apuracao` would otherwise sail through.
-- **`total >= 96`** — a *falling* mutant count needs a human, whatever the cause. One
+- **`total >= 128`** — a *falling* mutant count needs a human, whatever the cause. One
   `# pragma: no mutate` on the `isento` line deletes 6 mutants of the R$20.000
   boundary; measured, every other clause stays green. Raise the floor when
   `apuracao.py` legitimately grows.

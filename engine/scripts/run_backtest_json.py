@@ -58,7 +58,7 @@ def _install_benchmark_stubs(start: str, end: str, offline: bool) -> None:
     import backtests.core.data as data
     import backtests.core.shared_data as sd
 
-    def _bench(ticker: str, s: str, e: str) -> pd.Series:
+    def _bench(ticker: str, s: str, e: str, *, market: str = "B3") -> pd.Series:
         return _flat_series(s, e, ticker, 100.0)
 
     data.download_benchmark = _bench
@@ -112,6 +112,7 @@ def main() -> None:
     from backtests.core.strategy_registry import get_registry
     from backtests.core.strategy_base import dedup_target_weights
     from backtests.core.simulation import run_simulation
+    from backtests.core import markets, universe
     from backtests.core.metrics import (
         build_metrics, value_to_ret, strategy_daily_values,
     )
@@ -124,6 +125,11 @@ def main() -> None:
     end = _resolve_end(str(cfg.get("end") or params.get("end_date", "today")))
     freq = str(cfg.get("freq") or params.get("rebalance_freq", "ME"))
     needs_funds = bool(getattr(strat, "needs_fundamentals", False))
+    # Request, then the strategy's own declaration, then B3. Resolved through the
+    # registry so an unknown market fails here rather than silently running the
+    # book against Brazilian prices.
+    market = markets.get(
+        cfg.get("market") or params.get("market") or getattr(strat, "market", None)).key
 
     offline = os.environ.get("ENGINE_BENCH_OFFLINE") == "1"
     _install_benchmark_stubs(start, end, offline)
@@ -132,17 +138,24 @@ def main() -> None:
     # db_path is ignored once ENGINE_DATABASE_URL routes to Postgres; pass the DSN
     # (or the sqlite default) so a bare sqlite run still works.
     db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
-    shared = build_shared_data(db_path, start, end, freq, include_fundamentals=needs_funds)
+    shared = build_shared_data(db_path, start, end, freq,
+                               include_fundamentals=needs_funds, market=market)
 
     ret_matrix, tw = strat.generate_signals(shared, params)
-    tw = dedup_target_weights(tw, shared["adtv"])
+    tw = dedup_target_weights(tw, shared["adtv"], market=market)
     result = run_simulation(
-        returns_matrix=ret_matrix.fillna(0.0),
+        # Not a bare fillna(0.0): once the price fill stops at delisting a
+        # dead name's return is NaN, and zeroing it would freeze the position
+        # at its last value forever. fill_returns books the terminal return.
+        returns_matrix=universe.fill_returns(ret_matrix, shared["delist_ret"]),
         target_weights=tw,
         initial_capital=initial_capital,
-        tax_rate=float(params.get("tax_rate", 0.15)),
+        # Defaults from the market, not a literal: a crypto book scored with the
+        # R$20k isenção of ações is scored under taxes its holder does not pay.
+        tax_rate=float(params.get("tax_rate", markets.get(market).tax_rate)),
         slippage=float(params.get("slippage", 0.001)),
-        monthly_sales_exemption=float(params.get("monthly_sales_exemption", 20_000)),
+        monthly_sales_exemption=float(params.get(
+            "monthly_sales_exemption", markets.get(market).monthly_sales_exemption)),
         contribution=contribution,
         name=name,
     )
@@ -186,6 +199,12 @@ def main() -> None:
         "start": start,
         "end": end,
         "freq": freq,
+        "market": market,
+        # Always BRL, whatever the venue quoted. A US or crypto run therefore
+        # bundles the USD/BRL move into its return — correct for a Brazilian
+        # holder, and not comparable to a native-currency Sharpe. Stated in the
+        # payload so a reader comparing two runs can see which is which.
+        "currency": "BRL",
         "periods": int(len(idx)),
         "initial_capital": initial_capital,
         "final_pretax_nav": float(result["pretax_values"].iloc[-1]),

@@ -30,6 +30,8 @@ RUN uv venv .venv --python 3.12 \
     && uv pip install --python .venv -r requirements-bench.txt
 COPY engine/b3_pipeline ./b3_pipeline
 COPY engine/backtests ./backtests
+COPY engine/crypto_pipeline ./crypto_pipeline
+COPY engine/us_pipeline ./us_pipeline
 COPY engine/scripts ./scripts
 
 # --- platform app ---

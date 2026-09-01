@@ -13,11 +13,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtests.core import fundamentals, markets, universe
 from backtests.core.data import (
-    load_b3_hlc_data, download_benchmark, download_cdi_daily,
-    load_all_fundamentals, load_all_fundamentals_monthly,
-    compute_pe_ratio_dynamic, compute_pb_ratio_dynamic, compute_ev_ebitda_dynamic,
-    load_sector_pit,
+    load_market_hlc_data, download_benchmark, download_cdi_daily, load_sector_pit,
 )
 from backtests.core.mean_rev_helpers import compute_mean_rev_features
 
@@ -225,33 +223,43 @@ def build_shared_data(
     end: str,
     freq: str = "ME",
     include_fundamentals: bool = False,
-    filter_delisted: bool = False,
+    market: str = markets.DEFAULT,
 ) -> dict:
     """
     Load and precompute all shared DataFrames needed by strategy plugins.
 
     Args:
-        db_path:  Path to the B3 SQLite database file.
+        db_path:  Path to the market-plane database (file or DSN).
         start:    Start date string, e.g. '2005-01-01'.
         end:      End date string, e.g. '2025-12-31' or 'today'.
         freq:     Resampling frequency (default 'ME' = month-end).
-        filter_delisted: If True, drop tickers that were delisted before `start`.
-                         Default False — no change to existing behavior.
+        market:   Which market to trade — see backtests.core.markets. Defaults to
+                  B3, so every shipped spec and every stored user strategy that
+                  does not mention a market keeps its exact behaviour.
 
     Returns:
-        Dict containing all precomputed DataFrames and Series.
+        Dict containing all precomputed DataFrames and Series. Prices are in BRL
+        for every market: the numeraire is the holder's currency, not the venue's.
     """
+    spec = markets.get(market)
     lookback = 12  # default lookback periods
 
     # ── 1. Load raw data ──────────────────────────────────────────────────────
     adj_close, split_adj_high, split_adj_low, split_adj_close, close_px, fin_vol = (
-        load_b3_hlc_data(db_path, start, end, filter_delisted=filter_delisted)
+        load_market_hlc_data(db_path, start, end, spec.key)
     )
+    _tradable, _delist_ret = universe.survivorship(db_path, adj_close, spec.key)
+    # CDI whatever the equity sleeve is: the cash a Brazilian holder parks in does
+    # not change because the book is in US names.
     cdi_daily = download_cdi_daily(start, end)
-    ibov_px = download_benchmark("^BVSP", start, end)
+    ibov_px = download_benchmark(spec.benchmark, start, end, market=spec.key)
 
     # ── 1b. Fix unrecorded splits ────────────────────────────────────────────
-    adj_close = _detect_and_fix_unrecorded_splits(adj_close, close_px, fin_vol)
+    # B3 only. The detector fires on a persistent, calm-volume overnight
+    # repricing by a clean ratio — an unrecorded grupamento there, an ordinary
+    # Tuesday in crypto, where it would silently rewrite price history.
+    if spec.detect_splits:
+        adj_close = _detect_and_fix_unrecorded_splits(adj_close, close_px, fin_vol)
 
     # ── 2. Resample ───────────────────────────────────────────────────────────
     ibov_ret = ibov_px.resample(freq).last().pct_change().dropna()
@@ -264,9 +272,12 @@ def build_shared_data(
     adtv = fin_vol.resample(freq).mean()
 
     log_ret = np.log1p(ret)
-    # Threshold -0.45 catches 2:1 splits (-50%) and 3:1 splits (-67%)
-    # that slip past the heuristic detector
-    has_glitch = ((ret > 1.0) | (ret < -0.45)).rolling(lookback).max()
+    # B3's -0.45 catches 2:1 (-50%) and 3:1 (-67%) splits that slip past the
+    # heuristic detector. The thresholds come off the market spec because a
+    # -45% month is not an artifact in crypto — applied there, this would mask
+    # essentially the whole universe, permanently.
+    has_glitch = ((ret > spec.glitch_up)
+                  | (ret < spec.glitch_down)).rolling(lookback).max()
 
     # ── 3. Regime signals ─────────────────────────────────────────────────────
     # COPOM easing: CDI was lower 1 month ago vs 4 months ago
@@ -347,6 +358,14 @@ def build_shared_data(
         # ── benchmark ─────────────────────────────────────────────────────────
         "ibov_ret": ibov_ret,
         "ibov_px": ibov_px,
+        # Market-neutral aliases to the same objects. `ibov_*` cannot be renamed
+        # — signals.yaml, every inline `expr:`, every hand-written strategy and
+        # every stored tenant spec read those names — but a US or crypto spec
+        # calling its benchmark "ibov" would be a lie on the page. New specs use
+        # these; the old names stay and now mean "this market's benchmark".
+        "bench_ret": ibov_ret,
+        "bench_px": ibov_px,
+        "market": spec.key,
         "cdi_monthly": cdi_monthly,
         "cdi_daily": cdi_daily,
         # ── regime signals ────────────────────────────────────────────────────
@@ -376,8 +395,9 @@ def build_shared_data(
         "cdi_cumul_63d": cdi_cumul_63d,
         "ibov_vol_20d_daily": ibov_vol_20d_daily,
         "ibov_ret_20d_daily": ibov_ret_20d_daily,
-        # ── survivorship bias filter flag ─────────────────────────────────────
-        "filter_delisted": filter_delisted,
+        # ── survivorship (see backtests.core.universe) ────────────────────────
+        "tradable": _tradable,
+        "delist_ret": _delist_ret,
     }
 
     # ── Point-in-time CVM sector classification (survivorship-free, from FCA) ──
@@ -391,81 +411,9 @@ def build_shared_data(
         logger.warning(f"Could not load PIT sector data: {e}")
         shared["sector_pit"] = pd.DataFrame(columns=["ticker", "ref_date", "sector"])
 
-    # ── Optional: CVM fundamentals (PIT-aligned to rebalance calendar) ────────
-    # When include_fundamentals=True, loads all 10 metric DataFrames from
-    # fundamentals_pit and adds them with "f_" prefix. Default is False to
-    # avoid performance regression for strategies that don't need fundamentals.
+    # Fundamentals are loaded and attached by their own module — see
+    # backtests.core.fundamentals for the PIT semantics and the ratio inputs.
     if include_fundamentals:
-        logger.info("Loading CVM fundamentals data (include_fundamentals=True)...")
-        # Pass the ticker universe so the root-keyed fundamentals_pit frames are
-        # broadcast onto full tickers (else they silently fail to join — the bug
-        # that made ValueQuality never invest).
-        fundamentals = load_all_fundamentals(db_path, start, end, freq=freq, tickers=ret.columns)
-        for metric, df_fund in fundamentals.items():
-            shared["f_" + metric] = df_fund
-        logger.info(f"Added {len(fundamentals)} fundamentals DataFrames with 'f_' prefix")
-
-        # ── Monthly snapshot — f_*_m (raw financials, all use '_m' suffix) ─────
-        # Reads from fundamentals_monthly (pre-materialized by pipeline step 9b).
-        # All raw financial metrics get '_m' suffix.
-        # Ratio keys (f_pe_ratio_dyn, f_pb_ratio_dyn, f_ev_ebitda_dyn) are computed
-        # dynamically below from raw inputs — not loaded from stored columns.
-        # Gracefully degrades if the table is empty or doesn't exist yet.
-        try:
-            fundamentals_monthly = load_all_fundamentals_monthly(db_path, start, end)
-            rebal_dates = ret.index  # use the strategy's rebalance calendar
-            for metric, df_m in fundamentals_monthly.items():
-                key = "f_" + metric + "_m"
-                if df_m.empty:
-                    shared[key] = pd.DataFrame(index=rebal_dates, dtype=float)
-                else:
-                    # Reindex monthly snapshot to the strategy's rebalance calendar
-                    extended_idx = df_m.index.union(rebal_dates).sort_values()
-                    df_aligned = df_m.reindex(extended_idx).ffill().reindex(rebal_dates)
-                    df_aligned = df_aligned.loc[df_aligned.index >= pd.Timestamp(start)]
-                    shared[key] = df_aligned
-            logger.info(
-                f"Added {len(fundamentals_monthly)} monthly fundamentals DataFrames "
-                f"with '_m' suffix"
-            )
-        except Exception as e:
-            logger.warning(
-                f"Failed to load fundamentals_monthly (table may not exist or be empty): {e}. "
-                f"Adding empty DataFrames for all _m keys."
-            )
-            rebal_dates = ret.index
-            _all_monthly_keys = [
-                "f_revenue_m", "f_net_income_m", "f_ebitda_m", "f_equity_m",
-                "f_total_assets_m", "f_net_debt_m", "f_shares_outstanding_m",
-            ]
-            for key in _all_monthly_keys:
-                shared[key] = pd.DataFrame(index=rebal_dates, dtype=float)
-
-        # ── Dynamic ratio computation from raw monthly inputs + raw_close ────────
-        # Ratios are computed here rather than loaded from stored columns.
-        # raw_close is already in shared (month-end resampled, unadjusted close).
-        _shares_m = shared.get("f_shares_outstanding_m", pd.DataFrame())
-        _ni_m = shared.get("f_net_income_m", pd.DataFrame())
-        _equity_m = shared.get("f_equity_m", pd.DataFrame())
-        _ebitda_m = shared.get("f_ebitda_m", pd.DataFrame())
-        _net_debt_m = shared.get("f_net_debt_m", pd.DataFrame())
-        _prices_m = shared.get("raw_close", pd.DataFrame())
-        rebal_dates = ret.index
-
-        if not _shares_m.empty and not _ni_m.empty and not _prices_m.empty:
-            shared["f_pe_ratio_dyn"] = compute_pe_ratio_dynamic(_shares_m, _ni_m, _prices_m)
-        else:
-            shared["f_pe_ratio_dyn"] = pd.DataFrame(index=rebal_dates, dtype=float)
-
-        if not _shares_m.empty and not _equity_m.empty and not _prices_m.empty:
-            shared["f_pb_ratio_dyn"] = compute_pb_ratio_dynamic(_shares_m, _equity_m, _prices_m)
-        else:
-            shared["f_pb_ratio_dyn"] = pd.DataFrame(index=rebal_dates, dtype=float)
-
-        if not _shares_m.empty and not _ebitda_m.empty and not _prices_m.empty:
-            _nd = _net_debt_m if not _net_debt_m.empty else pd.DataFrame(0.0, index=_shares_m.index, columns=_shares_m.columns)
-            shared["f_ev_ebitda_dyn"] = compute_ev_ebitda_dynamic(_shares_m, _ebitda_m, _nd, _prices_m)
-        else:
-            shared["f_ev_ebitda_dyn"] = pd.DataFrame(index=rebal_dates, dtype=float)
+        fundamentals.attach(shared, db_path, start, end, freq, ret, spec.key)
 
     return shared

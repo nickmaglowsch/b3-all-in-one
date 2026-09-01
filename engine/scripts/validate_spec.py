@@ -24,7 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backtests.core import signal_dsl
+from backtests.core import markets, signal_dsl
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 
 # shared_data frames a bare `factor:` reference may name, per
@@ -33,6 +33,8 @@ from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_def
 SHARED_DATA_KEYS = {
     "ret", "log_ret", "adj_close", "raw_close", "adtv", "close_px",
     "fin_vol", "vol_60d", "vol_20d", "atr_m", "mf_composite",
+    # Market-neutral aliases for the benchmark frames; see shared_data.
+    "bench_ret", "bench_px",
 }
 
 _KINDS = {"rank_and_hold": RankAndHold, "fixed_weight": FixedWeight}
@@ -98,6 +100,20 @@ def validate(spec: dict) -> dict:
             needs_funds = _validate_rank_signal(spec, errors)
 
     needs_funds = needs_funds or bool(spec.get("needs_fundamentals"))
+
+    # An unknown market must be rejected here rather than defaulting to B3: a
+    # tenant saving `market: USA` would otherwise get a silently Brazilian
+    # backtest and no way to tell.
+    try:
+        spec_market = markets.get(spec.get("market"))
+    except ValueError as e:
+        errors.append(str(e))
+    else:
+        if needs_funds and not spec_market.fundamentals:
+            errors.append(
+                f"market {spec_market.key} has no fundamentals: a spec that reads"
+                " f_* signals cannot run against it")
+
     return {"ok": not errors, "errors": errors, "needs_fundamentals": needs_funds}
 
 

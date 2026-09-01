@@ -14,6 +14,8 @@ from typing import Any, Optional
 
 import pandas as pd
 
+from backtests.core import markets
+
 
 # ── Parameter Specification ───────────────────────────────────────────────────
 
@@ -46,19 +48,26 @@ class ParameterSpec:
 
 # ── Selection helpers ─────────────────────────────────────────────────────────
 
-def keep_most_liquid_per_root(scores: pd.Series, adtv_row: pd.Series) -> pd.Series:
+def keep_most_liquid_per_root(scores: pd.Series, adtv_row: pd.Series,
+                              market: str = markets.DEFAULT) -> pd.Series:
     """Collapse multi-share-class companies to a single ticker before ranking.
 
-    For each 4-char company root, keep only the ticker with the highest ADTV
-    (e.g. PETR4 over PETR3). Company fundamentals are now broadcast onto every
-    share class, so without this a fundamentals ranker could select PETR3 AND
-    PETR4 as two "separate" names — double exposure to one company. Ties and
-    missing-ADTV rows fall back to first-seen. Returns ``scores`` unchanged when
-    empty; the returned order is arbitrary (callers re-sort via nlargest/nsmallest).
+    For each company root, keep only the ticker with the highest ADTV (e.g. PETR4
+    over PETR3). Company fundamentals are broadcast onto every share class, so
+    without this a fundamentals ranker could select PETR3 AND PETR4 as two
+    "separate" names — double exposure to one company. Ties and missing-ADTV rows
+    fall back to first-seen. Returns ``scores`` unchanged when empty; the returned
+    order is arbitrary (callers re-sort via nlargest/nsmallest).
+
+    The root width comes from the market. B3's is four characters; off B3 there
+    are no share-class roots and the grouping is skipped entirely — a fixed
+    four-char prefix would merge GOOG with GOOGL and BTCUSDT with BTCUSDC, which
+    are not two classes of anything.
     """
-    if scores.empty:
+    root_len = markets.get(market).root_len
+    if scores.empty or root_len is None:
         return scores
-    roots = [str(t)[:4] for t in scores.index]
+    roots = [str(t)[:root_len] for t in scores.index]
     liq = adtv_row.reindex(scores.index).fillna(-1.0)   # unknown ADTV -> lowest
     keep = liq.groupby(roots).idxmax()                  # one ticker per root
     return scores.loc[keep.values]
@@ -104,19 +113,28 @@ def cap_and_renormalize(w: pd.Series, cap: float) -> pd.Series:
     return w
 
 
-def dedup_target_weights(tw: pd.DataFrame, adtv: pd.DataFrame) -> pd.DataFrame:
+def dedup_target_weights(tw: pd.DataFrame, adtv: pd.DataFrame,
+                         market: str = markets.DEFAULT) -> pd.DataFrame:
     """Global safety net applied to EVERY strategy's target weights before the sim.
 
-    For each rebalance row, weights on tickers sharing a 4-char company root
-    (e.g. PETR3 + PETR4) are merged onto that row's highest-ADTV ticker, so no
-    company is ever held via two share classes. Merging (not dropping) preserves
-    the row's weight sum — no vaporized weight. Special assets like CDI_ASSET /
-    IBOV have unique roots and are never touched. No-op when a strategy already
-    holds one ticker per company (e.g. rankers that pre-dedup their pool).
+    For each rebalance row, weights on tickers sharing a company root (e.g. PETR3
+    + PETR4) are merged onto that row's highest-ADTV ticker, so no company is ever
+    held via two share classes. Merging (not dropping) preserves the row's weight
+    sum — no vaporized weight. Special assets like CDI_ASSET / IBOV have unique
+    roots and are never touched. No-op when a strategy already holds one ticker
+    per company (e.g. rankers that pre-dedup their pool).
+
+    Off B3 this is a no-op rather than a hazard. It runs unconditionally on every
+    strategy's weights, and a fixed four-char prefix there would silently merge
+    GOOG into GOOGL and BTCUSDT into BTCUSDC — collapsing two real positions into
+    one and moving the weight with them.
     """
+    root_len = markets.get(market).root_len
+    if root_len is None:
+        return tw
     groups: dict[str, list] = {}
     for c in tw.columns:
-        groups.setdefault(str(c)[:4], []).append(c)
+        groups.setdefault(str(c)[:root_len], []).append(c)
     dup_groups = {r: cols for r, cols in groups.items() if len(cols) > 1}
     if not dup_groups:
         return tw
@@ -179,6 +197,21 @@ COMMON_CONTRIBUTION = ParameterSpec(
                 "target gets the most. Negative = withdrawal. 0 = lump sum only.",
     step=500.0,
 )
+def market_param(default: str = markets.DEFAULT) -> "ParameterSpec":
+    """The market selector every spec-driven strategy exposes.
+
+    A choice, not free text, so the frontend form renders it and a typo cannot
+    reach the loader. `validate_spec` rejects an unknown market too — this is the
+    UI half of the same guard.
+    """
+    return ParameterSpec(
+        "market", "Market", "choice", default,
+        description="Which market plane to trade. Prices are converted to BRL "
+                    "for every market — the numeraire is the holder's currency.",
+        choices=markets.keys(),
+    )
+
+
 COMMON_MONTHLY_SALES_EXEMPTION = ParameterSpec(
     "monthly_sales_exemption", "Monthly Sales Exemption (BRL)", "float", 20_000.0,
     description="Brazilian tax exemption threshold for monthly sales (R$20K)",
@@ -190,6 +223,10 @@ COMMON_MONTHLY_SALES_EXEMPTION = ParameterSpec(
 
 class StrategyBase(ABC):
     """Abstract base class for all backtest strategy plugins."""
+
+    # Every hand-written Python strategy inherits B3 with no edit. A spec-driven
+    # one overrides it from its `market:` key.
+    market: str = markets.DEFAULT
 
     @property
     @abstractmethod

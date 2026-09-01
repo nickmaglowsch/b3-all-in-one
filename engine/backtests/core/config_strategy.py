@@ -26,8 +26,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtests.core import signal_dsl
+from backtests.core import markets, signal_dsl
 from backtests.core.strategy_base import (
+    market_param,
     StrategyBase, ParameterSpec, keep_most_liquid_per_root,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE,
@@ -136,6 +137,7 @@ class RankAndHold(StrategyBase):
 
     def __init__(self, spec: dict) -> None:
         self.spec = spec
+        self.market = markets.get(spec.get("market")).key
         self.needs_fundamentals = bool(spec.get("needs_fundamentals", False))
 
     @property
@@ -147,16 +149,17 @@ class RankAndHold(StrategyBase):
         return self.spec.get("description", self.spec["name"])
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
-        uni = self.spec.get("universe", {})
+        uni, _spec = self.spec.get("universe", {}), markets.get(self.market)
         sel = self.spec.get("selection", {})
         specs = [
             COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
             COMMON_TAX_RATE, COMMON_SLIPPAGE,
+            market_param(self.market),
             ParameterSpec("min_adtv", "Min ADTV (BRL)", "float",
-                          float(uni.get("min_adtv", 1_000_000.0)),
+                          float(uni.get("min_adtv", _spec.default_min_adtv)),
                           min_value=0.0, step=100_000.0),
             ParameterSpec("min_price", "Min Price (BRL)", "float",
-                          float(uni.get("min_price", 1.0)),
+                          float(uni.get("min_price", _spec.default_min_price)),
                           min_value=0.0, max_value=10.0, step=0.5),
             ParameterSpec("rebalance_freq", "Rebalance Frequency", "choice",
                           self.spec.get("rebalance", "ME"), choices=["ME", "QE", "W-FRI"]),
@@ -299,6 +302,7 @@ class FixedWeight(StrategyBase):
 
     def __init__(self, spec: dict) -> None:
         self.spec = spec
+        self.market = markets.get(spec.get("market")).key
         # A strategy sleeve may need CVM fundamentals; the spec declares it so
         # the service loads them (can't query the registry here — we're being
         # constructed *inside* registry discovery).

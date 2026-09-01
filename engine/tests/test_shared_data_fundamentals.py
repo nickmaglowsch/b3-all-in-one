@@ -80,7 +80,8 @@ def _mock_cdi(start, end):
     return _make_constant_series(0.0001, start, end, freq="D")
 
 
-def _mock_benchmark(ticker, start, end):
+def _mock_benchmark(ticker, start, end, *, market="B3"):
+    # keyword-only `market`, mirroring data.download_benchmark
     s = _make_constant_series(10000.0, start, end, freq="D")
     s.index = s.index.tz_localize(None)
     return s

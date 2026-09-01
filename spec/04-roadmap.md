@@ -16,6 +16,42 @@ Still open, in order:
 5. Asset-class tax model — per-class rates and carry buckets, plus the ações isenção applied
    per **calendar month**. This also fixes a known inaccuracy in the bench itself: today the
    isenção is applied per rebalance row and FII uses a single flat rate.
+   Partly shipped: `taxcore/scripts/apuracao.py` now holds a per-class `Regra`
+   table covering CRIPTO (ganho de capital, progressive, R$35k, no carry) and
+   EXTERIOR (Lei 14.754/2023, annual, netted within the year), and the bench takes
+   its rate and isenção from the market. Still open here: the per-calendar-month
+   isenção, and two approximations the bench makes — it compensates crypto losses,
+   which ganho de capital does not, and it settles exterior at each rebalance
+   rather than once in the ajuste.
+
+### US prices — the one open decision
+
+The US plane has its fundamentals (SEC XBRL, point-in-time, survivorship-free,
+public domain) and its security master (the consolidated symbol directory,
+captured daily). It has no prices, and that is a decision rather than a missing
+module: deep US history *including the delisted* is the part that is not free.
+
+Three paths, in the order they cost:
+
+1. **Forward-only, free.** Capture EOD from a free feed into `market_prices`
+   daily. Survivorship-free from the day the capture starts, exactly as the
+   symbol directory is, and thin behind it. Needs a feed chosen and its format
+   verified — no free source was reachable from the environment this was built
+   in, so nothing was written against an unverified shape.
+2. **Sharadar** (~US$100–150/mo, Nasdaq Data Link). SEP + TICKERS + ACTIONS:
+   ~21k active and delisted tickers back to 1998, point-in-time ready. The
+   closest fit to what the B3 plane already is.
+3. **Polygon.io flat files** (~US$199/mo). Grouped daily bars — every ticker that
+   traded that day — so survivorship-free by construction, the same shape as
+   COTAHIST. No fundamentals; pairs with the SEC ingest already built.
+
+Whichever is chosen writes `market_prices` rows with `market='US'`; the loaders,
+the universe and the tax model already read them.
+
+Two gaps to state in the product either way, per the honest-gaps commitment:
+US `adj_close` is split-adjusted only until a dividend source is bought, so
+total-return comparisons are understated; and crypto delisting means *delisted
+from Binance spot*, not that the token stopped trading anywhere.
 
 ### Postgres gaps
 - **Connection pooling.** `storage.get_connection` opens a fresh `psycopg` connection per

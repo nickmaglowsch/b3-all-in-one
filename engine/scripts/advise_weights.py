@@ -53,6 +53,8 @@ sys.path.insert(0, str(ROOT))
 # subprocess entry points behave identically (no second copy to drift).
 from scripts.run_backtest_json import _install_benchmark_stubs  # noqa: E402
 
+from backtests.core import markets  # noqa: E402
+
 # Distinct exit code the platform (platform_app/enginerun.py) keys on: the
 # strategy needs CVM fundamentals but fundamentals_pit is empty in the active
 # engine DB. Any other failure keeps the ordinary non-zero/stringly exit.
@@ -103,14 +105,16 @@ def _latest_prices(raw_close: pd.DataFrame) -> dict[str, float]:
             if pd.notna(v) and float(v) > 0}
 
 
-# Standard-lot universe, character-for-character the predicate in
-# load_b3_data / load_b3_hlc_data. Duplicated rather than imported because
-# importing that module is what this path exists to avoid; if one moves the
-# other has to move with it, or the two will disagree about which names exist.
-_STANDARD_LOT_SQL = (
-    "((LENGTH(ticker) = 5 AND SUBSTR(ticker, 5, 1) IN ('3', '4', '5', '6'))"
-    " OR (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11'))"
-)
+# Standard-lot universe. This used to be a hand-copied duplicate of the
+# predicate in the loaders, with a comment warning that moving one without the
+# other would make the two disagree about which names exist. It now comes from
+# the market registry, which is a plain dataclass table with no pandas import —
+# so the reason for duplicating it (keeping this path off the heavy import) no
+# longer applies, and the drift hazard is gone.
+#
+# B3, explicitly and not by default: this advises on a real tenant portfolio,
+# and those are built from B3 extracts.
+_STANDARD_LOT_SQL = markets.MARKETS["B3"].ticker_sql
 
 
 def _latest_plane_close(

@@ -79,6 +79,10 @@ services:
       ENVIRONMENT: production
       SECRET_KEY: ${SECRET_KEY}
       WORKER_QUEUES: ingest
+      # EDGAR requires a declaring User-Agent. The client defaults to one
+      # naming this project, so the scheduled job runs unconfigured; set this to
+      # a contact of your own when running against your own domain.
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
     volumes:

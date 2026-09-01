@@ -21,9 +21,16 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
     registry = tasks.app.periodic_registry.periodic_tasks
     by_name = {name: pt for (name, _pid), pt in registry.items()}
 
-    assert set(by_name) == {"ingest_prices", "ingest_fundamentals"}
+    assert set(by_name) == {"ingest_prices", "ingest_fundamentals",
+                            "ingest_instruments", "ingest_crypto",
+                            "ingest_us_fundamentals", "ingest_us_symbols"}
     assert by_name["ingest_prices"].cron == settings.ingest_prices_cron
     assert by_name["ingest_fundamentals"].cron == settings.ingest_fundamentals_cron
+    assert by_name["ingest_instruments"].cron == settings.ingest_instruments_cron
+    assert by_name["ingest_crypto"].cron == settings.ingest_crypto_cron
+    assert (by_name["ingest_us_fundamentals"].cron
+            == settings.ingest_us_fundamentals_cron)
+    assert by_name["ingest_us_symbols"].cron == settings.ingest_us_symbols_cron
     for pt in by_name.values():
         assert pt.task.queue == "ingest", (
             "ingestion must not share the default queue — a multi-hour run would "
@@ -31,7 +38,20 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
         )
 
 
-@pytest.mark.parametrize("task", ["ingest_prices", "ingest_fundamentals"])
+def test_the_security_master_is_rebuilt_after_the_prices_it_reads():
+    """ingest_instruments derives its listing intervals from `prices`. Scheduled
+    ahead of the price refresh it would rebuild the master from yesterday's plane
+    — and since that master is what switches survivorship correction on for B3, a
+    stale one silently truncates every backtest's universe by a day."""
+    prices_hour = int(settings.ingest_prices_cron.split()[1])
+    instruments_hour = int(settings.ingest_instruments_cron.split()[1])
+    assert instruments_hour > prices_hour
+
+
+@pytest.mark.parametrize("task", ["ingest_prices", "ingest_fundamentals",
+                                 "ingest_instruments", "ingest_crypto",
+                                 "ingest_us_fundamentals",
+                                 "ingest_us_symbols"])
 def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     """The periodic scheduler injects `timestamp`; a manual defer_async() does not.
     Without a default the worker raises before the ingest_runs row is written, so

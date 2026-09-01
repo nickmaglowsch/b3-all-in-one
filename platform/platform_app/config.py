@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     ingest_start_year: int = 2005
     # Fundamentals move on a filing calendar, not a daily one — weekly is plenty.
     ingest_fundamentals_cron: str = "0 7 * * 0"
+    # The B3 security master derives from the price plane, so it runs after the
+    # price refresh has had time to land rather than beside it.
+    ingest_instruments_cron: str = "0 9 * * *"
+    # Crypto trades every day of the year, so this has no weekend to skip. Late
+    # enough that the previous UTC day's daily kline files have been published.
+    ingest_crypto_cron: str = "0 4 * * *"
+    # SEC fundamentals move on a filing calendar; weekly is plenty, and the
+    # incremental pass is thousands of small requests under a 10/s limit.
+    ingest_us_fundamentals_cron: str = "0 8 * * 0"
+    # The US listing snapshot, on the other hand, is a daily obligation: there is
+    # no free historical archive of these files, so a day not captured is listing
+    # history that cannot be recovered. Late enough that the day's file is up.
+    ingest_us_symbols_cron: str = "0 23 * * 1-5"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

@@ -185,6 +185,63 @@ async def ingest_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices 
     return await _record_ingest("fundamentals", ["b3_pipeline.cvm_main"])
 
 
+@app.periodic(cron=settings.ingest_instruments_cron)
+@app.task(name="ingest_instruments", queue="ingest", queueing_lock="ingest_instruments")
+async def ingest_instruments(timestamp: int = 0) -> dict:  # see ingest_prices re: default
+    """Rebuild the B3 security master from the price plane.
+
+    This is what switches survivorship correction on for B3: until `instruments`
+    has rows, `backtests.core.universe` treats every ticker as always-listed and
+    the loaders behave exactly as they did before it existed. Separate from
+    ingest_prices, and later in the day, because it reads what that job wrote.
+    """
+    return await _record_ingest("instruments", ["b3_pipeline.instruments_backfill"])
+
+
+@app.periodic(cron=settings.ingest_crypto_cron)
+@app.task(name="ingest_crypto", queue="ingest", queueing_lock="ingest_crypto")
+async def ingest_crypto(timestamp: int = 0) -> dict:  # see ingest_prices re: default
+    """Refresh the crypto plane from Binance's public archive.
+
+    Enumerates every spot pair the archive has ever held, delisted ones included
+    — that enumeration is the survivorship property, so there is no "only the
+    live ones" fast path to add here later.
+    """
+    return await _record_ingest("crypto", ["crypto_pipeline.crypto_main"])
+
+
+@app.periodic(cron=settings.ingest_us_symbols_cron)
+@app.task(name="ingest_us_symbols", queue="ingest",
+          queueing_lock="ingest_us_symbols")
+async def ingest_us_symbols(timestamp: int = 0) -> dict:  # see ingest_prices
+    """Capture today's consolidated US symbol directory.
+
+    This is what makes the US plane survivorship-free going forward: a symbol's
+    appearance and disappearance across these daily captures is its listing
+    interval, and nobody publishes them historically for free. A day not captured
+    is listing history that cannot be recovered — the same reason B3's daily file
+    is a daily obligation rather than a backfill.
+    """
+    return await _record_ingest("us_symbols", ["us_pipeline.symbol_directory"])
+
+
+@app.periodic(cron=settings.ingest_us_fundamentals_cron)
+@app.task(name="ingest_us_fundamentals", queue="ingest",
+          queueing_lock="ingest_us_fundamentals")
+async def ingest_us_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices
+    """Refresh US point-in-time fundamentals from SEC XBRL.
+
+    Bootstraps itself: an empty plane takes the bulk `companyfacts.zip` pass —
+    the one that gets the companies which stopped filing — and a populated one
+    walks the CIKs it already has. Deciding from the plane rather than from a
+    flag is what stops this reporting success having walked an empty list.
+
+    The archive lands on the engine data volume, so the ~1.5 GB download happens
+    on the first run and not again.
+    """
+    return await _record_ingest("us_fundamentals", ["us_pipeline.us_main"])
+
+
 @app.task(name="process_imports")
 async def process_imports(tenant_id: str) -> dict:
     """Run taxcore's load_b3 over ALL of a tenant's uploaded extracts, then full-replace

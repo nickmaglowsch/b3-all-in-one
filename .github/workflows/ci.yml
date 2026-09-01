@@ -120,21 +120,21 @@ jobs:
     name: Mutation testing (taxcore apuração)
     # Runs on every PR. It was originally schedule-only because mutation testing the
     # 1100-line irpf_2026.py took minutes; against the extracted apuracao.py the whole
-    # job is ~20s (96 mutants, 12s of mutmut), so there is nothing left to justify
+    # job is ~20s (128 mutants, 12s of mutmut), so there is nothing left to justify
     # letting a PR merge without it. Widen `source_paths` and re-measure this.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       # Target and scope live in taxcore/pyproject.toml [tool.mutmut]: scripts/apuracao.py
-      # against the two apuração suites, 96 mutants in ~12s on a CI runner.
+      # against the two apuração suites, 128 mutants in ~12s on a CI runner.
       #
       # No `|| true`. `mutmut run` exits 0 even with survivors (measured, at two
       # different survivor counts), so the only thing it could mask is a genuine
       # failure — a broken clean run, a timeout — which should fail the build.
       - run: cd taxcore && uv run --with 'mutmut>=3' mutmut run
       - run: cd taxcore && uv run --with 'mutmut>=3' mutmut results
-      # The gate itself, since `mutmut run` won't do it. 6 of the 96 survive and all 6
+      # The gate itself, since `mutmut run` won't do it. 6 of the 128 survive and all 6
       # are equivalent mutants: each flips a comparison in a way that only differs at
       # `pnl == 0`, where both branches do the same arithmetic (`carry += -0.0`,
       # `base = 0 - 0`), so no test can kill them. A seventh survivor is a real hole in
@@ -149,7 +149,7 @@ jobs:
           #
           #   - type checks: `mutmut>=3` is unpinned, and bare `.survived <= 6` passes
           #     when the key is absent (jq: `null <= 6` is true).
-          #   - `total >= 96`: a *falling* mutant count on this module needs a human,
+          #   - `total >= 128`: a *falling* mutant count on this module needs a human,
           #     whatever the cause. One `# pragma: no mutate` on the isento line deletes
           #     6 mutants of the R$20k boundary; measured, every other clause here
           #     including the sum identity stays green, because the books still balance.
@@ -168,15 +168,15 @@ jobs:
           # i.e. the suite would have killed it, and it is the one bucket a slow runner
           # can move things into. Gating on it would trade a real hole for a flake.
           jq -e '(.survived|type) == "number" and (.total|type) == "number"
-                 and .total >= 96 and .survived <= 6
+                 and .total >= 128 and .survived <= 6
                  and .no_tests == 0 and .suspicious == 0 and .segfault == 0
                  and .skipped == 0 and .check_was_interrupted_by_user == 0
                  and (.killed + .survived + .timeout) == .total' \
              mutants/mutmut-cicd-stats.json >/dev/null || {
             echo "::error::mutation gate failed. Either the apuração suite got weaker" \
                  "(more than 6 survivors, or a mutant no test executes) or fewer than" \
-                 "96 mutants were generated. If you deliberately removed code from" \
-                 "scripts/apuracao.py, that second one is expected: lower the 96 here" \
+                 "128 mutants were generated. If you deliberately removed code from" \
+                 "scripts/apuracao.py, that second one is expected: lower the 128 here" \
                  "and in README.md, the same way you would re-record any other" \
                  "baseline. The per-mutant list is in the step above."
             exit 1

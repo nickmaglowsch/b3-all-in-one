@@ -219,3 +219,184 @@ def test_a_gain_of_centavos_is_still_a_gain():
     assert jun["pnl"] == pytest.approx(0.50)
     assert jun["base"] == pytest.approx(0.50)
     assert jun["ir"] == pytest.approx(0.075)
+
+
+# ── Cripto: ganho de capital, R$35k, sem compensação ──────────────────────────
+#
+# Every assertion below is a rule that differs from ações, and each is the kind a
+# well-meaning refactor flattens into "same as ações but another rate".
+
+from scripts.apuracao import (  # noqa: E402
+    ALIQUOTA, GCAP_TETO, ISENCAO_LIMIT, REGRAS, annual_apuracao, gcap_aliquota,
+)
+
+
+def cripto_grid(**by_month) -> pd.DataFrame:
+    rows = []
+    for m in range(1, 13):
+        gross, pnl = by_month.get(str(m), (0.0, 0.0))
+        rows.append({"month": m, "CRIPTO_gross": float(gross),
+                     "CRIPTO_pnl": float(pnl)})
+    return pd.DataFrame(rows)
+
+
+def cripto(rows, month):
+    return next(r for r in rows if r["month"] == month)
+
+
+def test_gcap_bands_are_inclusive_at_the_top():
+    assert gcap_aliquota(0.0) == 0.15
+    assert gcap_aliquota(5_000_000.0) == 0.15
+    assert gcap_aliquota(5_000_000.01) == 0.175
+    assert gcap_aliquota(10_000_000.0) == 0.175
+    assert gcap_aliquota(10_000_000.01) == 0.20
+    assert gcap_aliquota(30_000_000.0) == 0.20
+    assert gcap_aliquota(30_000_000.01) == GCAP_TETO
+    assert GCAP_TETO == 0.225
+
+
+def test_cripto_is_isento_up_to_thirty_five_thousand_of_sales():
+    """The threshold is on the month's gross alienações, not on the gain, and it
+    is R$35k — not the R$20k of ações."""
+    rows = monthly_apuracao(cripto_grid(**{"3": (35_000, 9_000)}), ("CRIPTO",))
+    r = cripto(rows, 3)
+    assert r["isento"] and r["ir"] == 0.0
+    assert r["ganho_isento"] == 9_000
+
+
+def test_cripto_above_the_threshold_pays():
+    rows = monthly_apuracao(cripto_grid(**{"3": (35_000.01, 10_000)}), ("CRIPTO",))
+    r = cripto(rows, 3)
+    assert not r["isento"]
+    assert r["base"] == 10_000
+    assert r["ir"] == pytest.approx(1_500.0)
+
+
+def test_a_cripto_loss_is_not_carried_forward():
+    """Ganho de capital has no loss compensation. This is the rule most likely to
+    be "fixed" into a bug by someone assuming every class works like ações — a
+    carried crypto loss would understate the tax owed on the next gain."""
+    rows = monthly_apuracao(
+        cripto_grid(**{"3": (50_000, -10_000), "4": (50_000, 10_000)}), ("CRIPTO",))
+    assert cripto(rows, 3)["carry"] == 0.0
+    later = cripto(rows, 4)
+    assert later["compensacao"] == 0.0
+    assert later["base"] == 10_000
+    assert later["ir"] == pytest.approx(1_500.0)
+
+
+def test_an_isento_cripto_loss_feeds_nothing_either():
+    """The ações rule — an isento loss still feeds the carry — must not leak
+    across: there is no bucket for it to feed."""
+    rows = monthly_apuracao(cripto_grid(**{"3": (10_000, -5_000)}), ("CRIPTO",))
+    assert cripto(rows, 3)["carry"] == 0.0
+
+
+def test_the_cripto_rate_follows_the_size_of_the_gain():
+    rows = monthly_apuracao(
+        cripto_grid(**{"5": (60_000_000, 6_000_000)}), ("CRIPTO",))
+    r = cripto(rows, 5)
+    assert r["aliquota"] == 0.175
+    assert r["ir"] == pytest.approx(6_000_000 * 0.175)
+
+
+def test_cripto_carries_its_own_darf_code():
+    """4600, not the 6015 of renda variável — a DARF paid under the wrong code is
+    a payment the Receita does not match to the debt."""
+    rows = monthly_apuracao(cripto_grid(**{"3": (50_000, 1.0)}), ("CRIPTO",))
+    assert cripto(rows, 3)["darf"] == "4600"
+    assert REGRAS["AÇÃO"].darf == "6015"
+
+
+def test_cripto_is_not_rendered_by_default():
+    """The report is built from B3 extracts, which carry no crypto. Adding it to
+    the default render set would put twelve empty months in every declaration."""
+    assert "CRIPTO" not in CLASSES_APURACAO
+    assert "EXTERIOR" not in CLASSES_APURACAO
+    assert "CRIPTO" in REGRAS
+
+
+# ── Exterior: Lei 14.754/2023, anual, compensável dentro do ano ────────────────
+
+def test_exterior_nets_gains_against_losses_within_the_year():
+    """The compensation the law introduced in exchange for ending the deferral:
+    losses offset gains across foreign assets inside the same year."""
+    out = annual_apuracao({"AAPL": 30_000.0, "MSFT": -10_000.0})
+    assert out["base"] == 20_000.0
+    assert out["ir"] == pytest.approx(3_000.0)
+
+
+def test_exterior_is_fifteen_percent_flat():
+    out = annual_apuracao({"AAPL": 40_000_000.0})
+    assert out["aliquota"] == 0.15, "not the progressive GCAP table"
+
+
+def test_a_losing_year_abroad_owes_nothing_and_carries_nothing():
+    """This function is one year. The law nets inside it; an excess loss does not
+    become a carry here, and reporting one would understate next year's tax."""
+    out = annual_apuracao({"AAPL": -5_000.0, "MSFT": 1_000.0})
+    assert out["base"] == 0.0
+    assert out["ir"] == 0.0
+    assert out["perdas"] == 5_000.0
+    assert out["ganhos"] == 1_000.0
+
+
+def test_exterior_raises_no_monthly_darf():
+    """Lei 14.754 replaced the monthly DARF with one annual apuração settled in
+    the ajuste. A code here would tell a user to pay something that does not
+    exist."""
+    assert annual_apuracao({"AAPL": 1.0})["periodo"] == "anual"
+    assert annual_apuracao({"AAPL": 1.0})["darf"] == "-"
+    assert REGRAS["EXTERIOR"].periodo == "anual"
+
+
+def test_an_empty_year_abroad_is_inactive():
+    out = annual_apuracao({})
+    assert not out["ativo"]
+    assert out["ir"] == 0.0
+
+
+def test_a_zero_result_position_is_neither_gain_nor_loss():
+    out = annual_apuracao({"AAPL": 0.0})
+    assert out["ganhos"] == 0.0 and out["perdas"] == 0.0
+    assert out["ativo"]
+    assert out["classe"] == "EXTERIOR"
+
+
+def test_a_sub_one_real_result_is_still_a_gain():
+    """Not a boundary anyone trades at — it is here because "greater than zero"
+    and "greater than one" are indistinguishable on every other input, and a rule
+    no test can distinguish from a wrong one is a rule nobody can trust."""
+    out = annual_apuracao({"AAPL": 0.50, "MSFT": -0.25})
+    assert out["ganhos"] == 0.50
+    assert out["perdas"] == 0.25
+    assert out["base"] == 0.25
+
+
+def test_a_class_without_isencao_is_never_isento():
+    """FII has no isenção at all, which is not the same as an isenção of zero: a
+    month with no sales would clear a zero threshold and be reported isento, on
+    every one of the twelve empty rows."""
+    rows = monthly_apuracao(grid(), ("FII",))
+    assert not any(r["isento"] for r in rows)
+
+
+# ── The back-compat constants other modules still read ────────────────────────
+
+def test_the_legacy_rate_map_still_answers_for_the_rendered_classes():
+    assert ALIQUOTA["AÇÃO"] == 0.15
+    assert ALIQUOTA["FII"] == 0.20
+    assert ALIQUOTA["BDR_ETF"] == 0.15
+
+
+def test_the_legacy_rate_map_excludes_the_annual_regime():
+    """EXTERIOR is not apurado monthly, so a caller iterating ALIQUOTA to build
+    month rows must not find it there."""
+    assert "EXTERIOR" not in ALIQUOTA
+    assert "CRIPTO" in ALIQUOTA
+
+
+def test_the_isencao_constant_is_the_acoes_threshold():
+    assert ISENCAO_LIMIT == 20_000.0
+    assert REGRAS["AÇÃO"].isencao == ISENCAO_LIMIT
+    assert REGRAS["CRIPTO"].isencao == 35_000.0

@@ -184,6 +184,28 @@ async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
     return await _record_ingest("us_backfill", ["us_pipeline.us_backfill"])
 
 
+# Deliberately not `@app.periodic`. Every other ingest here has a cron because
+# its source keeps publishing; WIKI was frozen in April 2018 and never will
+# again, so a schedule would re-read the same 15.4M rows forever. Deferred by
+# hand, once, and re-run only to repair.
+@app.task(name="ingest_wiki_backfill", queue="ingest",
+          queueing_lock="ingest_wiki_backfill")
+async def ingest_wiki_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
+    """Fifty-six years of US history from the WIKI bulk export.
+
+    The backfill `ingest_us_backfill` was meant to be, from a vendor that
+    actually serves the file: stooq gates its archive behind an account, while
+    this one needs a free key and one request. 15.4M bars over 3,199 tickers
+    from 1962, with the corporate actions in the rows — so the bars land
+    `total_return` rather than the `split_only` the stooq path would have given.
+
+    It fills 1962..2018-03-27 and nothing after; the plane's US bars will end in
+    2018 until a live feed covers the gap. That is the dataset, not a fault in
+    the run.
+    """
+    return await _record_ingest("wiki_backfill", ["us_pipeline.wiki_backfill"])
+
+
 @app.periodic(cron=settings.ingest_us_prices_cron)
 @app.task(name="ingest_us_prices", queue="ingest",
           queueing_lock="ingest_us_prices")

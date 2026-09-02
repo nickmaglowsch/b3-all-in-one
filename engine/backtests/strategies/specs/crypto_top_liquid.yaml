@@ -1,0 +1,25 @@
+name: CryptoTopLiquid
+description: >-
+  The ten deepest USDT pairs, weighted by turnover, rebalanced monthly. There is
+  no market-cap index on this plane — the engine holds no supply counts — so
+  traded value is the size measure, and this is the closest thing to "just hold
+  the market" a crypto book here can be. Useful mostly as the ruler the other
+  crypto strategies are read against.
+kind: rank_and_hold
+market: CRYPTO
+rebalance: ME
+warmup_pad: 1
+universe:
+  # The floor still applies: it is what keeps a pair with one print a week out
+  # of a ranking whose whole content is liquidity.
+  min_adtv: 1000000
+  min_price: 0
+signal:
+  # A bare shared_data key: last period's average daily traded value, in BRL
+  # like every threshold here. No lookback, so no warmup beyond the first row.
+  factor: adtv
+  apply_glitch: false
+selection:
+  top_n: 10
+  min_names: 3
+weighting: adtv

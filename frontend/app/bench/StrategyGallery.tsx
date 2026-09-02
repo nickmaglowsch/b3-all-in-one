@@ -5,6 +5,7 @@ import type { Strategy } from "@/lib/types";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { kindLabel } from "./lib";
+import { marketBadge, matchesQuery } from "@/lib/strategyGallery";
 
 // Metadata chips share the ticker-chip geometry (DESIGN.md Shapes) at the 11px
 // label step. Neutral by default: the series palette is data-only, so a chip
@@ -41,6 +42,17 @@ export function UserBadge() {
   );
 }
 
+export function MarketBadge({ label }: { label: string }) {
+  // Which plane the strategy trades. Neutral like KindBadge: the label carries
+  // the distinction and it needs no hue. Whether a row gets one at all is
+  // lib/strategyGallery.marketBadge's decision, not this component's.
+  return (
+    <span className={`${badgeCls} border-hairline bg-paper text-muted`}>
+      {label}
+    </span>
+  );
+}
+
 export function FundamentalsBadge() {
   // Strategy reads CVM fundamentals — surfaced so users know it depends on that
   // data being ingested (a fundamentals-less environment can't build its target).
@@ -70,11 +82,7 @@ export function StrategyGallery({
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return strategies;
-    return strategies.filter(
-      (s) =>
-        s.name.toLowerCase().includes(needle) ||
-        s.description.toLowerCase().includes(needle),
-    );
+    return strategies.filter((s) => matchesQuery(s, needle));
   }, [strategies, q]);
 
   return (
@@ -107,6 +115,7 @@ export function StrategyGallery({
         <ul className="max-h-[560px] space-y-1.5 overflow-y-auto pr-1">
           {filtered.map((s) => {
             const active = s.name === selected;
+            const market = marketBadge(s);
             return (
               <li key={s.name}>
                 <button
@@ -125,6 +134,7 @@ export function StrategyGallery({
                     </span>
                     <span className="flex shrink-0 items-center gap-1">
                       {s.source === "user" && <UserBadge />}
+                      {market && <MarketBadge label={market} />}
                       {s.needs_fundamentals && <FundamentalsBadge />}
                       <KindBadge kind={s.kind} />
                     </span>

@@ -50,3 +50,46 @@ win_rate_mean_rev:
 daily_low_vol:
   expr: "-at_rebalance(roll_std(pct_change(adj_close), lookback * 21))"
   lookback: 6
+
+# ── Point-in-time fundamentals (B3 and US) ───────────────────────────────────
+# These read the `f_*` PIT frames, so a spec using one needs
+# `needs_fundamentals: true` and a market whose MarketSpec.fundamentals is true.
+# They exist because the ratio frames the B3 specs use — f_pe_ratio_dyn,
+# f_pb_ratio_dyn, f_ev_ebitda_dyn — are built from `fundamentals_monthly`, which
+# `load_all_fundamentals_monthly` reads without a market scope. Off B3 those
+# frames are empty, so a US value strategy has to be assembled from the PIT
+# frames directly.
+#
+# TWO THINGS ABOUT THESE ARE LOAD-BEARING.
+#
+# **They are for ranking, never for a `range:` band.** Off B3 `raw_close` is BRL
+# (data._CONVERTED_COLUMNS multiplies the venue's close by fx_rate) while
+# `fundamentals_pit_us` values are the raw USD the filer reported; on B3 the CVM
+# values are thousands of BRL against a BRL price. Either way the mismatch is one
+# scale factor shared by every name on a date, so the cross-sectional rank is
+# exact and an absolute threshold is meaningless. A band like low_pe.yaml's is
+# correct there and would be nonsense here.
+#
+# **Every one of them is duration-invariant.** SEC facts arrive per
+# (accession, period_end) and 10-K and 10-Q rows sit side by side, so a US
+# `f_net_income` cell is an annual figure for one filer and a quarterly figure
+# for the next — and `f_net_income_ttm`, which would fix that, is computed only
+# by the CVM pipeline and is NULL on the US plane. So the factors below either
+# read instants only (equity, shares, price) or divide two figures from the same
+# filing slot (a margin), which cancels the period out. An earnings yield —
+# net income over market cap — mixes a duration with an instant and would rank a
+# quarterly filer against an annual one; it is deliberately not here.
+
+# Book-to-price: equity / market cap. Instants only, so no duration to mix.
+# Higher = cheaper, per the convention.
+book_to_price_pit:
+  expr: "f_equity / (raw_close * f_shares_outstanding)"
+
+# Net margin. Numerator and denominator come from the same filing slot, so the
+# ratio means the same thing whether that slot is a quarter or a year.
+net_margin_pit:
+  expr: "f_net_income / where(f_revenue, f_revenue > 0)"
+
+# EBITDA margin — the same same-slot cancellation, on the operating line.
+ebitda_margin_pit:
+  expr: "f_ebitda / where(f_revenue, f_revenue > 0)"

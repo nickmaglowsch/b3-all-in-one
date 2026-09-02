@@ -1,0 +1,24 @@
+name: USLowVol
+description: >-
+  Low Volatility on the US plane. The mirror of LowVol, name for name: lowest
+  realised volatility over 12 monthly returns, top decile of the liquid
+  universe, equal weight, always invested. Scored in reais like every book here,
+  so the USD/BRL move is part of its return.
+kind: rank_and_hold
+market: US
+rebalance: ME
+warmup_pad: 1
+universe:
+  # markets.MARKETS["US"] floors, written out so a direct generate_signals call
+  # behaves like a run through the runner (which injects them as params).
+  # ~US$200k/day of turnover and a ~US$1 price at a ~5.5 rate.
+  min_adtv: 1000000
+  min_price: 5.0
+signal:
+  factor: low_vol
+  lookback: 12
+  shift: 0
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal

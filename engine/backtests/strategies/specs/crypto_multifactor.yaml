@@ -1,0 +1,22 @@
+name: CryptoMultiFactor
+description: >-
+  Multifactor on the crypto plane (always invested). MultiFactor's mirror:
+  composite = 0.5 * momentum_rank + 0.5 * low_vol_rank over the USDT pairs, top
+  decile, equal weight.
+kind: rank_and_hold
+market: CRYPTO
+rebalance: ME
+warmup_pad: 2
+universe:
+  min_adtv: 1000000
+  min_price: 0
+signal:
+  expr: >-
+    0.5 * rank(mask_glitch(roll_sum(shift(log_ret, 1), lookback)))
+    + 0.5 * rank(mask_glitch(-roll_std(shift(ret, 1), lookback)))
+  lookback: 6
+  apply_glitch: false   # glitch handled per-leg inside the expr
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal

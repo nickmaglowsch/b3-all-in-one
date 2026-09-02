@@ -105,6 +105,21 @@ def test_the_benchmark_aliases_point_at_the_same_frames(plane):
     assert shared["bench_ret"] is shared["ibov_ret"]
 
 
+def test_the_regime_flags_carry_the_neutral_names_too(plane):
+    """The flags are computed off MarketSpec.benchmark, so on this plane
+    `ibov_above` already means "the S&P above its 10-month MA". A regime spec
+    looks its flag up in this dict by name (config_strategy._eval_regime), so
+    without the aliases a US or crypto spec had to write `ibov_above` and say
+    something false on the page."""
+    shared = _build(plane, "US")
+    for neutral, legacy in (("bench_above", "ibov_above"),
+                            ("bench_calm", "ibov_calm"),
+                            ("bench_uptrend", "ibov_uptrend"),
+                            ("bench_vol_monthly", "ibov_vol_monthly"),
+                            ("bench_vol_pctrank", "ibov_vol_pctrank")):
+        assert shared[neutral] is shared[legacy], neutral
+
+
 def test_the_glitch_mask_uses_the_market_thresholds(plane):
     """A -45% month is B3's artifact threshold. In crypto it is a normal month,
     and using B3's number would permanently mask most of the universe."""

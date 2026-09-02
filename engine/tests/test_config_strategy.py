@@ -265,3 +265,67 @@ def test_an_unknown_weighting_falls_back_to_equal_rather_than_crashing():
     row = _last_active_row(tw)
     assert row["AAAA3"] == pytest.approx(0.5)
     assert row["BBBB3"] == pytest.approx(0.5)
+
+
+# ── dedup_roots is a B3 rule, and only B3's ───────────────────────────────────
+
+def _dedup_shared(tickers: dict) -> dict:
+    """One rebalance-eligible row where every name carries a distinct signal, so
+    only the root collapsing can change what is held."""
+    cols = list(tickers)
+    idx = pd.date_range("2020-01-31", periods=4, freq="ME")
+    ret = pd.DataFrame(
+        np.tile(np.arange(len(cols)) * 0.01, (len(idx), 1)), index=idx, columns=cols)
+    return {
+        "ret": ret,
+        "log_ret": np.log1p(ret),
+        "adtv": pd.DataFrame([list(tickers.values())] * len(idx),
+                             index=idx, columns=cols),
+        "raw_close": pd.DataFrame(50.0, index=idx, columns=cols),
+        "has_glitch": pd.DataFrame(0.0, index=idx, columns=cols),
+    }
+
+
+def _dedup_spec(market: str) -> dict:
+    return {
+        "name": f"dedup-{market}", "kind": "rank_and_hold", "rebalance": "ME",
+        "market": market, "warmup": 1,
+        "signal": {"factor": "momentum", "lookback": 1},
+        "universe": {"min_adtv": 0, "min_price": 0},
+        "selection": {"top_n": 2, "min_names": 1, "dedup_roots": True},
+    }
+
+
+def test_dedup_roots_collapses_share_classes_on_b3():
+    # Ordered so the collapse changes the book: PETR3 has the strongest signal
+    # (last column) and the thinnest book, so a run without the dedup would hold
+    # it and one with it holds PETR4 instead. A pool where both answers coincide
+    # would pass either way.
+    shared = _dedup_shared({"PETR4": 3e6, "VALE3": 2e6, "PETR3": 1e6})
+    _, tw = RankAndHold(_dedup_spec("B3")).generate_signals(shared, {})
+    row = tw[(tw != 0).any(axis=1)].iloc[-1]
+    # PETR3 and PETR4 are one company; the deeper class survives the collapse.
+    assert row["PETR3"] == 0.0
+    assert sorted(row[row > 0].index) == ["PETR4", "VALE3"]
+
+
+@pytest.mark.parametrize("market,tickers", [
+    # Same shape as the B3 case: the shared-prefix name with the strongest
+    # signal is also the thinner one, so a B3-style collapse would drop it.
+    ("US", {"GOOGL": 3e6, "MSFT": 2e6, "GOOG": 1e6}),
+    ("CRYPTO", {"BTCUSDT": 3e6, "ETHUSDT": 2e6, "BTCUSDC": 1e6}),
+])
+def test_dedup_roots_is_inert_off_b3(market, tickers):
+    """A four-character root is a B3 fact. Applied to US it merges GOOG into
+    GOOGL and to crypto BTCUSDT into BTCUSDC — two real positions collapsed into
+    one, with the weight moved. markets sets root_len None on both planes; this
+    asserts the market actually reaches keep_most_liquid_per_root, which is the
+    one call site that used to take the B3 default."""
+    shared = _dedup_shared(tickers)
+    _, tw = RankAndHold(_dedup_spec(market)).generate_signals(shared, {})
+    row = tw[(tw != 0).any(axis=1)].iloc[-1]
+
+    names = list(tickers)
+    # The two highest-momentum names are held, whatever prefix they share.
+    assert sorted(row[row > 0].index) == sorted(names[-2:])
+    assert row[row > 0].sum() == pytest.approx(1.0)

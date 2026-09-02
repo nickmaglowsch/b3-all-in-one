@@ -59,14 +59,14 @@ def crypto_plane(tmp_path_factory) -> str:
     return db_path
 
 
-def _run(plane: str, market: str, tmp_path, **params) -> dict:
+def _run(plane: str, market: str, tmp_path, strategy="BottomVol", **params) -> dict:
     cfg = {"start": "2021-01-01", "end": "2023-12-31", "freq": "ME",
            "market": market,
            "params": {"min_adtv": 1000.0, "min_price": 0.0, **params}}
     out = str(tmp_path)
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "run_backtest_json.py"),
-         "BottomVol", out, json.dumps(cfg)],
+         strategy, out, json.dumps(cfg)],
         capture_output=True, text=True, cwd=str(ROOT),
         env={**os.environ, "ENGINE_DATABASE_URL": plane,
              "ENGINE_BENCH_OFFLINE": "1"})
@@ -84,6 +84,48 @@ def test_a_crypto_backtest_runs_and_reports_its_market(crypto_plane, tmp_path):
     assert m["currency"] == "BRL"
     assert m["periods"] > 24
     assert m["final_pretax_nav"] > 0
+
+
+def test_a_spec_authored_for_this_plane_runs_on_it(crypto_plane, tmp_path):
+    """The gallery's crypto strategies, through the same entry point the platform
+    shells. `BottomVol` above proves the plane runs *something*; this proves the
+    specs written for it are discovered by name and produce a book."""
+    m = _run(crypto_plane, "CRYPTO", tmp_path, strategy="CryptoLowVol")
+    assert m["strategy"] == "CryptoLowVol"
+    assert m["market"] == "CRYPTO"
+    assert m["periods"] > 24
+    assert m["final_pretax_nav"] > 0
+
+
+def test_a_gated_crypto_book_parks_in_cdi_rather_than_holding_nothing(
+        crypto_plane, tmp_path):
+    """CryptoBTCRegime routes the whole book to CDI whenever BTC is below its
+    10-period MA. What this asserts is that it stays invested in *something*
+    across the window — an unreachable regime flag would leave every row flat and
+    still return a plausible-looking NAV."""
+    m = _run(crypto_plane, "CRYPTO", tmp_path, strategy="CryptoBTCRegime")
+    assert m["market"] == "CRYPTO"
+    assert m["final_pretax_nav"] > 0
+    curves = pd.read_csv(tmp_path / "curves.csv")
+    assert (curves["pretax"] > 0).all()
+
+
+def test_a_crypto_spec_declares_its_own_market_without_being_told(
+        crypto_plane, tmp_path):
+    """No `market` in the config: the runner falls back to the strategy's own
+    declaration. A spec that forgot `market: CRYPTO` would silently run against
+    B3 and report the number under a crypto name."""
+    cfg = {"start": "2021-01-01", "end": "2023-12-31", "freq": "ME",
+           "params": {"min_adtv": 1000.0, "min_price": 0.0}}
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "run_backtest_json.py"),
+         "CryptoMomSharpe", str(tmp_path), json.dumps(cfg)],
+        capture_output=True, text=True, cwd=str(ROOT),
+        env={**os.environ, "ENGINE_DATABASE_URL": crypto_plane,
+             "ENGINE_BENCH_OFFLINE": "1"})
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    payload = [ln for ln in proc.stdout.splitlines() if ln.startswith("{")]
+    assert json.loads(payload[-1])["market"] == "CRYPTO"
 
 
 def test_it_writes_the_artifacts_the_platform_reads_back(crypto_plane, tmp_path):

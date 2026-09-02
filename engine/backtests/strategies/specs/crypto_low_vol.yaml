@@ -1,0 +1,26 @@
+name: CryptoLowVol
+description: >-
+  Low Volatility on the crypto plane. LowVol's mirror over the USDT pairs:
+  lowest realised volatility over the lookback, top decile, equal weight, always
+  invested. "Low volatility" is relative here — the calmest decile of this
+  universe is not calm.
+kind: rank_and_hold
+market: CRYPTO
+rebalance: ME
+warmup_pad: 1
+universe:
+  # markets.MARKETS["CRYPTO"] floors. No price floor: a coin quoting at $0.0001
+  # is not a penny stock, it is a supply schedule, and the B3 floor would delete
+  # most of the board.
+  min_adtv: 1000000
+  min_price: 0
+signal:
+  factor: low_vol
+  # Six, not LowVol's twelve. The Binance archive opens in 2017 and a 12-month
+  # lookback plus its pad costs more than a year of an eight-year history.
+  lookback: 6
+  shift: 0
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal

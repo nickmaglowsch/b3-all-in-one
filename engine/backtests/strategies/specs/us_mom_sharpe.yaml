@@ -1,0 +1,19 @@
+name: USMomSharpe
+description: >-
+  Momentum-Sharpe on the US plane. The mirror of MomSharpe: ranks the liquid
+  universe by risk-adjusted momentum (12m log-return sum / 12m return std, both
+  skip-1), top decile, equal weight.
+kind: rank_and_hold
+market: US
+rebalance: ME
+warmup_pad: 2
+universe:
+  min_adtv: 1000000
+  min_price: 5.0
+signal:
+  factor: sharpe_mom
+  lookback: 12
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal

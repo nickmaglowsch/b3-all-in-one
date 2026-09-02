@@ -78,12 +78,13 @@ def us_plane(tmp_path_factory) -> str:
     return db_path
 
 
-def _run(plane: str, tmp_path, start="2021-01-01", **params) -> dict:
+def _run(plane: str, tmp_path, start="2021-01-01", strategy="BottomVol",
+         **params) -> dict:
     cfg = {"start": start, "end": "2023-12-31", "freq": "ME", "market": "US",
            "params": {"min_adtv": 1000.0, "min_price": 0.0, **params}}
     proc = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "run_backtest_json.py"),
-         "BottomVol", str(tmp_path), json.dumps(cfg)],
+         strategy, str(tmp_path), json.dumps(cfg)],
         capture_output=True, text=True, cwd=str(ROOT),
         env={**os.environ, "ENGINE_DATABASE_URL": plane,
              "ENGINE_BENCH_OFFLINE": "1"})
@@ -101,6 +102,37 @@ def test_a_us_backtest_runs_and_is_scored_in_reais(us_plane, tmp_path):
     assert m["currency"] == "BRL"
     assert m["periods"] > 24
     assert m["final_pretax_nav"] > 0
+
+
+def test_a_spec_authored_for_this_plane_runs_on_it(us_plane, tmp_path):
+    """The gallery's US strategies, through the same entry point the platform
+    shells. `BottomVol` above proves the plane runs *something*; this proves the
+    specs written for it are discovered by name and produce a book — the seam
+    between `specs/us_*.yaml` and the runner, which nothing else crosses."""
+    m = _run(us_plane, tmp_path, strategy="USLowVol")
+    assert m["strategy"] == "USLowVol"
+    assert m["market"] == "US"
+    # Fewer rows than BottomVol above: this spec's 12-month lookback plus its pad
+    # eats 13 of the window's 36 months before it can rank anything.
+    assert m["periods"] > 20
+    assert m["final_pretax_nav"] > 0
+
+
+def test_a_us_spec_declares_its_own_market_without_being_told(us_plane, tmp_path):
+    """No `market` in the config: the runner falls back to the strategy's own
+    declaration. A spec that forgot `market: US` would silently run against B3
+    here and report a number under a US name."""
+    cfg = {"start": "2021-01-01", "end": "2023-12-31", "freq": "ME",
+           "params": {"min_adtv": 1000.0, "min_price": 0.0}}
+    proc = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "run_backtest_json.py"),
+         "USMomSharpe", str(tmp_path), json.dumps(cfg)],
+        capture_output=True, text=True, cwd=str(ROOT),
+        env={**os.environ, "ENGINE_DATABASE_URL": us_plane,
+             "ENGINE_BENCH_OFFLINE": "1"})
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    payload = [ln for ln in proc.stdout.splitlines() if ln.startswith("{")]
+    assert json.loads(payload[-1])["market"] == "US"
 
 
 def test_the_dead_are_in_the_universe_and_then_out_of_it(us_plane):

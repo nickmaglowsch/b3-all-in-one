@@ -1,0 +1,26 @@
+name: CryptoMeanRevWeekly
+description: >-
+  Weekly short-term mean reversion: buys the previous week's biggest losers among
+  the liquid USDT pairs, top decile, equal weight. SimpleMeanReversion's shape at
+  the cadence this plane actually reverts on, with a band wide enough to be a
+  crypto band rather than a B3 one.
+kind: rank_and_hold
+market: CRYPTO
+rebalance: W-FRI
+warmup_pad: 1
+universe:
+  min_adtv: 1000000
+  min_price: 0
+signal:
+  # Its own band, not the shared has_glitch: markets.MARKETS["CRYPTO"] already
+  # widens that to +500%/-90% for the whole plane, and this strategy wants a
+  # tighter one of its own — a name that moved +200% or -70% in a week is not a
+  # reversion candidate, it is a listing event or a collapse.
+  expr: "where(-roll_sum(ret, lookback), (ret <= 2.0) & (ret >= -0.7))"
+  lookback: 1
+  apply_glitch: false
+selection:
+  top_pct: 0.10
+  min_names: 5
+  sticky: true   # a thin week holds the book rather than round-tripping to cash
+weighting: equal

@@ -89,12 +89,7 @@ export interface MarketStatus {
 
 // Imports move pending → processing → done | error; backtests use "running" not
 // "processing". StatusBadge handles the union.
-export type JobStatus =
-  | "pending"
-  | "processing"
-  | "running"
-  | "done"
-  | "error";
+export type JobStatus = "pending" | "processing" | "running" | "done" | "error";
 
 export interface ImportRow {
   id: string;
@@ -249,6 +244,9 @@ export interface Strategy {
   kind: "code" | "spec";
   description: string;
   needs_fundamentals: boolean;
+  // Which market plane the strategy is authored for ("B3" | "US" | "CRYPTO").
+  // Optional because a cached/older gallery response predates the field.
+  market?: string;
   params: StrategyParam[];
   // GET /strategies tags each entry: built-in gallery vs this tenant's own.
   source?: "builtin" | "user";

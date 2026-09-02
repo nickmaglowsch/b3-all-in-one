@@ -1,0 +1,24 @@
+name: USProfitability
+description: >-
+  Quality without a value leg: ranks the liquid US universe on EBITDA margin
+  from SEC point-in-time filings and holds the top decile, equal weight. The
+  margin is a same-filing ratio, so it means the same thing whether the row
+  behind it is a quarter or a year.
+kind: rank_and_hold
+market: US
+rebalance: ME
+needs_fundamentals: true
+warmup_pad: 1
+universe:
+  min_adtv: 1000000
+  min_price: 5.0
+signal:
+  factor: ebitda_margin_pit
+  # EBITDA is NULL wherever the filer did not report both operating income and
+  # D&A (sec_parser refuses to guess it), so this book is narrower than the
+  # value one by construction — a stated property, not a gap.
+  apply_glitch: false
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal

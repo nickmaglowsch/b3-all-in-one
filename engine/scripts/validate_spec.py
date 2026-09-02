@@ -69,8 +69,14 @@ def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
     if isinstance(ref, str) and ref.startswith("store:"):
         errors.append(f"factor {ref!r}: store: references are not allowed for user strategies")
         return False
-    if ref in _signal_defs():
-        return False
+    defs = _signal_defs()
+    if ref in defs:
+        # A named signal is an expr like any other, so it can read fundamentals
+        # too (book_to_price_pit and the margins do). Returning False here meant
+        # a spec referencing one by name was never flagged needs_fundamentals —
+        # and so slipped past the "this market has no fundamentals" guard that
+        # validate() applies below.
+        return any(n.startswith("f_") for n in _expr_names(defs[ref].get("expr", "")))
     if isinstance(ref, str) and ref.startswith("f_"):
         return True                                    # a fundamentals shared_data frame
     if ref in SHARED_DATA_KEYS:

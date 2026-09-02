@@ -254,7 +254,9 @@ class RankAndHold(StrategyBase):
                 liq_adtv = adtv_r[valid.index]
                 valid = valid[liq_adtv <= liq_adtv.median()]
             if dedup_roots:
-                valid = keep_most_liquid_per_root(valid, adtv_r)
+                # With the market: B3's four-character root would merge GOOG into
+                # GOOGL and BTCUSDT into BTCUSDC. No-ops where there are no roots.
+                valid = keep_most_liquid_per_root(valid, adtv_r, self.market)
             if len(valid) < min_names:
                 # `sticky`: carry the previous book through a thin month rather
                 # than going flat (volume_breakout's prev_sel fallback).

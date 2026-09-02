@@ -1,0 +1,41 @@
+name: USQualityValue
+description: >-
+  Value + Quality on the US plane, off SEC point-in-time filings. Ranks the
+  liquid universe on book-to-price (value) and net margin (quality) and holds the
+  top fifth, equal weight. ValueQuality's shape, rebuilt from the raw PIT frames
+  because the f_*_dyn ratio frames are B3-only.
+kind: rank_and_hold
+market: US
+rebalance: ME
+needs_fundamentals: true
+universe:
+  min_adtv: 1000000
+  min_price: 5.0
+signal:
+  # nan_add, not `+`, for the same reason ValueQuality documents: the two legs
+  # have different coverage (a filer can report equity and shares but no revenue)
+  # and a plain sum would NaN out every name missing either one.
+  #
+  # Both legs are duration-invariant, which is what makes them rankable at all on
+  # this plane: 10-K and 10-Q facts sit side by side in fundamentals_pit_us, so a
+  # bare f_net_income is annual for one filer and quarterly for the next.
+  # book_to_price_pit reads instants only; net_margin_pit divides two figures
+  # from the same filing slot. See the comment block in signals.yaml.
+  #
+  # And no `range:` band on either: off B3 the price is BRL and the filing is
+  # USD, so the levels carry an FX factor. It cancels in a cross-sectional rank
+  # and does not cancel in a threshold.
+  expr: >-
+    nan_add(
+      value_weight * rank(f_equity / (raw_close * f_shares_outstanding)),
+      (1.0 - value_weight) * rank(f_net_income / where(f_revenue, f_revenue > 0))
+    )
+  value_weight: 0.5
+  apply_glitch: false
+selection:
+  top_pct: 0.20
+  min_names: 5
+  # No dedup_roots: markets.MARKETS["US"].root_len is None. There are no share
+  # classes to collapse here, and a four-character root would merge GOOG into
+  # GOOGL — two companies' worth of one company's filing.
+weighting: equal

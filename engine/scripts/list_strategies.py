@@ -4,9 +4,10 @@ Registry discovery must run inside the engine env (it imports pandas, yaml, the
 strategy plugins and specs), so the platform shells into this instead of trying
 to import backtests/ from its own venv.
 
-Output: JSON list of {name, kind, description, params}, where kind is "spec" for
-YAML-driven RankAndHold/FixedWeight strategies and "code" for StrategyBase
-subclasses. params is each strategy's parameter specs (cheap — no data load).
+Output: JSON list of {name, kind, market, description, params}, where kind is
+"spec" for YAML-driven RankAndHold/FixedWeight strategies and "code" for
+StrategyBase subclasses. params is each strategy's parameter specs (cheap — no
+data load).
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from backtests.core import markets
 from backtests.core.strategy_registry import get_registry
 from backtests.core.config_strategy import RankAndHold, FixedWeight
 
@@ -47,6 +49,10 @@ def main() -> None:
         out.append({
             "name": name,
             "kind": kind,
+            # Which plane the strategy is authored for. Spec-driven ones carry
+            # it; the hand-written plugins predate the market registry and are
+            # all B3, which is what the default means here.
+            "market": getattr(strat, "market", None) or markets.DEFAULT,
             "description": " ".join(str(strat.description).split()),
             "needs_fundamentals": bool(getattr(strat, "needs_fundamentals", False)),
             "params": params,

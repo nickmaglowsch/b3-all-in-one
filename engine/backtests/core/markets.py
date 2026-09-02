@@ -13,7 +13,7 @@ security master will ever cover for thirty years of history; `instruments` says
 all*. They compose. That is why B3 keeps its suffix rule instead of being forced
 through a master it does not have.
 
-**Split detection must not run on crypto.** `shared_data._detect_and_fix_unrecorded_splits`
+**Split detection must not run on crypto.** `splits.detect_and_fix_unrecorded`
 fires on a persistent, calm-volume overnight repricing by a clean ratio. On B3
 that is an unrecorded grupamento. In crypto a -50% day is a Tuesday, and letting
 the detector loose would silently rewrite price history.

@@ -1,0 +1,34 @@
+name: USTrendRegime
+description: >-
+  Trend-gated US book. When the S&P is above its 10-month moving average, hold
+  the top-decile momentum/low-vol composite; otherwise (or when too few names
+  qualify) hold 100% CDI. RegimeSwitching's shape on the US plane — and the
+  ordinary reading of the Faber rule, which is stated on the S&P in the first
+  place.
+kind: rank_and_hold
+market: US
+rebalance: ME
+warmup_pad: 2
+universe:
+  min_adtv: 1000000
+  min_price: 5.0
+signal:
+  factor: mf_composite
+  lookback: 12
+  apply_glitch: false
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal
+regime:
+  # `bench_above` is `ibov_above` under the market-neutral name: the flag is
+  # computed off MarketSpec.benchmark, which here is $SPX. The old name would
+  # have been a lie on the page.
+  add_ibov: false        # nothing weights that column; leaving it on would put a
+                         # return stream literally named IBOV in a US matrix
+  park_when_too_few: true
+  inputs:
+    above: {flag: bench_above, offset: 1}
+  rules:
+    - {above: true}
+    - {default: true, park: true}

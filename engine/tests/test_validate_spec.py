@@ -73,3 +73,38 @@ def test_unknown_kind_is_rejected():
     r = validate({"name": "X", "kind": "bogus"})
     assert not r["ok"]
     assert any("unknown kind" in e for e in r["errors"])
+
+
+# ── A named signal can read fundamentals too ──────────────────────────────────
+# signals.yaml gained book_to_price_pit / net_margin_pit / ebitda_margin_pit, so
+# "resolves to a name in signals.yaml" stopped implying "reads no f_* frame".
+# Before this, a `factor:` reference to one of them reported
+# needs_fundamentals: False and sailed past the no-fundamentals market guard.
+
+def test_a_named_signal_that_reads_fundamentals_is_flagged():
+    r = validate(_rank({"factor": "book_to_price_pit"}))
+    assert r["ok"] and r["needs_fundamentals"]
+
+
+def test_a_named_signal_that_reads_no_fundamentals_is_not_flagged():
+    r = validate(_rank({"factor": "low_vol", "lookback": 12}))
+    assert r["ok"] and not r["needs_fundamentals"]
+
+
+def test_a_fundamentals_named_signal_is_rejected_on_a_market_without_them():
+    r = validate(_rank({"factor": "net_margin_pit"}, market="CRYPTO"))
+    assert not r["ok"]
+    assert any("no fundamentals" in e for e in r["errors"])
+
+
+def test_the_same_signal_is_accepted_on_a_market_that_has_them():
+    for market in ("B3", "US"):
+        r = validate(_rank({"factor": "net_margin_pit"}, market=market))
+        assert r["ok"], (market, r["errors"])
+        assert r["needs_fundamentals"]
+
+
+def test_an_unknown_market_is_rejected_rather_than_defaulting_to_b3():
+    r = validate(_rank({"factor": "momentum", "lookback": 6}, market="USA"))
+    assert not r["ok"]
+    assert any("Unknown market" in e for e in r["errors"])

@@ -1,0 +1,24 @@
+name: USMultiFactor
+description: >-
+  Multifactor on the US plane (always invested). The mirror of MultiFactor:
+  composite = 0.5 * momentum_rank + 0.5 * low_vol_rank, top decile of the
+  eligible liquid universe.
+kind: rank_and_hold
+market: US
+rebalance: ME
+warmup_pad: 2
+universe:
+  min_adtv: 1000000
+  min_price: 5.0
+signal:
+  # Character for character the expression MultiFactor uses, so the two books
+  # differ only in the plane they read. Each leg glitch-masked before ranking.
+  expr: >-
+    0.5 * rank(mask_glitch(roll_sum(shift(log_ret, 1), lookback)))
+    + 0.5 * rank(mask_glitch(-roll_std(shift(ret, 1), lookback)))
+  lookback: 12
+  apply_glitch: false   # glitch handled per-leg inside the expr
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal

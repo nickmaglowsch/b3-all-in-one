@@ -1,6 +1,7 @@
 # Config-driven strategies (strategies as data)
 
-Audience: humans **and** AI agents building/backtesting B3 portfolios.
+Audience: humans **and** AI agents building/backtesting portfolios on any of
+the three market planes — B3, US, crypto.
 
 A large class of strategies — "pick a factor, rank the liquid universe, hold the
 top N, rebalance" and "hold a fixed set of sleeves and rebalance to weights" —
@@ -56,6 +57,76 @@ python scripts/run_backtest_json.py MyMomentum /tmp/run1 '{}'
 ```
 
 ---
+
+## Markets
+
+A spec runs against B3 unless it says otherwise. One key picks the plane:
+
+```yaml
+market: US        # B3 (default) | US | CRYPTO
+```
+
+`backtests/core/markets.py` is the registry, and everything that differs between
+planes is a field there rather than a branch in the engines. An unknown key
+raises — a typo is never a silently Brazilian backtest.
+
+**The numeraire is BRL on all three.** The holder is a Brazilian taxpayer and the
+cash sleeve is CDI whatever the equity sleeve is, so `min_adtv` and `min_price`
+are BRL floors on every plane and a US or crypto book bundles the USD/BRL move
+into its return. That is correct for this product's user and *not* comparable to
+a native-currency Sharpe.
+
+What a spec author has to know per plane:
+
+| | B3 | US | CRYPTO |
+|---|---|---|---|
+| universe | standard lots + units | every listed name | `%USDT` pairs only |
+| benchmark | `$IBOV` | `$SPX` | `BTCUSDT` |
+| `min_adtv` / `min_price` defaults | 1000000 / 1.0 | 1000000 / 5.0 | 1000000 / 0.0 |
+| glitch band (`has_glitch`) | +100% / -45% | +100% / -45% | +500% / -90% |
+| `dedup_roots` | collapses share classes | **no-op** (no roots) | **no-op** |
+| fundamentals (`f_*`) | CVM | SEC XBRL | **none — a spec that reads them is rejected** |
+| tax | 15%, R$20k monthly isenção, loss carries | 15%, no isenção, annual apuração, no carry | 15%, R$35k monthly isenção, **no loss carry at all** |
+
+Tax is not a spec field. `markets.resolve_tax` takes the rate, the isenção, the
+apuração period and the carry policy from the class's rule; only the rate is
+overridable, as a what-if.
+
+### Naming the benchmark honestly
+
+The regime flags are computed off *this market's* benchmark, but their names date
+from when there was only one: `ibov_ret`, `ibov_above`, `ibov_calm`,
+`ibov_uptrend`, `ibov_vol_pctrank`, `ibov_vol_monthly`. Each has a
+market-neutral alias to the same object — `bench_ret`, `bench_px`, `bench_above`,
+`bench_calm`, `bench_uptrend`, `bench_vol_pctrank`, `bench_vol_monthly`. **New
+specs use the `bench_*` names**; on US `bench_above` is the S&P above its
+10-month MA and on crypto it is BTC. The `ibov_*` names stay and now mean "this
+market's benchmark".
+
+### Fundamentals off B3
+
+Only the point-in-time frames are market-scoped. `f_revenue`, `f_net_income`,
+`f_ebitda`, `f_total_assets`, `f_equity`, `f_net_debt`, `f_shares_outstanding`
+come from `fundamentals_pit` on B3 and `fundamentals_pit_us` on US.
+
+The *derived* frames do not: `f_*_m`, `f_pe_ratio_dyn`, `f_pb_ratio_dyn` and
+`f_ev_ebitda_dyn` are all built from `fundamentals_monthly`, which
+`load_all_fundamentals_monthly` reads without a market scope. **They are empty
+off B3.** A US value strategy therefore assembles its ratio from the raw PIT
+frames — see `signals.yaml`'s `book_to_price_pit` / `net_margin_pit` /
+`ebitda_margin_pit` and `specs/us_quality_value.yaml`.
+
+Two traps live there, both documented at length in `signals.yaml`:
+
+- **Rank, never `range:`.** Off B3 the price is BRL and the filing is USD (on B3
+  the CVM values are thousands of BRL against a BRL price). The mismatch is one
+  scale factor shared by every name on a date, so a cross-sectional rank is exact
+  and an absolute threshold — `low_pe.yaml`'s P/E band, say — is meaningless.
+- **Duration.** SEC facts arrive per (accession, period\_end) and 10-K and 10-Q
+  rows sit side by side, so a bare `f_net_income` is annual for one filer and
+  quarterly for the next; `f_net_income_ttm` would fix it but is computed only by
+  the CVM pipeline and is NULL on the US plane. Use instants only (equity,
+  shares, price) or a same-slot ratio (a margin), which cancels the period out.
 
 ## Two `kind`s of strategy
 
@@ -267,6 +338,10 @@ Common regime flags in `shared_data`: `is_easing`, `above_ma200`, `ibov_above`,
 | Band filter on the factor value | `specs/low_pe.yaml`, `specs/bottom_vol.yaml` (`range:`) |
 | Daily-derived factor on a monthly grid | `signals.yaml: win_rate_mean_rev` |
 | Fixed ETF/CDI blend | `specs/divo_ivvb_cdi_40_40_20.yaml` |
+| The same book on another plane | `specs/us_low_vol.yaml`, `specs/crypto_low_vol.yaml` |
+| Fundamentals ranker without the monthly snapshot (US) | `specs/us_quality_value.yaml` |
+| Macro gate on a non-B3 benchmark (`bench_above`) | `specs/us_trend_regime.yaml`, `specs/crypto_btc_regime.yaml` |
+| Liquidity-weighted "hold the market" book | `specs/crypto_top_liquid.yaml` |
 | Blend that waits for all ETFs | `specs/baseline_thirds.yaml` |
 
 ---
@@ -331,6 +406,15 @@ table in `backtests/core/signal_dsl.py`. That's rare; factors are data.
   spans every share class, ~15% more columns than `ret`). The engine reindexes
   the signal row onto the universe, but `rank()` inside your `expr` still ranks
   over the *whole* frame — which is what the original classes did.
+- **`market:` is not a run-time nicety.** Omit it and the spec is B3, whatever its
+  name says. The `market` *parameter* can override it on a single run, but a spec
+  authored for a plane should declare it — otherwise the gallery, the universe
+  floors and the tax rule all read B3.
+- **Write `universe:` out even when you mean the market's defaults.** The
+  `MarketSpec` floors reach `generate_signals` only through
+  `get_default_parameters()`, so a direct `generate_signals(shared, {})` call —
+  which is how the behaviour tests drive a spec — falls back to 1000000/1.0
+  instead.
 - **`min_names` vs `min_hold`.** `min_names` gates whether to invest at all;
   `min_hold` floors how many to hold. They default to the same value; split them
   only when a strategy really does both (`win_rate_mean_rev`).

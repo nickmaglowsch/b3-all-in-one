@@ -1,0 +1,32 @@
+name: CryptoBTCRegime
+description: >-
+  Altcoins while Bitcoin trends, CDI when it does not. Holds the top-decile
+  momentum/low-vol composite of the USDT pairs whenever BTC is above its
+  10-period moving average, and 100% CDI otherwise. The drawdown is the whole
+  risk on this plane — the book that survives it is the one that leaves.
+kind: rank_and_hold
+market: CRYPTO
+rebalance: ME
+warmup_pad: 2
+universe:
+  min_adtv: 1000000
+  min_price: 0
+signal:
+  factor: mf_composite
+  lookback: 6
+  apply_glitch: false
+selection:
+  top_pct: 0.10
+  min_names: 5
+weighting: equal
+regime:
+  # `bench_above` is the market's own benchmark above its 10-period MA, and
+  # MarketSpec.benchmark is BTCUSDT here. Same flag RegimeSwitching reads on B3,
+  # under the name that is true on every plane.
+  add_ibov: false
+  park_when_too_few: true
+  inputs:
+    above: {flag: bench_above, offset: 1}
+  rules:
+    - {above: true}
+    - {default: true, park: true}

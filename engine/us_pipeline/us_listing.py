@@ -80,7 +80,7 @@ def _known(conn) -> pd.DataFrame:
 
 
 def _check(active: pd.DataFrame, delisted: pd.DataFrame, new_delistings: int,
-           live: int) -> None:
+           live: int, max_new_delistings: int = 0) -> None:
     """Refuse a snapshot that does not look like the US market. Nothing written."""
     if len(active) < MIN_PLAUSIBLE_ACTIVE:
         raise ValueError(
@@ -92,7 +92,7 @@ def _check(active: pd.DataFrame, delisted: pd.DataFrame, new_delistings: int,
             "LISTING_STATUS returned active symbols but no delisted ones. The "
             "delisted set is tens of thousands of rows and never empty, so this "
             "is a truncation signature. Nothing was written.")
-    cap = max(50, int(live * MAX_NEW_DELISTINGS_PCT))
+    cap = max_new_delistings or max(50, int(live * MAX_NEW_DELISTINGS_PCT))
     if live and new_delistings > cap:
         raise ValueError(
             f"LISTING_STATUS would newly delist {new_delistings:,} of {live:,} "
@@ -188,18 +188,34 @@ def _foreign_delisting(prior) -> bool:
             and prior["delist_reason"] != DELIST_REASON)
 
 
-def reconcile(conn, active: pd.DataFrame, delisted: pd.DataFrame) -> dict:
-    """Fold both listing files into `instruments`."""
+def reconcile(conn, active: pd.DataFrame, delisted: pd.DataFrame,
+              max_new_delistings: int = 0) -> dict:
+    """Fold both listing files into `instruments`.
+
+    `max_new_delistings` raises the refusal ceiling for one run. The ceiling is
+    calibrated for a steady-state day ("a real day adds single digits"), which a
+    *first* reconciliation is not: the plane starts as one directory snapshot
+    with no intervals at all, so the whole standing backlog of delistings lands
+    at once. Opt in explicitly rather than widening the daily guard.
+    """
     known_df = _known(conn)
     for col in ("first_seen", "last_seen", "delisting_date"):
         known_df[col] = pd.to_datetime(known_df[col], errors="coerce").dt.date
     known = {r["symbol"]: r for _, r in known_df.iterrows()}
     live = int(known_df["delisting_date"].isna().sum()) if not known_df.empty else 0
 
-    already_dead = {s for s, r in known.items() if not pd.isna(r["delisting_date"])}
+    # Only symbols this plane currently holds as *live*. The delisted file is
+    # the whole history of the US market — ~9.5k names, ~8.9k of which this
+    # plane has never held — and counting those as "newly delisted" made the
+    # ceiling below compare the size of that file against our live count. The
+    # first real run therefore reported 9,457 of 13,181 and refused, which is
+    # the module declining to do the exact job its docstring describes: a
+    # symbol the directory never saw is the historical universe this exists to
+    # import, not a delisting of anything we hold.
+    live_now = {s for s, r in known.items() if pd.isna(r["delisting_date"])}
     fresh = ([] if delisted.empty
-             else [s for s in delisted["symbol"] if s not in already_dead])
-    _check(active, delisted, len(fresh), live)
+             else [s for s in delisted["symbol"] if s in live_now])
+    _check(active, delisted, len(fresh), live, max_new_delistings)
 
     seen, unseen, revived, conflicts = _plan(active, delisted, known)
     written = 0
@@ -241,7 +257,7 @@ def _columns(row, unseen: bool) -> dict:
     return base
 
 
-def run_pipeline(db_path=None) -> dict:
+def run_pipeline(db_path=None, max_new_delistings: int = 0) -> dict:
     """Two requests: the living universe and the dead one."""
     logger.info(f"US listing status -> {storage.describe_target(db_path)}")
     with storage.get_connection(db_path) as conn:
@@ -249,7 +265,7 @@ def run_pipeline(db_path=None) -> dict:
         client = Client(conn)
         active = fetch(client, "active")
         delisted = fetch(client, "delisted")
-        return reconcile(conn, active, delisted)
+        return reconcile(conn, active, delisted, max_new_delistings)
 
 
 def main() -> None:
@@ -257,10 +273,14 @@ def main() -> None:
 
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db-path", default=None)
+    ap.add_argument("--max-new-delistings", type=int, default=0,
+                    help="raise the refusal ceiling for this run; for the first "
+                         "reconciliation, which imports a standing backlog "
+                         "rather than one day's delistings")
     args = ap.parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run_pipeline(args.db_path)
+    run_pipeline(args.db_path, args.max_new_delistings)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,7 @@
+import time
 import uuid
 
+import jwt
 from fastapi import Depends
 from fastapi_users import BaseUserManager, FastAPIUsers, UUIDIDMixin
 from fastapi_users.authentication import (
@@ -12,6 +14,7 @@ from fastapi_users.authentication.transport import (
     TransportLogoutNotSupportedError,
 )
 from fastapi_users.db import SQLAlchemyUserDatabase
+from fastapi_users.jwt import decode_jwt, generate_jwt
 from fastapi_users.schemas import BaseUser, BaseUserCreate
 from httpx_oauth.clients.google import GoogleOAuth2
 from starlette.responses import RedirectResponse, Response
@@ -40,9 +43,75 @@ async def get_user_manager(user_db: SQLAlchemyUserDatabase = Depends(get_user_db
 
 bearer_transport = BearerTransport(tokenUrl="auth/jwt/login")
 
+# ── Session lifetime ──────────────────────────────────────────────────────────
+# The token is a bearer credential the SPA keeps in localStorage and nothing can
+# revoke, so it was minted for one hour. With no renewal anywhere, that hour was
+# the *whole session*: an open tab stopped working at the wall and the next click
+# landed on /login, which is what "I have to log in again every time you deploy"
+# actually was — deploys are just when people go and look.
+#
+# Splitting the one number in two fixes that without handing out a longer-lived
+# credential than the flow needs:
+#
+#   TOKEN_TTL_S       how long one token is accepted. Still bounded, so a token
+#                     that leaks out of localStorage is not a permanent key.
+#   SESSION_MAX_AGE_S how long the session behind it may keep renewing. Every
+#                     token carries `sst`, the instant its session began;
+#                     POST /auth/refresh re-issues with the *same* `sst` and
+#                     refuses once it is older than this. Sliding without a cap
+#                     is what would make a stolen token immortal, so the cap is
+#                     the point, not a detail.
+#
+# The audience is pinned here rather than left to the JWTStrategy default because
+# refresh decodes the presented token itself and has to ask for the same one.
+TOKEN_AUDIENCE = ["fastapi-users:auth"]
+TOKEN_TTL_S = 12 * 3600
+SESSION_MAX_AGE_S = 30 * 24 * 3600
+SESSION_START_CLAIM = "sst"
 
-def get_jwt_strategy() -> JWTStrategy:
-    return JWTStrategy(secret=settings.secret_key, lifetime_seconds=3600)
+
+class SessionJWTStrategy(JWTStrategy):
+    """JWTStrategy that stamps when the session started.
+
+    Identical to upstream except for the extra claim — `read_token` ignores
+    unknown claims, so tokens minted before this shipped keep working.
+    """
+
+    async def write_token(self, user: User, session_start: int | None = None) -> str:
+        data = {
+            "sub": str(user.id),
+            "aud": self.token_audience,
+            SESSION_START_CLAIM: int(time.time()) if session_start is None else session_start,
+        }
+        return generate_jwt(
+            data, self.encode_key, self.lifetime_seconds, algorithm=self.algorithm
+        )
+
+
+def get_jwt_strategy() -> SessionJWTStrategy:
+    return SessionJWTStrategy(
+        secret=settings.secret_key,
+        lifetime_seconds=TOKEN_TTL_S,
+        token_audience=TOKEN_AUDIENCE,
+    )
+
+
+def session_started_at(token: str) -> int | None:
+    """`sst` out of a token the caller has *already* authenticated.
+
+    None when the token carries no stamp — every token issued before this shipped
+    is in that class, and the deploy that ships it must not log those sessions
+    out. The caller reads None as "this session starts now", which costs at most
+    one extra renewal window and nothing else.
+    """
+    try:
+        data = decode_jwt(token, settings.secret_key, TOKEN_AUDIENCE)
+    except jwt.PyJWTError:
+        return None
+    stamp = data.get(SESSION_START_CLAIM)
+    if isinstance(stamp, bool) or not isinstance(stamp, (int, float)):
+        return None
+    return int(stamp)
 
 
 auth_backend = AuthenticationBackend(
@@ -60,7 +129,7 @@ class RedirectTransport(Transport):
 
     In the **fragment**, not the query string. A query string is logged verbatim
     by Cloudflare Pages and every proxy in between, and this token is a full
-    1h bearer credential that JWTStrategy cannot revoke — so a line in an access
+    bearer credential that JWTStrategy cannot revoke — so a line in an access
     log is a working session for whoever reads it. Fragments are never sent to a
     server at all. Keep it that way.
     """

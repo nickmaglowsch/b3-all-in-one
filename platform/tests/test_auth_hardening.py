@@ -85,6 +85,10 @@ def test_password_and_dev_routes_are_not_mounted_in_production():
                   "/billing/dev-modules"):
         assert route not in paths, f"{route} is mounted in production"
     assert "/auth/google/authorize" in paths  # ...and Google login still is
+    # Renewal is not a dev convenience. Without it in production the session is
+    # again exactly as long as one token, which is the "every deploy logs me
+    # out" report — see tests/test_session_lifetime.py.
+    assert "/auth/refresh" in paths
 
 
 @pytest.mark.parametrize("secret", ["", "change-me", "dev-secret-change-me"])

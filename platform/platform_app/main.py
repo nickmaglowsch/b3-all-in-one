@@ -1,9 +1,10 @@
 import hashlib
 import hmac
 import json
+import time
 from urllib.parse import parse_qs, urlparse
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_users import exceptions
@@ -19,6 +20,7 @@ from platform_app.billing import (
 )
 from platform_app.config import settings
 from platform_app.db import engine
+from platform_app.models import User
 from platform_app.privacy import privacy_router
 from platform_app.routes import (
     backtests_router,
@@ -36,14 +38,18 @@ from platform_app.routes_portfolios import portfolios_router
 from platform_app.routes_whatif import whatif_router
 from platform_app.tenancy import get_current_tenant
 from platform_app.users import (
+    SESSION_MAX_AGE_S,
+    SessionJWTStrategy,
     UserCreate,
     UserRead,
     auth_backend,
+    current_active_user,
     fastapi_users,
     get_google_oauth_client,
     get_jwt_strategy,
     get_user_manager,
     oauth_backend,
+    session_started_at,
 )
 
 app = FastAPI(title="b3-all-in-one platform")
@@ -191,6 +197,41 @@ async def health() -> dict[str, str]:
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
     return {"status": "ok"}
+
+
+@app.post("/auth/refresh", tags=["auth"])
+async def refresh_session(
+    request: Request,
+    user: User = Depends(current_active_user),
+    strategy: SessionJWTStrategy = Depends(get_jwt_strategy),
+) -> dict[str, str]:
+    """Mint the next token of the session the caller is already in.
+
+    A renewal, not a login: the `sst` stamp rides across, so the chain of
+    renewals expires SESSION_MAX_AGE_S after the *first* sign-in no matter how
+    many times it slid. The SPA calls this on load and while a tab is in use,
+    which is what keeps a session that is being used from ending at the token's
+    TTL — the failure everyone read as "the deploy logged me out".
+
+    Nothing here touches the browser's selected book: renewing is not switching
+    accounts, and clearing it would drop an advisor out of the client's book they
+    were reading.
+    """
+    presented = request.headers.get("Authorization", "")
+    raw = presented[7:] if presented[:7].lower() == "bearer " else ""
+    # None => a token minted before `sst` existed. Reading that as "starts now"
+    # is deliberate: the alternative is logging every open session out on the
+    # deploy that adds the claim, which is the bug this endpoint exists to fix.
+    started = session_started_at(raw)
+    now = int(time.time())
+    if started is None:
+        started = now
+    if now - started > SESSION_MAX_AGE_S:
+        raise HTTPException(401, "Sessão expirada — entre novamente.")
+    return {
+        "access_token": await strategy.write_token(user, session_start=started),
+        "token_type": "bearer",
+    }
 
 
 @app.get("/me", tags=["users"])

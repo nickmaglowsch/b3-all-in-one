@@ -6,20 +6,30 @@ export const API_URL =
 
 const TOKEN_KEY = "b3_token";
 const PORTFOLIO_KEY = "b3_portfolio";
+const REFRESHED_AT_KEY = "b3_token_refreshed_at";
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
 }
 export function setToken(t: string) {
-  window.localStorage.setItem(TOKEN_KEY, t);
+  storeToken(t);
   // A new login inherits nothing: the previous account's book selection would
   // otherwise ride along and 404 this account's first requests.
   clearPortfolioId();
 }
 export function clearToken() {
   window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem(REFRESHED_AT_KEY);
   clearPortfolioId();
+}
+
+// Write the credential and nothing else. A *renewal* comes through here: it is
+// the same session on the same account, so wiping the selected book — which is
+// what setToken does, correctly, for a login — would drop an advisor out of the
+// client's book they were reading, at an interval, for no reason.
+function storeToken(t: string) {
+  window.localStorage.setItem(TOKEN_KEY, t);
 }
 
 // Which book the app is acting on (módulo empresarial). Unset => the user's own,
@@ -224,6 +234,47 @@ function errorMessage(detail: unknown, res: Response): string {
       && typeof detail.message === "string") return detail.message;
   if (detail) return JSON.stringify(detail);
   return res.statusText || `HTTP ${res.status}`;
+}
+
+// ── Renovação da sessão ──────────────────────────────────────────────────────
+// The token the API issues has a fixed TTL, and until POST /auth/refresh existed
+// that TTL *was* the session: a tab that had been open past it simply stopped
+// working, and the next click landed on /login. People read that as "the deploy
+// logged me out", because a deploy is when they go back and look.
+//
+// So renew it while the tab is in use. The API slides the same session forward
+// (it refuses once the session as a whole is older than its cap — see
+// platform_app/users.py), which is why this stores the token without touching
+// the selected book: renewing is not signing in as somebody else.
+export const REFRESH_EVERY_MS = 60 * 60 * 1000; // TTL is 12h — a dozen chances to renew
+
+// One flight at a time. Mount, window focus and the interval can land together,
+// and two in parallel would race to write back the older of the two tokens.
+let refreshing: Promise<void> | null = null;
+
+export function refreshSession(force = false): Promise<void> {
+  if (typeof window === "undefined" || !getToken()) return Promise.resolve();
+  const last = Number(window.localStorage.getItem(REFRESHED_AT_KEY) ?? 0);
+  if (!force && Date.now() - last < REFRESH_EVERY_MS) return Promise.resolve();
+  refreshing ??= (async () => {
+    // Stamped on the attempt, not on the success: while the API is down — which
+    // is exactly when a deploy is happening — every window focus would otherwise
+    // fire another POST. There are a dozen windows inside one token's life, so
+    // sitting out one of them costs nothing.
+    window.localStorage.setItem(REFRESHED_AT_KEY, String(Date.now()));
+    try {
+      const body = await api<Bearer>("/auth/refresh", { method: "POST" });
+      storeToken(body.access_token);
+    } catch {
+      // A 401 already did the right thing inside api(): token cleared, bounce to
+      // /login. Everything else — the API mid-deploy, a laptop that woke up on a
+      // dead network — is not a reason to end a session that is still valid, so
+      // keep the token we have and let the next tick try again.
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
 }
 
 // Google OAuth: ask the API for Google's consent URL, then hand the browser to

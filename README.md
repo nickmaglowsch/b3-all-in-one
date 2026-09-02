@@ -344,6 +344,22 @@ email, and a **sair** (logout) action. Google OAuth comes later.
 backtest summary at the end. `npm --prefix frontend run build` runs a clean production
 build.
 
+**Sessions.** A token is valid for `TOKEN_TTL_S` (12h, `platform_app/users.py`) and the
+app renews it through `POST /auth/refresh` on mount, on window focus and hourly, so a
+session that is being used does not end at the token's expiry. Renewal carries the `sst`
+claim — when the session started — and the API refuses once that is older than
+`SESSION_MAX_AGE_S` (30 days), which is what keeps a sliding token from becoming a
+permanent one. Both halves are pinned by `platform/tests/test_session_lifetime.py`.
+
+**Deploys and the browser cache.** `frontend/public/_headers` makes every HTML document
+revalidate (`max-age=0, must-revalidate`) and lets the content-hashed `/_next/static/*`
+assets be cached forever. This is load-bearing, not tidiness: a browser reusing an HTML
+document from before a deploy asks for chunk filenames the new deployment does not have,
+gets the 404 page where JavaScript should be, and never hydrates — the login button goes
+inert and `/auth/callback` never stores the token Google just handed it. `app/layout.tsx`
+carries the belt to that braces: a pre-React script that reloads once, through the HTTP
+cache, if the chunks 404 or the app never comes up.
+
 ## Quality gates
 
 The suites are the contract, not the review. Eight checks run in CI

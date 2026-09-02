@@ -17,6 +17,10 @@ export interface Series {
   key: string;
   label: string;
   color?: string;
+  /** SVG dash pattern. Set it for a line that is not the same *kind* of thing
+   *  as the others — a benchmark beside a set of backtests. Colour alone puts
+   *  the ruler in the same visual class as the runs it is there to judge. */
+  dash?: string;
 }
 
 // `undefined` is allowed: a series need not cover every row (an overlay the API
@@ -58,7 +62,17 @@ export function LineSeries({
             >
               <span
                 className="inline-block h-0.5 w-4 rounded-full"
-                style={{ background: s.color ?? SERIES[i % SERIES.length] }}
+                style={
+                  // The swatch has to carry the dash too, or the legend claims
+                  // every line is the same kind of line.
+                  s.dash
+                    ? {
+                        backgroundImage: `repeating-linear-gradient(to right, ${
+                          s.color ?? SERIES[i % SERIES.length]
+                        } 0 4px, transparent 4px 7px)`,
+                      }
+                    : { background: s.color ?? SERIES[i % SERIES.length] }
+                }
               />
               {s.label}
             </li>
@@ -99,7 +113,8 @@ export function LineSeries({
               dataKey={s.key}
               name={s.label}
               stroke={s.color ?? SERIES[i % SERIES.length]}
-              strokeWidth={2}
+              strokeDasharray={s.dash}
+              strokeWidth={s.dash ? 1.5 : 2}
               dot={false}
               activeDot={{ r: 3 }}
               isAnimationActive={false}

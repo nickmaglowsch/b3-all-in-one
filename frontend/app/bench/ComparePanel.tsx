@@ -7,15 +7,12 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Money } from "@/components/ui/Money";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { LineSeries } from "@/components/charts/LineSeries";
-import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { IconChart } from "@/components/icons";
-import { formatDate } from "@/lib/format";
 import type { BacktestRun } from "@/lib/types";
+import { CompareChart } from "./CompareChart";
 import {
   MAX_COMPARE,
   type Metrics,
-  compactBRL,
   formatMetricPct,
   formatRatio,
   mergeCurvesByDate,
@@ -108,11 +105,10 @@ export function ComparePanel({
   const capped = runs.slice(0, MAX_COMPARE);
   const overflow = runs.length - capped.length;
   // Hooks stay unconditional: fetch curves for whatever is capped, then branch.
+  // Everything the overlay itself needs — the window, the unit, the rulers —
+  // lives in CompareChart: it is state the metrics table below can never follow,
+  // since those figures are the engine's over each run's whole period.
   const curveQueries = useCurvesMany(capped.map((r) => r.id));
-  // Scoped to the overlay, which is why the control sits above the chart rather
-  // than in the card header: the metrics table underneath is the engine's, over
-  // each run's full window, and nothing here can narrow it.
-  const period = useDateRange();
 
   if (runs.length < 2) {
     return (
@@ -227,39 +223,22 @@ export function ComparePanel({
             Não foi possível carregar as curvas das rodadas selecionadas.
           </p>
         ) : (
-          <>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-                Período do gráfico
-              </span>
-              {period.control}
-            </div>
-            <LineSeries
-              data={period.slice(chartData)}
-              xKey="date"
-              height={340}
-              series={chartSeries}
-              valueFormat={compactBRL}
-              labelFormat={formatDate}
-            />
-            {failed.length > 0 && (
-              <p className="mt-2 text-xs text-muted">
-                Sem curva para {failed.map((r) => labels[r.id]).join(", ")} — as
-                métricas seguem na tabela.
-              </p>
-            )}
-          </>
+          <CompareChart
+            rows={chartData}
+            runSeries={chartSeries}
+            failedLabels={failed.map((r) => labels[r.id])}
+          />
         )}
       </div>
 
       {/* Metrics table (after-tax) */}
       <DataTable columns={columns} rows={METRICS} getRowKey={(m) => m.key} label="Métricas comparadas" />
+      {/* Said out loud rather than left to be inferred: a narrowed chart above an
+          unchanged table is exactly the kind of mismatch a reader assumes away.
+          Unconditional now, because the chart owns the window — and because a
+          benchmark drawn up there has no row down here at all. */}
       <p className="mt-2 font-mono text-[11px] text-muted">
-        ● melhor por linha · métricas pós-imposto
-        {/* Said out loud rather than left to be inferred: a narrowed chart above
-            an unchanged table is exactly the kind of mismatch a reader assumes
-            away. The engine computes these over each run's whole window. */}
-        {isFiltered(period.range) && " · sobre a rodada inteira, não o período do gráfico"}
+        ● melhor por linha · métricas pós-imposto, sobre a rodada inteira
       </p>
     </Card>
   );

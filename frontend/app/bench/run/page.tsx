@@ -9,12 +9,12 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
-import { LineSeries } from "@/components/charts/LineSeries";
 import { AreaSeries } from "@/components/charts/AreaSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { formatDate, formatPercent } from "@/lib/format";
 import { ApiError } from "@/lib/api";
 import type { BacktestRun } from "@/lib/types";
+import { CurveChart } from "../CurveChart";
 import {
   compactBRL,
   curveRows,
@@ -177,31 +177,31 @@ function TearSheet({
         </p>
       )}
 
-      {/* Equity curve — pré vs pós is the whole point, so it's the centerpiece */}
+      {/* Equity curve — pré vs pós is the whole point, so it's the centerpiece.
+          Reais answer "how much would I have"; the percent reading answers "how
+          did this do", which is the only one that survives a different starting
+          capital — and the only axis on which a ruler like the CDI can be drawn
+          beside the run at all. Both live in CurveChart, shared with the
+          comparison overlay. */}
       <Card
         title="Patrimônio: pré vs pós-imposto"
         action={
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-mono text-[11px] text-muted">
-              o diferencial: quanto o imposto corrói o retorno
-            </span>
-            {equity.control}
-          </div>
+          <span className="font-mono text-[11px] text-muted">
+            o diferencial: quanto o imposto corrói o retorno
+          </span>
         }
       >
         {curvesLoading || !curves ? (
           <Skeleton className="h-[300px] w-full" />
         ) : (
-          <LineSeries
-            data={equity.slice(curveRows(curves, ["pretax", "aftertax"]))}
-            xKey="date"
-            height={320}
+          <CurveChart
+            rows={curveRows(curves, ["pretax", "aftertax"])}
+            period={equity}
+            of="patrimônio"
             series={[
               { key: "pretax", label: "Pré-imposto", color: "var(--series-1)" },
               { key: "aftertax", label: "Pós-imposto", color: "var(--series-2)" },
             ]}
-            valueFormat={compactBRL}
-            labelFormat={formatDate}
           />
         )}
       </Card>

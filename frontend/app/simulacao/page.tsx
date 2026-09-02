@@ -10,6 +10,7 @@ import { PctDelta } from "@/components/ui/PctDelta";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { LineSeries } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
+import { useChartMode } from "@/components/charts/ChartMode";
 import { IconClock, IconChart } from "@/components/icons";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
@@ -228,7 +229,12 @@ function Results({ data }: { data: WhatIfResult }) {
   // The chart's window only. The "Comparação" table below is the engine's
   // figures over the whole replay and does not follow it — said so in its note.
   const period = useDateRange({ min: curveRows[0]?.date, max: data.as_of });
-  const windowed = period.slice(curveRows);
+  // Every scenario replays the same aportes, so in reais the lines are directly
+  // comparable — but the question being asked is "which veículo did more with
+  // the same money", and that is a percentage. Sliced first, then rebased: 0% is
+  // the left edge of what is on screen.
+  const unit = useChartMode({ format: compactBRL, of: "patrimônio" });
+  const windowed = unit.apply(period.slice(curveRows));
 
   const tableRows: TableRow[] = [
     {
@@ -312,6 +318,7 @@ function Results({ data }: { data: WhatIfResult }) {
             <span className="font-mono text-[11px] text-muted">
               mesmos aportes, veículos diferentes
             </span>
+            {unit.control}
             {period.control}
           </div>
         }
@@ -328,7 +335,7 @@ function Results({ data }: { data: WhatIfResult }) {
             xKey="date"
             series={series}
             height={320}
-            valueFormat={compactBRL}
+            valueFormat={unit.valueFormat}
             labelFormat={formatDate}
           />
         )}

@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Dated } from "@/lib/chartRange";
+import type { Levels } from "@/lib/benchmarks";
 import type { BacktestCurves, BacktestRun, Strategy } from "@/lib/types";
 
 export function useStrategies() {
@@ -60,6 +61,55 @@ export function useCurvesMany(ids: string[]) {
       queryFn: () => api<BacktestCurves>(`/backtests/${id}/curves`),
       staleTime: 60 * 60_000,
     })),
+  });
+}
+
+// ── benchmarks ────────────────────────────────────────────────────────────────
+
+/** One ruler the bench can draw a run against. `key` is the engine's own name
+ *  (scripts/bench_series.BENCHMARKS) and travels unchanged through the API. */
+export interface Benchmark {
+  key: string;
+  label: string;
+  note: string;
+}
+
+export interface BenchmarkSeries {
+  start: string;
+  end: string;
+  series: Record<string, Levels>;
+  /** Requested but not drawable — the plane has nothing for this window, or the
+   *  engine could not be reached. Named rather than dropped: a line that
+   *  silently never appears reads as one nobody selected. */
+  unavailable: string[];
+}
+
+export function useBenchmarks() {
+  return useQuery({
+    queryKey: ["benchmarks"],
+    queryFn: () => api<Benchmark[]>("/benchmarks"),
+    staleTime: 60 * 60_000, // a catalogue in code, not data
+  });
+}
+
+/**
+ * Levels for `keys` over [start, end]. Idle until something is selected and the
+ * window is known — the runs' own curves decide it, and asking before they land
+ * would fetch one window and draw another.
+ */
+export function useBenchmarkSeries(keys: string[], start?: string, end?: string) {
+  const sorted = [...keys].sort();
+  return useQuery({
+    // Sorted, because the selection is a set but the key is a string: picking
+    // CDI then IBOV and IBOV then CDI are one question and must be one cache
+    // entry (the API answers in the catalogue's order either way).
+    queryKey: ["benchmark-series", sorted.join(","), start, end],
+    queryFn: () =>
+      api<BenchmarkSeries>(
+        `/benchmarks/series?start=${start}&end=${end}&keys=${sorted.join(",")}`,
+      ),
+    enabled: sorted.length > 0 && Boolean(start && end),
+    staleTime: 60 * 60_000, // the plane moves once a day
   });
 }
 

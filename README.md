@@ -46,9 +46,33 @@ the image — backtests read the market plane from Postgres, not from files.
   (shared `artifacts_data` volume, mirroring `uploads_data`).
 - `GET /backtests`, `GET /backtests/{id}`, `GET /backtests/{id}/curves` — history, a run
   row + metrics, and the pre/after-tax equity + drawdown + turnover series.
+- `GET /benchmarks` — the rulers a run can be compared against: CDI, IPCA, IBOVESPA,
+  S&P 500 and bitcoin (the last two **in reais**, so they carry the dollar's move
+  the way a Brazilian holder actually experiences it). A catalogue in code, with the
+  note that says what each number is.
+- `GET /benchmarks/series?start=&end=&keys=` — raw daily levels for those, straight
+  off the plane via `scripts/bench_series.py`. Deliberately **not** rebased: every
+  series is on its own scale (IBOV in points, CDI/IPCA as accrual factors, the other
+  two as BRL prices), and only the caller knows the grid it is drawing on. The
+  response's `unavailable` names every requested benchmark the plane could not
+  serve — a line that silently never appears is indistinguishable from one nobody
+  picked. Cached per (window, keys, day); an engine failure degrades to
+  `unavailable` rather than a 500, and is not cached.
 - `GET /market/status` — price-plane row count, distinct tickers, min/max date, and
   per-table freshness for `corporate_actions`/`fundamentals_pit` (0-row tables reported
   honestly).
+
+The bench UI reads any money chart two ways — reais, or return from the left edge
+of the chart (`frontend/lib/chartMode.ts`, toggled per chart beside the date
+filter). The percent reading rebases **after** the date slice, so 0% is always the
+start of what is on screen, and each line rebases onto its own first value: an
+overlay of runs on different windows has holes in front, and basing a late series
+on a value it does not have would draw it falling off a cliff on its first day.
+Benchmarks join the compare overlay as dashed lines scaled to the money the chart
+starts from, so in reais a ruler reads as "the same capital, in this instead" and in
+percent both readings agree. `/portfolio/index` is already a base-100 index and has
+no reais reading to offer — it is time-weighted precisely so deposits do not move
+the line, and multiplying it by today's NAV would invent a series.
 
 **Network:** a backtest run fetches **CDI daily from the Brazilian Central Bank**
 (`api.bcb.gov.br`, required by `build_shared_data`, reliable) and nothing else.
@@ -76,7 +100,8 @@ Two complementary answers to "how am I doing?", both off the tenant's own book:
   Fixa, unpriced tickers) and `coverage.clamped` says when the chart starts later than
   the user's real history because the plane does. Benchmarks come from the engine
   (`scripts/bench_series.py`); with `ENGINE_BENCH_OFFLINE=1` they are reported
-  unavailable rather than drawn flat.
+  unavailable rather than drawn flat. The same script serves the bench's
+  `/benchmarks/series` — it takes a name list, and `ibov,cdi` is its default.
 - `POST /whatif` — the same money through a *different* strategy (spec/05 Feature 2).
 
 ### Strategy-linked portfolio (spec/05)
@@ -139,7 +164,7 @@ What each module unlocks (gated routes answer `402` with
 | `irpf` R$19 | `/irpf` | re-apura the tenant's own rows, no external data |
 | `mercado` R$29 | `/tlh`, `/whatif`, `/portfolio/{sleeves,target,rebalance-plans,settings,tax-summary}` | needs today's price for every held ticker |
 | `indice` R$12 | `/portfolio/index` | rebuilds the daily series of the book and both benchmarks |
-| `bench` R$49 | `/backtests`, `/strategies/user*` | runs the engine over years of B3 history per execution |
+| `bench` R$49 | `/backtests`, `/benchmarks`, `/strategies/user*` | runs the engine over years of B3 history per execution |
 | `empresarial` R$249 | every module above, plus `/portfolios` (client books) | the whole apuração, once per client book |
 
 The module boundary is the **cost driver, not the feature name**: TLH, what-if and

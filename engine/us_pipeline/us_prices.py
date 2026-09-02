@@ -7,6 +7,15 @@ is not throughput but **resumability**: every symbol's outcome is written to
 `us_price_cursor` inside the loop, before the next request goes out, so a run
 that stops at request 12 of 25 starts at 13 tomorrow rather than at 1.
 
+On a free key this is the **top-up**, not the backfill. `us_backfill` takes the
+history from one bulk file for nothing, because "years" is not a throughput
+problem this module can solve — it is a property of a per-symbol metered feed.
+What is left here is the work only a metered key can do: the symbols the bulk
+archive does not carry, and the corporate actions that turn a `split_only`
+series into a `total_return` one. `select_work` is handed the set of symbols the
+archive already priced and never re-prices them; `us_backfill.demote_bulk_priced` says
+why that matters and what would break without it.
+
 Two conversions happen here and nowhere else.
 
 **Turnover, not share count.** The vendor's `volume` is a number of shares.
@@ -30,7 +39,7 @@ import logging
 import pandas as pd
 from b3_pipeline import fx_series, market_storage, storage, us_storage
 
-from . import us_adjust
+from . import us_adjust, us_backfill
 from .alphavantage import (
     AlphaVantageError,
     BudgetExhausted,
@@ -110,7 +119,8 @@ def to_market_rows(symbol: str, bars: pd.DataFrame, state: str,
 
 
 def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
-                actions_stale_days: int = ACTIONS_STALE_DAYS) -> list:
+                actions_stale_days: int = ACTIONS_STALE_DAYS,
+                bulk_covered=frozenset()) -> list:
     """What this run can afford to do, in the order it should do it.
 
     Pure — no network, no database — so the policy can be tested directly, in
@@ -152,6 +162,9 @@ def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
             stale_bars.append((symbol, True, actions_due))
         elif actions_due:
             stale_actions.append((symbol, False, True))
+
+    retry, fresh, stale_bars, stale_actions = us_backfill.demote_bulk_priced(
+        (retry, fresh, stale_bars, stale_actions), bulk_covered)
 
     plan, spent = [], 0
     for item in [*retry, *fresh, *stale_bars, *stale_actions]:
@@ -282,7 +295,15 @@ def run_pipeline(db_path=None, limit: int = 0, today=None,
         budget = client.remaining if limit <= 0 else min(
             limit, client.remaining if client.remaining >= 0 else limit)
         cursor_df = us_storage.load_price_cursor(conn)
-        plan = select_work(_universe(conn), cursor_df, budget=budget, today=today)
+        # Asked of the price table, not of a flag: `market_prices.source` is
+        # where the fact lives, so a missing or overwritten cursor row cannot
+        # make this run believe a bulk-priced symbol is safe to re-price.
+        bulk = us_backfill.covered_symbols(conn)
+        if bulk:
+            logger.info(f"{len(bulk):,} symbols priced by the bulk archive — "
+                        "the budget buys their corporate actions, not their bars")
+        plan = select_work(_universe(conn), cursor_df, budget=budget, today=today,
+                           bulk_covered=bulk)
         logger.info(f"{len(plan):,} symbols planned against a budget of {budget}")
 
         prior = {} if cursor_df.empty else dict(

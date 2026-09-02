@@ -34,7 +34,7 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
                             "ingest_instruments", "ingest_crypto",
                             "ingest_us_fundamentals", "ingest_us_symbols",
                             "ingest_us_listing", "ingest_us_prices",
-                            "ingest_spx"}
+                            "ingest_us_backfill", "ingest_spx"}
     assert by_name["ingest_prices"].cron == settings.ingest_prices_cron
     assert by_name["ingest_fundamentals"].cron == settings.ingest_fundamentals_cron
     assert by_name["ingest_instruments"].cron == settings.ingest_instruments_cron
@@ -44,6 +44,8 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
     assert by_name["ingest_us_symbols"].cron == settings.ingest_us_symbols_cron
     assert by_name["ingest_us_listing"].cron == settings.ingest_us_listing_cron
     assert by_name["ingest_us_prices"].cron == settings.ingest_us_prices_cron
+    assert (by_name["ingest_us_backfill"].cron
+            == settings.ingest_us_backfill_cron)
     assert by_name["ingest_spx"].cron == settings.ingest_spx_cron
     for pt in by_name.values():
         assert pt.task.queue == "ingest", (
@@ -62,11 +64,23 @@ def test_the_security_master_is_rebuilt_after_the_prices_it_reads():
     assert instruments_hour > prices_hour
 
 
+def test_the_bulk_us_backfill_runs_before_that_days_price_top_up():
+    """Both land on Saturday and the ingest queue has one slot. The backfill is a
+    hundreds-of-megabytes download that can take the better part of an hour; the
+    top-up is at most 25 metered requests. Behind the backfill, the top-up would
+    plan its day against a plane the backfill had not finished writing — and
+    since `select_work` skips symbols the archive already priced, planning early
+    is how the free tier's whole allowance gets spent re-buying bars."""
+    backfill_hour = int(settings.ingest_us_backfill_cron.split()[1])
+    prices_hour = int(settings.ingest_us_prices_cron.split()[1])
+    assert backfill_hour < prices_hour
+
+
 @pytest.mark.parametrize("task", ["ingest_prices", "ingest_fundamentals",
                                  "ingest_instruments", "ingest_crypto",
                                  "ingest_us_fundamentals", "ingest_us_symbols",
                                  "ingest_us_listing", "ingest_us_prices",
-                                 "ingest_spx"])
+                                 "ingest_us_backfill", "ingest_spx"])
 def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     """The periodic scheduler injects `timestamp`; a manual defer_async() does not.
     Without a default the worker raises before the ingest_runs row is written, so

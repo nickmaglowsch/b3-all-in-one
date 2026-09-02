@@ -196,3 +196,53 @@ def test_withdrawing_a_claim_does_not_touch_the_symbols_around_it(tmp_path):
     assert survivor["name"] == "ACT0 Corp"
     assert str(survivor["first_seen"]) == "2026-01-05"
     assert str(_instrument(conn, "DEAD0")["delisting_date"]) == "2010-01-01"
+
+
+def test_historical_delistings_the_plane_never_held_do_not_trip_the_ceiling(
+        tmp_path):
+    """The delisted file is the whole history of the US market, and importing
+    the names that predate this plane's capture is the entire point of this
+    module. Counting them as delistings *of live instruments* made the first
+    real run report 9,457 of 13,181 and refuse to do its own job."""
+    conn = _db(tmp_path)
+    for i in range(10):
+        _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
+    never_held = _rows(300, "HIST", status="delisted", delisted="2010-01-01")
+
+    summary = us_listing.reconcile(conn, _plausible_active(), never_held)
+
+    assert summary["new_delistings"] == 0          # none of ours went dark
+    assert not pd.isna(_instrument(conn, "HIST0")["delisting_date"])
+    assert pd.isna(_instrument(conn, "LIVE0")["delisting_date"])
+
+
+def test_a_live_holding_going_dark_still_counts_toward_the_ceiling(tmp_path):
+    """The narrowing must not blind the guard to the case it exists for."""
+    conn = _db(tmp_path)
+    for i in range(10):
+        _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
+    mixed = pd.concat([
+        _rows(300, "HIST", status="delisted", delisted="2010-01-01"),
+        _rows(10, "LIVE", status="delisted", delisted="2026-08-31"),
+    ], ignore_index=True)
+
+    summary = us_listing.reconcile(conn, _plausible_active(), mixed,
+                                   max_new_delistings=1000)
+    assert summary["new_delistings"] == 10
+
+
+def test_the_first_reconciliation_can_opt_into_a_wider_ceiling(tmp_path):
+    """A first run imports a standing backlog, not one day's delistings. The
+    override is explicit per-run; the daily ceiling is left where it is."""
+    conn = _db(tmp_path)
+    for i in range(200):
+        _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
+    dead = _rows(200, "LIVE", status="delisted", delisted="2026-08-31")
+
+    with pytest.raises(ValueError, match="ceiling"):
+        us_listing.reconcile(conn, _plausible_active(), dead)
+
+    summary = us_listing.reconcile(conn, _plausible_active(), dead,
+                                   max_new_delistings=500)
+    assert summary["new_delistings"] == 200
+    assert not pd.isna(_instrument(conn, "LIVE0")["delisting_date"])

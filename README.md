@@ -189,8 +189,11 @@ Before starting anything, ask the plane. The script touches no network, writes
 nothing, and is safe to run against production mid-ingest:
 
 ```
-docker compose exec ingest python scripts/plane_status.py           # every market
-docker compose exec ingest python scripts/plane_status.py --json    # for a script
+# the engine has its own venv and its own workdir in the image — see enginerun.py
+docker compose exec -w /opt/engine ingest \
+    /opt/engine/.venv/bin/python scripts/plane_status.py            # every market
+docker compose exec -w /opt/engine ingest \
+    /opt/engine/.venv/bin/python scripts/plane_status.py --json     # for a script
 ```
 
 It prints rows, symbols, bar range and per-`source` counts per market, plus the
@@ -200,15 +203,46 @@ crypto plane holding only live pairs is survivorship-biased. Each gap line names
 the module that closes it.
 
 Everything below is already scheduled (see `platform/platform_app/config.py`);
-these are the same jobs, run by hand when you do not want to wait for the cron.
-All of them are idempotent and resumable, so re-running one is always safe.
+these are the same jobs, started by hand when you do not want to wait for the
+cron. All are idempotent and resumable, so re-running one is always safe.
 
-| Backfill | Command (in the `ingest` container) | Cost |
+**Prefer deferring the task over shelling the module.** The task path takes the
+`queueing_lock` (so it cannot collide with the scheduled run or with a second
+impatient operator — two processes writing the same rows is the failure worth
+avoiding) and records the outcome in `ingest_runs`, which is where a failure
+leaves its error rather than only in the worker log:
+
+```
+docker compose exec ingest python -c "
+import asyncio
+from platform_app.tasks import app
+from platform_app.tasks_ingest import ingest_us_backfill
+
+async def main():
+    async with app.open_async():          # defer_async needs the app opened
+        print(await ingest_us_backfill.defer_async())
+
+asyncio.run(main())
+"
+```
+
+`AlreadyEnqueued` back from that is the lock doing its job, not an error: a run
+of that kind is already pending or in flight, and there is nothing to do.
+
+| Backfill | Task | Cost |
 |---|---|---|
-| Crypto | `python -m crypto_pipeline.crypto_main` | ~3h, free, no key |
-| US prices (history) | `python -m us_pipeline.us_backfill` | one ~GB download, free, no key |
-| US universe (incl. delisted) | `python -m us_pipeline.us_listing` | 2 metered requests |
-| US prices (top-up + dividends) | `python -m us_pipeline.us_prices` | ≤20 metered requests/day |
+| Crypto | `ingest_crypto` | ~3h, free, no key |
+| US prices (history) | `ingest_us_backfill` | one large download, free, no key |
+| US universe (incl. delisted) | `ingest_us_listing` | 2 metered requests |
+| US prices (top-up + dividends) | `ingest_us_prices` | ≤20 metered requests/day |
+
+To run one in the foreground and watch it — no lock, so make sure the scheduled
+job is not already running:
+
+```
+docker compose exec -w /opt/engine ingest \
+    /opt/engine/.venv/bin/python -m us_pipeline.us_backfill
+```
 
 **Crypto** enumerates every spot pair Binance's public archive has ever held —
 about 780 in USDT/BRL, delisted ones included, since enumerating from the bucket

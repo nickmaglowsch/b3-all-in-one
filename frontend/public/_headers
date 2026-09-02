@@ -1,7 +1,29 @@
 # Cloudflare Pages response headers. `output: "export"` copies public/ into out/
 # verbatim, so this ships with the build; it is inert anywhere else.
 #
-# The session JWT lives in localStorage (lib/api.ts) as a 1h bearer credential
+# ── Caching ───────────────────────────────────────────────────────────────────
+# This is the whole of "clear your cache to be able to log in". Every HTML
+# document names content-hashed chunks under /_next/static/, and a deploy
+# replaces every one of those names. A browser still holding yesterday's HTML
+# asks the new deployment for chunk files it does not have, gets the 404 page
+# back where a script should be, and React never hydrates: the Google button is
+# inert, and /auth/callback never stores the token Google just handed it. The
+# page cannot fix itself, because nothing on the page is running — clearing the
+# cache by hand was the only way out.
+#
+# So: an HTML document may never be reused without asking us first, and the
+# hashed assets may be kept forever (a new build gives them new names, so there
+# is nothing to invalidate — that is what the hash is for).
+#
+# The specific rule comes last on purpose. Cloudflare applies every matching rule
+# and the later value wins for a repeated header, so /_next/static keeps
+# `immutable` instead of inheriting must-revalidate from /*. If that ever stops
+# being true the assets are merely revalidated more often than they need to be —
+# a 304, not a broken page. The ordering is an optimisation; the /* rule is the
+# fix.
+#
+# ── Security ──────────────────────────────────────────────────────────────────
+# The session JWT lives in localStorage (lib/api.ts) as a bearer credential
 # nothing can revoke, so script injection == account takeover. There is no server
 # to set headers, and no nonce is possible in a static export — this file is the
 # only place a CSP can come from.
@@ -9,7 +31,11 @@
 # connect-src pins the API. If the API ever moves off b3-api.duckdns.org, this
 # line moves with it or every request in the app fails.
 /*
+  Cache-Control: public, max-age=0, must-revalidate
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://b3-api.duckdns.org; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
+
+/_next/static/*
+  Cache-Control: public, max-age=31536000, immutable

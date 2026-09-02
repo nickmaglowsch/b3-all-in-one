@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { clearToken, getToken } from "@/lib/api";
+import { REFRESH_EVERY_MS, clearToken, getToken, refreshSession } from "@/lib/api";
 import { useHealth, useMarketStatus, useMe } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
 import { isPublicRoute } from "@/lib/routes";
@@ -64,6 +64,27 @@ function ShellChrome({
     // Carry the destination so a landing "Assinar" click survives the login bounce.
     if (!getToken()) router.replace(`/login?next=${encodeURIComponent(pathname)}`);
   }, [router, pathname]);
+
+  // Keep the session alive for as long as the app is being used. Without this the
+  // token's TTL is a wall an open tab walks into: the page is up, the user is
+  // doing nothing wrong, and the next request 401s them back to /login.
+  //
+  // Three triggers, all funnelled through the same throttle in refreshSession, so
+  // this is at most one small POST an hour however often they fire:
+  //   mount    — the common case, a tab reopened after a while;
+  //   focus    — a laptop that slept with the tab open and woke up hours later,
+  //              where the interval below did not tick;
+  //   interval — a tab left in the foreground all day.
+  useEffect(() => {
+    const renew = () => void refreshSession();
+    renew();
+    window.addEventListener("focus", renew);
+    const id = window.setInterval(renew, REFRESH_EVERY_MS);
+    return () => {
+      window.removeEventListener("focus", renew);
+      window.clearInterval(id);
+    };
+  }, []);
 
   // Drawer is transient: any navigation or Escape closes it.
   //

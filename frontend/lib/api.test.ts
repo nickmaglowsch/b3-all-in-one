@@ -282,3 +282,78 @@ test("o Google login manda o browser para a URL de consentimento", async () => {
   assert.equal(calls[0].init.credentials, "include");
   assert.equal(win.location.href, "https://accounts.google/x");
 });
+
+// --------------------------------------------------------------------------
+// Renovação da sessão
+// --------------------------------------------------------------------------
+// O token tem um prazo, e antes de /auth/refresh esse prazo era a sessão
+// inteira: a aba parava de funcionar sozinha e o clique seguinte caía no
+// /login. Todo mundo leu isso como "o deploy me deslogou".
+
+const renewed = (t: string) => json(200, { access_token: t, token_type: "bearer" });
+
+test("a renovação troca o token sem largar o livro selecionado", async () => {
+  const { mod } = await load();
+  const calls = respond(() => renewed("jwt-novo"));
+  mod.setToken("jwt-velho");
+  mod.setPortfolioId(UUID);
+  await mod.refreshSession();
+  assert.equal(calls[0].url, `${mod.API_URL}/auth/refresh`);
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(mod.getToken(), "jwt-novo");
+  // Renovar não é entrar com outra conta: soltar o livro aqui tiraria o assessor
+  // da carteira do cliente que ele está lendo, de hora em hora, sem motivo.
+  assert.equal(mod.getPortfolioId(), UUID);
+});
+
+test("sem token não há o que renovar", async () => {
+  const { mod } = await load();
+  const calls = respond(() => renewed("jwt-novo"));
+  await mod.refreshSession();
+  assert.equal(calls.length, 0);
+});
+
+// Montagem, foco da janela e o intervalo caem juntos; sem o estrangulamento
+// isso vira uma rajada de POSTs a cada troca de aba.
+test("uma renovação recente não é repetida, mas `force` passa por cima", async () => {
+  const { mod } = await load();
+  const calls = respond(() => renewed("jwt-2"));
+  mod.setToken("jwt-1");
+  await mod.refreshSession();
+  await mod.refreshSession();
+  assert.equal(calls.length, 1);
+  await mod.refreshSession(true);
+  assert.equal(calls.length, 2);
+});
+
+// A API reiniciando no meio de um deploy é exatamente quando isto roda. Encerrar
+// a sessão por causa disso seria o bug, não a correção.
+test("uma falha que não é 401 deixa a sessão de pé", async () => {
+  const { mod, win } = await load();
+  respond(() => new Response("<html>502</html>", { status: 502, statusText: "Bad Gateway" }));
+  mod.setToken("jwt-valido");
+  await mod.refreshSession();
+  assert.equal(mod.getToken(), "jwt-valido");
+  assert.equal(win.location.href, "");
+});
+
+// O cap de idade da sessão no backend responde 401: aí sim acabou.
+test("um 401 na renovação encerra a sessão e volta ao login", async () => {
+  const { mod, win } = await load();
+  respond(() => json(401, { detail: "Sessão expirada — entre novamente." }));
+  mod.setToken("jwt-de-um-mes-atras");
+  await mod.refreshSession();
+  assert.equal(mod.getToken(), null);
+  assert.equal(win.location.href, "/login");
+});
+
+// A API reiniciando é justamente quando o foco volta para a aba. Sem marcar a
+// tentativa, cada troca de janela vira mais um POST contra um serviço fora do ar.
+test("uma tentativa que falhou também segura a próxima", async () => {
+  const { mod } = await load();
+  const calls = respond(() => new Response("", { status: 502 }));
+  mod.setToken("jwt-valido");
+  await mod.refreshSession();
+  await mod.refreshSession();
+  assert.equal(calls.length, 1);
+});

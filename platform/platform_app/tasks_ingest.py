@@ -164,6 +164,26 @@ async def ingest_us_listing(timestamp: int = 0) -> dict:  # see ingest_prices
     return await _record_ingest("us_listing", ["us_pipeline.us_listing"])
 
 
+@app.periodic(cron=settings.ingest_us_backfill_cron)
+@app.task(name="ingest_us_backfill", queue="ingest",
+          queueing_lock="ingest_us_backfill")
+async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
+    """The US price history, from one bulk file, off the metered budget.
+
+    This is the job that makes a free key workable. `ingest_us_prices` buys
+    three requests per symbol against a 25-a-day ceiling and ~11k symbols — five
+    years to a first pass — so it is the top-up, not the backfill, and this is
+    the backfill. One archive, no API key, the whole history at once; the same
+    shape `ingest_prices` has with COTAHIST and `ingest_crypto` has with the
+    Binance bucket.
+
+    Weekly, and deliberately not on the daily path: the download is hundreds of
+    megabytes. It runs *before* the Saturday price job would, so the two never
+    contend for the ingest queue's single slot.
+    """
+    return await _record_ingest("us_backfill", ["us_pipeline.us_backfill"])
+
+
 @app.periodic(cron=settings.ingest_us_prices_cron)
 @app.task(name="ingest_us_prices", queue="ingest",
           queueing_lock="ingest_us_prices")

@@ -183,6 +183,100 @@ serves this at `/conta`; the public policy lives at `/privacidade`.
 ./scripts/docker_smoke.sh --keep   # same, but leave the stack running
 ```
 
+### Market data: what the plane holds, and how to fill it
+
+Before starting anything, ask the plane. The script touches no network, writes
+nothing, and is safe to run against production mid-ingest:
+
+```
+# the engine has its own venv and its own workdir in the image — see enginerun.py
+docker compose exec -w /opt/engine ingest \
+    /opt/engine/.venv/bin/python scripts/plane_status.py            # every market
+docker compose exec -w /opt/engine ingest \
+    /opt/engine/.venv/bin/python scripts/plane_status.py --json     # for a script
+```
+
+It prints rows, symbols, bar range and per-`source` counts per market, plus the
+gaps that would make those counts misleading — a US plane with eleven thousand
+symbols and no CIK on any of them cannot serve a fundamental strategy, and a
+crypto plane holding only live pairs is survivorship-biased. Each gap line names
+the module that closes it.
+
+Everything below is already scheduled (see `platform/platform_app/config.py`);
+these are the same jobs, started by hand when you do not want to wait for the
+cron. All are idempotent and resumable, so re-running one is always safe.
+
+**Prefer deferring the task over shelling the module.** The task path takes the
+`queueing_lock` (so it cannot collide with the scheduled run or with a second
+impatient operator — two processes writing the same rows is the failure worth
+avoiding) and records the outcome in `ingest_runs`, which is where a failure
+leaves its error rather than only in the worker log:
+
+```
+docker compose exec ingest python -c "
+import asyncio
+from platform_app.tasks import app
+from platform_app.tasks_ingest import ingest_us_backfill
+
+async def main():
+    async with app.open_async():          # defer_async needs the app opened
+        print(await ingest_us_backfill.defer_async())
+
+asyncio.run(main())
+"
+```
+
+`AlreadyEnqueued` back from that is the lock doing its job, not an error: a run
+of that kind is already pending or in flight, and there is nothing to do.
+
+| Backfill | Task | Cost |
+|---|---|---|
+| Crypto | `ingest_crypto` | ~3h, free, no key |
+| US prices (history) | `ingest_us_backfill` | one large download, free, no key |
+| US universe (incl. delisted) | `ingest_us_listing` | 2 metered requests |
+| US prices (top-up + dividends) | `ingest_us_prices` | ≤20 metered requests/day |
+
+To run one in the foreground and watch it — no lock, so make sure the scheduled
+job is not already running:
+
+```
+docker compose exec -w /opt/engine ingest \
+    /opt/engine/.venv/bin/python -m us_pipeline.us_backfill
+```
+
+**Crypto** enumerates every spot pair Binance's public archive has ever held —
+about 780 in USDT/BRL, delisted ones included, since enumerating from the bucket
+rather than from `exchangeInfo` *is* the survivorship property. Roughly three
+hours for a first full pass and minutes thereafter. No API key, no budget.
+
+**US prices** are split across two jobs on purpose, and the reason is
+arithmetic. Alpha Vantage's free tier is a hard 25 requests a day; a fresh symbol
+costs three (one price, two corporate actions) against ~11,000 symbols. That is
+about six symbols a day — **five years** to a first pass, and 550x the daily
+allowance to refresh what it had. No amount of care in the client changes that,
+because it is a property of a per-symbol metered feed.
+
+So `us_pipeline.us_backfill` takes the history from one bulk file for nothing,
+and `us_pipeline.us_prices` becomes the top-up. The archive is split-adjusted
+and carries no distributions, so its symbols are recorded as `split_only` — real
+and labelled, and enough for a momentum or liquidity screen. The metered key
+then spends its 20 usable requests a day on the two things only it has: the
+symbols the archive does not carry (it holds the currently listed, so the
+delisted tail is still `us_listing`'s job) and the dividends that upgrade a
+symbol from `split_only` to `total_return`.
+
+The two never price the same symbol. `us_prices` asks
+`market_prices.source` which symbols the archive already covered and drops the
+price half of their work — writing a raw close over a split-adjusted history
+would invent a return at the seam, and a split-sized jump is exactly what
+`MARKETS["US"].glitch_down` is built to mask.
+
+A run in progress is visible three ways: `docker compose logs -f ingest` for
+live progress, `plane_status.py` for what has landed so far (the counts move
+while the job runs), and the `ingest_runs` table — which is where a *failed* run
+leaves its error, since the scheduled jobs record status there rather than only
+in the worker's log.
+
 ### Env vars (see `.env.example`)
 
 | Var | Default (host) | In-image |

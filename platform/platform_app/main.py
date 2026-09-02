@@ -29,6 +29,7 @@ from platform_app.routes import (
     strategies_router,
     tlh_router,
 )
+from platform_app.routes_benchmarks import benchmarks_router
 from platform_app.routes_portfolio_index import portfolio_index_router
 from platform_app.routes_portfolio_settings import portfolio_settings_router
 from platform_app.routes_portfolios import portfolios_router
@@ -180,6 +181,9 @@ app.include_router(whatif_router, dependencies=[Depends(needs_mercado)])
 app.include_router(portfolio_settings_router, dependencies=[Depends(needs_mercado)])
 app.include_router(portfolio_index_router, dependencies=[Depends(needs_indice)])
 app.include_router(backtests_router, dependencies=[Depends(needs_bench)])
+# The rulers the bench draws a run against. Gated with the bench itself: they
+# are only reachable from it, and the engine subprocess behind them is not free.
+app.include_router(benchmarks_router, dependencies=[Depends(needs_bench)])
 
 
 @app.get("/health")

@@ -1,25 +1,28 @@
-"""Print daily IBOV and CDI levels over a window as JSON (one line to stdout).
+"""Print daily benchmark levels over a window as JSON (one line to stdout).
 
-The portfolio index (platform /portfolio/index) charts the tenant's book against
-IBOV and CDI. Both series are the engine's business — it owns the plane they are
-stored in — so the platform shells this instead of re-implementing two readers in
-its own venv. Mirrors list_signals.py.
+Two callers, one reader. The portfolio index (platform /portfolio/index) charts
+the tenant's book against IBOV and CDI; the backtest bench (platform
+/benchmarks) charts a run against whichever ruler the user picked. Both are the
+engine's business — it owns the plane the series are stored in — so the platform
+shells this instead of re-implementing a reader in its own venv.
 
 Usage:
-    python scripts/bench_series.py <start> <end>        # ISO dates
+    python scripts/bench_series.py <start> <end> [name,name,...]   # ISO dates
 
-Output: {"ibov": {"YYYY-MM-DD": level, ...}, "cdi": {...}, "offline": bool}.
-Levels are raw (IBOV in points, CDI a compounded accrual factor) — the caller
-rebases both onto its own trading-day grid, which is the only place that knows
-the tenant's window.
+`names` defaults to `ibov,cdi`, which is the portfolio index's call and the
+contract it has always had. Output: {"<name>": {"YYYY-MM-DD": level, ...}, ...,
+"offline": bool} — one key per *requested* name, and nothing else.
 
-Network: none. Both come out of `external_prices`: `$IBOV` (B3's published
-index) and `$CDI`
-in `external_prices` (BCB, written by the ingest run), so a page load reads the
-database and nothing else. `offline` therefore no longer means "we were told not
-to fetch" — it means the plane holds neither series for this window, and the
-caller reports benchmarks as unavailable rather than drawing a flat line the user
-would read as "IBOV was up 0%".
+Levels are raw and each series is on its own scale: IBOV in points, CDI and IPCA
+as compounded accrual factors, S&P 500 and bitcoin as prices in reais. Nothing
+here rebases them, because only the caller knows the window's own grid — and
+mixing scales is exactly why the caller must rebase before drawing.
+
+Network: none. Everything comes out of the plane the ingest runs write, so a
+page load reads the database and nothing else. `offline` therefore means "the
+plane holds none of the requested series for this window", and the caller reports
+those benchmarks as unavailable rather than drawing a flat line the user would
+read as "the market was up 0%".
 """
 from __future__ import annotations
 
@@ -30,25 +33,50 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# name -> (symbol, market). The names are the API's contract: the platform route
+# and the bench UI both spell them, so treat a rename as a breaking change.
+#
+# The `$` symbols are stored index levels in `external_prices` and belong to no
+# market — download_benchmark routes them to download_index_level and ignores the
+# `market` argument, so B3 there is inert, not a claim. Bitcoin is the one real
+# ticker in the list, and it is read through CRYPTO precisely so the projection
+# is `adj_close_brl`: the numeraire is reais for every market on this plane, and
+# a ruler quoted in USDT would credit the dollar's move to the strategy.
+BENCHMARKS = {
+    "ibov": ("$IBOV", "B3"),        # B3's published index, points
+    "cdi": ("$CDI", "B3"),          # BCB SGS 12, cumulative factor
+    "ipca": ("$IPCA", "B3"),        # BCB SGS 433, cumulative factor
+    "sp500": ("$SPX", "B3"),        # SPY total return in BRL (a named proxy)
+    "bitcoin": ("BTCUSDT", "CRYPTO"),
+}
 
-def series(start: str, end: str) -> dict:
-    from backtests.core.data import download_benchmark, download_index_level
+DEFAULT_NAMES = ("ibov", "cdi")
 
-    ibov = download_benchmark("^BVSP", start, end)
-    cdi = download_index_level("$CDI", start, end)
 
-    out = {
-        "ibov": {d.strftime("%Y-%m-%d"): float(v) for d, v in ibov.items()},
-        "cdi": {d.strftime("%Y-%m-%d"): float(v) for d, v in cdi.items()},
-    }
-    # Per-series, not all-or-nothing: $IBOV and $CDI are written by different
-    # pipeline steps, so one being late must not blank the other.
-    out["offline"] = not out["ibov"] and not out["cdi"]
+def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
+    """Requested benchmarks over [start, end], as {name: {date: level}}.
+
+    An unknown name raises KeyError rather than answering an empty series:
+    empty means "the plane has no rows yet" and a typo means "this chart will
+    silently lose a line", and the caller has to be able to tell them apart.
+    """
+    from backtests.core.data import download_benchmark
+
+    out: dict = {}
+    for name in names:
+        symbol, market = BENCHMARKS[name]
+        level = download_benchmark(symbol, start, end, market=market)
+        out[name] = {d.strftime("%Y-%m-%d"): float(v) for d, v in level.items()}
+    # Per-series, not all-or-nothing: each ruler is written by a different
+    # pipeline step, so one being late must not blank the others.
+    out["offline"] = not any(out[name] for name in names)
     return out
 
 
-def main() -> None:
-    json.dump(series(sys.argv[1], sys.argv[2]), sys.stdout)
+def main(argv: list[str] | None = None) -> None:
+    args = sys.argv[1:] if argv is None else argv
+    names = args[2].split(",") if len(args) > 2 and args[2] else DEFAULT_NAMES
+    json.dump(series(args[0], args[1], names), sys.stdout)
     sys.stdout.write("\n")
 
 

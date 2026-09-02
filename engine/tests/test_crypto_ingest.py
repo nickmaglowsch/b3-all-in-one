@@ -156,3 +156,87 @@ def test_ingest_is_idempotent(tmp_path, monkeypatch):
                                   months=["2020-08"])
     assert storage.read_sql("SELECT COUNT(*) c FROM instruments", conn).iloc[0]["c"] == 1
     assert storage.read_sql("SELECT COUNT(*) c FROM market_prices", conn).iloc[0]["c"] == 1
+
+
+# ── incremental fetch ─────────────────────────────────────────────────────────
+
+def test_months_already_on_the_plane_are_not_downloaded(tmp_path, monkeypatch):
+    """The reason this exists: a full re-fetch of every pair's every month is
+    what pushed the nightly run past its six-hour budget and stalled the plane.
+    Only the last stored month and anything after it may be fetched."""
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite"))
+    storage.init_db(conn)
+    fetched = []
+    monkeypatch.setattr(crypto_main.archive, "fetch_month",
+                        lambda s, m: fetched.append(m) or _bars(s, [f"{m}-03"]))
+
+    crypto_main.ingest_symbol(
+        conn, "BTCUSDT", "USDT", PTAX, TODAY,
+        months=["2017-08", "2020-01", "2026-07", "2026-08"], since="2026-07")
+    assert fetched == ["2026-07", "2026-08"]
+
+
+def test_the_last_stored_month_is_refetched_not_skipped(tmp_path, monkeypatch):
+    """It is the month the last stored bar falls in, so it is normally still
+    partial — skipping it would leave a permanent hole mid-month."""
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite"))
+    storage.init_db(conn)
+    fetched = []
+    monkeypatch.setattr(crypto_main.archive, "fetch_month",
+                        lambda s, m: fetched.append(m) or _bars(s, ["2026-07-31"]))
+
+    crypto_main.ingest_symbol(conn, "BTCUSDT", "USDT", PTAX, TODAY,
+                             months=["2026-06", "2026-07"], since="2026-07")
+    assert fetched == ["2026-07"]
+
+
+def test_an_incremental_run_does_not_move_the_listing_date(tmp_path, monkeypatch):
+    """`upsert_instruments` writes the columns it is given, so an incremental
+    window that reported its own first bar as listing_date would erase the
+    observed life this plane exists to record."""
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite"))
+    storage.init_db(conn)
+    monkeypatch.setattr(crypto_main.archive, "fetch_month",
+                        lambda s, m: _bars(s, ["2017-08-17", "2017-08-18"]))
+    crypto_main.ingest_symbol(conn, "BTCUSDT", "USDT", PTAX, TODAY,
+                             months=["2017-08"])
+
+    monkeypatch.setattr(crypto_main.archive, "fetch_month",
+                        lambda s, m: _bars(s, ["2026-08-30", "2026-08-31"]))
+    crypto_main.ingest_symbol(conn, "BTCUSDT", "USDT", PTAX, TODAY,
+                             months=["2017-08", "2026-08"], since="2026-08")
+
+    instr = storage.read_sql("SELECT * FROM instruments", conn).iloc[0]
+    assert instr["listing_date"] == "2017-08-17"   # preserved, not overwritten
+    assert instr["first_seen"] == "2017-08-17"
+    assert instr["last_seen"] == "2026-08-31"      # still advances
+
+
+def test_a_pair_the_plane_has_never_seen_gets_its_whole_history(tmp_path,
+                                                                monkeypatch):
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite"))
+    storage.init_db(conn)
+    fetched = []
+    monkeypatch.setattr(crypto_main.archive, "fetch_month",
+                        lambda s, m: fetched.append(m) or _bars(s, [f"{m}-05"]))
+
+    crypto_main.ingest_symbol(conn, "NEWUSDT", "USDT", PTAX, TODAY,
+                             months=["2019-12", "2020-01"], since=None)
+    assert fetched == ["2019-12", "2020-01"]
+
+
+def test_stored_months_reports_the_last_bar_per_pair(tmp_path, monkeypatch):
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite"))
+    storage.init_db(conn)
+    monkeypatch.setattr(crypto_main.archive, "fetch_month",
+                        lambda s, m: _bars(s, ["2026-07-30", "2026-07-31"]))
+    crypto_main.ingest_symbol(conn, "BTCUSDT", "USDT", PTAX, TODAY,
+                             months=["2026-07"])
+
+    assert crypto_main.stored_months(conn, "CRYPTO") == {"BTCUSDT": "2026-07"}
+
+
+def test_stored_months_is_empty_on_a_fresh_plane(tmp_path):
+    conn = sqlite3.connect(str(tmp_path / "c.sqlite"))
+    storage.init_db(conn)
+    assert crypto_main.stored_months(conn, "CRYPTO") == {}

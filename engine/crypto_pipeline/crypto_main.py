@@ -112,11 +112,26 @@ def _with_brl(bars: pd.DataFrame, quote: str, rates: pd.Series) -> pd.DataFrame:
 
 
 def ingest_symbol(conn, symbol: str, quote: str, rates: pd.Series,
-                  today: datetime.date, months=None) -> int:
-    """Fetch, convert and write one pair. Returns rows written."""
+                  today: datetime.date, months=None, since: str = None) -> int:
+    """Fetch, convert and write one pair. Returns rows written.
+
+    `since` ('YYYY-MM') drops months the plane already holds in full, which is
+    what keeps a nightly run from re-downloading nine years of archive for
+    every pair. The month named by `since` is itself re-fetched, never skipped:
+    it is the month the last stored bar falls in, so it is the one month that
+    is normally still partial.
+    """
     months = months if months is not None else archive.list_months(symbol)
     if not months:
         logger.warning(f"{symbol}: archive has no monthly files")
+        return 0
+
+    # Partial in the sense that matters below: the fetched bars are a suffix of
+    # the pair's life, so their first bar is not the pair's first bar.
+    partial = bool(since) and any(m < since for m in months)
+    if since:
+        months = [m for m in months if m >= since]
+    if not months:
         return 0
 
     frames = [archive.fetch_month(symbol, m) for m in months]
@@ -126,14 +141,34 @@ def ingest_symbol(conn, symbol: str, quote: str, rates: pd.Series,
         logger.warning(f"{symbol}: {len(months)} files, no parseable bars")
         return 0
 
-    market_storage.upsert_instruments(
-        conn, pd.DataFrame([_instrument_row(symbol, quote, bars, today)]))
+    row = _instrument_row(symbol, quote, bars, today)
+    if partial:
+        # upsert_instruments writes only the keys it is given, so dropping these
+        # leaves the stored values alone. Keeping them would move a pair's
+        # listing_date forward to whenever this incremental window opened and
+        # erase the observed life this plane exists to record.
+        del row["listing_date"], row["first_seen"]
+    market_storage.upsert_instruments(conn, pd.DataFrame([row]))
     return market_storage.upsert_market_prices(
         conn, _with_brl(bars, quote, rates))
 
 
+def stored_months(conn, market: str) -> dict:
+    """`{symbol: 'YYYY-MM'}` of the last bar the plane already holds per pair.
+
+    One query for the whole market rather than one per pair: at ~3,700 pairs the
+    per-pair round trip is itself minutes of the run.
+    """
+    df = storage.read_sql(
+        "SELECT symbol, MAX(date) AS last_date FROM market_prices"
+        " WHERE market = ? GROUP BY symbol", conn, params=[market])
+    if df.empty:
+        return {}
+    return {r.symbol: str(r.last_date)[:7] for r in df.itertuples()}
+
+
 def run_pipeline(db_path=None, quotes=DEFAULT_QUOTES, limit: int = 0,
-                 today: datetime.date = None) -> dict:
+                 today: datetime.date = None, full: bool = False) -> dict:
     """Ingest the archive into the plane. Returns a summary for `ingest_runs`."""
     today = today or datetime.date.today()
     logger.info(f"Crypto ingest -> {storage.describe_target(db_path)}")
@@ -152,12 +187,22 @@ def run_pipeline(db_path=None, quotes=DEFAULT_QUOTES, limit: int = 0,
         logger.info("Step 2/3: enumerating the archive...")
         symbols = select_symbols(quotes, limit)
 
+        # Without this every nightly run re-downloaded every monthly file of
+        # every pair back to 2017 — ~3,700 pairs x ~50 months of zips — which
+        # is why the job stopped finishing inside its six-hour budget and the
+        # plane stalled. A pair the plane has never seen still gets its full
+        # history; only the months already stored are skipped.
+        held = {} if full else stored_months(conn, archive.MARKET)
+        if held:
+            logger.info(f"incremental: {len(held):,} pairs already on the plane")
+
         logger.info(f"Step 3/3: ingesting {len(symbols):,} pairs...")
         rows, failed, dead = 0, [], 0
         for i, symbol in enumerate(symbols, 1):
             quote = _quote_of(symbol, quotes)
             try:
-                rows += ingest_symbol(conn, symbol, quote, rates, today)
+                rows += ingest_symbol(conn, symbol, quote, rates, today,
+                                      since=held.get(symbol))
             except Exception as e:                      # noqa: BLE001
                 # One unreachable pair must not cost the other 3,694. The names
                 # are returned so a caller can retry them rather than re-running
@@ -186,10 +231,14 @@ def main() -> None:
                     help="comma-separated quote assets to ingest")
     ap.add_argument("--limit", type=int, default=0,
                     help="smoke-test only: truncate the universe alphabetically")
+    ap.add_argument("--full", action="store_true",
+                    help="re-fetch every month even if the plane holds it "
+                         "(repairs a corrupted history; hours long)")
     args = ap.parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run_pipeline(args.db_path, tuple(args.quotes.split(",")), args.limit)
+    run_pipeline(args.db_path, tuple(args.quotes.split(",")), args.limit,
+                 full=args.full)
 
 
 if __name__ == "__main__":

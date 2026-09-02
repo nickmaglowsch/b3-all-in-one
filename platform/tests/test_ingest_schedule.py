@@ -80,7 +80,8 @@ def test_the_bulk_us_backfill_runs_before_that_days_price_top_up():
                                  "ingest_instruments", "ingest_crypto",
                                  "ingest_us_fundamentals", "ingest_us_symbols",
                                  "ingest_us_listing", "ingest_us_prices",
-                                 "ingest_us_backfill", "ingest_spx"])
+                                 "ingest_us_backfill", "ingest_spx",
+                                 "ingest_wiki_backfill"])
 def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     """The periodic scheduler injects `timestamp`; a manual defer_async() does not.
     Without a default the worker raises before the ingest_runs row is written, so
@@ -90,6 +91,16 @@ def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
 
     sig = inspect.signature(getattr(tasks_ingest, task).func)
     assert sig.parameters["timestamp"].default is not inspect.Parameter.empty
+
+
+def test_the_wiki_backfill_is_deliberately_not_periodic():
+    """Every other ingest here has a cron because its source keeps publishing.
+    WIKI was frozen in April 2018, so a schedule would re-read the same 15.4M
+    rows forever without ever adding a bar. It is deferred by hand."""
+    registry = tasks.app.periodic_registry.periodic_tasks
+    assert "ingest_wiki_backfill" not in {
+        pt.task.name for pt in registry.values()}
+    assert tasks_ingest.ingest_wiki_backfill.queue == "ingest"
 
 
 def test_user_facing_tasks_stay_on_the_default_queue():

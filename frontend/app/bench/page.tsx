@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api";
 import { StrategyGallery } from "./StrategyGallery";
 import { RunPanel } from "./RunPanel";
 import { RunsList } from "./RunsList";
+import { RunsPurge } from "./RunsPurge";
 import { ComparePanel } from "./ComparePanel";
 import { UserStrategies } from "./UserStrategies";
 import { useBacktests, useStrategies } from "./lib";
@@ -36,6 +37,9 @@ export default function BenchPage() {
     setCompareIds((ids) =>
       ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id],
     );
+
+  const dropCompare = (id: string) =>
+    setCompareIds((ids) => ids.filter((x) => x !== id));
 
   return (
     <>
@@ -87,15 +91,17 @@ export default function BenchPage() {
         <Card
           title="Rodadas"
           action={
-            compareIds.length > 0 ? (
+            <div className="flex items-center gap-3">
+              {/* Counted off the live runs, not the picked ids: a run deleted or
+                  swept while picked is gone from the overlay already, and a
+                  header that still counted it would be describing a ghost. */}
               <span className="font-mono text-[11px] text-muted">
-                {compareIds.length} p/ comparar
+                {compareRuns.length > 0
+                  ? `${compareRuns.length} p/ comparar`
+                  : "marque 2+ p/ comparar"}
               </span>
-            ) : (
-              <span className="font-mono text-[11px] text-muted">
-                marque 2+ p/ comparar
-              </span>
-            )
+              <RunsPurge />
+            </div>
           }
         >
           <RunsList
@@ -103,11 +109,12 @@ export default function BenchPage() {
             loading={backtests.isLoading}
             selected={compareIds}
             onToggle={toggleCompare}
+            onDeleted={dropCompare}
           />
         </Card>
       </div>
 
-      {compareIds.length > 0 && (
+      {compareRuns.length > 0 && (
         <div className="mt-4">
           <ComparePanel
             runs={compareRuns}

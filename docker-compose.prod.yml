@@ -89,6 +89,9 @@ services:
       # Nasdaq Data Link, for the WIKI bulk backfill. Free key, one request
       # for the whole 1962..2018 export. Same handling as the keys above.
       NASDAQ_DATA_LINK_API_KEY: ${NASDAQ_DATA_LINK_API_KEY:-}
+      # Seconds between requests in the US backfill's walk of the free quote
+      # endpoint. Politeness, not correctness; the default is 0.5.
+      STOOQ_DELAY_SECONDS: ${STOOQ_DELAY_SECONDS:-}
       ALPHAVANTAGE_RATE_PER_MIN: ${ALPHAVANTAGE_RATE_PER_MIN:-}
       ALPHAVANTAGE_DAILY_BUDGET: ${ALPHAVANTAGE_DAILY_BUDGET:-}
       UPLOADS_DIR: /data/uploads

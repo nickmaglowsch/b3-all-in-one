@@ -1,7 +1,7 @@
 """Read the Nasdaq Data Link WIKI/PRICES bulk export.
 
 The reader half of `wiki_backfill`, split off for the same reason
-`stooq_archive` is split off from `us_backfill`: fetching and parsing a vendor
+`stooq_daily` is split off from `us_backfill`: fetching and parsing a vendor
 file is a different job from folding it into the plane, and only this half needs
 to know what the vendor's CSV looks like.
 
@@ -63,7 +63,7 @@ MIN_PLAUSIBLE_SYMBOLS = 2_500
 # would silently lose the tail of its history.
 LAST_BAR = "2018-03-27"
 
-# Pinned, never inferred, for the reason `stooq_archive` pins its two: letting
+# Pinned, never inferred, for the reason `stooq_daily` pins its two: letting
 # pandas guess per element reads 03/04 as two different days.
 DATE_FORMAT = "%Y-%m-%d"
 
@@ -121,7 +121,7 @@ def download_bulk(dest: str, key: str = None, session=None) -> str:
     """Fetch the export to `dest`, streamed to disk.
 
     Streamed and then checked with `is_zipfile` for the reason
-    `stooq_archive.download_bulk` checks: the file is hundreds of megabytes, and
+    `sec_downloader.download_bulk` checks: the file is hundreds of megabytes, and
     a 200 is not evidence of a payload.
     """
     link = export_link(key, session)

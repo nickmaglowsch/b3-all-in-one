@@ -8,12 +8,12 @@ is not throughput but **resumability**: every symbol's outcome is written to
 that stops at request 12 of 25 starts at 13 tomorrow rather than at 1.
 
 On a free key this is the **top-up**, not the backfill. `us_backfill` takes the
-history from one bulk file for nothing, because "years" is not a throughput
+history from a free vendor for nothing, because "years" is not a throughput
 problem this module can solve — it is a property of a per-symbol metered feed.
-What is left here is the work only a metered key can do: the symbols the bulk
-archive does not carry, and the corporate actions that turn a `split_only`
-series into a `total_return` one. `select_work` is handed the set of symbols the
-archive already priced and never re-prices them; `us_backfill.demote_bulk_priced` says
+What is left here is the work only a metered key can do: the symbols that vendor
+does not carry, and the corporate actions that turn a `split_only` series into a
+`total_return` one. `select_work` is handed the set of symbols the
+vendor already priced and never re-prices them; `us_seam.demote_bulk_priced` says
 why that matters and what would break without it.
 
 Two conversions happen here and nowhere else.
@@ -39,7 +39,7 @@ import logging
 import pandas as pd
 from b3_pipeline import fx_series, market_storage, storage, us_storage
 
-from . import us_adjust, us_backfill
+from . import us_adjust, us_seam
 from .alphavantage import (
     AlphaVantageError,
     BudgetExhausted,
@@ -163,7 +163,7 @@ def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
         elif actions_due:
             stale_actions.append((symbol, False, True))
 
-    retry, fresh, stale_bars, stale_actions = us_backfill.demote_bulk_priced(
+    retry, fresh, stale_bars, stale_actions = us_seam.demote_bulk_priced(
         (retry, fresh, stale_bars, stale_actions), bulk_covered)
 
     plan, spent = [], 0
@@ -298,7 +298,7 @@ def run_pipeline(db_path=None, limit: int = 0, today=None,
         # Asked of the price table, not of a flag: `market_prices.source` is
         # where the fact lives, so a missing or overwritten cursor row cannot
         # make this run believe a bulk-priced symbol is safe to re-price.
-        bulk = us_backfill.covered_symbols(conn)
+        bulk = us_seam.covered_symbols(conn)
         if bulk:
             logger.info(f"{len(bulk):,} symbols priced by the bulk archive — "
                         "the budget buys their corporate actions, not their bars")

@@ -173,13 +173,20 @@ async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
     This is the job that makes a free key workable. `ingest_us_prices` buys
     three requests per symbol against a 25-a-day ceiling and ~11k symbols — five
     years to a first pass — so it is the top-up, not the backfill, and this is
-    the backfill. One archive, no API key, the whole history at once; the same
-    shape `ingest_prices` has with COTAHIST and `ingest_crypto` has with the
-    Binance bucket.
+    the backfill. No API key, no account, and it reaches the present, which is
+    the one thing `ingest_wiki_backfill` cannot do.
 
-    Weekly, and deliberately not on the daily path: the download is hundreds of
-    megabytes. It runs *before* the Saturday price job would, so the two never
-    contend for the ingest queue's single slot.
+    Daily, and resumable, because the vendor serves one symbol per request under
+    an anonymous daily hit ceiling: a run ends when the ceiling is spent, keeps
+    what it wrote, and the next one picks up from the cursor. A throttled stop
+    is reported in the summary rather than in the exit code — the day's
+    allowance running out is what the day's allowance does. A first pass over
+    the universe therefore takes several days, the same way `ingest_crypto`'s
+    takes hours: a free source charges in wall-clock instead of money.
+
+    It also *replaces* WIKI's rows for every symbol it can serve, so that no
+    symbol carries a raw close and a split-adjusted one in the same column. See
+    `us_pipeline.us_backfill` on why that is a delete and not an upsert.
     """
     return await _record_ingest("us_backfill", ["us_pipeline.us_backfill"])
 
@@ -193,15 +200,15 @@ async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
 async def ingest_wiki_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
     """Fifty-six years of US history from the WIKI bulk export.
 
-    The backfill `ingest_us_backfill` was meant to be, from a vendor that
-    actually serves the file: stooq gates its archive behind an account, while
-    this one needs a free key and one request. 15.4M bars over 3,199 tickers
-    from 1962, with the corporate actions in the rows — so the bars land
-    `total_return` rather than the `split_only` the stooq path would have given.
+    One free key, one request: 15.4M bars over 3,199 tickers from 1962, with the
+    corporate actions in the rows — so the bars land `total_return` rather than
+    the `split_only` a split-adjusted feed can give.
 
-    It fills 1962..2018-03-27 and nothing after; the plane's US bars will end in
-    2018 until a live feed covers the gap. That is the dataset, not a fault in
-    the run.
+    It fills 1962..2018-03-27 and nothing after. `ingest_us_backfill` is what
+    covers the gap and, for every symbol it can serve, takes the symbol over;
+    what stays here is the tail this file alone has, the names that died inside
+    WIKI's maintenance window. Worth running first on an empty plane anyway: it
+    is one request and it is fast.
     """
     return await _record_ingest("wiki_backfill", ["us_pipeline.wiki_backfill"])
 

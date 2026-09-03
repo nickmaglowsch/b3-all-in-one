@@ -65,12 +65,13 @@ def test_the_security_master_is_rebuilt_after_the_prices_it_reads():
 
 
 def test_the_bulk_us_backfill_runs_before_that_days_price_top_up():
-    """Both land on Saturday and the ingest queue has one slot. The backfill is a
-    hundreds-of-megabytes download that can take the better part of an hour; the
-    top-up is at most 25 metered requests. Behind the backfill, the top-up would
-    plan its day against a plane the backfill had not finished writing — and
-    since `select_work` skips symbols the archive already priced, planning early
-    is how the free tier's whole allowance gets spent re-buying bars."""
+    """Both land daily and the ingest queue has one slot. The backfill walks a
+    free vendor one symbol at a time until its daily ceiling is spent, which can
+    take the better part of an hour; the top-up is at most 25 metered requests.
+    Behind the backfill, the top-up would plan its day against a plane the
+    backfill had not finished writing — and since `select_work` skips symbols
+    the free vendor already priced, planning early is how the free tier's whole
+    allowance gets spent re-buying bars."""
     backfill_hour = int(settings.ingest_us_backfill_cron.split()[1])
     prices_hour = int(settings.ingest_us_prices_cron.split()[1])
     assert backfill_hour < prices_hour

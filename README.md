@@ -257,7 +257,8 @@ of that kind is already pending or in flight, and there is nothing to do.
 | Backfill | Task | Cost |
 |---|---|---|
 | Crypto | `ingest_crypto` | ~3h, free, no key |
-| US prices (history) | `ingest_us_backfill` | one large download, free, no key |
+| US prices (1962–2018) | `ingest_wiki_backfill` | one 463MB download, free key, one request |
+| US prices (through today) | `ingest_us_backfill` | one request per symbol, free, no key; several days for a first pass |
 | US universe (incl. delisted) | `ingest_us_listing` | 2 metered requests |
 | US prices (top-up + dividends) | `ingest_us_prices` | ≤20 metered requests/day |
 
@@ -281,20 +282,39 @@ about six symbols a day — **five years** to a first pass, and 550x the daily
 allowance to refresh what it had. No amount of care in the client changes that,
 because it is a property of a per-symbol metered feed.
 
-So `us_pipeline.us_backfill` takes the history from one bulk file for nothing,
-and `us_pipeline.us_prices` becomes the top-up. The archive is split-adjusted
-and carries no distributions, so its symbols are recorded as `split_only` — real
-and labelled, and enough for a momentum or liquidity screen. The metered key
-then spends its 20 usable requests a day on the two things only it has: the
-symbols the archive does not carry (it holds the currently listed, so the
-delisted tail is still `us_listing`'s job) and the dividends that upgrade a
-symbol from `split_only` to `total_return`.
+So the history comes from free sources and `us_pipeline.us_prices` becomes the
+top-up. There are two free sources because neither one alone is enough:
 
-The two never price the same symbol. `us_prices` asks
-`market_prices.source` which symbols the archive already covered and drops the
-price half of their work — writing a raw close over a split-adjusted history
-would invent a return at the seam, and a split-sized jump is exactly what
-`MARKETS["US"].glitch_down` is built to mask.
+- **`wiki_backfill`** reads Nasdaq Data Link's WIKI/PRICES export — 15.4M bars
+  over 3,199 tickers from 1962-01-02, with the corporate actions in the rows, so
+  the bars land `total_return`. One request, one free key. It was frozen in
+  April 2018: the newest bar is 2018-03-27 and no request changes that.
+- **`us_backfill`** walks Stooq's free quote endpoint, one request per symbol,
+  no key and no account, and it reaches the present. Stooq back-adjusts for
+  splits and publishes no distributions, so its bars are `split_only` — real and
+  labelled, and enough for a momentum or liquidity screen. Anonymous callers
+  have a daily hit ceiling, so a run ends when the ceiling is spent and the next
+  one resumes from the cursor; a first pass over the universe takes a few days.
+
+**A symbol gets one source and one convention, never two.** WIKI writes a raw
+close and Stooq a split-adjusted one, and `market_prices` is keyed
+`(market, symbol, date)` — so a symbol both of them wrote would hold two
+conventions in one column with a fabricated split-sized return where they meet,
+which is exactly what `MARKETS["US"].glitch_down` is built to mask. Nothing
+repairs that after the fact: converting either series to the other's convention
+needs the post-2018 splits and neither source has them. So `us_backfill` *drops*
+WIKI's rows for a symbol before writing it, and WIKI keeps the names Stooq
+cannot serve — mostly the ones that died inside its maintenance window, where
+nothing extends them and the question does not arise.
+
+That trade is a real one and worth knowing: a symbol moved from WIKI to Stooq
+drops from `total_return` to `split_only`, and `plane_status.py` reports the
+drop. It is also the drop the metered key exists to undo. `us_prices` asks
+`market_prices.source` which symbols the free vendor already covered and drops
+the price half of their work, spending its 20 usable requests a day on the two
+things only it has: the symbols the free vendor does not carry (the delisted
+tail is still `us_listing`'s job) and the dividends that upgrade a symbol from
+`split_only` back to `total_return`, about ten symbols a day.
 
 A run in progress is visible three ways: `docker compose logs -f ingest` for
 live progress, `plane_status.py` for what has landed so far (the counts move

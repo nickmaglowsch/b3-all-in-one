@@ -8,16 +8,33 @@ gate its archive behind an account. This one needs a free key and one request.
 **What it is and is not.** WIKI stopped being maintained in April 2018. This
 module therefore fills 1962..2018 and nothing after — see `wiki_archive` for the
 dataset's shape and the limits of its survivorship coverage. It is a history
-backfill, not a price feed, and `plane_status` will show the US plane ending in
-2018 until something else covers the gap. That is the honest state of the plane
-rather than a bug in this module.
+backfill, not a price feed.
 
-**Why it can claim a total return series when `us_backfill` cannot.** The stooq
-dump carries split-adjusted closes and no distributions, so its bars are
-`split_only` and the metered feed has to buy dividends per symbol to upgrade
-them. WIKI ships raw OHLC *and* the events — 118,131 dividends and 4,096 splits
-ride along in the bar rows — so `us_adjust` computes both adjusted columns here
-from the same file, for free, and the result is `total_return`.
+**Which symbols it ends up owning.** `us_backfill` walks Stooq's quote endpoint,
+which reaches the present, and it *replaces* this module's rows for every symbol
+it can serve — one symbol gets one source and one convention, because a raw
+close spliced onto a split-adjusted one fabricates a split-sized return where
+they meet and no arithmetic repairs it without the post-2018 splits. So what
+stays here is the part only this file has: the names that died inside WIKI's
+maintenance window and that the quote endpoint no longer quotes. There the
+splice question does not arise, because nothing extends them.
+
+That division is why the order of the two jobs does not matter and why this one
+is still worth running first on an empty plane: it is fast, it is one request,
+and every symbol Stooq later reaches is one this module was only ever holding.
+
+**Why it can claim a total return series when `us_backfill` cannot.** Stooq
+serves split-adjusted closes and no distributions, so its bars are `split_only`
+and the metered feed has to buy dividends per symbol to upgrade them. WIKI ships
+raw OHLC *and* the events — 118,131 dividends and 4,096 splits ride along in the
+bar rows — so `us_adjust` computes both adjusted columns here from the same
+file, for free, and the result is `total_return`.
+
+That is a real loss on every symbol `us_backfill` takes over, and it is stated
+rather than buried: those symbols drop to `split_only`, `/market/status` reports
+the drop, and the metered feed's corporate-actions budget is what buys the
+adjustment back — ten symbols a day, on the names a strategy actually holds. The
+plane trades a dividend adjustment it had for eight years of bars it did not.
 
 The adjusted columns are computed rather than copied from the vendor's own
 `adj_close`. The vendor's series is back-adjusted to *its* last day, 2018-03-27;
@@ -34,11 +51,12 @@ file and are safe.
 **Why these symbols are not fenced off from the metered feed.** `us_backfill`
 adds its symbols to `covered_symbols` so `us_prices` never re-prices them and
 splices two adjustment conventions into one column. This module writes a raw
-`close` — the same convention `us_prices` buys — and stops in 2018, so the
-metered feed topping a symbol up to the present is the wanted outcome, not the
-seam. The two do meet in `adj_close`, whose back-adjustment anchor differs
-either side of 2018; that is recorded in the source tag rather than papered
-over, and a strategy reading `adj_close` across the seam should know it.
+`close` — the same convention `us_prices` buys — and stops in 2018, so for a
+symbol Stooq cannot serve, the metered feed topping it up to the present is the
+wanted outcome rather than a seam. The two do meet in `adj_close`, whose
+back-adjustment anchor differs either side of 2018; that is recorded in the
+source tag rather than papered over, and a strategy reading `adj_close` across
+the seam should know it.
 """
 
 import argparse
@@ -68,11 +86,10 @@ def bulk_path(db_dir=None):
 def ensure_bulk(path, fetch=None, force: bool = False) -> str:
     """The export on disk, downloaded if absent.
 
-    No staleness check, unlike `us_backfill.ensure_bulk`, and the difference is
-    the point rather than an omission: that archive is republished daily so a
-    local copy goes behind, while this dataset was frozen in 2018 and a copy of
-    it can never be out of date. Re-downloading 463MB on a schedule would buy
-    nothing at all. `force` is the escape hatch for a corrupted file.
+    No staleness check, and that is the point rather than an omission: this
+    dataset was frozen in 2018, so a copy of it can never be out of date.
+    Re-downloading 463MB on a schedule would buy nothing at all. `force` is the
+    escape hatch for a corrupted file.
     """
     fetch = fetch or archive.download_bulk
     if path.exists() and not force:

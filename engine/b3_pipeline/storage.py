@@ -55,19 +55,14 @@ def is_postgres(conn) -> bool:
 
 
 def _xlate(conn, sql: str, params=None) -> str:
-    """Translate sqlite ?/:name placeholders to psycopg pyformat when needed.
-
-    `params` is what the caller will hand the driver, and it decides whether a
-    literal `%` in the SQL has to be escaped: psycopg only scans for pyformat
-    placeholders when it is given parameters, so `LIKE '%USDT'` (see the CRYPTO
-    market spec) reads as the placeholder `%U` on a parameterised query and as a
-    plain percent sign on an unparameterised one. Doubling has to happen *before*
-    the rewrites below, which introduce `%` of their own.
-    """
+    """Translate sqlite ?/:name placeholders to psycopg pyformat when needed."""
     if not is_postgres(conn):
         return sql
+    # psycopg scans for placeholders only when given params, and only unescapes
+    # then — so a literal % (CRYPTO's `LIKE '%USDT'`, read as the placeholder
+    # %U) is doubled exactly then, and before the rewrites that add % of their own.
     if params is not None:
-        sql = sql.replace("%", "%%")             # literal % -> %% (escaped)
+        sql = sql.replace("%", "%%")                         # literal % -> %%
     sql = re.sub(r"(?<!:):([a-zA-Z_]\w*)", r"%(\1)s", sql)  # :name -> %(name)s
     return sql.replace("?", "%s")                            # ?     -> %s
 
@@ -86,10 +81,8 @@ def read_sql(sql: str, conn, params=None, **kwargs) -> pd.DataFrame:
 def execute(conn, sql: str, params=None):
     """Execute one statement, translating placeholders. Returns the cursor."""
     cur = conn.cursor()
-    if params is None:
-        cur.execute(_xlate(conn, sql))
-    else:
-        cur.execute(_xlate(conn, sql, params), params)
+    args = () if params is None else (params,)
+    cur.execute(_xlate(conn, sql, params), *args)
     return cur
 
 
@@ -464,17 +457,22 @@ def get_connection(db_path: Optional[Path] = None):
     return conn
 
 
+# The rebuild drop sets, in the historical order: CVM first, then COTAHIST. The
+# cvm_only rebuild drops the first tuple alone — that is the whole difference.
+_CVM_TABLES = ("fundamentals_monthly", "fundamentals_pit", "cvm_filings",
+               "company_isin_map", "company_tickers_pit", "cvm_companies")
+_COTAHIST_TABLES = ("prices", "corporate_actions", "stock_actions",
+                    "detected_splits", "skipped_events", "fetch_failures")
+
+
 def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = False) -> None:
     """Initialize the database schema.
 
     Args:
         conn: SQLite connection.
         rebuild: When True, drop tables before recreating them.
-        cvm_only: When True (and rebuild=True), only drop the 5 CVM-specific tables
-            (fundamentals_monthly, fundamentals_pit, cvm_filings, company_isin_map,
-            cvm_companies).  COTAHIST-owned tables (prices, corporate_actions,
-            stock_actions, detected_splits, skipped_events, fetch_failures) are left
-            intact.  When False (default), all tables are dropped — this is the
+        cvm_only: When True (and rebuild=True), drop only _CVM_TABLES and leave
+            _COTAHIST_TABLES intact. When False (default), both sets go — the
             full-pipeline rebuild behaviour used by main.py.
     """
     cursor = conn.cursor()
@@ -482,31 +480,14 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
     if rebuild:
         if cvm_only:
             logger.info("Dropping CVM tables only (prices and COTAHIST tables preserved)...")
-            cursor.execute("DROP TABLE IF EXISTS fundamentals_monthly")
-            cursor.execute("DROP TABLE IF EXISTS fundamentals_pit")
-            cursor.execute("DROP TABLE IF EXISTS cvm_filings")
-            cursor.execute("DROP TABLE IF EXISTS company_isin_map")
-            cursor.execute("DROP TABLE IF EXISTS company_tickers_pit")
-            cursor.execute("DROP TABLE IF EXISTS cvm_companies")
+            drop = _CVM_TABLES
         else:
             logger.warning(
                 "Full rebuild: dropping ALL tables including prices and corporate actions"
             )
-            # Drop fundamentals_monthly first (depends on nothing but should be cleaned)
-            cursor.execute("DROP TABLE IF EXISTS fundamentals_monthly")
-            # Drop CVM fundamentals tables first (before existing tables)
-            cursor.execute("DROP TABLE IF EXISTS fundamentals_pit")
-            cursor.execute("DROP TABLE IF EXISTS cvm_filings")
-            cursor.execute("DROP TABLE IF EXISTS company_isin_map")
-            cursor.execute("DROP TABLE IF EXISTS company_tickers_pit")
-            cursor.execute("DROP TABLE IF EXISTS cvm_companies")
-            # Drop original tables
-            cursor.execute("DROP TABLE IF EXISTS prices")
-            cursor.execute("DROP TABLE IF EXISTS corporate_actions")
-            cursor.execute("DROP TABLE IF EXISTS stock_actions")
-            cursor.execute("DROP TABLE IF EXISTS detected_splits")
-            cursor.execute("DROP TABLE IF EXISTS skipped_events")
-            cursor.execute("DROP TABLE IF EXISTS fetch_failures")
+            drop = _CVM_TABLES + _COTAHIST_TABLES
+        for table in drop:
+            cursor.execute(f"DROP TABLE IF EXISTS {table}")  # noqa: S608
 
     logger.info("Creating database schema...")
     pg = is_postgres(conn)

@@ -65,7 +65,7 @@
     "engine/b3_pipeline/cvm_parser.py": 664,
     "engine/b3_pipeline/cvm_storage.py": 478,
     "engine/b3_pipeline/main.py": 593,
-    "engine/b3_pipeline/storage.py": 1288,
+    "engine/b3_pipeline/storage.py": 1280,
     "engine/backtests/core/data.py": 904,
     "engine/backtests/core/simulation.py": 449,
     "engine/backtests/strategies/sp500_b3.py": 594,

@@ -34,7 +34,7 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
                             "ingest_instruments", "ingest_crypto",
                             "ingest_us_fundamentals", "ingest_us_symbols",
                             "ingest_us_listing", "ingest_us_prices",
-                            "ingest_us_backfill", "ingest_spx"}
+                            "ingest_us_daily", "ingest_spx"}
     assert by_name["ingest_prices"].cron == settings.ingest_prices_cron
     assert by_name["ingest_fundamentals"].cron == settings.ingest_fundamentals_cron
     assert by_name["ingest_instruments"].cron == settings.ingest_instruments_cron
@@ -44,8 +44,8 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
     assert by_name["ingest_us_symbols"].cron == settings.ingest_us_symbols_cron
     assert by_name["ingest_us_listing"].cron == settings.ingest_us_listing_cron
     assert by_name["ingest_us_prices"].cron == settings.ingest_us_prices_cron
-    assert (by_name["ingest_us_backfill"].cron
-            == settings.ingest_us_backfill_cron)
+    assert (by_name["ingest_us_daily"].cron
+            == settings.ingest_us_daily_cron)
     assert by_name["ingest_spx"].cron == settings.ingest_spx_cron
     for pt in by_name.values():
         assert pt.task.queue == "ingest", (
@@ -64,17 +64,16 @@ def test_the_security_master_is_rebuilt_after_the_prices_it_reads():
     assert instruments_hour > prices_hour
 
 
-def test_the_bulk_us_backfill_runs_before_that_days_price_top_up():
-    """Both land daily and the ingest queue has one slot. The backfill walks a
-    free vendor one symbol at a time until its daily ceiling is spent, which can
-    take the better part of an hour; the top-up is at most 25 metered requests.
-    Behind the backfill, the top-up would plan its day against a plane the
-    backfill had not finished writing — and since `select_work` skips symbols
-    the free vendor already priced, planning early is how the free tier's whole
-    allowance gets spent re-buying bars."""
-    backfill_hour = int(settings.ingest_us_backfill_cron.split()[1])
-    prices_hour = int(settings.ingest_us_prices_cron.split()[1])
-    assert backfill_hour < prices_hour
+def test_the_us_daily_refresh_runs_after_the_session_it_asks_for_has_settled():
+    """The free tier refuses a session that has not closed, by name. New York
+    midnight is 04:00 UTC on daylight time and 05:00 on standard, and the vendor
+    needs a while past that to settle the day — so a refresh scheduled before
+    ~06:00 UTC would spend its request being told to come back later, every day,
+    and the plane would never advance. Encoded because the failure is silent:
+    `NotSettled` is handled, so the job would go on reporting success while
+    writing nothing."""
+    daily_hour = int(settings.ingest_us_daily_cron.split()[1])
+    assert daily_hour >= 6
 
 
 @pytest.mark.parametrize("task", ["ingest_prices", "ingest_fundamentals",
@@ -82,7 +81,7 @@ def test_the_bulk_us_backfill_runs_before_that_days_price_top_up():
                                  "ingest_us_fundamentals", "ingest_us_symbols",
                                  "ingest_us_listing", "ingest_us_prices",
                                  "ingest_us_backfill", "ingest_spx",
-                                 "ingest_wiki_backfill"])
+                                 "ingest_us_daily", "ingest_wiki_backfill"])
 def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     """The periodic scheduler injects `timestamp`; a manual defer_async() does not.
     Without a default the worker raises before the ingest_runs row is written, so

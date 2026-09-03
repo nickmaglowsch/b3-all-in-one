@@ -15,11 +15,18 @@ import logging
 
 from b3_pipeline import storage
 
+from . import massive_daily
 from . import stooq_daily as vendor
 
 logger = logging.getLogger(__name__)
 
 MARKET = vendor.MARKET
+
+# Every source tag on the plane that publishes a back-adjusted close. The
+# metered feed publishes a raw one, so these are the symbols it must not touch;
+# `us_daily` reads the same set from the other side, to know which histories a
+# split-adjusted bar may legally be appended to.
+SPLIT_ADJUSTED_PREFIXES = (vendor.SOURCE_PREFIX, massive_daily.SOURCE_PREFIX)
 
 
 def covered_symbols(conn) -> set:
@@ -30,9 +37,12 @@ def covered_symbols(conn) -> set:
     written — or was overwritten by a later run — cannot make `us_prices`
     believe a symbol is safe to re-price when it is not.
 
-    Matched on `SOURCE_PREFIX`, not on the exact tag, so rows left by the bulk
-    attempt fence identically to rows written by the walk: both conventions are
-    split-adjusted and neither may be spliced with the metered feed's raw one.
+    Matched on prefixes, not on exact tags, so every split-adjusted writer
+    fences identically: the bulk file, the per-symbol walk and the daily grouped
+    refresh all publish a back-adjusted close, and none of them may be spliced
+    with the metered feed's raw one. A new split-adjusted source belongs in
+    `SPLIT_ADJUSTED_PREFIXES` on the day it is added, not after the seam it
+    opens is noticed in a backtest.
 
     That costs a scan of the US half of the price table, since `source` is in no
     index — tens of millions of rows once this history has landed. Paid rather
@@ -41,10 +51,11 @@ def covered_symbols(conn) -> set:
     absence fails in the one direction that corrupts a price series. If it ever
     does hurt, the fix is an index on `(market, source, symbol)`, not a flag.
     """
+    clauses = " OR ".join(["source LIKE ?"] * len(SPLIT_ADJUSTED_PREFIXES))
     df = storage.read_sql(
         "SELECT DISTINCT symbol FROM market_prices"
-        " WHERE market = ? AND source LIKE ?",
-        conn, params=(MARKET, f"{vendor.SOURCE_PREFIX}%"))
+        f" WHERE market = ? AND ({clauses})",
+        conn, params=(MARKET, *(f"{p}%" for p in SPLIT_ADJUSTED_PREFIXES)))
     return set(df["symbol"]) if not df.empty else set()
 
 

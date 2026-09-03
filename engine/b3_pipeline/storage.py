@@ -54,10 +54,20 @@ def is_postgres(conn) -> bool:
     return not isinstance(conn, sqlite3.Connection)
 
 
-def _xlate(conn, sql: str) -> str:
-    """Translate sqlite ?/:name placeholders to psycopg pyformat when needed."""
+def _xlate(conn, sql: str, params=None) -> str:
+    """Translate sqlite ?/:name placeholders to psycopg pyformat when needed.
+
+    `params` is what the caller will hand the driver, and it decides whether a
+    literal `%` in the SQL has to be escaped: psycopg only scans for pyformat
+    placeholders when it is given parameters, so `LIKE '%USDT'` (see the CRYPTO
+    market spec) reads as the placeholder `%U` on a parameterised query and as a
+    plain percent sign on an unparameterised one. Doubling has to happen *before*
+    the rewrites below, which introduce `%` of their own.
+    """
     if not is_postgres(conn):
         return sql
+    if params is not None:
+        sql = sql.replace("%", "%%")             # literal % -> %% (escaped)
     sql = re.sub(r"(?<!:):([a-zA-Z_]\w*)", r"%(\1)s", sql)  # :name -> %(name)s
     return sql.replace("?", "%s")                            # ?     -> %s
 
@@ -69,7 +79,8 @@ def read_sql(sql: str, conn, params=None, **kwargs) -> pd.DataFrame:
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # pandas warns on non-sqlite DBAPI conns
-        return pd.read_sql_query(_xlate(conn, sql), conn, params=params, **kwargs)
+        return pd.read_sql_query(_xlate(conn, sql, params), conn,
+                                 params=params, **kwargs)
 
 
 def execute(conn, sql: str, params=None):
@@ -78,14 +89,14 @@ def execute(conn, sql: str, params=None):
     if params is None:
         cur.execute(_xlate(conn, sql))
     else:
-        cur.execute(_xlate(conn, sql), params)
+        cur.execute(_xlate(conn, sql, params), params)
     return cur
 
 
 def executemany(conn, sql: str, rows) -> int:
     """Batch execute; sqlite3/psycopg only expose executemany on the cursor."""
     cur = conn.cursor()
-    cur.executemany(_xlate(conn, sql), rows)
+    cur.executemany(_xlate(conn, sql, rows), rows)
     return len(rows)
 
 

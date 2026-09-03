@@ -162,8 +162,8 @@ def universe(conn) -> list:
         "       CASE WHEN i.cik IS NOT NULL THEN 0 ELSE 1 END AS tier"
         "  FROM instruments i"
         " WHERE i.market = ? AND COALESCE(i.is_test_issue, 0) = 0"
-        "   AND i.symbol NOT LIKE 'CIK%'"
-        " ORDER BY tier, i.symbol", conn, params=(MARKET,))
+        "   AND i.symbol NOT LIKE ?"
+        " ORDER BY tier, i.symbol", conn, params=(MARKET, "CIK%"))
     return list(df["symbol"]) if not df.empty else []
 
 

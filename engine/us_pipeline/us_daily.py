@@ -110,8 +110,8 @@ def writable_symbols(conn) -> set:
     back-adjusted bar onto a `total_return` history splices two conventions in
     one column and fabricates a return where they meet — the same seam
     `delete_market_prices_from_other_sources` exists to prevent, and one this
-    module cannot fix the way `us_backfill` can, because a single session is not
-    a history to replace one with.
+    module cannot fix the way a bulk load can, because a single session is not a
+    history to replace one with.
 
     So a WIKI-only symbol is skipped rather than corrupted or half-replaced.
     Today every one of those is delisted and no live session would name it

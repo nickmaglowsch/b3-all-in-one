@@ -58,13 +58,6 @@ class Settings(BaseSettings):
     # Before the directory capture at 23:00, so a same-day disagreement between
     # the claimed interval and the observed one lands in that order.
     ingest_us_listing_cron: str = "0 22 * * 1-5"
-    # The bulk US history, which costs nothing against the metered budget. Daily
-    # rather than weekly, and that is a consequence of how it is fetched: the
-    # free vendor serves one symbol per request under a daily hit ceiling, so a
-    # run ends when the ceiling is spent and the next one resumes from the
-    # cursor. A first pass over the universe is several days of these. Early,
-    # so a long walk is finished well before the day's price job.
-    ingest_us_backfill_cron: str = "0 3 * * *"
     # The US daily refresh: one grouped request for the whole market's session,
     # plus the split feed that re-adjusts stored history before the new bar
     # lands. 07:00 UTC because the free tier refuses a session that has not

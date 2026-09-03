@@ -1,10 +1,10 @@
 """Where the free bulk history stops and the metered feed starts.
 
-Split out of `us_backfill` because it has two consumers and belongs to neither.
-`us_backfill` writes the split-adjusted bars; `us_prices` spends the metered
-budget; this module is the rule that keeps one from undoing the other, and
-putting it in either one makes the other import a pipeline to ask a question
-about a boundary.
+Its own module because it has several consumers and belongs to none of them.
+The bulk dump and `us_daily` write the split-adjusted bars; `us_prices` spends
+the metered budget; this module is the rule that keeps one from undoing the
+other, and putting it in any of them makes the rest import a pipeline to ask a
+question about a boundary.
 
 The rule itself is one sentence: a symbol the free vendor priced never has its
 prices bought again, and its corporate actions always can be. Everything below
@@ -16,17 +16,24 @@ import logging
 from b3_pipeline import storage
 
 from . import massive_daily
-from . import stooq_daily as vendor
 
 logger = logging.getLogger(__name__)
 
-MARKET = vendor.MARKET
+MARKET = massive_daily.MARKET
+
+# Stooq's tag, as a literal, now that the per-symbol walk that used to define it
+# is deleted. It is not decoration: 13,347 symbols and 28,057,516 rows on the
+# plane are tagged `stooq-bulk:split_only`, written by the bulk `d_us_txt` dump,
+# and this prefix is the whole of what fences them off from `us_prices`' raw
+# metered close. The module that owned the constant went away because its vendor
+# stopped answering; the rows it names did not go anywhere.
+STOOQ_PREFIX = "stooq"
 
 # Every source tag on the plane that publishes a back-adjusted close. The
 # metered feed publishes a raw one, so these are the symbols it must not touch;
 # `us_daily` reads the same set from the other side, to know which histories a
 # split-adjusted bar may legally be appended to.
-SPLIT_ADJUSTED_PREFIXES = (vendor.SOURCE_PREFIX, massive_daily.SOURCE_PREFIX)
+SPLIT_ADJUSTED_PREFIXES = (STOOQ_PREFIX, massive_daily.SOURCE_PREFIX)
 
 
 def covered_symbols(conn) -> set:
@@ -38,11 +45,10 @@ def covered_symbols(conn) -> set:
     believe a symbol is safe to re-price when it is not.
 
     Matched on prefixes, not on exact tags, so every split-adjusted writer
-    fences identically: the bulk file, the per-symbol walk and the daily grouped
-    refresh all publish a back-adjusted close, and none of them may be spliced
-    with the metered feed's raw one. A new split-adjusted source belongs in
-    `SPLIT_ADJUSTED_PREFIXES` on the day it is added, not after the seam it
-    opens is noticed in a backtest.
+    fences identically: the bulk file and the daily grouped refresh both publish
+    a back-adjusted close, and neither may be spliced with the metered feed's
+    raw one. A new split-adjusted source belongs in `SPLIT_ADJUSTED_PREFIXES` on
+    the day it is added, not after the seam it opens is noticed in a backtest.
 
     That costs a scan of the US half of the price table, since `source` is in no
     index — tens of millions of rows once this history has landed. Paid rather
@@ -62,12 +68,13 @@ def covered_symbols(conn) -> set:
 def demote_bulk_priced(buckets, covered) -> tuple:
     """Re-file `us_prices.select_work`'s work buckets around the seam.
 
-    A symbol the free vendor covers never gets its prices bought again — see
-    `us_backfill` on why one symbol may carry only one convention. Its
-    *actions* still do, and that is the point rather than a leftover:
-    distributions are the one thing this vendor does not carry, so the free
-    tier's 20 requests a day buy the `split_only` -> `total_return` upgrade
-    instead of re-buying bars the plane already has.
+    A symbol the free vendor covers never gets its prices bought again: the bulk
+    dump back-adjusts to the day it was cut and the metered feed publishes a raw
+    close, so one symbol may carry only one convention. Its *actions* still get
+    bought, and that is the point rather than a leftover: distributions are the
+    one thing the free source does not carry, so the free tier's 20 requests a
+    day buy the `split_only` -> `total_return` upgrade instead of re-buying bars
+    the plane already has.
 
     Demoted work lands in bucket 4, behind every symbol that still has no bars
     at all — a symbol the free vendor priced *has* bars and no longer belongs

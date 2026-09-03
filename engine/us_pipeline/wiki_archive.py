@@ -1,7 +1,7 @@
 """Read the Nasdaq Data Link WIKI/PRICES bulk export.
 
 The reader half of `wiki_backfill`, split off for the same reason
-`stooq_daily` is split off from `us_backfill`: fetching and parsing a vendor
+`massive_daily` is split off from `us_daily`: fetching and parsing a vendor
 file is a different job from folding it into the plane, and only this half needs
 to know what the vendor's CSV looks like.
 
@@ -63,8 +63,8 @@ MIN_PLAUSIBLE_SYMBOLS = 2_500
 # would silently lose the tail of its history.
 LAST_BAR = "2018-03-27"
 
-# Pinned, never inferred, for the reason `stooq_daily` pins its two: letting
-# pandas guess per element reads 03/04 as two different days.
+# Pinned, never inferred, for the reason every other reader here pins its
+# formats: letting pandas guess per element reads 03/04 as two different days.
 DATE_FORMAT = "%Y-%m-%d"
 
 # The exact header the export has carried. Checked in full rather than by

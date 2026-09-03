@@ -78,14 +78,14 @@ def test_the_us_gaps_name_the_module_that_closes_each_one(conn):
     market_storage.upsert_instruments(conn, pd.DataFrame([
         {"market": "US", "symbol": "AAPL", "currency": "USD"}]))
     gaps = " | ".join(plane_status.us_gaps(conn))
-    assert "us_pipeline.us_backfill" in gaps      # no bars
+    assert "us_pipeline.us_daily" in gaps         # no bars
     assert "us_pipeline.us_main" in gaps          # no CIK
     assert "us_pipeline.us_listing" in gaps       # nothing delisted
 
 
 def test_the_source_breakdown_tells_the_bulk_backfill_from_the_metered_trickle(conn):
     """The one number that says which US strategy is in play: a plane built from
-    the free vendor reads `stooq-daily`, one trickled out of the free tier reads
+    the bulk dump reads `stooq-bulk`, one trickled out of the free tier reads
     `alphavantage-*`, and they carry different adjustment conventions."""
     market_storage.upsert_market_prices(conn, _bars(
         "US", "AAPL", ["2024-01-01"], "stooq-daily:split_only"))

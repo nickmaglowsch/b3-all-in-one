@@ -89,6 +89,11 @@ services:
       # Nasdaq Data Link, for the WIKI bulk backfill. Free key, one request
       # for the whole 1962..2018 export. Same handling as the keys above.
       NASDAQ_DATA_LINK_API_KEY: ${NASDAQ_DATA_LINK_API_KEY:-}
+      # Massive (formerly Polygon.io) keys the US daily refresh: one grouped
+      # request per session for the whole market, plus the split feed that
+      # re-adjusts stored history. Free key, same handling as the others.
+      MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
+      MASSIVE_DELAY_SECONDS: ${MASSIVE_DELAY_SECONDS:-}
       # Seconds between requests in the US backfill's walk of the free quote
       # endpoint. Politeness, not correctness; the default is 0.5.
       STOOQ_DELAY_SECONDS: ${STOOQ_DELAY_SECONDS:-}

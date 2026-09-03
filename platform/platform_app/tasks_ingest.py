@@ -164,7 +164,14 @@ async def ingest_us_listing(timestamp: int = 0) -> dict:  # see ingest_prices
     return await _record_ingest("us_listing", ["us_pipeline.us_listing"])
 
 
-@app.periodic(cron=settings.ingest_us_backfill_cron)
+# Deliberately not `@app.periodic` any more, for the reason `ingest_wiki_backfill`
+# never was: the source stopped answering. Stooq began requiring an API key in
+# 2026, issued only through a browser CAPTCHA, so the per-symbol walk this task
+# runs now 404s on every symbol — a nightly run that could only ever record an
+# error. The history it was meant to fetch is loaded from Stooq's bulk `d_us_txt`
+# dump by hand (no machine can fetch it past the vendor's proof-of-work), and
+# `ingest_us_daily` is what keeps that history current. Kept deferrable rather
+# than deleted: if a key is ever issued, restoring the schedule is one line.
 @app.task(name="ingest_us_backfill", queue="ingest",
           queueing_lock="ingest_us_backfill")
 async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
@@ -189,6 +196,30 @@ async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
     `us_pipeline.us_backfill` on why that is a delete and not an upsert.
     """
     return await _record_ingest("us_backfill", ["us_pipeline.us_backfill"])
+
+
+@app.periodic(cron=settings.ingest_us_daily_cron)
+@app.task(name="ingest_us_daily", queue="ingest",
+          queueing_lock="ingest_us_daily")
+async def ingest_us_daily(timestamp: int = 0) -> dict:  # see ingest_prices
+    """Keep the US plane current: re-adjust for splits, then append the session.
+
+    The counterpart to a history that arrives as a file. The bulk dump is loaded
+    by hand and is correct on the day it is loaded; this is what stops it going
+    stale, in one request per session against a free tier that allows five a
+    minute.
+
+    Two steps and the order is the point. A split-adjusted vendor re-scales its
+    own history when a split executes and the stored history does not move, so
+    appending the new bar first would splice a quarter-price session onto a
+    full-price one and fabricate a -75% return — the artefact `glitch_down` is
+    built to mask, which is what makes it dangerous. `us_daily` re-scales the
+    old rows first, once per split ever, keyed on the vendor's split id.
+
+    A session that has not closed is not a failure: the free tier refuses it by
+    name, the run stops there and reports it, and the next run picks it up.
+    """
+    return await _record_ingest("us_daily", ["us_pipeline.us_daily"])
 
 
 # Deliberately not `@app.periodic`. Every other ingest here has a cron because

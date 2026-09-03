@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     # cursor. A first pass over the universe is several days of these. Early,
     # so a long walk is finished well before the day's price job.
     ingest_us_backfill_cron: str = "0 3 * * *"
+    # The US daily refresh: one grouped request for the whole market's session,
+    # plus the split feed that re-adjusts stored history before the new bar
+    # lands. 07:00 UTC because the free tier refuses a session that has not
+    # closed — by then the previous New York day is long over, and the job is
+    # early enough to be finished before the day's other US work.
+    ingest_us_daily_cron: str = "0 7 * * *"
     # After the US close and after the crypto job has refreshed PTAX. Daily
     # rather than weekday-only: the free tier's 25 requests a day are the
     # constraint, and a skipped day is a day of backfill that never happens.

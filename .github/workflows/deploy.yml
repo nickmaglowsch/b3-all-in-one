@@ -12,19 +12,60 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Whether to deploy at all, decided in one place so "we did not deploy" is never
+  # silent. This replaces a job-level `if` on each deploy job: a job the `if`
+  # skips reports green at the workflow level, so a red CI on main stopped every
+  # deploy with nothing anywhere saying so — a merged fix sat undeployed and the
+  # box kept serving the previous commit. A failed gate is loud instead.
+  guard:
+    name: Should we deploy?
+    runs-on: ubuntu-latest
+    # Deliberately no `environment: production` — this job holds no secrets, so it
+    # is safe to run for any triggering event and decide afterwards.
+    outputs:
+      deploy: ${{ steps.decide.outputs.deploy }}
+    steps:
+      - id: decide
+        # Every payload-derived value arrives as an env var rather than a `${{ }}`
+        # interpolation in the script body: the repo name below is attacker-chosen
+        # text, and interpolation would splice it into the shell.
+        env:
+          EVENT: ${{ github.event_name }}
+          CI_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # head_repository guard: `branches: [main]` matches the workflow_run's
+          # *head* branch, so a fork PR from a branch literally named `main` that
+          # passes CI would otherwise reach the jobs holding VPS_SSH_KEY and
+          # CLOUDFLARE_API_TOKEN. The deploy script only ever ships origin/main, so
+          # the blast radius is a spurious redeploy rather than fork code — but a
+          # deploy job that any outsider can trigger is a lever nobody should be
+          # handed.
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          THIS_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "Manual dispatch — deploying origin/main."
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+            echo "::notice::CI ran on $HEAD_REPO, not $THIS_REPO — not deploying."
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$CI_CONCLUSION" != "success" ]; then
+            echo "::error::CI on main concluded '$CI_CONCLUSION' — NOTHING WAS DEPLOYED. The VPS still runs the previous commit. Fix main (or re-run the failed CI job) and the next green run deploys."
+            exit 1
+          fi
+          echo "CI on main is green — deploying."
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
   backend:
     name: API + worker to the VPS
     runs-on: ubuntu-latest
     environment: production
-    # head_repository guard: `branches: [main]` matches the workflow_run's *head*
-    # branch, so a fork PR from a branch literally named `main` that passes CI
-    # would fire this job. The script only ever deploys origin/main, so the blast
-    # radius is a spurious redeploy rather than fork code — but a deploy job that
-    # any outsider can trigger is a lever nobody should be handed.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+    needs: guard
+    if: needs.guard.outputs.deploy == 'true'
     steps:
       - name: Deploy over SSH
         # Pinned to a SHA, not the mutable v1 tag: this step is handed VPS_SSH_KEY,
@@ -48,13 +89,8 @@ jobs:
     name: Static site to Cloudflare Pages
     runs-on: ubuntu-latest
     environment: production
-    # Same head_repository guard as the backend job — `branches: [main]` matches the
-    # workflow_run's head branch, so a fork PR from a branch named main would
-    # otherwise reach a deploy job holding CLOUDFLARE_API_TOKEN.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+    needs: guard
+    if: needs.guard.outputs.deploy == 'true'
     env:
       # Secrets can't be read in a job-level `if`, so gate the steps on this instead:
       # until CLOUDFLARE_API_TOKEN is set the job is a green no-op (backend still ships).

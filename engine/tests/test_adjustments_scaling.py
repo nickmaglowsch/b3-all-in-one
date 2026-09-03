@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from b3_pipeline import config
+from b3_pipeline import adjustments, config
 from b3_pipeline.adjustments import (
     _normalize_date,
     _normalize_date_series,
@@ -192,16 +192,18 @@ def test_caller_frame_is_not_mutated():
     assert list(prices["date"]) == before
 
 
-def test_cost_does_not_scale_with_actions_times_rows():
-    """The regression guard. With the per-action rescan, doubling the number of
-    actions over a fixed price table doubled the work; grouped once, it does not.
+def test_whole_frame_work_does_not_scale_with_the_action_count(monkeypatch):
+    """The regression guard: the price frame is normalised, grouped and sorted
+    once, not once per B3 action.
 
-    Measured as a ratio against the same call with a tenth of the actions, with a
-    generous ceiling — this is catching an O(n*m) reintroduction, not a 20% drift.
+    This was a wall-clock ratio (`large < small * 4`) until a CI runner came in
+    6% slow, the ratio landed at 4.24x, and a red `main` silently stopped every
+    deploy. The property being guarded is structural, not temporal: the
+    whole-frame work happens the same number of times whatever the action count.
+    Counting it is exact, immune to runner speed, and a re-scan per action fails
+    it by construction rather than by being slow enough to notice.
     """
-    import time
-
-    n_rows, n_isin = 60_000, 300
+    n_rows, n_isin = 6_000, 300
     isins = [f"BR{i:09d}" for i in range(n_isin)]
     dates = pd.date_range("2015-01-01", periods=n_rows // n_isin, freq="B")
     prices = pd.DataFrame({
@@ -211,17 +213,37 @@ def test_cost_does_not_scale_with_actions_times_rows():
         "close": 10.0,
     })
 
-    def run(k):
+    # _normalize_date_series is the whole-column normalisation; sort_values is the
+    # per-group ordering. _normalize_date (scalar, per action) is deliberately not
+    # counted — that one is allowed to scale with the actions.
+    calls: dict[str, int] = {}
+    real_normalize = adjustments._normalize_date_series
+    real_sort = pd.DataFrame.sort_values
+
+    def counting_normalize(series):
+        calls["normalize"] = calls.get("normalize", 0) + 1
+        return real_normalize(series)
+
+    def counting_sort(self, *a, **kw):
+        calls["sort"] = calls.get("sort", 0) + 1
+        return real_sort(self, *a, **kw)
+
+    monkeypatch.setattr(adjustments, "_normalize_date_series", counting_normalize)
+    monkeypatch.setattr(pd.DataFrame, "sort_values", counting_sort)
+
+    def work_for(k):
+        calls.clear()
         actions = _actions([
             (isins[i % n_isin], "2018-06-01", 2.0, config.EVENT_TYPE_STOCK_SPLIT, "B3")
             for i in range(k)
         ])
-        t = time.perf_counter()
         filter_fatcot_redundant_splits(actions, prices)
-        return time.perf_counter() - t
+        return dict(calls)
 
-    small = run(20)
-    large = run(200)
-    # 10x the actions must not cost anywhere near 10x: the price table is grouped
-    # once and only the per-action window search remains.
-    assert large < small * 4, f"{small=:.3f}s {large=:.3f}s — looks O(actions x rows) again"
+    few, many = work_for(20), work_for(200)
+    assert few == many, (
+        f"10x the actions changed the whole-frame work: {few} -> {many}"
+        " — looks O(actions x rows) again")
+    # Pin the absolute numbers too, so a refactor that stops doing the work at all
+    # cannot pass by making both sides equally zero.
+    assert few == {"normalize": 1, "sort": n_isin}, few

@@ -46,6 +46,16 @@ the image — backtests read the market plane from Postgres, not from files.
   (shared `artifacts_data` volume, mirroring `uploads_data`).
 - `GET /backtests`, `GET /backtests/{id}`, `GET /backtests/{id}/curves` — history, a run
   row + metrics, and the pre/after-tax equity + drawdown + turnover series.
+- `DELETE /backtests/{id}` — drop one run and its artifacts directory. A run the worker
+  still holds (`pending`/`running`) is a 409: the engine is writing into that directory,
+  and those are exactly the rows the queue quota counts.
+- `DELETE /backtests?before=&status=&keep=` — sweep old runs, answering `{"deleted": n}`.
+  `before` is a calendar date (runs created before its UTC midnight), `status` a subset of
+  `done,error`, `keep` the N most recent runs to spare whatever the other two say. At
+  least one is required — a bare `DELETE /backtests` reads as "clear the list" to whoever
+  typed it and as "delete every backtest I have ever run" to the database. Artifacts are
+  located by run id rather than by `artifacts_path`, which is only written on the success
+  path even though a failed run leaves curves.csv behind.
 - `GET /benchmarks` — the rulers a run can be compared against: CDI, IPCA, IBOVESPA,
   S&P 500 and bitcoin (the last two **in reais**, so they carry the dollar's move
   the way a Brazilian holder actually experiences it). A catalogue in code, with the

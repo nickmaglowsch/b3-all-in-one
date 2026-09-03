@@ -130,6 +130,39 @@ export function useCreateBacktest() {
   });
 }
 
+export function useDeleteBacktest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => api<void>(`/backtests/${id}`, { method: "DELETE" }),
+    onSuccess: (_void, id) => {
+      // Evicted, not invalidated: there is nothing to refetch for a run that no
+      // longer exists, and a stale ["backtest", id] entry would render a tear
+      // sheet for it until the 404 came back.
+      qc.removeQueries({ queryKey: ["backtest", id] });
+      qc.removeQueries({ queryKey: ["curves", id] });
+      qc.invalidateQueries({ queryKey: ["backtests"] });
+    },
+  });
+}
+
+/** Sweep old runs. Takes the query string lib/retention builds — which is null
+ *  for a choice with no criteria, so this is never called with one. */
+export function usePurgeBacktests() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (query: string) =>
+      api<{ deleted: number }>(`/backtests?${query}`, { method: "DELETE" }),
+    onSuccess: () => {
+      // The answer is a count, not a list of ids, so every cached run and curve
+      // is suspect. Dropping the two families is cheaper than being wrong about
+      // which survived; the listing refetches immediately.
+      qc.removeQueries({ queryKey: ["backtest"] });
+      qc.removeQueries({ queryKey: ["curves"] });
+      qc.invalidateQueries({ queryKey: ["backtests"] });
+    },
+  });
+}
+
 // ── formatters ────────────────────────────────────────────────────────────────
 
 export const kindLabel = (k: Strategy["kind"]) => (k === "spec" ? "espec" : "código");

@@ -1,28 +1,39 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { BacktestRun } from "@/lib/types";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
+import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { useDeleteBacktest } from "./lib";
 
 // Rows must be clickable → /bench/run?id=. DataTable (frozen) has no onRowClick, so
 // this renders a native table in the same hairline-ruled, dense visual style.
-// A leading checkbox picks runs for the comparison overlay (done runs only).
+// A leading checkbox picks runs for the comparison overlay (done runs only), and
+// a trailing "Excluir" drops a single run and its artifacts.
 export function RunsList({
   runs,
   loading,
   selected,
   onToggle,
+  onDeleted,
 }: {
   runs: BacktestRun[];
   loading: boolean;
   selected: string[];
   onToggle: (id: string) => void;
+  /** So the parent can drop a deleted run from the comparison selection. */
+  onDeleted: (id: string) => void;
 }) {
   const router = useRouter();
+  const del = useDeleteBacktest();
+  // One at a time: the confirm is inline, so two open confirms would be two
+  // rows both claiming the next click.
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   const picked = new Set(selected);
 
   if (loading) {
@@ -45,70 +56,203 @@ export function RunsList({
     );
   }
 
+  const delMsg =
+    del.error instanceof ApiError
+      ? del.error.message
+      : del.error
+        ? "Falha ao excluir a rodada."
+        : null;
+
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-hairline">
-            <th className="w-9 px-3 py-2" aria-label="Comparar" />
-            {["Estratégia", "Status", "Criado"].map((h, i) => (
-              <th
-                key={h}
-                className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted ${
-                  i === 2 ? "text-right" : "text-left"
-                }`}
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((r) => {
-            const done = r.status === "done";
-            const isPicked = picked.has(r.id);
-            return (
-            <tr
-              key={r.id}
-              onClick={() => router.push(`/bench/run?id=${r.id}`)}
-              className={`cursor-pointer border-b border-hairline/70 last:border-0 hover:bg-hairline/30 ${
-                isPicked ? "bg-navy/[0.04]" : ""
-              }`}
-            >
-              <td className="px-3 py-2.5 align-middle">
-                <input
-                  type="checkbox"
-                  checked={isPicked}
-                  disabled={!done}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={() => onToggle(r.id)}
-                  aria-label={
-                    done
-                      ? `Comparar ${r.strategy}`
-                      : "Só rodadas concluídas podem ser comparadas"
-                  }
-                  title={done ? "Adicionar à comparação" : "Aguardando conclusão"}
-                  className="h-4 w-4 cursor-pointer accent-navy disabled:cursor-not-allowed disabled:opacity-30"
-                />
-              </td>
-              <td className="px-3 py-2.5 align-middle">
-                <span className="font-medium text-ink">{r.strategy}</span>
-                <span className="ml-2 font-mono text-[11px] text-muted">
-                  {r.id.slice(0, 8)}
-                </span>
-              </td>
-              <td className="px-3 py-2.5 align-middle">
-                <StatusBadge status={r.status} />
-              </td>
-              <td className="px-3 py-2.5 text-right align-middle font-mono tnum tabular-nums text-muted">
-                {formatDateTime(r.created_at)}
-              </td>
+    <div>
+      {delMsg && (
+        <p className="mb-3 text-sm text-loss" role="alert">
+          {delMsg}
+        </p>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="border-b border-hairline">
+              <th className="w-9 px-3 py-2" aria-label="Comparar" />
+              {["Estratégia", "Status", "Criado"].map((h, i) => (
+                <th
+                  key={h}
+                  className={`px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-muted ${
+                    i === 2 ? "text-right" : "text-left"
+                  }`}
+                >
+                  {h}
+                </th>
+              ))}
+              <th className="px-3 py-2" aria-label="Ações" />
             </tr>
-            );
-          })}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {runs.map((r) => (
+              <Row
+                key={r.id}
+                run={r}
+                picked={picked.has(r.id)}
+                onOpen={() => router.push(`/bench/run?id=${r.id}`)}
+                onToggle={() => onToggle(r.id)}
+                confirming={confirmId === r.id}
+                onConfirm={() => setConfirmId(r.id)}
+                onCancel={() => setConfirmId(null)}
+                deleting={del.isPending && confirmId === r.id}
+                onDelete={() =>
+                  del.mutate(r.id, {
+                    onSuccess: () => onDeleted(r.id),
+                    onSettled: () => setConfirmId(null),
+                  })
+                }
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
+  );
+}
+
+function Row({
+  run,
+  picked,
+  onOpen,
+  onToggle,
+  confirming,
+  onConfirm,
+  onCancel,
+  deleting,
+  onDelete,
+}: {
+  run: BacktestRun;
+  picked: boolean;
+  onOpen: () => void;
+  onToggle: () => void;
+  confirming: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  // A run the worker still holds cannot be deleted (the API answers 409): the
+  // engine is writing into its artifacts directory, and the queue quota counts
+  // exactly these rows.
+  const done = run.status === "done";
+  const finished = done || run.status === "error";
+
+  return (
+    <tr
+      onClick={onOpen}
+      className={`cursor-pointer border-b border-hairline/70 last:border-0 hover:bg-hairline/30 ${
+        picked ? "bg-navy/[0.04]" : ""
+      }`}
+    >
+      <td className="px-3 py-2.5 align-middle">
+        <input
+          type="checkbox"
+          checked={picked}
+          disabled={!done}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggle}
+          aria-label={
+            done
+              ? `Comparar ${run.strategy}`
+              : "Só rodadas concluídas podem ser comparadas"
+          }
+          title={done ? "Adicionar à comparação" : "Aguardando conclusão"}
+          className="h-4 w-4 cursor-pointer accent-navy disabled:cursor-not-allowed disabled:opacity-30"
+        />
+      </td>
+      <td className="px-3 py-2.5 align-middle">
+        <span className="font-medium text-ink">{run.strategy}</span>
+        <span className="ml-2 font-mono text-[11px] text-muted">
+          {run.id.slice(0, 8)}
+        </span>
+      </td>
+      <td className="px-3 py-2.5 align-middle">
+        <StatusBadge status={run.status} />
+      </td>
+      <td className="px-3 py-2.5 text-right align-middle font-mono tnum tabular-nums text-muted">
+        {formatDateTime(run.created_at)}
+      </td>
+      <td className="px-3 py-2.5 text-right align-middle">
+        <RowActions
+          strategy={run.strategy}
+          finished={finished}
+          confirming={confirming}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+          deleting={deleting}
+          onDelete={onDelete}
+        />
+      </td>
+    </tr>
+  );
+}
+
+function RowActions({
+  strategy,
+  finished,
+  confirming,
+  onConfirm,
+  onCancel,
+  deleting,
+  onDelete,
+}: {
+  strategy: string;
+  finished: boolean;
+  confirming: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
+  // stopPropagation everywhere: the row itself navigates to the tear sheet, and
+  // the click that opens a confirm must not also leave the page.
+  const stop = (fn: () => void) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    fn();
+  };
+
+  if (confirming) {
+    return (
+      <span className="flex items-center justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={stop(onDelete)}
+          disabled={deleting}
+          className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
+        >
+          Confirmar
+        </button>
+        <button
+          type="button"
+          onClick={stop(onCancel)}
+          className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-ink hover:bg-hairline/40"
+        >
+          Não
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={stop(onConfirm)}
+      disabled={!finished}
+      title={
+        finished
+          ? "Excluir esta rodada e seus artefatos"
+          : "Rodada em andamento — aguarde terminar"
+      }
+      aria-label={`Excluir ${strategy}`}
+      className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-muted hover:text-loss disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:text-muted"
+    >
+      Excluir
+    </button>
   );
 }
 

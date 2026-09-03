@@ -320,3 +320,42 @@ def upsert_market_prices(conn, df: pd.DataFrame) -> int:
     )
     logger.info(f"Upserted {n:,} market price records")
     return n
+
+
+def delete_market_prices_from_other_sources(conn, market: str, symbol: str,
+                                            source_prefix: str) -> int:
+    """Drop one symbol's bars that some *other* source wrote. Returns rows gone.
+
+    The targeted DELETE this module's header note reserves, and it exists for
+    one caller and one reason. `market_prices` is keyed `(market, symbol, date)`
+    and its `close` carries whatever convention its writer used — WIKI ships a
+    raw close, Stooq a split-adjusted one. A symbol both of them wrote therefore
+    holds two conventions in one column, joined at whatever date the two
+    coverages happen to meet, and the join is a fabricated return: a split-sized
+    jump, which is precisely what `MARKETS["US"].glitch_down` is built to mask.
+
+    Upserting cannot fix that, because it only overwrites the dates the new
+    source also has. A symbol whose new series starts later than the old one
+    leaves the old rows in front of it — still raw, still spliced, and now
+    invisible because every date the new run touched looks correct. So the old
+    rows are removed rather than written over.
+
+    Deliberately not a general "rebuild this market": it takes one symbol, and
+    it is scoped by `source_prefix` so a source can never delete its own rows —
+    a re-run stays idempotent, and a caller that names the wrong prefix deletes
+    nothing rather than the plane.
+    """
+    from . import storage
+
+    cur = storage.execute(
+        conn,
+        "DELETE FROM market_prices"
+        " WHERE market = ? AND symbol = ?"
+        "   AND (source IS NULL OR source NOT LIKE ?)",
+        (market, symbol, f"{source_prefix}%"))
+    n = cur.rowcount or 0
+    conn.commit()
+    if n:
+        logger.info(f"{market}/{symbol}: dropped {n:,} bars from another "
+                    f"source before writing {source_prefix}")
+    return n

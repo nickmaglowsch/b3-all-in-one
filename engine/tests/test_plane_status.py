@@ -85,22 +85,22 @@ def test_the_us_gaps_name_the_module_that_closes_each_one(conn):
 
 def test_the_source_breakdown_tells_the_bulk_backfill_from_the_metered_trickle(conn):
     """The one number that says which US strategy is in play: a plane built from
-    the archive reads `stooq-bulk`, one trickled out of the free tier reads
+    the free vendor reads `stooq-daily`, one trickled out of the free tier reads
     `alphavantage-*`, and they carry different adjustment conventions."""
     market_storage.upsert_market_prices(conn, _bars(
-        "US", "AAPL", ["2024-01-01"], "stooq-bulk:split_only"))
+        "US", "AAPL", ["2024-01-01"], "stooq-daily:split_only"))
     market_storage.upsert_market_prices(conn, _bars(
         "US", "DEAD", ["2024-01-01"], "alphavantage-time-series-daily:total_return"))
     got = next(m for m in plane_status.collect(conn)["markets"]
                if m["market"] == "US")
-    assert got["sources"] == {"stooq-bulk:split_only": 1,
+    assert got["sources"] == {"stooq-daily:split_only": 1,
                               "alphavantage-time-series-daily:total_return": 1}
 
 
 def test_rows_ptax_could_not_cover_are_counted(conn):
     """The portfolio and the tax engine read the BRL column. A NULL there is
     honest and also invisible unless something counts it."""
-    rows = _bars("US", "AAPL", ["2024-01-01", "2024-01-02"], "stooq-bulk:split_only")
+    rows = _bars("US", "AAPL", ["2024-01-01", "2024-01-02"], "stooq-daily:split_only")
     rows.loc[0, ["close_brl", "adj_close_brl", "fx_rate"]] = None
     market_storage.upsert_market_prices(conn, rows)
     got = next(m for m in plane_status.collect(conn)["markets"]

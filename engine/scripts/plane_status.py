@@ -97,8 +97,9 @@ def market_summary(conn, market: str) -> dict:
 def _sources(conn, market: str) -> dict:
     """Rows per `source`, which is where each feed stamps what it wrote.
 
-    Reading this is how you tell a US plane backfilled from the bulk archive
-    (`stooq-bulk:split_only`) from one trickled out of the metered feed.
+    Reading this is how you tell a US plane backfilled from the free vendor
+    (`stooq-daily:split_only`) from one trickled out of the metered feed, and
+    either from the frozen history WIKI left (`wiki-prices:total_return`).
     """
     df = storage.read_sql(
         "SELECT source, COUNT(*) AS n FROM market_prices WHERE market = ?"

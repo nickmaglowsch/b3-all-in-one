@@ -138,6 +138,42 @@ def test_the_timeout_message_names_what_timed_out(
     assert SLEEPER[0] in slow.stderr
 
 
+# ── A child killed by a signal ────────────────────────────────────────────────
+# The compose files now cap container memory, so the engine overrunning its share
+# is an expected outcome rather than an impossible one. It arrives as returncode
+# -9 with an empty stderr, and tasks.run_backtest stores `proc.stderr` verbatim
+# on the row — so without this the tenant sees a run that failed and says nothing
+# about why, which is the same as no error message at all.
+
+
+def test_a_child_killed_by_a_signal_says_so(tmp_path, this_interpreter):
+    (tmp_path / "suicide.py").write_text(
+        "import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+    proc = b3run.run_module(tmp_path, ["suicide"])
+    assert proc.returncode == -9
+    assert "SIGKILL" in proc.stderr
+    assert "suicide" in proc.stderr, "the message must name which subprocess died"
+
+
+def test_sigkill_names_the_memory_limit_as_the_likely_cause(tmp_path, this_interpreter):
+    """The one signal with an obvious cause worth naming. An operator reading a
+    failed run should not have to know that -9 means the cgroup ceiling."""
+    (tmp_path / "suicide.py").write_text(
+        "import os, signal; os.kill(os.getpid(), signal.SIGKILL)")
+    assert "mem_limit" in b3run.run_module(tmp_path, ["suicide"]).stderr
+
+
+def test_a_signal_death_keeps_what_the_child_managed_to_say(tmp_path, this_interpreter):
+    """Whatever reached stderr before the kill is often the only clue to which
+    stage overran; the explanation is prepended to it, not substituted for it."""
+    (tmp_path / "noisy.py").write_text(
+        "import os, signal, sys\n"
+        "print('loading the market plane', file=sys.stderr, flush=True)\n"
+        "os.kill(os.getpid(), signal.SIGKILL)\n")
+    stderr = b3run.run_module(tmp_path, ["noisy"]).stderr
+    assert "SIGKILL" in stderr and "loading the market plane" in stderr
+
+
 def test_a_normal_exit_is_passed_through_untouched(tmp_path, this_interpreter):
     """The timeout wrapper must not disturb the ordinary path: real exit code,
     real stdout, real stderr."""

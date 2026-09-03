@@ -34,6 +34,12 @@ services:
       - artifacts_data:/data/artifacts
     networks:
       - shared
+    # The api spawns engine subprocesses of its own: /portfolio/target gathers one
+    # advise_weights per strategy sleeve, and each builds the whole market plane
+    # (~1.3 GB peak). Three sleeves on a cold cache is ~4 GB in this container
+    # alone, so it needs a ceiling as much as the worker does — see below.
+    mem_limit: ${API_MEM_LIMIT:-3g}
+    cpus: ${API_CPUS:-2}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
@@ -60,6 +66,19 @@ services:
       - artifacts_data:/data/artifacts   # writes backtest artifacts the api serves back
     networks:
       - shared
+    # Nothing here had a ceiling, and that is how a backtest took the site down.
+    # One engine subprocess peaks at ~1.3 GB building the market plane and burns a
+    # core for ~30s; the worker runs two at a time (worker.py concurrency=2). With
+    # no limit those two are free to push a shared VPS into swap, at which point
+    # every process on the box stalls on page faults — including uvicorn's single
+    # event loop, which is why /health hung alongside everything else.
+    #
+    # Bounded, the same overrun is a failed run with a readable error
+    # (subprocs.run names the signal) instead of an unreachable API. The defaults
+    # are the measured peak plus headroom for a market plane larger than the one
+    # they were measured against; lower them in .env.prod on a smaller box.
+    mem_limit: ${WORKER_MEM_LIMIT:-4g}
+    cpus: ${WORKER_CPUS:-2}
     restart: unless-stopped
 
   # Scheduled market-data refresh (prices nightly, CVM fundamentals weekly). Its
@@ -104,6 +123,12 @@ services:
       - engine_data:/opt/engine/data
     networks:
       - shared
+    # A COTAHIST parse holds a year of bars in memory and this runs unattended at
+    # 06:00, so it gets the same treatment. Roomier than the worker because a
+    # first full backfill is a bigger frame than any single backtest, and it runs
+    # one job at a time.
+    mem_limit: ${INGEST_MEM_LIMIT:-4g}
+    cpus: ${INGEST_CPUS:-2}
     restart: unless-stopped
 
 volumes:

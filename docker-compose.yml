@@ -53,6 +53,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # Same ceilings as prod (docker-compose.prod.yml has the reasoning and the
+    # measurements). Ceilings, not reservations — Docker allocates nothing up
+    # front, so mirroring them here costs a local run nothing and means a change
+    # that only fits without a limit fails on a laptop rather than on the VPS.
+    mem_limit: ${API_MEM_LIMIT:-3g}
+    cpus: ${API_CPUS:-2}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
       interval: 30s
@@ -80,6 +86,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    mem_limit: ${WORKER_MEM_LIMIT:-4g}
+    cpus: ${WORKER_CPUS:-2}
     profiles: ["app"]
 
   # Scheduled market-data refresh. Its own service, not a second role for `worker`,
@@ -128,6 +136,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    mem_limit: ${INGEST_MEM_LIMIT:-4g}
+    cpus: ${INGEST_CPUS:-2}
     profiles: ["ingest"]
 
 volumes:

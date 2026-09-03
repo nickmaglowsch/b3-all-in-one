@@ -14,7 +14,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from . import config, market_storage, split_storage, us_storage
+from . import config, market_storage, split_storage, sql_stream, us_storage
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +68,14 @@ def _xlate(conn, sql: str, params=None) -> str:
 
 
 def read_sql(sql: str, conn, params=None, **kwargs) -> pd.DataFrame:
-    """pd.read_sql_query with dialect-aware placeholders (both backends).
-
-    Extra kwargs (e.g. parse_dates) are forwarded to pandas.
-    """
+    """DataFrame for one query, dialect-aware. Postgres streams through a server-side
+    cursor (sql_stream has the why); SQLite and pandas-kwargs callers do not."""
+    sql = _xlate(conn, sql, params)
+    if is_postgres(conn) and not kwargs:
+        return sql_stream.read_dataframe(conn, sql, params)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")  # pandas warns on non-sqlite DBAPI conns
-        return pd.read_sql_query(_xlate(conn, sql, params), conn,
-                                 params=params, **kwargs)
+        return pd.read_sql_query(sql, conn, params=params, **kwargs)
 
 
 def execute(conn, sql: str, params=None):

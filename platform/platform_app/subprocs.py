@@ -11,6 +11,7 @@ env and timeouts.
 from __future__ import annotations
 
 import json
+import signal
 import subprocess
 from pathlib import Path
 
@@ -44,9 +45,16 @@ def run(
     and an unbounded wait would pin one of the two worker slots indefinitely.
     ``label`` names the thing that wedged, because "timed out" alone does not
     identify which of a half-dozen subprocesses it was.
+
+    A child killed by a signal gets the same treatment for the same reason. Now
+    that the compose files cap container memory, the engine exceeding its share
+    is a routine, expected failure — and it arrives as returncode -9 with an
+    empty stderr, which every caller stores verbatim. The tenant then sees a run
+    that failed with no reason given. Say which signal, and name the likeliest
+    cause of the one signal that has one.
     """
     try:
-        return subprocess.run(
+        proc = subprocess.run(
             argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_s
         )
     except subprocess.TimeoutExpired:
@@ -54,6 +62,20 @@ def run(
             argv, TIMEOUT_EXIT, stdout="",
             stderr=f"{label} timed out after {timeout_s}s",
         )
+    if proc.returncode < 0:
+        proc.stderr = _killed(label, -proc.returncode, proc.stderr)
+    return proc
+
+
+def _killed(label: str, signum: int, stderr: str) -> str:
+    """Explain a signal death, keeping whatever the child managed to say first."""
+    try:
+        name = signal.Signals(signum).name
+    except ValueError:                      # a signal this platform has no name for
+        name = f"signal {signum}"
+    why = " (out of memory, most likely the container's mem_limit)" if (
+        signum == signal.SIGKILL) else ""
+    return f"{label} was killed by {name}{why}\n{stderr}".rstrip()
 
 
 def last_json(text: str, *, strict: bool = False) -> dict:

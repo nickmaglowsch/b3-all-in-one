@@ -329,3 +329,32 @@ def test_placeholders_and_test_issues_are_not_priced(tmp_path):
         {"market": "US", "symbol": "CIK0000806085", "currency": "USD"},
         {"market": "US", "symbol": "TEST", "currency": "USD", "is_test_issue": 1}]))
     assert us_prices._universe(conn) == ["REAL"]
+
+
+# ── a vendor that has stopped answering must not read as a green run ─────────
+
+def test_a_run_where_every_symbol_failed_is_not_a_success():
+    """The failure mode that hid a dead vendor for six months.
+
+    `us_backfill` walked Stooq's quote endpoint after it began demanding a key
+    nobody can obtain, 404ed on every symbol, and reported "0 rows over 0
+    symbols, 20 failed" with exit code 0. Procrastinate recorded success. The US
+    plane stopped advancing in March and nothing said so until September."""
+    assert us_prices.total_failure({"planned": 20, "failed_count": 20})
+
+
+def test_a_run_where_some_symbols_failed_is_still_a_success():
+    """A walk over eleven thousand names always has a few that 404 for their own
+    reasons. A job that pages on those is a job that gets muted."""
+    assert not us_prices.total_failure({"planned": 20, "failed_count": 3})
+
+
+def test_an_exhausted_budget_is_not_a_failure():
+    """The day's allowance running out is what the day's allowance does."""
+    assert not us_prices.total_failure(
+        {"planned": 20, "failed_count": 0, "budget_exhausted": True})
+
+
+def test_a_run_with_nothing_to_do_is_not_a_failure():
+    """An empty plan means the plane is current, not that the vendor is gone."""
+    assert not us_prices.total_failure({"planned": 0, "failed_count": 0})

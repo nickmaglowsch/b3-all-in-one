@@ -19,6 +19,12 @@ target/
 .env
 .env.prod
 .env.local
+# Every backup of one, too. A copy named `.env.prod.bak-20260902-154223` sat
+# untracked and unignored in the VPS checkout for a day: the deploy does
+# `git reset --hard`, which leaves an untracked file alone, so it survives
+# indefinitely one `git add -A` away from being committed. The glob, not the
+# one name, because the next one will be stamped with a different date.
+.env*.bak*
 node_modules/
 .next/
 .open-next/

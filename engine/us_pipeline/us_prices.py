@@ -7,14 +7,15 @@ is not throughput but **resumability**: every symbol's outcome is written to
 `us_price_cursor` inside the loop, before the next request goes out, so a run
 that stops at request 12 of 25 starts at 13 tomorrow rather than at 1.
 
-On a free key this is the **top-up**, not the backfill. `us_backfill` takes the
-history from a free vendor for nothing, because "years" is not a throughput
-problem this module can solve — it is a property of a per-symbol metered feed.
-What is left here is the work only a metered key can do: the symbols that vendor
-does not carry, and the corporate actions that turn a `split_only` series into a
-`total_return` one. `select_work` is handed the set of symbols the
-vendor already priced and never re-prices them; `us_seam.demote_bulk_priced` says
-why that matters and what would break without it.
+On a free key this is the **top-up**, not the backfill. Stooq's bulk `d_us_txt`
+dump takes the history for nothing and `us_daily` keeps it current, because
+"years" is not a throughput problem this module can solve — it is a property of
+a per-symbol metered feed. What is left here is the work only a metered key can
+do: the symbols those sources do not carry, and the corporate actions that turn
+a `split_only` series into a `total_return` one. `select_work` is handed the set
+of symbols the free sources already priced and never re-prices them;
+`us_seam.demote_bulk_priced` says why that matters and what would break without
+it.
 
 Two conversions happen here and nowhere else.
 
@@ -346,6 +347,26 @@ def run_pipeline(db_path=None, limit: int = 0, today=None,
         return summary
 
 
+def total_failure(summary: dict) -> bool:
+    """True when the run planned work and every symbol of it failed.
+
+    Exists because the module this one outlived did not have it. `us_backfill`
+    walked a vendor that had started answering 404 to every symbol and reported
+    "0 rows over 0 symbols, 20 failed" with an exit code of 0 — a green job, a
+    green `ingest_runs` row, and a US plane that stopped advancing in March and
+    was not noticed until September. A total failure is the one outcome that is
+    never a bad day at the vendor; it is the vendor being gone.
+
+    Deliberately *total*, not any failure: a walk over eleven thousand symbols
+    always has a few that 404 for their own reasons, and a job that pages on
+    those gets muted, which costs more than it saves. `budget_exhausted` is not
+    failure either — the day's allowance running out is what the day's allowance
+    does, and it leaves `failed_count` at zero anyway.
+    """
+    planned = summary.get("planned") or 0
+    return bool(planned) and (summary.get("failed_count") or 0) >= planned
+
+
 def main() -> None:
     import argparse
 
@@ -358,7 +379,12 @@ def main() -> None:
     args = ap.parse_args()
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    run_pipeline(args.db_path, args.limit, reserve=args.reserve)
+    summary = run_pipeline(args.db_path, args.limit, reserve=args.reserve)
+    if total_failure(summary):
+        raise SystemExit(
+            f"every one of the {summary['planned']:,} symbols this run planned "
+            f"failed — this is a vendor that has stopped answering, not a bad "
+            f"day. First failures: {', '.join(summary['failed'][:5])}")
 
 
 if __name__ == "__main__":

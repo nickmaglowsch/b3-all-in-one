@@ -94,9 +94,6 @@ services:
       # re-adjusts stored history. Free key, same handling as the others.
       MASSIVE_API_KEY: ${MASSIVE_API_KEY:-}
       MASSIVE_DELAY_SECONDS: ${MASSIVE_DELAY_SECONDS:-}
-      # Seconds between requests in the US backfill's walk of the free quote
-      # endpoint. Politeness, not correctness; the default is 0.5.
-      STOOQ_DELAY_SECONDS: ${STOOQ_DELAY_SECONDS:-}
       ALPHAVANTAGE_RATE_PER_MIN: ${ALPHAVANTAGE_RATE_PER_MIN:-}
       ALPHAVANTAGE_DAILY_BUDGET: ${ALPHAVANTAGE_DAILY_BUDGET:-}
       UPLOADS_DIR: /data/uploads

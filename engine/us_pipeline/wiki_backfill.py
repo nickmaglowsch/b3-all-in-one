@@ -1,36 +1,36 @@
 """Backfill fifty-six years of US history from the WIKI bulk export.
 
 The third bulk pass on this plane, after COTAHIST for B3 and the Binance bucket
-for crypto, and the sibling of `us_backfill`: same shape, different vendor, and
-it exists because the vendor `us_backfill` was written against turned out to
-gate its archive behind an account. This one needs a free key and one request.
+for crypto, and the sibling of Stooq's bulk `d_us_txt` dump: same shape,
+different vendor. It exists because that dump turned out to be gated behind an
+account and a browser proof-of-work. This one needs a free key and one request.
 
 **What it is and is not.** WIKI stopped being maintained in April 2018. This
 module therefore fills 1962..2018 and nothing after — see `wiki_archive` for the
 dataset's shape and the limits of its survivorship coverage. It is a history
 backfill, not a price feed.
 
-**Which symbols it ends up owning.** `us_backfill` walks Stooq's quote endpoint,
-which reaches the present, and it *replaces* this module's rows for every symbol
-it can serve — one symbol gets one source and one convention, because a raw
-close spliced onto a split-adjusted one fabricates a split-sized return where
-they meet and no arithmetic repairs it without the post-2018 splits. So what
-stays here is the part only this file has: the names that died inside WIKI's
-maintenance window and that the quote endpoint no longer quotes. There the
-splice question does not arise, because nothing extends them.
+**Which symbols it ends up owning.** Stooq's bulk dump reaches the present, and
+its rows *replace* this module's for every symbol it carries — one symbol gets
+one source and one convention, because a raw close spliced onto a split-adjusted
+one fabricates a split-sized return where they meet and no arithmetic repairs it
+without the post-2018 splits. So what stays here is the part only this file has:
+1,502 names that died inside WIKI's maintenance window, which the dump does not
+carry because it holds only what is currently listed. There the splice question
+does not arise, because nothing extends them.
 
-That division is why the order of the two jobs does not matter and why this one
+That division is why the order of the two loads does not matter and why this one
 is still worth running first on an empty plane: it is fast, it is one request,
-and every symbol Stooq later reaches is one this module was only ever holding.
+and every symbol the dump later covers is one this module was only ever holding.
 
-**Why it can claim a total return series when `us_backfill` cannot.** Stooq
+**Why it can claim a total return series when the dump cannot.** Stooq
 serves split-adjusted closes and no distributions, so its bars are `split_only`
 and the metered feed has to buy dividends per symbol to upgrade them. WIKI ships
 raw OHLC *and* the events — 118,131 dividends and 4,096 splits ride along in the
 bar rows — so `us_adjust` computes both adjusted columns here from the same
 file, for free, and the result is `total_return`.
 
-That is a real loss on every symbol `us_backfill` takes over, and it is stated
+That is a real loss on every symbol the dump takes over, and it is stated
 rather than buried: those symbols drop to `split_only`, `/market/status` reports
 the drop, and the metered feed's corporate-actions budget is what buys the
 adjustment back — ten symbols a day, on the names a strategy actually holds. The
@@ -43,17 +43,17 @@ as every other symbol on it, and means the split guards and the pathological
 dividend guard apply to this file too.
 
 **What it deliberately does not write.** No `listing_date`, `delisting_date` or
-`delist_reason`, for exactly the reason `us_backfill` gives: a symbol's absence
-from a frozen file is a fact about the file, not about the company. Apple did
+`delist_reason`, for the reason the dump gives too: a symbol's absence from a
+frozen file is a fact about the file, not about the company. Apple did
 not delist in March 2018. `first_seen` and `last_seen` are observations of this
 file and are safe.
 
-**Why these symbols are not fenced off from the metered feed.** `us_backfill`
-adds its symbols to `covered_symbols` so `us_prices` never re-prices them and
-splices two adjustment conventions into one column. This module writes a raw
+**Why these symbols are not fenced off from the metered feed.** The dump's
+symbols land in `us_seam.covered_symbols` so `us_prices` never re-prices them
+and splices two adjustment conventions into one column. This module writes a raw
 `close` — the same convention `us_prices` buys — and stops in 2018, so for a
-symbol Stooq cannot serve, the metered feed topping it up to the present is the
-wanted outcome rather than a seam. The two do meet in `adj_close`, whose
+symbol the dump does not carry, the metered feed topping it up to the present is
+the wanted outcome rather than a seam. The two do meet in `adj_close`, whose
 back-adjustment anchor differs either side of 2018; that is recorded in the
 source tag rather than papered over, and a strategy reading `adj_close` across
 the seam should know it.
@@ -104,7 +104,7 @@ def to_market_rows(symbol: str, bars: pd.DataFrame,
     """Archive bars -> (`market_prices` rows, adjust_state).
 
     `volume` is money and not share count, the same definition `us_prices` and
-    `us_backfill` use, because `min_adtv` filters on money — a symbol that moves
+    the other US loaders use, because `min_adtv` filters on money — a symbol that moves
     between the three sources must not change what its `volume` column means.
     """
     splits, dividends = archive.events(bars)
@@ -229,7 +229,7 @@ def run_pipeline(db_path=None, zip_path=None, limit: int = 0, today=None,
                     result["cursor"]["adjust_state"], 0) + 1
                 newest = max(newest, result["cursor"]["last_bar"])
             if len(cursors) >= _LOG_EVERY:
-                # Batched for `us_backfill`'s reason: the file is already on
+                # Batched for the bulk loaders' reason: the file is already on
                 # disk, so a re-run costs one read, and three thousand
                 # single-row upserts would dominate the runtime.
                 us_storage.upsert_price_cursor(conn, pd.DataFrame(cursors))

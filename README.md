@@ -241,11 +241,11 @@ leaves its error rather than only in the worker log:
 docker compose exec ingest python -c "
 import asyncio
 from platform_app.tasks import app
-from platform_app.tasks_ingest import ingest_us_backfill
+from platform_app.tasks_ingest import ingest_wiki_backfill
 
 async def main():
     async with app.open_async():          # defer_async needs the app opened
-        print(await ingest_us_backfill.defer_async())
+        print(await ingest_wiki_backfill.defer_async())
 
 asyncio.run(main())
 "
@@ -258,7 +258,8 @@ of that kind is already pending or in flight, and there is nothing to do.
 |---|---|---|
 | Crypto | `ingest_crypto` | ~3h, free, no key |
 | US prices (1962–2018) | `ingest_wiki_backfill` | one 463MB download, free key, one request |
-| US prices (through today) | `ingest_us_backfill` | one request per symbol, free, no key; several days for a first pass |
+| US prices (2018–today) | Stooq's bulk `d_us_txt` dump | one download, free, no key — **by hand**: a JS proof-of-work blocks automated fetch |
+| US prices (kept current) | `ingest_us_daily` | one grouped request per session, free key; runs nightly |
 | US universe (incl. delisted) | `ingest_us_listing` | 2 metered requests |
 | US prices (top-up + dividends) | `ingest_us_prices` | ≤20 metered requests/day |
 
@@ -267,7 +268,7 @@ job is not already running:
 
 ```
 docker compose exec -w /opt/engine ingest \
-    /opt/engine/.venv/bin/python -m us_pipeline.us_backfill
+    /opt/engine/.venv/bin/python -m us_pipeline.us_daily
 ```
 
 **Crypto** enumerates every spot pair Binance's public archive has ever held —
@@ -289,25 +290,40 @@ top-up. There are two free sources because neither one alone is enough:
   over 3,199 tickers from 1962-01-02, with the corporate actions in the rows, so
   the bars land `total_return`. One request, one free key. It was frozen in
   April 2018: the newest bar is 2018-03-27 and no request changes that.
-- **`us_backfill`** walks Stooq's free quote endpoint, one request per symbol,
-  no key and no account, and it reaches the present. Stooq back-adjusts for
-  splits and publishes no distributions, so its bars are `split_only` — real and
-  labelled, and enough for a momentum or liquidity screen. Anonymous callers
-  have a daily hit ceiling, so a run ends when the ceiling is spent and the next
-  one resumes from the cursor; a first pass over the universe takes a few days.
+- **Stooq's bulk `d_us_txt` dump** covers 2018 to the present — 13,347 symbols
+  and 28M bars, tagged `stooq-bulk:split_only`. Stooq back-adjusts for splits
+  and publishes no distributions, so its bars are `split_only` — real and
+  labelled, and enough for a momentum or liquidity screen. It is **downloaded by
+  hand**: Stooq began requiring an API key in 2026, issued only through a browser
+  CAPTCHA that does not currently issue keys, and a JavaScript proof-of-work sits
+  in front of the dump itself. There is no automated path to it, which is why
+  the per-symbol walk that used to fetch this history was deleted rather than
+  repaired.
+- **`us_daily`** is what stops that file going stale. One grouped request to
+  Massive (formerly Polygon.io) returns every US ticker's bars for one session,
+  which is the only shape a free tier can refresh thirteen thousand symbols in.
+  It re-applies splits to the stored history *before* appending the new session,
+  because a back-adjusted vendor re-scales its own history on a split and the
+  stored history does not move — appending first would splice a quarter-price
+  bar onto a full-price one and fabricate a -75% return.
 
 **A symbol gets one source and one convention, never two.** WIKI writes a raw
-close and Stooq a split-adjusted one, and `market_prices` is keyed
+close and the bulk dump a split-adjusted one, and `market_prices` is keyed
 `(market, symbol, date)` — so a symbol both of them wrote would hold two
 conventions in one column with a fabricated split-sized return where they meet,
 which is exactly what `MARKETS["US"].glitch_down` is built to mask. Nothing
 repairs that after the fact: converting either series to the other's convention
-needs the post-2018 splits and neither source has them. So `us_backfill` *drops*
-WIKI's rows for a symbol before writing it, and WIKI keeps the names Stooq
-cannot serve — mostly the ones that died inside its maintenance window, where
-nothing extends them and the question does not arise.
+needs the post-2018 splits and neither source has them. So the dump's rows
+*replace* WIKI's for a symbol rather than merging with them, and WIKI keeps the
+1,502 names the dump cannot serve — the ones that died inside its maintenance
+window, since the dump carries only what is currently listed.
 
-That trade is a real one and worth knowing: a symbol moved from WIKI to Stooq
+`us_seam.SPLIT_ADJUSTED_PREFIXES` is what enforces this, and it is matched on
+the source *prefix* rather than the exact tag so that every split-adjusted
+writer fences identically. The literal `"stooq"` in it is load-bearing: it is
+all that keeps the metered feed's raw close off the 28M rows the dump wrote.
+
+That trade is a real one and worth knowing: a symbol moved from WIKI to the dump
 drops from `total_return` to `split_only`, and `plane_status.py` reports the
 drop. It is also the drop the metered key exists to undo. `us_prices` asks
 `market_prices.source` which symbols the free vendor already covered and drops

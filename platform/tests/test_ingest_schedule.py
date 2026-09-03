@@ -80,8 +80,8 @@ def test_the_us_daily_refresh_runs_after_the_session_it_asks_for_has_settled():
                                  "ingest_instruments", "ingest_crypto",
                                  "ingest_us_fundamentals", "ingest_us_symbols",
                                  "ingest_us_listing", "ingest_us_prices",
-                                 "ingest_us_backfill", "ingest_spx",
-                                 "ingest_us_daily", "ingest_wiki_backfill"])
+                                 "ingest_spx", "ingest_us_daily",
+                                 "ingest_wiki_backfill"])
 def test_ingest_tasks_are_callable_without_the_periodic_timestamp(task):
     """The periodic scheduler injects `timestamp`; a manual defer_async() does not.
     Without a default the worker raises before the ingest_runs row is written, so

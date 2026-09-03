@@ -97,9 +97,10 @@ def market_summary(conn, market: str) -> dict:
 def _sources(conn, market: str) -> dict:
     """Rows per `source`, which is where each feed stamps what it wrote.
 
-    Reading this is how you tell a US plane backfilled from the free vendor
-    (`stooq-daily:split_only`) from one trickled out of the metered feed, and
-    either from the frozen history WIKI left (`wiki-prices:total_return`).
+    Reading this is how you tell a US plane loaded from the bulk dump and kept
+    current by the daily refresh (`stooq-bulk:split_only`, `massive-daily:
+    split_only`) from one trickled out of the metered feed, and either from the
+    frozen history WIKI left (`wiki-prices:total_return`).
     """
     df = storage.read_sql(
         "SELECT source, COUNT(*) AS n FROM market_prices WHERE market = ?"
@@ -116,7 +117,9 @@ def us_gaps(conn) -> list:
                             " WHERE market = 'US'"))
     if listed and priced < listed:
         gaps.append(f"{listed - priced:,} of {listed:,} US instruments have no "
-                    "bars — run us_pipeline.us_backfill")
+                    "bars — load Stooq's bulk d_us_txt dump (by hand: a "
+                    "proof-of-work blocks automated fetch), then keep it "
+                    "current with us_pipeline.us_daily")
     if not int(_one(conn, "SELECT COUNT(*) FROM instruments"
                           " WHERE market = 'US' AND cik IS NOT NULL")):
         gaps.append("no US instrument carries a CIK — fundamentals cannot join "

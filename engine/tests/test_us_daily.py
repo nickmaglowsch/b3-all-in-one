@@ -1,9 +1,9 @@
 """The US daily refresh: the split re-adjustment, the grouped reader, the window.
 
-Offline. Every response here is constructed, for the reason `test_us_backfill`'s
-header gives — and that reason is not hypothetical any more: the module this one
+Offline. Every response here is constructed, because a test that reaches a
+vendor tests the vendor. That is not hypothetical here: the module this one
 replaces shipped against a documented endpoint that answered 404, and the one
-before it against a bulk URL that did the same.
+before it against a bulk URL that did the same — both have since been deleted.
 
 The tests that matter most are the ones about applying a split twice. A split
 applied once is a history made comparable; applied twice it is a history

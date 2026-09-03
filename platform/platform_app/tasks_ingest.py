@@ -164,40 +164,6 @@ async def ingest_us_listing(timestamp: int = 0) -> dict:  # see ingest_prices
     return await _record_ingest("us_listing", ["us_pipeline.us_listing"])
 
 
-# Deliberately not `@app.periodic` any more, for the reason `ingest_wiki_backfill`
-# never was: the source stopped answering. Stooq began requiring an API key in
-# 2026, issued only through a browser CAPTCHA, so the per-symbol walk this task
-# runs now 404s on every symbol — a nightly run that could only ever record an
-# error. The history it was meant to fetch is loaded from Stooq's bulk `d_us_txt`
-# dump by hand (no machine can fetch it past the vendor's proof-of-work), and
-# `ingest_us_daily` is what keeps that history current. Kept deferrable rather
-# than deleted: if a key is ever issued, restoring the schedule is one line.
-@app.task(name="ingest_us_backfill", queue="ingest",
-          queueing_lock="ingest_us_backfill")
-async def ingest_us_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
-    """The US price history, from one bulk file, off the metered budget.
-
-    This is the job that makes a free key workable. `ingest_us_prices` buys
-    three requests per symbol against a 25-a-day ceiling and ~11k symbols — five
-    years to a first pass — so it is the top-up, not the backfill, and this is
-    the backfill. No API key, no account, and it reaches the present, which is
-    the one thing `ingest_wiki_backfill` cannot do.
-
-    Daily, and resumable, because the vendor serves one symbol per request under
-    an anonymous daily hit ceiling: a run ends when the ceiling is spent, keeps
-    what it wrote, and the next one picks up from the cursor. A throttled stop
-    is reported in the summary rather than in the exit code — the day's
-    allowance running out is what the day's allowance does. A first pass over
-    the universe therefore takes several days, the same way `ingest_crypto`'s
-    takes hours: a free source charges in wall-clock instead of money.
-
-    It also *replaces* WIKI's rows for every symbol it can serve, so that no
-    symbol carries a raw close and a split-adjusted one in the same column. See
-    `us_pipeline.us_backfill` on why that is a delete and not an upsert.
-    """
-    return await _record_ingest("us_backfill", ["us_pipeline.us_backfill"])
-
-
 @app.periodic(cron=settings.ingest_us_daily_cron)
 @app.task(name="ingest_us_daily", queue="ingest",
           queueing_lock="ingest_us_daily")
@@ -235,11 +201,12 @@ async def ingest_wiki_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
     corporate actions in the rows — so the bars land `total_return` rather than
     the `split_only` a split-adjusted feed can give.
 
-    It fills 1962..2018-03-27 and nothing after. `ingest_us_backfill` is what
-    covers the gap and, for every symbol it can serve, takes the symbol over;
-    what stays here is the tail this file alone has, the names that died inside
-    WIKI's maintenance window. Worth running first on an empty plane anyway: it
-    is one request and it is fast.
+    It fills 1962..2018-03-27 and nothing after. The bulk `d_us_txt` dump covers
+    the gap and, for every symbol it can serve, takes the symbol over; what
+    stays here is the tail that file alone has — 1,502 names that died inside
+    WIKI's maintenance window, which the dump does not carry because it holds
+    only what is currently listed. Worth running first on an empty plane anyway:
+    it is one request and it is fast.
     """
     return await _record_ingest("wiki_backfill", ["us_pipeline.wiki_backfill"])
 

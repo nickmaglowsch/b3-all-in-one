@@ -342,6 +342,12 @@ def main() -> None:
     ap.add_argument("--nav-cash", type=float, default=0.0, help="uninvested BRL")
     args = ap.parse_args()
 
+    # Same ceiling the backtest runner takes, for the same reason: this builds
+    # the whole market plane too, and the API spawns one of these per portfolio
+    # sleeve. A MemoryError names a line; a SIGKILL names nothing.
+    from backtests.core import memory
+    memory.guard()
+
     if bool(args.strategy) == bool(args.weights):
         ap.error("pass exactly one of <strategy> or --weights")
 

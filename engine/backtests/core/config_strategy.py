@@ -21,6 +21,7 @@ strategy is expressed as ``earnings_yield`` (higher yield = cheaper), etc.
 from __future__ import annotations
 
 import functools
+from collections import ChainMap
 from pathlib import Path
 
 import numpy as np
@@ -50,11 +51,10 @@ def _signal_defs() -> dict:
 
 
 def _eval_expr(expr: str, scalars: dict, shared: dict) -> pd.DataFrame:
-    """Evaluate a signal expression in a namespace of shared_data frames plus any
-    numeric scalars (lookback, etc.)."""
-    ns = dict(shared)
-    ns.update({k: v for k, v in scalars.items() if isinstance(v, (int, float))})
-    return signal_dsl.evaluate(expr, ns)
+    """A signal expression over the shared_data frames plus any numeric scalars —
+    chained, not copied, and scalars win. See signal_dsl.evaluate for why."""
+    ns = {k: v for k, v in scalars.items() if isinstance(v, (int, float))}
+    return signal_dsl.evaluate(expr, ChainMap(ns, shared))
 
 
 def resolve_factor(cfg: dict, shared: dict, params: dict | None = None) -> pd.DataFrame:

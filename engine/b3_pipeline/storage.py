@@ -68,14 +68,14 @@ def _xlate(conn, sql: str, params=None) -> str:
 
 
 def read_sql(sql: str, conn, params=None, **kwargs) -> pd.DataFrame:
-    """DataFrame for one query, dialect-aware. Postgres streams through a server-side
-    cursor (sql_stream has the why); SQLite and pandas-kwargs callers do not."""
+    """DataFrame for one query, dialect-aware, batched either way (sql_stream has
+    the why). A pandas-kwargs caller still gets pandas' own post-processing."""
     sql = _xlate(conn, sql, params)
-    if is_postgres(conn) and not kwargs:
-        return sql_stream.read_dataframe(conn, sql, params)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")  # pandas warns on non-sqlite DBAPI conns
-        return pd.read_sql_query(sql, conn, params=params, **kwargs)
+    if kwargs:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # pandas warns on non-sqlite DBAPI conns
+            return pd.read_sql_query(sql, conn, params=params, **kwargs)
+    return sql_stream.read_dataframe(conn, sql, params, postgres=is_postgres(conn))
 
 
 def execute(conn, sql: str, params=None):

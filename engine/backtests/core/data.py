@@ -13,25 +13,15 @@ import pandas as pd
 
 from b3_pipeline import storage
 
-from backtests.core import markets, universe
-
-
-def _safe_dsn(dsn) -> str:
-    """A Postgres URL with the password masked, for anything that gets printed.
-
-    The platform captures this process's stdout/stderr and returns the tail of it
-    in API error bodies, so an unmasked DSN here hands the database password to
-    any authenticated tenant that can make a backtest fail.
-    """
-    text = str(dsn)
-    if "://" not in text:
-        return text  # a plain file path (SQLite) — nothing to hide
-    scheme, _, rest = text.partition("://")
-    creds, at, host = rest.rpartition("@")
-    if not at:
-        return text  # no credentials in the URL
-    user = creds.split(":", 1)[0]
-    return f"{scheme}://{user}:***@{host}"
+from backtests.core import markets
+# The price-panel loading moved to its own module — it is the part of this file
+# that decides how much memory a backtest takes, and it had outgrown living
+# alongside the fundamentals and the benchmark fetchers. The names stay here so
+# every caller and every test keeps its import.
+from backtests.core.panels import (      # noqa: F401
+    BASE_PANELS, HLC_PANELS, load_b3_data, load_b3_hlc_data,
+    load_market_hlc_data, load_market_panels,
+)
 
 
 # ── Disk+memory cache for external market series (benchmarks, CDI) ────────────
@@ -161,88 +151,6 @@ def sector_membership_asof(
     return wide.notna() & (wide > 0)
 
 
-def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
-    """One (date x ticker) reshape covering every value column.
-
-    Pivoting per value column rebuilt the same grid once per frame — three times
-    in load_b3_data, six in load_b3_hlc_data, over the whole price history on
-    every backtest.
-
-    An empty input is special-cased: a multi-value pivot of no rows produces a
-    column MultiIndex whose value level exists but is unused, so `wide[v]` raises
-    KeyError where the single-value pivot returned an empty frame. A fresh
-    database with no prices yet is a real state (it is what CI runs against), so
-    it gets the empty frames it used to get.
-    """
-    if df.empty:
-        return [
-            pd.DataFrame(index=pd.Index([], name="date"),
-                         columns=pd.Index([], name="ticker"), dtype=float)
-            for _ in values
-        ]
-    wide = df.pivot(index="date", columns="ticker", values=values)
-    return [wide[v] for v in values]
-
-
-def load_b3_data(db_path: str, start: str, end: str) -> tuple:
-    """
-    Load data from the local B3 SQLite database.
-    Filters for valid standard lot tickers (ending in 3, 4, 5, 6, 11).
-    Calculates daily financial volume correctly.
-
-    Prices are forward-filled only while each name was listed: see
-    `universe.ffill_until_delisting`. On a plane whose `instruments` table is not
-    yet backfilled every ticker counts as always-listed, so this is the plain
-    ffill it has always been.
-
-    Returns:
-        tuple: (adj_close, close_px, fin_vol)
-        All as wide DataFrames with shape (date, ticker)
-    """
-    # _safe_dsn, not db_path: it is a full Postgres URL with the password in it,
-    # and this stdout is captured and surfaced in API error bodies.
-    print(f"⬇  Loading B3 data from {_safe_dsn(db_path)} ({start} to {end})...")
-
-    # Query: standard lot tickers ending in 3, 4, 5, 6, 11
-    # BDRs (34, 35, etc.) and other weird assets are excluded using strict length and suffix checks.
-    query = """
-        SELECT date, ticker, close, adj_close, volume
-        FROM prices
-        WHERE date >= ? AND date <= ?
-        AND (
-            (LENGTH(ticker) = 5 AND SUBSTR(ticker, 5, 1) IN ('3', '4', '5', '6'))
-            OR
-            (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11')
-        )
-    """
-
-    with storage.get_connection(db_path) as conn:
-        df = storage.read_sql(query, conn, params=[start, end])
-
-    df["date"] = pd.to_datetime(df["date"])
-
-    # Daily financial volume in BRL.
-    # The parser already divides COTAHIST VOLTOT's 2 implied decimals,
-    # so the DB `volume` column is stored in reais (verified: PETR4 ~1e9/day).
-    df["fin_volume"] = df["volume"].astype(float)
-
-    print("🔄  Pivoting data to wide format...")
-    adj_close, close_px, fin_vol = _pivot_wide(
-        df, ["adj_close", "close", "fin_volume"])
-
-    # Forward fill prices to handle missing days, but leave volume as NaN/0
-    # to accurately calculate averages. The fill stops at each name's delisting;
-    # carried past it, it would invent a price for something that no longer
-    # trades and hand a book holding it a flat, riskless position forever.
-    tradable = universe.tradable_mask(
-        universe.load_listing_intervals(db_path), adj_close.index, adj_close.columns)
-    adj_close = universe.ffill_until_delisting(adj_close, tradable)
-    close_px = universe.ffill_until_delisting(close_px, tradable)
-
-    print(f"✅  Loaded {adj_close.shape[1]} unique standard tickers.")
-    return adj_close, close_px, fin_vol
-
-
 import requests
 
 
@@ -324,86 +232,6 @@ def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
     """
     return _plane_series("external_prices", "close",
                          ticker.strip().upper(), start, end)
-
-
-# What to SELECT per market, aliased to the B3 column names every downstream
-# reader already speaks. Two things happen in the non-B3 projection:
-#
-#   * BRL, not native. The simulation's numeraire is reais for every market (see
-#     markets.py), so the close, the range and the turnover are all converted
-#     here rather than in six callers. `fx_rate` is NULL where PTAX could not
-#     cover the date, which makes the whole row NULL — the honest outcome, and
-#     visible as `unconverted_brl` in GET /market/status. There is deliberately
-#     no COALESCE back to the native number: silently pricing a US book in
-#     dollars is worse than reporting it unpriced.
-#   * `high`/`low` stand in for `split_adj_high`/`split_adj_low`. Crypto spot
-#     has no splits at all, and the US feed's bars arrive already adjusted, so
-#     there is no second adjustment to keep separate.
-_B3_COLUMNS = ("split_adj_high, split_adj_low, split_adj_close, adj_close,"
-               " close, volume")
-_CONVERTED_COLUMNS = (
-    "high * fx_rate AS split_adj_high, low * fx_rate AS split_adj_low,"
-    " split_adj_close * fx_rate AS split_adj_close, adj_close_brl AS adj_close,"
-    " close_brl AS close, volume * fx_rate AS volume")
-
-
-def load_market_hlc_data(db_path: str, start: str, end: str,
-                         market: str = markets.DEFAULT) -> tuple:
-    """The six price frames for any market, in the historical B3 order.
-
-    `load_b3_hlc_data` is this with market="B3"; the B3 path is unchanged.
-    """
-    spec = markets.get(market)
-    print(f"⬇  Loading {spec.key} HLC data from {_safe_dsn(db_path)} "
-          f"({start} to {end})...")
-
-    b3 = spec.table == "prices"
-    shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
-    scope = "" if b3 else " AND market = :market"
-    query = (
-        f"SELECT date, {spec.symbol_column} AS ticker,"                          # noqa: S608
-        f" {_B3_COLUMNS if b3 else _CONVERTED_COLUMNS}"
-        f" FROM {spec.table} WHERE date >= :start AND date <= :end{scope}{shape}"
-    )
-    params = {"start": start, "end": end}
-    if not b3:
-        params["market"] = spec.key
-
-    with storage.get_connection(db_path) as conn:
-        df = storage.read_sql(query, conn, params=params)
-
-    df["date"] = pd.to_datetime(df["date"])
-    # DB `volume` is already in reais (parser handles VOLTOT's implied decimals)
-    df["fin_volume"] = df["volume"].astype(float)
-
-    print("🔄  Pivoting HLC data to wide format...")
-    # Six frames, one reshape. This is the loader every backtest goes through.
-    adj_close, split_high, split_low, split_close, close_px, fin_vol = _pivot_wide(
-        df, ["adj_close", "split_adj_high", "split_adj_low",
-             "split_adj_close", "close", "fin_volume"],
-    )
-
-    # Forward fill prices to handle missing days, leave volume as-is. Stops at
-    # each name's delisting — see load_b3_data.
-    tradable = universe.tradable_mask(
-        universe.load_listing_intervals(db_path, spec.key),
-        adj_close.index, adj_close.columns)
-    adj_close, split_high, split_low, split_close, close_px = (
-        universe.ffill_until_delisting(f, tradable)
-        for f in (adj_close, split_high, split_low, split_close, close_px))
-
-    print(f"✅  Loaded HLC for {adj_close.shape[1]} unique {spec.key} tickers.")
-    return adj_close, split_high, split_low, split_close, close_px, fin_vol
-
-
-def load_b3_hlc_data(db_path: str, start: str, end: str) -> tuple:
-    """Split-adjusted HLC + adj_close + raw close + financial volume, B3.
-
-    Uses split_adj_* (split-only adjustment) for ATR to avoid false True Range
-    spikes from ex-dividend gaps. Returns adj_close separately for the returns
-    matrix (simulation needs dividend-adjusted returns).
-    """
-    return load_market_hlc_data(db_path, start, end, "B3")
 
 
 from dateutil.relativedelta import relativedelta

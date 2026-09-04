@@ -217,12 +217,38 @@ fixed ETF/CDI blends.
 | Module | Description |
 |--------|-------------|
 | `data.py` | Loads B3 data through `storage.get_connection` (SQLite or Postgres); downloads CDI (BCB); reads benchmarks off the plane |
-| `shared_data.py` | Builds the shared frame bundle (`ret`, `log_ret`, `adj_close`, `adtv`, `f_*`, regime flags…) consumed by every strategy |
+| `shared_data.py` | Builds the shared frame bundle (`ret`, `log_ret`, `adj_close`, `adtv`, `f_*`, regime flags…) consumed by every strategy; the daily panels in it are built on first read |
+| `memory.py` | The backtest's memory budget (`ENGINE_BACKTEST_MEM_MB`, `ENGINE_MEM_TRACE`) and the lazy bundle `shared_data` returns |
 | `simulation.py` | Tax-aware multi-asset simulator (CGT, loss carryforward, slippage, margin, R$20k exemption) |
 | `signal_dsl.py` | Safe `ast`-parsed expression interpreter for factor signals |
 | `config_strategy.py` | YAML `rank_and_hold` / `fixed_weight` engines |
 | `strategy_base.py` / `strategy_registry.py` | Plugin base class + auto-discovery registry (plugin classes *and* `specs/*.yaml`) |
 | `metrics.py` | Sharpe, Calmar, max drawdown, annualised return/vol at any frequency |
+
+#### Memory
+
+A backtest's working set is set by the market, not by the tenant: a daily
+`(date x ticker)` panel over a US 2000..today window is ~11,000 symbols by
+~6,500 sessions, several hundred MB apiece, and the bundle derives a dozen of
+them. Three things keep that inside a container:
+
+* **The panels are built on first read.** `shared_data` returns a
+  `memory.LazyShared`, so a momentum book never allocates the mean-reversion
+  features, the ATR proxy or the MA200. Reads are unchanged — `shared["ret"]`,
+  `.get()`, `in`, `dict(shared)`.
+* **The load holds one copy, not two.** `data._pivot_wide` scatters one value
+  column at a time off the long frame instead of reshaping all of them at once,
+  and both database paths fetch in batches (`b3_pipeline/sql_stream.py`).
+* **The process caps its own heap.** `memory.guard()` sets `RLIMIT_DATA` from
+  the container's cgroup limit, so an overrun is a `MemoryError` naming a line
+  rather than a SIGKILL naming nothing. Every run reports `peak_rss_mb` in its
+  metrics.
+
+| Variable | Effect |
+|----------|--------|
+| `ENGINE_BACKTEST_MEM_MB` | Heap cap in MB. `0` disables it. Default: 80% of the cgroup limit, or none when there is no limit |
+| `ENGINE_BACKTEST_MEM_FRACTION` | The fraction used for that default |
+| `ENGINE_MEM_TRACE=1` | Print peak RSS per stage to stderr |
 
 ## Testing
 

@@ -6,10 +6,14 @@ tuples before building the frame — 3.1 GB peak to produce a 389 MB frame on th
 one query that matters (every B3 bar in a backtest window). sql_stream fetches
 through a server-side cursor instead, in chunks.
 
+SQLite has no server-side cursor to take, so it batches through pandas' own
+`chunksize` and lands in the same assembly — same reason, same guarantees.
+
 The risk of chunking is not that a row goes missing; it is that a column types
 differently because a chunk boundary fell somewhere unlucky. That is what most
-of this file is about. The rest needs a live Postgres and skips without one, the
-same way tests/test_postgres_storage.py does.
+of this file is about. The tests that need a live Postgres skip without one, the
+same way tests/test_postgres_storage.py does; the assembly and the SQLite path
+are exercised either way.
 """
 from __future__ import annotations
 
@@ -35,6 +39,116 @@ def _live_dsn() -> str:
     except Exception as exc:                                        # noqa: BLE001
         pytest.skip(f"Postgres unreachable: {exc}")
     return DSN
+
+
+# ── the chunk-assembly half, which needs no server ───────────────────────────
+#
+# read_dataframe's two memory behaviours are pure functions of the chunk frames,
+# so they are tested against synthetic chunks: everything below the fixture needs
+# a live Postgres and skips without one, which would otherwise mean these never
+# run in CI at all.
+
+def _chunk(lo: int, hi: int, *, sparse: bool = True) -> pd.DataFrame:
+    """A chunk shaped like the probe table's, built the way read_dataframe does."""
+    return pd.DataFrame.from_records(
+        [(i, datetime.date(2020, 1, 1) + datetime.timedelta(days=i % 28),
+          f"TICK{i % 7}", i / 4, (float(i) if sparse else None))
+         for i in range(lo, hi)],
+        columns=["i", "d", "t", "f", "sparse"], coerce_float=True)
+
+
+COLUMNS = ["i", "d", "t", "f", "sparse"]
+
+
+def test_assembling_column_by_column_equals_concatenating_the_chunks():
+    """The memory shape changes; the frame does not. Column-at-a-time exists so
+    the largest read in the process never exists twice."""
+    chunks = [_chunk(0, 200), _chunk(200, 350), _chunk(350, 500)]
+    expected = pd.concat([c.copy() for c in chunks],
+                         ignore_index=True).infer_objects()
+    pd.testing.assert_frame_equal(sql_stream._assemble(chunks, COLUMNS), expected)
+
+
+def test_a_column_all_null_in_one_chunk_still_types_as_float_after_assembly():
+    """The failure chunking can actually cause, at the level it happens: an
+    all-NULL chunk types object, and without infer_objects that spreads to the
+    whole column and every downstream .rolling() on it breaks."""
+    chunks = [_chunk(0, 100), _chunk(100, 200, sparse=False), _chunk(200, 300)]
+    assert sql_stream._assemble(chunks, COLUMNS)["sparse"].dtype == "float64"
+
+
+def test_assembly_of_one_chunk_is_that_chunk():
+    only = _chunk(0, 50)
+    assert sql_stream._assemble([only], COLUMNS) is only
+
+
+def test_assembly_of_nothing_keeps_the_columns():
+    """Zero rows means zero chunks — the names come off the cursor description."""
+    empty = sql_stream._assemble([], COLUMNS)
+    assert len(empty) == 0 and list(empty.columns) == COLUMNS
+
+
+def test_pooling_collapses_repeated_objects_without_changing_a_value():
+    """The driver mints a new object per row. On the US plane that is ~30M str
+    instances of a few thousand symbols and ~30M date instances of a few thousand
+    days — gigabytes of duplicates, and the largest thing in the process while
+    the read runs."""
+    chunks = [_chunk(0, 200), _chunk(200, 400)]
+    expected = pd.concat([c.copy() for c in chunks],
+                         ignore_index=True).infer_objects()
+
+    pools: dict = {}
+    for chunk in chunks:
+        sql_stream._pool_objects(chunk, pools)
+    got = sql_stream._assemble(chunks, COLUMNS)
+
+    pd.testing.assert_frame_equal(got, expected)
+    assert len({id(v) for v in got["d"]}) == 28, "one object per distinct date"
+
+
+def test_pooling_is_shared_across_chunks_not_restarted_per_chunk():
+    """Per-chunk pooling would still leave one object per distinct value *per
+    chunk* — 300 chunks of a big read is back to millions of them."""
+    a, b = _chunk(0, 100), _chunk(100, 200)
+    pools: dict = {}
+    sql_stream._pool_objects(a, pools)
+    sql_stream._pool_objects(b, pools)
+    assert {id(v) for v in b["d"]} <= {id(v) for v in a["d"]}
+
+
+def test_pooling_gives_up_on_a_column_that_is_distinct_per_row(monkeypatch):
+    """On a column with no repeats the pool would grow to the row count and cost
+    more than it saves. It stops, and the values are still exactly the values."""
+    monkeypatch.setattr(sql_stream, "_POOL_MAX", 10)
+    chunks = [_chunk(0, 50), _chunk(50, 100)]
+    expected = pd.concat([c.copy() for c in chunks],
+                         ignore_index=True).infer_objects()
+    pools: dict = {}
+    for chunk in chunks:
+        chunk["uniq"] = [object() for _ in range(len(chunk))]
+        sql_stream._pool_objects(chunk, pools)
+        del chunk["uniq"]
+    assert pools["uniq"] is None
+    pd.testing.assert_frame_equal(sql_stream._assemble(chunks, COLUMNS), expected)
+
+
+def test_pooling_keeps_a_null_a_null_and_not_a_nan():
+    """A categorical spells every missing value `nan`, whichever of None/nan came
+    back. In an object column that is a value change with teeth: `None or 0` is 0
+    and `nan or 0` is nan, and the coverage reports are full of
+    `int(row["x"] or 0)` over aggregates that are NULL on an empty table."""
+    chunk = pd.DataFrame({"n": [1, 2, 3], "s": [None, "a", "a"]}, dtype=object)
+    sql_stream._pool_objects(chunk, {})
+    assert chunk["s"].tolist() == [None, "a", "a"]
+    assert chunk["s"].iloc[0] is None
+
+
+def test_pooling_survives_a_column_it_cannot_hash():
+    """A JSON column comes back as lists. Nothing to pool, and nothing to break."""
+    chunk = _chunk(0, 10)
+    chunk["blob"] = [[i] for i in range(10)]
+    sql_stream._pool_objects(chunk, {})
+    assert chunk["blob"].tolist() == [[i] for i in range(10)]
 
 
 @pytest.fixture
@@ -173,15 +287,50 @@ def test_kwargs_fall_back_to_pandas(conn):
     assert pd.api.types.is_datetime64_any_dtype(df["d"])
 
 
-def test_sqlite_does_not_go_through_the_stream(monkeypatch, tmp_path):
-    """The SQLite path is unchanged, and there is no server-side cursor to take.
-    Blowing up if it is reached is the clearest way to say so."""
-    monkeypatch.setattr(sql_stream, "read_dataframe",
-                        lambda *a, **k: pytest.fail("sqlite reached sql_stream"))
+def test_sqlite_does_not_take_the_server_side_cursor(monkeypatch, tmp_path):
+    """There is no server-side cursor to take on SQLite. It batches through
+    pandas' own `chunksize` instead and lands in the same assembly, so the named
+    cursor must never be reached."""
+    monkeypatch.setattr(sql_stream, "_server_side",
+                        lambda *a, **k: pytest.fail("sqlite reached _server_side"))
     conn = storage.get_connection(tmp_path / "probe.sqlite")
     try:
-        conn.execute("CREATE TABLE t (a INTEGER)")
-        conn.execute("INSERT INTO t VALUES (1)")
-        assert storage.read_sql("SELECT a FROM t", conn)["a"].tolist() == [1]
+        conn.execute("CREATE TABLE t (a INTEGER, s TEXT)")
+        conn.executemany("INSERT INTO t VALUES (?, ?)",
+                         [(i, f"S{i % 3}") for i in range(250)])
+        got = storage.read_sql("SELECT a, s FROM t ORDER BY a", conn)
+        assert got["a"].tolist() == list(range(250))
+        assert got["s"].tolist() == [f"S{i % 3}" for i in range(250)]
+    finally:
+        conn.close()
+
+
+def test_a_sqlite_read_in_several_batches_matches_the_whole_one(tmp_path,
+                                                                monkeypatch):
+    """The same guarantee the Postgres path has, on the path a dev box takes."""
+    conn = storage.get_connection(tmp_path / "probe.sqlite")
+    try:
+        conn.execute("CREATE TABLE t (a INTEGER, s TEXT, f REAL)")
+        conn.executemany(
+            "INSERT INTO t VALUES (?, ?, ?)",
+            [(i, f"S{i % 5}", None if i > 300 else i / 4) for i in range(500)])
+        sql = "SELECT a, s, f FROM t ORDER BY a"
+        whole = storage.read_sql(sql, conn)
+        for chunk in (1, 7, 100, 499, 500, 501):
+            monkeypatch.setattr(sql_stream, "CHUNK_ROWS", chunk)
+            pd.testing.assert_frame_equal(storage.read_sql(sql, conn), whole)
+    finally:
+        conn.close()
+
+
+def test_an_empty_sqlite_result_keeps_its_columns(tmp_path):
+    """Callers index an empty frame by name on the way out
+    (universe.load_listing_intervals). The chunked iterator still yields one
+    empty frame carrying them, which is where they come from."""
+    conn = storage.get_connection(tmp_path / "probe.sqlite")
+    try:
+        conn.execute("CREATE TABLE t (a INTEGER, s TEXT)")
+        empty = storage.read_sql("SELECT a, s FROM t", conn)
+        assert len(empty) == 0 and list(empty.columns) == ["a", "s"]
     finally:
         conn.close()

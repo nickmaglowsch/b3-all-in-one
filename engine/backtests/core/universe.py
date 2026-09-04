@@ -113,7 +113,8 @@ def ffill_until_delisting(px: pd.DataFrame, tradable: pd.DataFrame) -> pd.DataFr
     return filled.where(mask.fillna(True).astype(bool))
 
 
-def delisting_returns(intervals: pd.DataFrame, dates, tickers) -> pd.DataFrame:
+def delisting_returns(intervals: pd.DataFrame, dates, tickers,
+                      dense: bool = True) -> pd.DataFrame:
     """The terminal return each delisted name booked, NaN everywhere else.
 
     Placed on the first grid date strictly after the delisting date: the last
@@ -125,16 +126,25 @@ def delisting_returns(intervals: pd.DataFrame, dates, tickers) -> pd.DataFrame:
 
     A name whose delisting falls beyond the end of the window gets no cell — it
     was still trading for every date the backtest can see, which is true.
+
+    ``dense=False`` returns only the rows and columns that carry a value. It is
+    the same answer: the consumer is `fill_returns`, which reindexes onto the
+    returns matrix and reads NaN as "no delisting", and a row or column that is
+    absent reindexes to exactly that NaN. The dense frame is (dates x tickers)
+    of float — on the US plane, ~400 MB to hold a few thousand numbers, kept
+    alive for the length of the run — so `shared_data` asks for the narrow one
+    and anything wanting the full grid keeps the default it always had.
     """
     idx = pd.DatetimeIndex(pd.to_datetime(dates))
     cols, _, delisted = _bounds(intervals, tickers)
-    out = pd.DataFrame(np.nan, index=idx, columns=cols)
+    empty = pd.DataFrame(np.nan, index=idx, columns=cols)
     if len(idx) == 0 or intervals is None or intervals.empty:
-        return out
+        return empty
 
     worthless = (intervals.drop_duplicates("ticker", keep="last")
                  .set_index("ticker")["is_worthless"].reindex(cols).fillna(0))
     grid = idx.to_numpy("datetime64[ns]")
+    events = []                      # (row position, column position, return)
     for pos, ticker in enumerate(cols):
         stamp = delisted[pos]
         if np.isnat(stamp):
@@ -142,8 +152,25 @@ def delisting_returns(intervals: pd.DataFrame, dates, tickers) -> pd.DataFrame:
         after = np.flatnonzero(grid > stamp)
         if len(after) == 0:
             continue
-        out.iloc[after[0], pos] = -1.0 if worthless.iloc[pos] else 0.0
-    return out
+        events.append((after[0], pos, -1.0 if worthless.iloc[pos] else 0.0))
+
+    if dense:
+        for row, col, value in events:
+            empty.iloc[row, col] = value
+        return empty
+    if not events:
+        # The emptiness `fill_returns` short-circuits on — and what an all-NaN
+        # frame reindexes to anyway.
+        return pd.DataFrame(index=pd.DatetimeIndex([]), columns=pd.Index([]),
+                            dtype=float)
+    # Positions back to labels, so the narrow frame still speaks in the caller's
+    # dates and tickers and reindexes onto anything the dense one would have.
+    rows = sorted({r for r, _, _ in events})
+    names = sorted({cols[c] for _, c, _ in events})
+    narrow = pd.DataFrame(np.nan, index=idx[rows], columns=pd.Index(names))
+    for row, col, value in events:
+        narrow.loc[idx[row], cols[col]] = value
+    return narrow
 
 
 def fill_returns(ret: pd.DataFrame, delist_ret: pd.DataFrame) -> pd.DataFrame:
@@ -161,12 +188,16 @@ def fill_returns(ret: pd.DataFrame, delist_ret: pd.DataFrame) -> pd.DataFrame:
 
 
 def survivorship(db_path, prices: pd.DataFrame, market: str = "B3") -> tuple:
-    """`(tradable, delist_ret)` shaped like `prices`, off one read of the master.
+    """`(tradable, delist_ret)` for `prices`, off one read of the master.
 
     The two frames always travel together — a mask that hides a dead name without
     the return that killed it just makes the position vanish — so they come from
     one `load_listing_intervals` rather than two. Taking the price frame rather
     than an index and a column list is what guarantees all three align.
+
+    "Shaped like `prices`" holds for the mask; `delist_ret` carries only the
+    dates and names that actually booked a terminal return (see
+    `delisting_returns`), which is what `fill_returns` aligns against anyway.
     """
     intervals = load_listing_intervals(db_path, market)
     return (tradable_mask(intervals, prices.index, prices.columns),

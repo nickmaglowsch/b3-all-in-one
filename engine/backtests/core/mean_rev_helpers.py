@@ -142,56 +142,70 @@ def compute_regime_filter(
     return risk_on
 
 
-def _alpha_inputs(shared_data: dict, freq: str, grid: pd.DataFrame) -> dict:
+# The bars every per-ticker input below is derived from. One tuple, so they come
+# off the plane in a single pass — a pass is ~90s at US scale, and this strategy
+# used to take three of them.
+_ALPHA_PANELS = ("adj_close", "split_adj_high", "split_adj_low", "split_adj_close")
+
+
+def alpha_inputs(shared_data: dict, freq: str, grid: pd.DataFrame,
+                 extra: dict | None = None) -> dict:
     """The per-ticker half of the alpha score, already on the rebalance grid.
 
-    Every sub-signal below is a chain of per-ticker operations — a rolling
-    window, a ratio to the name's own mean, a resample — followed by a
-    cross-sectional rank. Only the rank is cross-sectional, and it happens in
-    `compute_alpha_score` on what this returns. So everything here is computed
-    inside the batch its bars arrive in and never exists at the market's width.
+    Every sub-signal in `compute_alpha_score` is a chain of per-ticker operations
+    — a rolling window, a ratio to the name's own mean, a resample — followed by
+    a cross-sectional rank. Only the rank is cross-sectional, and it happens on
+    what this returns. So everything here is computed inside the batch its bars
+    arrive in and never exists at the market's width: this strategy read five
+    daily panels at once (~580 MB each on the US plane) plus a rolling window
+    over each, and peaked past 11 GB. These frames are ~26 MB apiece.
 
-    That is the whole memory story for this strategy: it read five daily panels
-    at once (~580 MB each on the US plane) plus a rolling window over each, and
-    peaked past 11 GB. The frames below are ~26 MB apiece.
+    ``extra`` lets the caller add its own reductions to the same pass. That is
+    not a convenience: the reads are the expensive part, and a caller that wants
+    two more grids off the same bars should not pay for the plane twice.
     """
     from backtests.core.strategy_base import daily_on_grid
 
     def ratio_to_own_mean(daily: pd.DataFrame) -> pd.DataFrame:
         """A name against its own 60-day norm — elevated vol reads as trending."""
-        mean_60d = daily.rolling(60, min_periods=30).mean()
-        return daily / mean_60d.replace(0, np.nan)
+        return daily / daily.rolling(60, min_periods=30).mean().replace(0, np.nan)
 
-    def atr(daily: pd.DataFrame) -> pd.DataFrame:
-        return daily.pct_change().abs().ewm(span=14, min_periods=14).mean()
+    def hlr(bars: dict) -> pd.DataFrame:
+        return high_low_range(bars["split_adj_high"], bars["split_adj_low"],
+                              bars["split_adj_close"])
 
-    out = daily_on_grid(
-        shared_data, "adj_close", grid,
-        return_60d_m=lambda a: a.pct_change(60).resample(freq).last(),
-        ac20_m=lambda a: autocorr(a, 20, 10).resample(freq).last(),
-        ac60_m=lambda a: autocorr(a, 60, 30).resample(freq).last(),
-        vol_ratio_m=lambda a: (
-            rolling_vol_daily(a, 60, 30)
-            / rolling_vol_daily(a, 20, 10).replace(0, np.nan)).resample(freq).last(),
-        atr_ratio_m=lambda a: ratio_to_own_mean(atr(a)).resample(freq).last(),
+    def atr(bars: dict) -> pd.DataFrame:
+        return bars["adj_close"].pct_change().abs().ewm(
+            span=14, min_periods=14).mean()
+
+    reductions = dict(
+        return_60d_m=lambda b: b["adj_close"].pct_change(60).resample(freq).last(),
+        ac20_m=lambda b: autocorr(b["adj_close"], 20, 10).resample(freq).last(),
+        ac60_m=lambda b: autocorr(b["adj_close"], 60, 30).resample(freq).last(),
+        vol_ratio_m=lambda b: (
+            rolling_vol_daily(b["adj_close"], 60, 30)
+            / rolling_vol_daily(b["adj_close"], 20, 10).replace(0, np.nan)
+        ).resample(freq).last(),
+        atr_ratio_m=lambda b: ratio_to_own_mean(atr(b)).resample(freq).last(),
+        hlr_m=lambda b: hlr(b).resample(freq).last(),
+        hl_vol_ratio_m=lambda b: ratio_to_own_mean(hlr(b)).resample(freq).last(),
     )
-    sides = ("split_adj_high", "split_adj_low", "split_adj_close")
-    out.update(daily_on_grid(
-        shared_data, sides, grid,
-        hlr_m=lambda b: high_low_range(*(b[k] for k in sides)).resample(freq).last(),
-        hl_vol_ratio_m=lambda b: ratio_to_own_mean(
-            high_low_range(*(b[k] for k in sides))).resample(freq).last(),
-    ))
-    return out
+    reductions.update(extra or {})
+    return daily_on_grid(shared_data, _ALPHA_PANELS, grid, **reductions)
 
 
 def compute_alpha_score(
     shared_data: dict,
     params: dict,
     freq: str = "ME",
+    on_grid: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """
     Layer 2: Composite alpha score from sub-signals A–D (and optional E).
+
+    ``on_grid`` is `alpha_inputs`' output, passed in by a caller that already
+    made that pass over the plane for reductions of its own; computed here when
+    it is not.
 
     Returns:
         alpha_score: DataFrame (month-end x ticker) with composite score [0,1] range
@@ -200,7 +214,8 @@ def compute_alpha_score(
     """
     cdi_cumul_63d = shared_data["cdi_cumul_63d"]
     grid = shared_data["ret"]
-    on_grid = _alpha_inputs(shared_data, freq, grid)
+    if on_grid is None:
+        on_grid = alpha_inputs(shared_data, freq, grid)
 
     w_vol = params.get("w_vol", 0.25)
     w_macro = params.get("w_macro", 0.25)

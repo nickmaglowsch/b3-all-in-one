@@ -8,33 +8,33 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from backtests.core.mean_rev_helpers import rolling_vol_daily
+from backtests.core.mean_rev_helpers import alpha_inputs, rolling_vol_daily
 from backtests.core.strategy_base import (
-    StrategyBase, ParameterSpec, daily_on_grid,
+    StrategyBase, ParameterSpec,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
 
 
-def _grid_gates(shared_data: dict, ret: pd.DataFrame, freq: str,
-                want_win_rate: bool) -> tuple:
-    """``(win_rate_ratio_m, rolling_vol_20d_m)`` on the rebalance grid.
+def _gate_reductions(freq: str, want_win_rate: bool) -> dict:
+    """The win-rate and vol-parity gates, as reductions to fold into one pass.
 
-    Both are daily -> monthly chains that touch each name on its own, so they are
-    derived inside the streamed batch and only the grid comes back
-    (strategy_base.daily_on_grid). The bars behind them are ~580 MB a panel on
-    the US plane; these two frames are ~26 MB each.
+    Both are daily -> monthly chains that touch each name on its own, so they
+    ride along with the alpha score's own pass over the bars rather than opening
+    a second one. A pass over the US plane is ~90 seconds; this strategy took
+    three of them before these were folded in, which put a US run within a
+    minute of the subprocess timeout.
     """
     def win_rate_ratio(bars):
-        rate = (bars.pct_change() > 0).rolling(20, min_periods=10).mean()
+        rate = (bars["adj_close"].pct_change() > 0).rolling(20, min_periods=10).mean()
         ratio = rate / (rate.rolling(60, min_periods=30).mean() + 1e-8)
         return ratio.resample(freq).last()
 
-    wanted = {"vol": lambda bars: rolling_vol_daily(bars, 20, 10).resample(freq).last()}
+    gates = {"vol": lambda bars: rolling_vol_daily(
+        bars["adj_close"], 20, 10).resample(freq).last()}
     if want_win_rate:
-        wanted["win_rate"] = win_rate_ratio
-    on_grid = daily_on_grid(shared_data, "adj_close", ret, **wanted)
-    return on_grid.get("win_rate"), on_grid["vol"]
+        gates["win_rate"] = win_rate_ratio
+    return gates
 
 
 class MeanReversionCompositeStrategy(StrategyBase):
@@ -135,8 +135,16 @@ class MeanReversionCompositeStrategy(StrategyBase):
         # Layer 1: Regime filter
         risk_on = compute_regime_filter(shared_data, params, freq)
 
-        # Layer 2: Composite alpha score
-        alpha, sub_signals = compute_alpha_score(shared_data, params, freq)
+        # Layer 2: Composite alpha score. One pass over the plane produces both
+        # its per-ticker inputs and this strategy's own two gates — see
+        # mean_rev_helpers.alpha_inputs.
+        on_grid = alpha_inputs(
+            shared_data, freq, ret,
+            extra=_gate_reductions(
+                freq, params.get("enable_win_rate_filter", "Yes") == "Yes"))
+        alpha, sub_signals = compute_alpha_score(
+            shared_data, params, freq, on_grid=on_grid)
+        win_rate_ratio_m, rolling_vol_20d_m = on_grid.get("win_rate"), on_grid["vol"]
 
         # Apply glitch mask to alpha
         if has_glitch is not None:
@@ -157,10 +165,6 @@ class MeanReversionCompositeStrategy(StrategyBase):
             )
         else:
             stability_weights = None
-
-        win_rate_ratio_m, rolling_vol_20d_m = _grid_gates(
-            shared_data, ret, freq,
-            params.get("enable_win_rate_filter", "Yes") == "Yes")
 
         # ATR ratio gate (from sub_signals if sub_E was computed)
         atr_ratio_m = sub_signals.get("atr_ratio_m")

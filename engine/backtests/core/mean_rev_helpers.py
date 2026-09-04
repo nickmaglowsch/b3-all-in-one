@@ -6,6 +6,8 @@ Separated from the strategy plugin so build_shared_data() can precompute the
 features once for every strategy that wants them.
 
 compute_mean_rev_features()        -- shared feature computation (used by both data paths)
+                                      built from the one-feature functions below,
+                                      which shared_data defers individually
 Layer 1: compute_regime_filter()   -- CDI/IBOV macro regime gating
 Layer 2: compute_alpha_score()     -- three sub-signal composite alpha
 Layer 4: compute_signal_stability() -- rolling IC signal stability guard
@@ -18,6 +20,44 @@ import pandas as pd
 
 # CDI NaN guard: match base_signals.py formula max(20, window * 0.6) where window=63
 _CDI_MIN_OBS = max(20, int(np.ceil(63 * 0.6)))  # = 38
+
+
+def autocorr(adj_close: pd.DataFrame, window: int, min_periods: int) -> pd.DataFrame:
+    """Lag-1 autocorrelation of daily returns, vectorised as rolling cov / var.
+
+    Split out of ``compute_mean_rev_features`` so ``build_shared_data`` can defer
+    each feature on its own. Every one of these is a full (date x ticker) daily
+    frame, and on the US plane that is hundreds of MB apiece — a momentum book
+    that never reads them should never pay for them. Recomputing ``pct_change``
+    per feature costs one transient frame; holding all six costs six.
+    """
+    daily_ret = adj_close.pct_change(1)
+    cov = daily_ret.rolling(window, min_periods=min_periods).cov(daily_ret.shift(1))
+    var = daily_ret.rolling(window, min_periods=min_periods).var()
+    return (cov / var.replace(0, np.nan)).shift(1)
+
+
+def high_low_range(split_adj_high: pd.DataFrame, split_adj_low: pd.DataFrame,
+                   split_adj_close: pd.DataFrame, window: int = 20,
+                   min_periods: int = 10) -> pd.DataFrame:
+    """Mean daily high-low range over `window`, normalised by close."""
+    hlr_daily = (split_adj_high - split_adj_low) / split_adj_close.replace(0, np.nan)
+    return hlr_daily.rolling(window, min_periods=min_periods).mean().shift(1)
+
+
+def rolling_vol_daily(adj_close: pd.DataFrame, window: int,
+                      min_periods: int) -> pd.DataFrame:
+    """Rolling std of daily returns, lagged one day."""
+    return (adj_close.pct_change(1)
+            .rolling(window, min_periods=min_periods).std().shift(1))
+
+
+def cdi_cumul(cdi_daily: pd.Series, window: int = 63) -> pd.Series:
+    """Cumulative CDI over `window` trading days, NaN until enough observations."""
+    cdi_cumprod = (1 + cdi_daily).cumprod()
+    out = cdi_cumprod / cdi_cumprod.shift(window) - 1
+    out[cdi_daily.expanding().count() < _CDI_MIN_OBS] = np.nan
+    return out
 
 
 def compute_mean_rev_features(
@@ -33,52 +73,25 @@ def compute_mean_rev_features(
     Compute mean-reversion composite features at daily frequency.
 
     Shared by both build_shared_data() and build_strategy_returns() to ensure
-    identical feature computation across both code paths.
+    identical feature computation across both code paths. Every entry is one of
+    the functions above, so there is still exactly one definition of each
+    formula whether it is reached eagerly through here or deferred key by key.
 
     Returns dict with keys:
         autocorr_20d, autocorr_60d, high_low_range_20d,
         rolling_vol_20d_daily, rolling_vol_60d_daily,
         cdi_cumul_63d, ibov_vol_20d_daily, ibov_ret_20d_daily
     """
-    daily_ret = adj_close.pct_change(1)
-    lagged_ret = daily_ret.shift(1)
-
-    # Autocorrelation at lag 1 (vectorized: rolling cov / rolling var)
-    ac20_cov = daily_ret.rolling(20, min_periods=10).cov(lagged_ret)
-    ac20_var = daily_ret.rolling(20, min_periods=10).var()
-    autocorr_20d = (ac20_cov / ac20_var.replace(0, np.nan)).shift(1)
-
-    ac60_cov = daily_ret.rolling(60, min_periods=30).cov(lagged_ret)
-    ac60_var = daily_ret.rolling(60, min_periods=30).var()
-    autocorr_60d = (ac60_cov / ac60_var.replace(0, np.nan)).shift(1)
-
-    # High-low range normalized by close
-    hlr_daily = (split_adj_high - split_adj_low) / split_adj_close.replace(0, np.nan)
-    high_low_range_20d = hlr_daily.rolling(20, min_periods=10).mean().shift(1)
-
-    # Rolling volatility of daily returns
-    rolling_vol_20d_daily = daily_ret.rolling(20, min_periods=10).std().shift(1)
-    rolling_vol_60d_daily = daily_ret.rolling(60, min_periods=30).std().shift(1)
-
-    # CDI cumulative return over 63 trading days
-    cdi_cumprod = (1 + cdi_daily).cumprod()
-    cdi_cumul_63d = cdi_cumprod / cdi_cumprod.shift(63) - 1
-    cdi_valid_count = cdi_daily.expanding().count()
-    cdi_cumul_63d[cdi_valid_count < _CDI_MIN_OBS] = np.nan
-
-    # IBOV daily regime features
-    ibov_vol_20d_daily = ibov_daily_ret.rolling(20).std().shift(1)
-    ibov_ret_20d_daily = ibov_px.pct_change(20)
-
     return {
-        "autocorr_20d": autocorr_20d,
-        "autocorr_60d": autocorr_60d,
-        "high_low_range_20d": high_low_range_20d,
-        "rolling_vol_20d_daily": rolling_vol_20d_daily,
-        "rolling_vol_60d_daily": rolling_vol_60d_daily,
-        "cdi_cumul_63d": cdi_cumul_63d,
-        "ibov_vol_20d_daily": ibov_vol_20d_daily,
-        "ibov_ret_20d_daily": ibov_ret_20d_daily,
+        "autocorr_20d": autocorr(adj_close, 20, 10),
+        "autocorr_60d": autocorr(adj_close, 60, 30),
+        "high_low_range_20d": high_low_range(
+            split_adj_high, split_adj_low, split_adj_close),
+        "rolling_vol_20d_daily": rolling_vol_daily(adj_close, 20, 10),
+        "rolling_vol_60d_daily": rolling_vol_daily(adj_close, 60, 30),
+        "cdi_cumul_63d": cdi_cumul(cdi_daily),
+        "ibov_vol_20d_daily": ibov_daily_ret.rolling(20).std().shift(1),
+        "ibov_ret_20d_daily": ibov_px.pct_change(20),
     }
 
 

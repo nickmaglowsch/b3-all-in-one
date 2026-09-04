@@ -137,10 +137,17 @@ def check_syntax(expr: str) -> None:
     _reject_disallowed_syntax(tree, expr)
 
 
-def evaluate(expr: str, namespace: dict) -> pd.DataFrame:
+def evaluate(expr: str, namespace) -> pd.DataFrame:
     """Evaluate a signal expression string against ``namespace`` (name -> frame or
     scalar). Returns a wide DataFrame. Raises ValueError on disallowed syntax or
-    unknown names/functions."""
+    unknown names/functions.
+
+    ``namespace`` is any mapping, not necessarily a dict — the interpreter only
+    ever asks ``name in ns`` and ``ns[name]``, and _build_funcs only ``.get()``.
+    That is load-bearing: the shared_data bundle builds its daily panels on first
+    read (backtests.core.memory), and config_strategy hands this a ChainMap over
+    it precisely so evaluating `-atr_m` builds the ATR proxy and nothing else.
+    Flattening the bundle into a dict here would undo that for every spec."""
     tree = ast.parse(expr, mode="eval")
     _reject_disallowed_syntax(tree, expr)
     funcs = _build_funcs(namespace)

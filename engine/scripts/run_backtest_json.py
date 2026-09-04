@@ -18,6 +18,13 @@ documented approximation — a flow between two monthly marks lands on the later
 one). Everything downstream of the window is identical, which is why the replay
 does not get its own script.
 
+Memory: the process caps its own heap (see backtests.core.memory) at a fraction
+of the container's cgroup limit, so overrunning it raises MemoryError here — with
+a traceback, on a line — instead of getting the process SIGKILLed by the kernel
+and reported to the tenant as a run that failed for no stated reason. The peak
+RSS is reported in the payload either way. ENGINE_BACKTEST_MEM_MB overrides the
+cap (0 disables it); ENGINE_MEM_TRACE=1 prints the peak at each stage to stderr.
+
 Network: the IBOV benchmark comes off the plane now (`$IBOV` in `external_prices`), so it
 costs nothing and is real — it used to be stubbed flat because the only source
 was Yahoo. CDI daily is still fetched from the Brazilian Central Bank
@@ -109,6 +116,9 @@ def main() -> None:
     cfg = json.loads(config_json) if config_json else {}
     req_params = cfg.get("params") or {}
 
+    from backtests.core import memory
+    memory.guard()
+
     from backtests.core.strategy_registry import get_registry
     from backtests.core.strategy_base import dedup_target_weights
     from backtests.core.simulation import run_simulation
@@ -140,9 +150,11 @@ def main() -> None:
     db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
     shared = build_shared_data(db_path, start, end, freq,
                                include_fundamentals=needs_funds, market=market)
+    memory.trace("shared_data")
 
     ret_matrix, tw = strat.generate_signals(shared, params)
     tw = dedup_target_weights(tw, shared["adtv"], market=market)
+    memory.trace("signals")
     result = run_simulation(
         # Not a bare fillna(0.0): once the price fill stops at delisting a
         # dead name's return is NaN, and zeroing it would freeze the position
@@ -169,6 +181,12 @@ def main() -> None:
     # Zero is fine here even for a replay: reconstruct_daily_values is scale-free
     # and rebases a zero start to 1.0 itself, so the drawdown ratios hold.
     strat_daily = strategy_daily_values(shared, tw, initial_capital)
+    # The last read of the bundle. Everything below works off `result`, `tw` and
+    # `strat_daily`, so the daily panels — the largest objects in the process —
+    # are dropped before the metrics and the artifacts are built.
+    data_warnings = shared.get("data_warnings", [])
+    del shared
+    memory.trace("simulation")
     ppy = {"ME": 12, "QE": 4, "W-FRI": 52}.get(freq, 12)
 
     pre = build_metrics(pt_ret, "Pre-Tax", ppy, daily_values=strat_daily)
@@ -207,7 +225,7 @@ def main() -> None:
         # The gaps, reported as loudly as the results. A US window that opens
         # before the price archive did used to return a number that looked
         # exactly as clean as one that did not.
-        "data_warnings": shared.get("data_warnings", []),
+        "data_warnings": data_warnings,
         "periods": int(len(idx)),
         "initial_capital": initial_capital,
         "final_pretax_nav": float(result["pretax_values"].iloc[-1]),
@@ -217,6 +235,10 @@ def main() -> None:
         "total_contributions": float(contribs.sum()),
         "pretax": pre,
         "aftertax": aft,
+        # What this run cost. A tenant never reads it; whoever is deciding
+        # whether the worker's mem_limit is the right number does, and until now
+        # the only measurement available was the runs that died.
+        "peak_rss_mb": round(memory.peak_rss_mb(), 1),
     }
     (out / "metrics.json").write_text(json.dumps(metrics, indent=2))
 
@@ -225,5 +247,31 @@ def main() -> None:
     sys.stdout.write("\n")
 
 
+def _out_of_memory(exc: MemoryError) -> SystemExit:
+    """A MemoryError, said in terms of the thing the caller can change.
+
+    This is the whole point of the rlimit in `memory.guard`. Without it the
+    kernel kills the process and the tenant is shown "killed by SIGKILL"; with
+    it we get here, and can name the budget, the peak, and the two knobs — a
+    narrower window, or a bigger ceiling — that actually resolve it.
+    """
+    from backtests.core import memory
+    budget, limit = memory.budget_mb(), memory.container_limit_mb()
+    if budget and limit:
+        ceiling = f"{budget} MB (of the container's {limit} MB)"
+    elif budget:
+        ceiling = f"{budget} MB"
+    else:
+        ceiling = "the memory this container has"
+    return SystemExit(
+        f"out of memory: this backtest needs more than {ceiling}. "
+        f"Peak RSS was {memory.peak_rss_mb():.0f} MB. A shorter window or a "
+        f"market with fewer names will fit; otherwise raise WORKER_MEM_LIMIT "
+        f"(and ENGINE_BACKTEST_MEM_MB with it). Original error: {exc}")
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except MemoryError as exc:
+        raise _out_of_memory(exc) from exc

@@ -158,6 +158,38 @@ def test_a_live_name_books_nothing():
     assert dr["X"].isna().all()
 
 
+def test_the_narrow_frame_is_the_dense_one_where_it_matters():
+    """`dense=False` drops the rows and columns that carry only NaN. On the US
+    plane the dense grid is ~400 MB to hold a few thousand numbers, and its one
+    reader reindexes onto the returns matrix — where an absent row or column
+    lands as exactly the NaN the dense frame spelled out."""
+    intervals = _intervals(X=(None, "2010-01-05", 1), Y=(None, None, 0))
+    dense = universe.delisting_returns(intervals, DATES, ["X", "Y"])
+    narrow = universe.delisting_returns(intervals, DATES, ["X", "Y"], dense=False)
+
+    assert narrow.shape == (1, 1), "one delisting, one cell"
+    pd.testing.assert_frame_equal(
+        narrow.reindex(index=DATES, columns=["X", "Y"]), dense)
+
+
+def test_a_plane_with_no_delistings_narrows_to_nothing():
+    """`fill_returns` short-circuits on an empty frame, which is the same answer
+    a grid of pure NaN would have given it."""
+    narrow = universe.delisting_returns(
+        _intervals(X=(None, None, 0)), DATES, ["X"], dense=False)
+    assert narrow.empty
+
+
+def test_the_narrow_frame_books_the_same_returns_through_fill():
+    ret = pd.DataFrame({"X": [0.01, None, None, None]}, index=DATES)
+    intervals = _intervals(X=(None, "2010-01-05", 1))
+    dense = universe.fill_returns(
+        ret, universe.delisting_returns(intervals, DATES, ["X"]))
+    narrow = universe.fill_returns(
+        ret, universe.delisting_returns(intervals, DATES, ["X"], dense=False))
+    pd.testing.assert_frame_equal(narrow, dense)
+
+
 # ── fill_returns ──────────────────────────────────────────────────────────────
 
 def test_the_terminal_return_survives_the_nan_fill():

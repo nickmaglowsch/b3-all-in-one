@@ -447,7 +447,7 @@ function BucketCard({
   limit: number;
 }) {
   const harvestCols: Column<HarvestRow>[] = [
-    { key: "ticker", header: "Ticker", render: (r) => <TickerChip ticker={r.ticker} /> },
+    { key: "ticker", header: "Ticker", mobile: "title", render: (r) => <TickerChip ticker={r.ticker} /> },
     {
       key: "qty",
       header: "Qtd",

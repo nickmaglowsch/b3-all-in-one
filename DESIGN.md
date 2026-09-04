@@ -163,7 +163,7 @@ A warm neutral ground with a single cool accent, plus two purpose-built data pal
 ### Neutral
 - **Bench Paper** (`{colors.paper}`): The page plane, and the fill inside inputs, secondary buttons, and ticker chips. Warm off-white, so a true-white panel reads as raised without any shadow. Dark mode: #1f1d1a.
 - **Panel White** (`{colors.panel}`): Cards, the sidebar, chart surfaces, dialogs — every surface that sits above the page. Dark mode: #2a2622.
-- **Instrument Ink** (`{colors.ink}`): Primary text, table cell values, headings. Also the modal scrim at 30% and the mobile drawer scrim at 25%. Dark mode: #f5f3f0.
+- **Instrument Ink** (`{colors.ink}`): Primary text, table cell values, headings. Also the modal scrim at 30% and the mobile drawer scrim at 40%. Dark mode: #f5f3f0.
 - **Legend Grey** (`{colors.muted}`): Secondary text, table column headers, eyebrows, axis tick labels, chart legend keys, and the resting state of every nav item. Dark mode: #a6adb8.
 - **Etched Rule** (`{colors.hairline}`): Every border, divider, and table rule. Row rules run at 70% opacity (`border-hairline/70`) so the header rule reads as heavier than the rows beneath it. Also the hover wash for secondary controls, at 40%. Dark mode: #3d3a36.
 - **Baseline Grey** (`{colors.axis}`): Chart baselines and axis lines only. Deliberately a separate token from Etched Rule — a chart's zero line is a measurement, an interface border is a separation, and they should not drift into each other. Dark mode: #7a7a7a.
@@ -216,11 +216,21 @@ The product is Brazilian-Portuguese only, and number formatting is part of the v
 
 ## Layout
 
-A fixed 240px sidebar (`w-60`) on the left from the `md` breakpoint up, with content in a 1152px max-width column (`max-w-6xl`) centred in the remaining space. Below `md` the sidebar becomes an off-canvas drawer behind a sticky 56px top bar, with an ink scrim at 25%; the drawer closes on navigation and on Escape. The landing and login routes opt out of the shell entirely — they render full-bleed with no sidebar.
+A fixed 240px sidebar (`w-60`) on the left from the `md` breakpoint up, with content in a 1152px max-width column (`max-w-6xl`) centred in the remaining space. The landing and login routes opt out of the shell entirely — they render full-bleed with no sidebar.
 
-Content padding is 16px on mobile and 32px from `md` up. Pages open with a `PageHeader` and a 24px gap beneath it. The primary page object is a vertical stack of cards; long pages get a sticky `SectionNav` under the top bar, and their anchor targets carry `scroll-mt-28 md:scroll-mt-16` to clear it.
+Content padding is 16px on mobile and 32px from `md` up. Pages open with a `PageHeader` — which wraps its actions under the title rather than pushing the page sideways — and a 20px gap beneath it, 24px from `md`. The primary page object is a vertical stack of cards; long pages get a sticky `SectionNav` under the top bar, and their anchor targets carry `scroll-mt-28 md:scroll-mt-16` to clear it.
 
-Density is set by the components, not by a global scale: card padding is 16px, card headers are 12px/16px, table cells are 8px/12px, and control padding runs 8–10px vertical. Marketing sections breathe far wider — 64px to 112px of vertical padding — which is the clearest signal that the two regimes are different.
+### Mobile
+
+**The One-Axis Rule.** A page scrolls one way. Individual panels may scroll horizontally on purpose — the landing's intake sheet, a markdown table in the IRPF report — but the *document* never does, at any width the product supports (320px up). `html, body` carry `overflow-x: clip` as a backstop, chosen over `hidden` because `hidden` would make the body a scroll container and break every `position: sticky` ancestor inside it. The backstop is not the fix: each overflow is corrected where it originates, and the clip exists so a future one degrades into a clipped pixel instead of a sideways page.
+
+Below `md` the shell is an app, not a page. A sticky 56px top bar, translucent at 85% over a backdrop blur, carries the drawer trigger and the wordmark; content scrolls under it rather than stopping at a hard edge. A **fixed bottom tab bar** carries the four destinations the product loop runs through — Portfólio, Importações, IRPF, Bench — plus "Mais", which opens the same drawer. The drawer holds the full ten-item nav and the book switcher, slides in over an ink scrim at 40%, locks the page behind it, and is `invisible` when closed so it is not in the tab order or the accessibility tree. It closes on navigation and on Escape.
+
+The whole shell is safe-area aware: the viewport is `viewport-fit=cover`, and `.pt-safe` / `.pb-safe` / `.pb-tabbar` keep content clear of the notch and the home indicator while the chrome paints under them. Tap targets are at least 44px. Form fields render at 16px below `md` — not for the type scale, but because iOS zooms the viewport into anything smaller and never zooms back out; `maximumScale` is deliberately not set, since pinch-zoom is an accessibility affordance and this fixes the cause instead.
+
+**The Card-Row Rule.** A table is not a phone layout. Below `md` every data table (`DataTable`, plus the two hand-rolled ones) restyles into a stack of cards, one per row: the `<thead>` is hidden and each cell becomes a label/value line, with a headline cell naming the row. The labels are real DOM (`.rt-label`, hidden above `md`), never `::before` generated content, so the column name exists for a screen reader once the header is gone. A column declares its role with `mobile: "title" | "full" | "off"`; a column whose header is not plain text must carry `label` so the card has a name to print. Sorting moves with it: the desktop header buttons are gone, so `SortControl` — a native `<select>` plus a direction toggle — drives the same state on a phone.
+
+Density is set by the components, not by a global scale: card padding is 16px (12px below `sm`, where the page's own 16px gutters are already spending the width), card headers are 12px/16px, table cells are 8px/12px, and control padding runs 8–10px vertical. Marketing sections breathe far wider — 64px to 112px of vertical padding — which is the clearest signal that the two regimes are different.
 
 **The Card-Stack Rule.** App pages are a single-column stack of `Card`s, not a masonry or a multi-column grid. Width comes from the container, not from side-by-side cards. Two cards may sit side by side only when their contents are genuinely a comparison.
 

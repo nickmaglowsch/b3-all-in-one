@@ -137,6 +137,8 @@ export function IncomeSection() {
       header: "Ano",
       // Years stack in a column and must not jitter, whatever the alignment.
       numeric: true,
+      // The card's headline: which year these figures are for.
+      mobile: "title",
       render: (r) => (
         <span className={r.bold ? "font-semibold" : ""}>{r.year ?? "Total"}</span>
       ),

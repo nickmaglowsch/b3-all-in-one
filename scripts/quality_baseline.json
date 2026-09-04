@@ -71,7 +71,7 @@
     "engine/backtests/strategies/sp500_b3.py": 594,
     "frontend/app/bench/RegimeEditor.tsx": 466,
     "frontend/app/bench/StrategyForm.tsx": 653,
-    "frontend/app/estrategia/page.tsx": 1042,
+    "frontend/app/estrategia/page.tsx": 1038,
     "frontend/app/page.tsx": 995,
     "frontend/app/portfolio/IndexSection.tsx": 482,
     "frontend/app/portfolio/page.tsx": 455,

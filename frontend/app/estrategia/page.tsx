@@ -363,13 +363,13 @@ function SleevesEditor() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Nome da carteira"
-                className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
+                className="min-w-[10rem] flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
               />
               <input
                 value={desc}
                 onChange={(e) => setDesc(e.target.value)}
                 placeholder="Descrição (opcional)"
-                className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
+                className="min-w-[10rem] flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
               />
               <button
                 type="button"
@@ -788,11 +788,7 @@ function TargetPanel() {
   ];
 
   const columns: Column<DriftRow>[] = [
-    {
-      key: "ticker",
-      header: "Ativo",
-      render: (r) => <TickerChip ticker={r.ticker} />,
-    },
+    { key: "ticker", header: "Ativo", mobile: "title", render: (r) => <TickerChip ticker={r.ticker} /> },
     {
       key: "target_w",
       header: "Peso alvo",
@@ -935,7 +931,7 @@ function RebalancePanel() {
 
 function PlanResult({ plan }: { plan: RebalancePlan }) {
   const tradeCols: Column<TradeLine>[] = [
-    { key: "ticker", header: "Ativo", render: (r) => <TickerChip ticker={r.ticker} /> },
+    { key: "ticker", header: "Ativo", mobile: "title", render: (r) => <TickerChip ticker={r.ticker} /> },
     { key: "qty", header: "Qtd", align: "right", render: (r) => r.qty.toLocaleString("pt-BR") },
     { key: "est_price", header: "Preço est.", align: "right", render: (r) => <Money value={r.est_price} /> },
     { key: "est_brl", header: "Valor", align: "right", render: (r) => <Money value={r.est_brl} /> },

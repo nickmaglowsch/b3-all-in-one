@@ -13,6 +13,12 @@ import { CHART, SERIES, TICK_STYLE } from "./theme";
 import { ChartTooltip } from "./ChartTooltip";
 import { NoData } from "./NoData";
 
+// `right` is half the widest x tick ("04/09/2026" at 11px mono is ~66px). A tick
+// is centred on its point and the last point sits at the plot's right edge, so
+// with the old 12px margin the final date was cut in half on a phone — the one
+// label that says how current the chart is.
+const MARGIN = { top: 6, right: 34, bottom: 0, left: 4 } as const;
+
 type Row = Record<string, string | number>;
 
 // Single filled area — built for drawdown. One value axis, thin stroke, low-alpha
@@ -44,7 +50,7 @@ export function AreaSeries({
   return (
     <div style={{ width: "100%", height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 6, right: 12, bottom: 0, left: 4 }}>
+        <AreaChart data={data} margin={MARGIN}>
           <defs>
             <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={color} stopOpacity={0.18} />

@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { TradesPage } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { DataTable, type Column } from "@/components/ui/DataTable";
+import { SortControl } from "@/components/ui/SortControl";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -23,6 +24,30 @@ export const TRADES_DEFAULTS = { limit: 50, sort: "date", dir: "desc" } as const
 
 type SortKey = "date" | "side" | "ticker" | "market" | "broker" | "qty" | "price" | "amount";
 type Dir = "asc" | "desc";
+
+// One spelling of each column name, read three ways: the desktop `<th>`, the
+// label on the card layout's line, and the phone's sort picker.
+const COLUMN_LABEL: Record<SortKey, string> = {
+  date: "Data",
+  side: "Lado",
+  ticker: "Ativo",
+  market: "Mercado",
+  broker: "Corretora",
+  qty: "Quantidade",
+  price: "Preço",
+  amount: "Valor",
+};
+
+const SORT_OPTIONS = (Object.keys(COLUMN_LABEL) as SortKey[]).map((key) => ({
+  key,
+  label: COLUMN_LABEL[key],
+}));
+
+// Money and dates read newest/largest first; names read A→Z.
+const defaultDir = (key: SortKey): Dir =>
+  key === "date" || key === "qty" || key === "price" || key === "amount"
+    ? "desc"
+    : "asc";
 
 // Side is not gain/loss — neutral pills only (Compra filled, Venda outlined for
 // scanning). Ink, not navy: the accent marks where you are and what you can do,
@@ -199,17 +224,24 @@ export function TradesSection() {
     setSort((s) =>
       s.key === key
         ? { key, dir: s.dir === "asc" ? "desc" : "asc" }
-        : { key, dir: key === "date" || key === "qty" || key === "price" || key === "amount" ? "desc" : "asc" },
+        : { key, dir: defaultDir(key) },
     );
   }
 
-  const head = (key: SortKey, label: string, align: "left" | "right") => {
+  // Picking a field from the phone's list is not a toggle: re-picking the field
+  // already selected must not reverse it, the way tapping its header would.
+  function pick(key: SortKey) {
+    if (key === sort.key) return;
+    setOffset(0);
+    setSort({ key, dir: defaultDir(key) });
+  }
+
+  const head = (key: SortKey, align: "left" | "right") => {
     const active = sort.key === key;
-    const fallback: Dir =
-      key === "date" || key === "qty" || key === "price" || key === "amount"
-        ? "desc"
-        : "asc";
+    const label = COLUMN_LABEL[key];
+    const fallback = defaultDir(key);
     return {
+      label,
       header: (
         <SortHeader
           label={label}
@@ -228,33 +260,35 @@ export function TradesSection() {
   const columns: Column<Trade>[] = [
     {
       key: "date",
-      ...head("date", "Data", "left"),
+      ...head("date", "left"),
       // A stacked column of dd/mm/aaaa is a column of numbers, whatever its
       // alignment — proportional figures make the days jitter against each other.
       numeric: true,
       render: (t) => formatDate(t.date),
     },
-    { key: "side", ...head("side", "Lado", "left"), render: (t) => <SideBadge side={t.side} /> },
+    { key: "side", ...head("side", "left"), render: (t) => <SideBadge side={t.side} /> },
     {
       key: "ticker",
-      ...head("ticker", "Ativo", "left"),
+      ...head("ticker", "left"),
+      // The card's headline: which trade this is, before its figures.
+      mobile: "title",
       render: (t) => <TickerChip ticker={t.ticker} />,
     },
     {
       key: "market",
-      ...head("market", "Mercado", "left"),
+      ...head("market", "left"),
       render: (t) => <span className="text-muted">{t.market}</span>,
     },
     {
       // Users hold accounts across institutions and consolidating them is the
       // job — the API has said which corretora all along.
       key: "broker",
-      ...head("broker", "Corretora", "left"),
+      ...head("broker", "left"),
       render: (t) => <span className="text-muted">{t.broker}</span>,
     },
-    { key: "qty", ...head("qty", "Quantidade", "right"), align: "right", render: (t) => formatQty(t.qty) },
-    { key: "price", ...head("price", "Preço", "right"), align: "right", render: (t) => <Money value={t.price} /> },
-    { key: "amount", ...head("amount", "Valor", "right"), align: "right", render: (t) => <Money value={t.amount} /> },
+    { key: "qty", ...head("qty", "right"), align: "right", render: (t) => formatQty(t.qty) },
+    { key: "price", ...head("price", "right"), align: "right", render: (t) => <Money value={t.price} /> },
+    { key: "amount", ...head("amount", "right"), align: "right", render: (t) => <Money value={t.amount} /> },
   ];
 
   const from = offset + 1;
@@ -270,6 +304,15 @@ export function TradesSection() {
       action={
         <div className="flex flex-wrap items-center justify-end gap-3">
         {filterField}
+        {/* The card layout has no column headers to click, so the sort moves
+            here on a phone. Same server-side query, same reset to page 1. */}
+        <SortControl
+          options={SORT_OPTIONS}
+          value={sort.key}
+          dir={sort.dir}
+          onPick={pick}
+          onToggleDir={() => toggle(sort.key)}
+        />
         <label className="flex items-center gap-2 text-xs text-muted">
           Por página
           <select

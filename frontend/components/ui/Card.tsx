@@ -21,14 +21,14 @@ export function Card({
           single label to filter-plus-page-size, and a header that cannot wrap
           pushes the whole document sideways on a phone. */}
       {(title || action) && (
-        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-hairline px-4 py-3">
+        <header className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-hairline px-3 py-3 sm:px-4">
           {title && (
             <h2 className="text-sm font-semibold text-ink">{title}</h2>
           )}
           {action}
         </header>
       )}
-      <div className="p-4">{children}</div>
+      <div className="p-3 sm:p-4">{children}</div>
     </section>
   );
 }

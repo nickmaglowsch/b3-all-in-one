@@ -221,6 +221,66 @@ def market_param(default: str = markets.DEFAULT) -> "ParameterSpec":
 
 # ── Abstract Base Class ───────────────────────────────────────────────────────
 
+def daily_on_grid(shared_data: dict, panel, grid: pd.DataFrame,
+                  **reductions) -> dict:
+    """Per-ticker reductions of daily bars, glued back into grid-wide frames.
+
+    How a strategy reads daily bars without holding them. Each reduction runs
+    inside the batch its bars arrive in, and only what it returns is kept: a
+    daily panel for a whole market is ~580 MB and a rolling window over it is
+    another one, while a rebalance grid is ~26 MB. Several reductions share a
+    single pass over the plane, because the pass is the expensive part — which is
+    why this takes them as keywords and returns a dict rather than one at a time.
+
+    Every reduction must be **per ticker** — a `pct_change`/`rolling`/`ewm`/
+    `resample` chain — because that is what makes a batch's answer its own
+    columns of the whole market's answer. Anything cross-sectional (a
+    `rank(axis=1)`, a cross-name normalisation) belongs after this, on the grid.
+
+    Each reduction owns its own row alignment, and must give every batch the same
+    index: `resample(freq).last()` and `on_grid_ffill` are not the same sampling
+    (the first skips a gap month, the second carries across it), and which one a
+    signal wants is the signal's business, not this function's.
+
+    ``panel`` is one bundle key, or a tuple of them when a reduction needs
+    several of the same bars — the high-low range needs all three sides. With a
+    tuple the reductions receive a dict keyed the same way.
+
+    Falls back to the resident panels when the bundle cannot stream (a hand-built
+    ``shared_data`` in a test). The same expressions on both paths, so they
+    cannot drift; only the memory differs.
+    """
+    keys = (panel,) if isinstance(panel, str) else tuple(panel)
+    stream = shared_data.get("stream")
+
+    def _cols(frame):
+        return frame.reindex(columns=grid.columns)
+
+    if not callable(stream):
+        bars = shared_data[keys[0]] if len(keys) == 1 else {
+            k: shared_data[k] for k in keys}
+        return {name: _cols(fn(bars)) for name, fn in reductions.items()}
+
+    parts: dict = {name: [] for name in reductions}
+    for bars in stream(panel):
+        for name, fn in reductions.items():
+            parts[name].append(fn(bars))
+        del bars
+    return {name: _cols(pd.concat(frames, axis=1))
+            for name, frames in parts.items()}
+
+
+def on_grid_ffill(daily: pd.DataFrame, grid: pd.DataFrame) -> pd.DataFrame:
+    """Daily frame -> the rebalance dates: last value at or before each.
+
+    Rows only, so it composes inside a `daily_on_grid` reduction — widening a
+    batch to the traded universe there would defeat the point. Not the same as
+    `resample(freq).last()`, which restarts each period and leaves a gap month
+    empty rather than carrying the previous value into it.
+    """
+    return daily.reindex(daily.index.union(grid.index)).ffill().reindex(grid.index)
+
+
 class StrategyBase(ABC):
     """Abstract base class for all backtest strategy plugins."""
 

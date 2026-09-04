@@ -42,6 +42,13 @@ def _synthetic_shared(n_days: int = 1500, n_tickers: int = 30, seed: int = 11) -
 
     return {
         "adj_close": adj_close,
+        # The three sides of the daily range. The strategy derives its high-low
+        # signals from these itself now (per ticker, inside the streamed batch —
+        # see strategy_base.daily_on_grid), so a bundle it can run against has to
+        # carry the bars, not only the features built from them.
+        "split_adj_high": high,
+        "split_adj_low": low,
+        "split_adj_close": adj_close,
         "px": px,
         "ret": ret,
         "raw_close": adj_close.resample(FREQ).last(),

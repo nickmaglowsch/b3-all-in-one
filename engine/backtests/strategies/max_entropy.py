@@ -48,7 +48,7 @@ import numpy as np
 import pandas as pd
 
 from backtests.core.strategy_base import (
-    StrategyBase, ParameterSpec, cap_and_renormalize,
+    StrategyBase, ParameterSpec, cap_and_renormalize, daily_on_grid, on_grid_ffill,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
@@ -183,7 +183,6 @@ class MaxEntropyStrategy(StrategyBase):
         ret = shared_data["ret"]                  # period returns, index = rebalance grid
         adtv = shared_data["adtv"]
         raw_close = shared_data["raw_close"]
-        daily_close = shared_data["adj_close"]    # daily total-return adjusted close
 
         min_adtv = float(params.get("min_adtv", 1_000_000))
         min_price = float(params.get("min_price", 1.0))
@@ -194,8 +193,11 @@ class MaxEntropyStrategy(StrategyBase):
         cap = float(params.get("weight_cap", 0.15))
 
         # Both measures are daily; sample them onto the rebalance calendar.
-        energy = self._on_grid(realised_energy(daily_close, window), ret)
-        entropy = self._on_grid(directional_entropy(daily_close, window), ret)
+        measures = daily_on_grid(
+            shared_data, "adj_close", ret,
+            energy=lambda px: on_grid_ffill(realised_energy(px, window), ret),
+            entropy=lambda px: on_grid_ffill(directional_entropy(px, window), ret))
+        energy, entropy = measures["energy"], measures["entropy"]
         energy[shared_data["has_glitch"] == 1] = np.nan
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
@@ -220,9 +222,3 @@ class MaxEntropyStrategy(StrategyBase):
 
         return ret, tw
 
-    @staticmethod
-    def _on_grid(daily: pd.DataFrame, ret: pd.DataFrame) -> pd.DataFrame:
-        """Daily frame → the rebalance grid: last value at or before each date,
-        columns aligned to the traded universe."""
-        out = daily.reindex(daily.index.union(ret.index)).ffill().reindex(ret.index)
-        return out.reindex(columns=ret.columns)

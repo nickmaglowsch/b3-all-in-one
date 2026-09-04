@@ -8,11 +8,33 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from backtests.core.mean_rev_helpers import rolling_vol_daily
 from backtests.core.strategy_base import (
-    StrategyBase, ParameterSpec,
+    StrategyBase, ParameterSpec, daily_on_grid,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
+
+
+def _grid_gates(shared_data: dict, ret: pd.DataFrame, freq: str,
+                want_win_rate: bool) -> tuple:
+    """``(win_rate_ratio_m, rolling_vol_20d_m)`` on the rebalance grid.
+
+    Both are daily -> monthly chains that touch each name on its own, so they are
+    derived inside the streamed batch and only the grid comes back
+    (strategy_base.daily_on_grid). The bars behind them are ~580 MB a panel on
+    the US plane; these two frames are ~26 MB each.
+    """
+    def win_rate_ratio(bars):
+        rate = (bars.pct_change() > 0).rolling(20, min_periods=10).mean()
+        ratio = rate / (rate.rolling(60, min_periods=30).mean() + 1e-8)
+        return ratio.resample(freq).last()
+
+    wanted = {"vol": lambda bars: rolling_vol_daily(bars, 20, 10).resample(freq).last()}
+    if want_win_rate:
+        wanted["win_rate"] = win_rate_ratio
+    on_grid = daily_on_grid(shared_data, "adj_close", ret, **wanted)
+    return on_grid.get("win_rate"), on_grid["vol"]
 
 
 class MeanReversionCompositeStrategy(StrategyBase):
@@ -108,7 +130,6 @@ class MeanReversionCompositeStrategy(StrategyBase):
         raw_close = shared_data["raw_close"]
         cdi_monthly = shared_data["cdi_monthly"]
         ibov_ret = shared_data["ibov_ret"]
-        rolling_vol_20d_daily = shared_data["rolling_vol_20d_daily"]
         has_glitch = shared_data.get("has_glitch")
 
         # Layer 1: Regime filter
@@ -137,25 +158,12 @@ class MeanReversionCompositeStrategy(StrategyBase):
         else:
             stability_weights = None
 
-        # Pre-compute win rate ratio (daily → monthly, aligned to ret columns)
-        enable_win_rate_filter = params.get("enable_win_rate_filter", "Yes") == "Yes"
-        if enable_win_rate_filter:
-            daily_ret_d = shared_data["adj_close"].pct_change()
-            win_rate_20d = (daily_ret_d > 0).rolling(20, min_periods=10).mean()
-            win_rate_ratio_d = win_rate_20d / (win_rate_20d.rolling(60, min_periods=30).mean() + 1e-8)
-            win_rate_ratio_m = (
-                win_rate_ratio_d
-                .resample(freq).last()
-                .reindex(columns=ret.columns)
-            )
-        else:
-            win_rate_ratio_m = None
+        win_rate_ratio_m, rolling_vol_20d_m = _grid_gates(
+            shared_data, ret, freq,
+            params.get("enable_win_rate_filter", "Yes") == "Yes")
 
         # ATR ratio gate (from sub_signals if sub_E was computed)
         atr_ratio_m = sub_signals.get("atr_ratio_m")
-
-        # Vol-parity weights (resample to monthly)
-        rolling_vol_20d_m = rolling_vol_20d_daily.resample(freq).last()
 
         # Build returns and target weights matrices
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)

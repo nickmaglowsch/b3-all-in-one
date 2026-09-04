@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from backtests.core.strategy_base import (
-    StrategyBase, ParameterSpec, cap_and_renormalize,
+    StrategyBase, ParameterSpec, cap_and_renormalize, daily_on_grid, on_grid_ffill,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
@@ -71,7 +71,6 @@ class IbovLowVolStrategy(StrategyBase):
         ret = shared_data["ret"]                    # period returns (index = rebal dates)
         adtv = shared_data["adtv"]
         raw_close = shared_data["raw_close"]
-        daily_close = shared_data["split_adj_close"]  # daily adjusted close
 
         min_adtv = params.get("min_adtv", 1_000_000)
         min_price = params.get("min_price", 1.0)
@@ -80,9 +79,11 @@ class IbovLowVolStrategy(StrategyBase):
         cap = params.get("weight_cap", 0.10)
 
         # Annualized EWMA vol on daily data, sampled onto the rebalance calendar.
-        vol_daily = ewma_annualized_vol(daily_close, n)
-        vol = vol_daily.reindex(vol_daily.index.union(ret.index)).ffill().reindex(ret.index)
-        vol = vol.reindex(columns=ret.columns)
+        # Per ticker, so it is computed inside the batch its bars arrive in and
+        # only the grid comes back — see strategy_base.daily_on_grid.
+        vol = daily_on_grid(
+            shared_data, "split_adj_close", ret,
+            vol=lambda px: on_grid_ffill(ewma_annualized_vol(px, n), ret))["vol"]
         vol[shared_data["has_glitch"] == 1] = np.nan
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)

@@ -255,14 +255,35 @@ a long frame it held whole at the same time. That is 6 GB before a signal exists
 * **The process caps itself.** `memory.guard()` sets `RLIMIT_DATA` from the cgroup
   limit, so an overrun is a `MemoryError` naming a line rather than a SIGKILL
   naming nothing. Every run reports `peak_rss_mb` in its metrics.
+* **The daily NAV path is a sum over names.** Within a rebalance segment the NAV
+  is `nav · (Σᵢ wᵢ·growthᵢ(t) + resid)`, so `metrics._reconstruct` accumulates it
+  a batch at a time into one array of `len(sessions)` floats. A book that rotates
+  monthly has held nearly every name in the universe by the end — 9,694 of 11,000
+  on a 26-year US run — so this was ~950 MB of every run's peak, for a curve that
+  only feeds drawdown and Calmar.
 
-Measured on a synthetic plane at true US scale (11,000 names, 6,540 sessions,
-37.5M bars): `build_shared_data` peak 5,961 MB -> 1,080 MB.
+**Strategies read daily bars through the same door.** A strategy whose signal is
+a per-ticker chain — a rolling window, a ratio to the name's own mean, a
+resample — declares it as a reduction and gets the grid back:
 
-A strategy that computes its *own* universe-wide daily features (MaxEntropy's
-realised energy, the `at_rebalance(...)` signals over `adj_close`) still holds
-daily frames of its own — that cost is in the strategy, and the per-batch
-`reduce` behind `shared["daily_returns"]` is the hook for moving it.
+```python
+from backtests.core.strategy_base import daily_on_grid, on_grid_ffill
+
+measures = daily_on_grid(
+    shared_data, "adj_close", ret,
+    energy=lambda px: on_grid_ffill(realised_energy(px, window), ret),
+    entropy=lambda px: on_grid_ffill(directional_entropy(px, window), ret))
+```
+
+Each reduction runs inside the batch its bars arrive in, and several share one
+pass over the plane. The rule is that a reduction must be per ticker — anything
+cross-sectional (a `rank(axis=1)`) belongs after, on the grid. `qdl` is the one
+strategy that cannot use it: it slices arbitrary daily windows inside its
+rebalance loop, and it is B3-bound, where a panel is tens of MB.
+
+The `at_rebalance(...)` signals in `signals.yaml` (`daily_low_vol`,
+`win_rate_mean_rev`) still evaluate over a resident `adj_close` — the DSL
+evaluator has no batching yet.
 
 | Variable | Effect |
 |----------|--------|

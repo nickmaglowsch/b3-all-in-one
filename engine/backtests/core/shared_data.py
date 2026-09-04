@@ -10,7 +10,7 @@ them. This is the single entry point the headless scripts/ runners go through.
 almost every strategy actually reads. Daily `sessions x names` panels are
 hundreds of MB apiece on the US plane, so none of them is resident: each is
 registered as a thunk that queries the plane, and the grid itself is reduced from
-streamed batches (see `_rebalance_grid`) so the market's bars are never all in
+streamed batches (`plane.MarketView`) so the market's bars are never all in
 memory at once. Building them eagerly is what killed a US backtest with SIGKILL
 before a single signal had been generated.
 
@@ -28,74 +28,14 @@ import numpy as np
 import pandas as pd
 
 from backtests.core import (
-    fundamentals, markets, mean_rev_helpers, memory, regimes, splits, universe,
+    fundamentals, markets, mean_rev_helpers, memory, regimes, universe,
 )
-from backtests.core import panels as plane
+from backtests.core import plane
 from backtests.core.data import (
     download_benchmark, download_cdi_daily, load_sector_pit,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# The bundle's names for the plane's panels. `close_px`/`fin_vol` are what every
-# strategy and every stored spec has always called them; the plane calls the same
-# columns `close` and `fin_volume`.
-_PANEL_OF = {
-    "adj_close": "adj_close",
-    "split_adj_close": "split_adj_close",
-    "split_adj_high": "split_adj_high",
-    "split_adj_low": "split_adj_low",
-    "close_px": "close",
-    "fin_vol": "fin_volume",
-}
-
-# What the rebalance grid is reduced from. Not `split_adj_close`: nothing in the
-# grid comes off it, and on the US plane it is ~580 MB of bars to read for that.
-_GRID_PANELS = ("adj_close", "close", "fin_volume")
-
-
-def _rebalance_grid(db_path: str, start: str, end: str, freq: str, spec,
-                    sessions, symbols) -> tuple:
-    """``(px, raw_close, adtv)`` on the rebalance grid, a few hundred names at a time.
-
-    This is the change that made a US backtest fit. The grid is three frames of
-    `rebalances x names` — 301 x 11,000 for a 2000..today US window, ~26 MB each —
-    reduced from daily bars that are 6,540 x 11,000, ~580 MB a panel. Reading the
-    market to build them meant holding twenty times the answer.
-
-    Every step below is per ticker: the split fix is a per-column loop, and
-    `resample().last()`/`.mean()` reduce each column independently. So a batch's
-    contribution is its own columns of the whole-market result, and the
-    concatenation is the frame the old whole-market load produced rather than an
-    approximation of it. Cross-sectional work (the ranks in `mf_composite`, the
-    liquidity dedup) happens afterwards, on the grid, where it is cheap.
-    """
-    px, raw, adtv = [], [], []
-    for batch in plane.stream_market_panels(
-            db_path, start, end, spec.key, panels=_GRID_PANELS,
-            sessions=sessions, symbols=symbols):
-        adj_close = batch["adj_close"]
-        # B3 only. The detector fires on a persistent, calm-volume overnight
-        # repricing by a clean ratio — an unrecorded grupamento there, an
-        # ordinary Tuesday in crypto, where it would silently rewrite history.
-        if spec.detect_splits:
-            adj_close = splits.detect_and_fix_unrecorded(
-                adj_close, batch["close"], batch["fin_volume"])
-        px.append(adj_close.resample(freq).last())
-        raw.append(batch["close"].resample(freq).last())
-        # Turnover is not forward-filled, so this is the mean of the month's
-        # actual prints — a day the name did not trade is missing, not a repeat.
-        adtv.append(batch["fin_volume"].resample(freq).mean())
-        del batch, adj_close
-
-    if not px:            # a plane with no bars in the window; CI runs on one
-        empty = pd.DataFrame(index=pd.DatetimeIndex([], name="date"),
-                             columns=pd.Index([], name="ticker"), dtype=float)
-        return empty, empty.copy(), empty.copy()
-    # Every batch was aligned to the same sessions before it was reduced, so all
-    # three concatenations are exact column unions with nothing to fill.
-    return (pd.concat(px, axis=1), pd.concat(raw, axis=1), pd.concat(adtv, axis=1))
 
 
 def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
@@ -145,7 +85,7 @@ def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
     # Every daily panel, none resident until something reads one — the bundle's
     # half of "a panel is a query". One panel per ask, ~580 MB on the US plane,
     # rather than four of them for every run.
-    for key in _PANEL_OF:
+    for key in plane.PANEL_OF:
         shared.defer(key, functools.partial(shared["panel"], key))
 
     # Nothing downstream reads the mask — it is the loader that stops the price
@@ -183,14 +123,9 @@ def build_shared_data(
     spec = markets.get(market)
     lookback = 12  # default lookback periods
 
-    # ── 1. The market's two axes ─────────────────────────────────────────────
-    # Everything below is expressed in terms of these: the sessions every batch
-    # is aligned to, and the names the batches are cut from.
-    sessions = plane.market_sessions(db_path, start, end, spec.key)
-    symbols = plane.market_symbols(db_path, start, end, spec.key)
-    # Two scans of the price table for two small lists. What they leave behind is
-    # freed heap the allocator holds unless asked — ~250 MB on the US plane.
-    memory.release()
+    # ── 1. The market, as a view rather than a load ──────────────────────────
+    view = plane.MarketView(db_path, start, end, spec)
+    sessions, symbols = view.sessions, view.symbols
 
     # CDI whatever the equity sleeve is: the cash a Brazilian holder parks in does
     # not change because the book is in US names.
@@ -198,8 +133,7 @@ def build_shared_data(
     ibov_px = download_benchmark(spec.benchmark, start, end, market=spec.key)
 
     # ── 2. The rebalance grid, reduced batch by batch ────────────────────────
-    px, raw_close, adtv = _rebalance_grid(
-        db_path, start, end, freq, spec, sessions, symbols)
+    px, raw_close, adtv = view.grid(freq)
     ret = px.pct_change()
 
     ibov_ret = ibov_px.resample(freq).last().pct_change().dropna()
@@ -249,70 +183,19 @@ def build_shared_data(
     # read is hoisted here and the mask deferred with the rest of the daily work.
     intervals = universe.load_listing_intervals(db_path, spec.key)
 
-    def _assemble(name: str, columns, reduce=None) -> pd.DataFrame:
-        """A daily frame, streamed and written straight into its own columns.
-
-        The bundle's escape hatch, and the reason the daily panels can be absent
-        from it: a strategy that genuinely reduces daily bars itself asks for one
-        and gets it, and a caller that needs only some names says which.
-
-        Never gathered. Asking `load_market_panels` for ten thousand symbols in
-        one query is the whole-market read this design exists to avoid — measured
-        at US scale it cost 5.6 GB to produce a 508 MB frame. Filling a
-        preallocated block a batch at a time makes the peak the frame plus a batch.
-
-        `reduce` is applied to each batch before it lands. It must be per-ticker —
-        the property the whole module rests on — and then reducing the batches is
-        the same as reducing the frame, without ever building the frame.
-        """
-        wanted = _PANEL_OF[name]
-        # An unrecorded grupamento is corrected against the raw close and the
-        # turnover of the same bars, so a corrected adj_close cannot be read
-        # alone. B3 only, and the detector is a per-column loop, so a batch
-        # corrects its own names.
-        extra = ("close", "fin_volume") if (
-            wanted == "adj_close" and spec.detect_splits) else ()
-        cols = list(symbols if columns is None else columns)
-        index = pd.DatetimeIndex(sessions, name="date")
-        out = np.full((len(index), len(cols)), np.nan)
-        at = {c: i for i, c in enumerate(cols)}
-        for batch in plane.stream_market_panels(
-                db_path, start, end, spec.key, panels=(wanted, *extra),
-                sessions=sessions, symbols=cols):
-            frame = batch[wanted]
-            if extra:
-                frame = splits.detect_and_fix_unrecorded(
-                    frame, batch["close"], batch["fin_volume"])
-            if reduce is not None:
-                frame = reduce(frame)
-            # By name, not by position: a symbol the caller asked for that the
-            # plane has no bars for is absent from the batch, and every column
-            # after it would otherwise land one place to the left.
-            out[:, [at[c] for c in frame.columns]] = frame.to_numpy()
-            del batch, frame
-        return pd.DataFrame(out, index=index, columns=pd.Index(cols, name="ticker"))
-
-    def read_panel(name: str, columns=None) -> pd.DataFrame:
-        """One daily panel, for `columns` or for the whole market."""
-        return _assemble(name, columns)
-
-    def read_daily_returns(name: str = "split_adj_close",
-                           columns=None) -> pd.DataFrame:
-        """Daily returns of one panel, without ever building the panel.
-
-        `pct_change` is per ticker, so it belongs in the batch. Reading the prices
-        and then diffing them holds both at once — half a gigabyte of US prices
-        kept alive only to be subtracted from itself.
-        """
-        return _assemble(name, columns, reduce=lambda f: f.pct_change())
-
     shared = memory.LazyShared({
         # ── price / return data ───────────────────────────────────────────────
         # `panel` is not a frame: it is how a caller asks for daily bars, by name
         # and optionally by ticker. See read_panel — and note that the daily
         # panels themselves are deferred below, so reading one is a query.
-        "panel": read_panel,
-        "daily_returns": read_daily_returns,
+        # Not frames: how a caller asks for daily bars, by panel and optionally
+        # by ticker. `stream` hands them over a batch at a time and is the one
+        # to reach for; `panel` gathers, which costs the whole frame.
+        "panel": view.panel,
+        "stream": view.stream,
+        # The market's daily calendar. Published because a caller that streams
+        # has no frame to read an index off — the daily NAV path needs one.
+        "sessions": sessions,
         "px": px,
         "ret": ret,
         "log_ret": log_ret,

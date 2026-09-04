@@ -347,16 +347,171 @@ def test_a_name_the_plane_has_no_bars_for_comes_back_empty_not_misaligned(plane)
     pd.testing.assert_series_equal(got["VALE3"], shared["adj_close"]["VALE3"])
 
 
-def test_daily_returns_are_the_panel_diffed_without_the_panel(plane):
-    """`pct_change` is per ticker, so it belongs in the batch — reading the
-    prices and then diffing them holds both at once."""
+def test_a_reduction_in_the_batch_equals_the_reduction_of_the_frame(plane):
+    """The property the streaming rests on. `pct_change` is per ticker, so
+    reducing each batch and gathering is the frame's own reduction — and the
+    prices never exist alongside their returns."""
     with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
          patch("backtests.core.shared_data.download_benchmark", _mock_bench):
         shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
 
     pd.testing.assert_frame_equal(
-        shared["daily_returns"]("split_adj_close"),
+        shared["panel"]("split_adj_close", reduce=lambda f: f.pct_change()),
         shared["split_adj_close"].pct_change())
+
+
+def test_a_reduction_may_land_on_the_rebalance_grid(plane):
+    """The point of it: a strategy's daily feature can be reduced to the grid
+    inside the batch, so the daily frame it came from is never assembled."""
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+
+    on_grid = shared["panel"](
+        "adj_close",
+        reduce=lambda f: f.pct_change().rolling(20).std().resample("ME").last())
+    expected = (shared["adj_close"].pct_change().rolling(20).std()
+                .resample("ME").last())
+    pd.testing.assert_frame_equal(on_grid, expected)
+    assert len(on_grid) < len(shared["adj_close"]), "the grid, not the bars"
+
+
+def test_streaming_yields_the_market_in_pieces(plane, monkeypatch):
+    import backtests.core.panels as plane_mod
+    monkeypatch.setattr(plane_mod, "SYMBOL_BATCH", 1)
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+
+    pieces = list(shared["stream"]("adj_close"))
+    assert [list(p.columns) for p in pieces] == [["PETR4"], ["VALE3"]]
+    pd.testing.assert_frame_equal(
+        pd.concat(pieces, axis=1), shared["adj_close"])
+
+
+# ── strategies read daily bars through the same door ─────────────────────────
+
+def test_a_strategy_reduction_streams_to_the_same_answer(plane, monkeypatch):
+    """`daily_on_grid` is how a strategy reads daily bars without holding them.
+    Streamed one name at a time or taken off a resident panel, the grid it
+    returns has to be the same — the reductions are per ticker, which is the
+    whole reason the batching is allowed."""
+    import backtests.core.panels as plane_mod
+    from backtests.core.strategy_base import daily_on_grid, on_grid_ffill
+
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+    grid = shared["ret"]
+
+    def reductions(**_):
+        return dict(
+            vol=lambda px: on_grid_ffill(px.pct_change().rolling(20).std(), grid),
+            mom=lambda px: px.pct_change(60).resample("ME").last())
+
+    monkeypatch.setattr(plane_mod, "SYMBOL_BATCH", 1)
+    streamed = daily_on_grid(shared, "adj_close", grid, **reductions())
+    resident = daily_on_grid({"adj_close": shared["adj_close"]}, "adj_close",
+                             grid, **reductions())
+    for key in ("vol", "mom"):
+        pd.testing.assert_frame_equal(streamed[key], resident[key], obj=key)
+
+
+def test_a_reduction_can_take_several_panels_from_one_pass(plane):
+    """The high-low range needs all three sides of the bar. Reading them in one
+    pass is the point — the pass is the expensive part."""
+    from backtests.core.strategy_base import daily_on_grid
+
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+    grid, sides = shared["ret"], ("split_adj_high", "split_adj_low",
+                                  "split_adj_close")
+
+    got = daily_on_grid(
+        shared, sides, grid,
+        rng=lambda b: ((b["split_adj_high"] - b["split_adj_low"])
+                       / b["split_adj_close"]).resample("ME").last())["rng"]
+    expected = ((shared["split_adj_high"] - shared["split_adj_low"])
+                / shared["split_adj_close"]).resample("ME").last()
+    pd.testing.assert_frame_equal(got, expected.reindex(columns=grid.columns))
+
+
+def test_ffill_sampling_is_not_resample_last(plane):
+    """Both land on the grid and they are not interchangeable: `resample().last()`
+    leaves a month with no print empty, `on_grid_ffill` carries the previous
+    value into it. Which one a signal wants is the signal's business, which is
+    why `daily_on_grid` does neither on its own."""
+    from backtests.core.strategy_base import on_grid_ffill
+
+    days = pd.bdate_range("2020-01-01", "2020-03-31")
+    daily = pd.DataFrame({"A": np.nan}, index=days)
+    daily.loc["2020-01-15", "A"] = 1.0
+    grid = pd.DataFrame(index=daily.resample("ME").last().index, columns=["A"])
+
+    assert pd.isna(daily.resample("ME").last().loc["2020-02-29", "A"])
+    assert on_grid_ffill(daily, grid).loc["2020-02-29", "A"] == 1.0
+
+
+@pytest.mark.parametrize("strategy", ["MaxEntropy", "MeanRevComposite"])
+def test_the_heavy_strategies_signal_the_same_streamed_or_not(plane, monkeypatch,
+                                                              strategy):
+    """The two that computed their own universe-wide daily features. Cutting the
+    universe into one-name batches must not move a weight."""
+    import backtests.core.panels as plane_mod
+    from backtests.core.strategy_registry import get_registry
+
+    def signals():
+        with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+             patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+            shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+        strat = get_registry().get(strategy)
+        return strat.generate_signals(shared, strat.get_default_parameters())
+
+    monkeypatch.setattr(plane_mod, "SYMBOL_BATCH", 1)
+    ret_a, tw_a = signals()
+    monkeypatch.setattr(plane_mod, "SYMBOL_BATCH", 500)
+    ret_b, tw_b = signals()
+    pd.testing.assert_frame_equal(ret_a, ret_b)
+    pd.testing.assert_frame_equal(tw_a, tw_b)
+
+
+def test_the_daily_nav_path_is_a_sum_over_names(plane):
+    """`_reconstruct` accumulates the segment factor chunk by chunk. Split the
+    same returns across chunks and the path must not move — that decomposition
+    is what lets a ten-thousand-name book be reconstructed a batch at a time."""
+    from backtests.core.metrics import _reconstruct, reconstruct_daily_values
+
+    days = pd.bdate_range("2020-01-01", periods=60)
+    rng = np.random.default_rng(5)
+    daily = pd.DataFrame(rng.normal(0, 0.01, (60, 6)), index=days,
+                         columns=list("ABCDEF"))
+    marks = daily.resample("ME").last().index
+    weights = pd.DataFrame(0.2, index=marks, columns=list("ABCDEF"))
+
+    whole = reconstruct_daily_values(weights, daily, 100_000.0)
+    split = _reconstruct(weights, days, daily.columns,
+                         [daily[["A", "B"]], daily[["C"]], daily[["D", "E", "F"]]],
+                         100_000.0)
+    pd.testing.assert_series_equal(whole, split)
+
+
+def test_a_sleeve_with_no_data_holds_flat_rather_than_vanishing(plane):
+    """A column the caller declared but supplied nothing for behaves like an
+    all-NaN column did: zero returns, weight carried. Dropping it from the sum
+    instead would be a silent haircut on every segment that held it."""
+    from backtests.core.metrics import _reconstruct
+
+    days = pd.bdate_range("2020-01-01", periods=40)
+    daily = pd.DataFrame(0.0, index=days, columns=["A"])
+    marks = daily.resample("ME").last().index
+    weights = pd.DataFrame({"A": 0.5, "GHOST": 0.5}, index=marks)
+
+    flat = _reconstruct(weights, days, ["A", "GHOST"], [daily], 100_000.0)
+    dense = _reconstruct(weights, days, ["A", "GHOST"],
+                         [daily.assign(GHOST=np.nan)], 100_000.0)
+    pd.testing.assert_series_equal(flat, dense)
+    assert flat.iloc[-1] == pytest.approx(100_000.0)
 
 
 def test_releasing_the_heap_is_safe_to_call_and_says_nothing():

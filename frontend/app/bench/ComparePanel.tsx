@@ -155,11 +155,16 @@ export function ComparePanel({
       key: "metric",
       header: "Métrica",
       align: "left",
+      // The card's headline: which metric the run figures under it are for.
+      mobile: "title",
       render: (m) => <span className="font-medium text-ink">{m.label}</span>,
     },
     ...capped.map<Column<MetricRow>>((r) => ({
       key: r.id,
       align: "right",
+      // The header is a chip with a colour swatch and a remove button; the card
+      // layout needs the run's name as plain text to label the line with.
+      label: labels[r.id],
       header: (
         <RunHeader
           run={r}

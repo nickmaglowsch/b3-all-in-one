@@ -49,10 +49,10 @@ function Stat({
       <p className="font-mono text-[11px] font-medium uppercase tracking-[0.14em] text-muted">
         {label}
       </p>
-      {/* A six-figure BRL value at 24px mono is ~190px wide, which overflows a
-          two-column tile at 375px and made the whole document scroll sideways.
-          Step down on the smallest screens rather than clipping or wrapping a
-          number mid-figure. */}
+      {/* A seven-figure BRL value is wider than any two-column tile a phone can
+          offer — which is why the grid below is one column until `sm`, and why
+          the type steps down here as well. "R$ 1.000.9 / 05,61" broken across
+          two lines does not read as one number. */}
       <div className="mt-1.5 text-xl leading-none sm:text-2xl">{children}</div>
       {sub && <p className="mt-1.5 text-xs text-muted">{sub}</p>}
     </div>
@@ -246,7 +246,7 @@ export default function PortfolioPage() {
               aria-label="Resumo da carteira"
               className="scroll-mt-28 md:scroll-mt-16"
             >
-              <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
                 <Stat
                   label="Valor de mercado"
                   sub={
@@ -352,7 +352,7 @@ export default function PortfolioPage() {
                         <span className="ml-auto font-mono tnum tabular-nums text-muted">
                           {formatPercent(allocTotal > 0 ? m.value / allocTotal : 0)}
                         </span>
-                        <Money value={m.value} className="w-32 text-right" />
+                        <Money value={m.value} className="text-right sm:w-32" />
                       </li>
                     ))}
                   </ul>

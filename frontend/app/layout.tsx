@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Archivo, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "@/lib/providers";
@@ -23,6 +23,30 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Quantax",
   description: "Carteira, IRPF e bench a partir dos seus extratos da B3.",
+  // Added to the home screen, this is an app: its own title, its own status bar,
+  // no Safari chrome around it.
+  applicationName: "Quantax",
+  appleWebApp: { capable: true, title: "Quantax", statusBarStyle: "default" },
+  formatDetection: { telephone: false },
+};
+
+// `viewportFit: "cover"` is what lets the page paint under the notch and the home
+// indicator; `.pt-safe`/`.pb-safe` in globals.css keep the content out from under
+// them. Without it iOS letterboxes the app in the safe area and the top bar stops
+// meeting the screen's edge — the single clearest "this is a web page" tell.
+//
+// Deliberately no `maximumScale`/`userScalable: false`: pinch-zoom is an
+// accessibility affordance, and the reason people reach for that flag — iOS
+// zooming into a 12px input and never zooming out — is fixed at the source in
+// globals.css, by rendering the fields at 16px on phones.
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fafaf8" },
+    { media: "(prefers-color-scheme: dark)", color: "#1f1d1a" },
+  ],
 };
 
 // Last resort for a document that outlived the build it names. public/_headers

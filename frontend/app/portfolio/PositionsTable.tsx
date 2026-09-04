@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
+import { SortControl } from "@/components/ui/SortControl";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
@@ -45,6 +46,21 @@ const DEFAULT_DIR: Record<SortKey, Dir> = {
 
 const isSortKey = (v: string | null): v is SortKey =>
   !!v && (SORT_KEYS as string[]).includes(v);
+
+// One spelling of each column name, read three ways: the desktop `<th>`, the
+// label on the card layout's line, and the phone's sort picker.
+const COLUMN_LABEL: Record<SortKey, string> = {
+  ticker: "Ativo",
+  market: "Mercado",
+  qty: "Quantidade",
+  avg_cost: "Preço médio",
+  last_price: "Última cotação",
+  total_cost: "Custo total",
+  market_value: "Valor de mercado",
+  pnl: "Rentabilidade",
+};
+
+const SORT_OPTIONS = SORT_KEYS.map((key) => ({ key, label: COLUMN_LABEL[key] }));
 
 function SortHeader({
   label,
@@ -160,9 +176,18 @@ export function PositionsTable({
     );
   }
 
-  const head = (key: SortKey, label: string, align: "left" | "right") => {
+  // Picking a field from the phone's list is not a toggle: re-picking the field
+  // already selected must not reverse it, the way tapping its header would.
+  function pick(key: SortKey) {
+    touched.current = true;
+    setSort((s) => (s.key === key ? s : { key, dir: DEFAULT_DIR[key] }));
+  }
+
+  const head = (key: SortKey, align: "left" | "right") => {
     const active = sort.key === key;
+    const label = COLUMN_LABEL[key];
     return {
+      label,
       header: (
         <SortHeader
           label={label}
@@ -183,23 +208,25 @@ export function PositionsTable({
   const columns: Column<Position>[] = [
     {
       key: "ticker",
-      ...head("ticker", "Ativo", "left"),
+      ...head("ticker", "left"),
+      // The card's headline: which position this is, before any figure of it.
+      mobile: "title",
       render: (p) => <TickerChip ticker={p.ticker} />,
     },
     {
       key: "market",
-      ...head("market", "Mercado", "left"),
+      ...head("market", "left"),
       render: (p) => <span className="text-muted">{p.market}</span>,
     },
     {
       key: "qty",
-      ...head("qty", "Quantidade", "right"),
+      ...head("qty", "right"),
       align: "right",
       render: (p) => formatQty(p.qty),
     },
     {
       key: "avg_cost",
-      ...head("avg_cost", "Preço médio", "right"),
+      ...head("avg_cost", "right"),
       align: "right",
       render: (p) => <Money value={p.avg_cost} />,
     },
@@ -207,7 +234,7 @@ export function PositionsTable({
       // The mark behind every market value on this page. A number whose source
       // is invisible is a number without provenance.
       key: "last_price",
-      ...head("last_price", "Última cotação", "right"),
+      ...head("last_price", "right"),
       align: "right",
       render: (p) =>
         p.last_price === null ? (
@@ -230,13 +257,13 @@ export function PositionsTable({
     },
     {
       key: "total_cost",
-      ...head("total_cost", "Custo total", "right"),
+      ...head("total_cost", "right"),
       align: "right",
       render: (p) => <Money value={p.total_cost} />,
     },
     {
       key: "market_value",
-      ...head("market_value", "Valor de mercado", "right"),
+      ...head("market_value", "right"),
       align: "right",
       render: (p) =>
         p.market_value === null ? (
@@ -247,13 +274,13 @@ export function PositionsTable({
     },
     {
       key: "pnl",
-      ...head("pnl", "Rentabilidade", "right"),
+      ...head("pnl", "right"),
       align: "right",
       render: (p) =>
         p.pnl === null ? (
           <span className="text-muted">—</span>
         ) : (
-          <span className="inline-flex items-baseline justify-end gap-2">
+          <span className="inline-flex flex-wrap items-baseline justify-end gap-x-2">
             <Money value={p.pnl} sign />
             {p.pnl_pct !== null && (
               <PctDelta value={p.pnl_pct} className="text-xs" />
@@ -288,8 +315,8 @@ export function PositionsTable({
 
   return (
     <div aria-busy={historyLoading || undefined}>
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <label className="flex items-center gap-2 text-xs text-muted">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <label className="flex w-full min-w-0 items-center gap-2 text-xs text-muted sm:w-auto">
           <span className="sr-only sm:not-sr-only">Filtrar</span>
           <input
             type="search"
@@ -297,10 +324,23 @@ export function PositionsTable({
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Ativo ou mercado"
             aria-label="Filtrar posições por ativo ou mercado"
-            className="w-36 rounded-md border border-hairline bg-paper px-3 py-1.5 font-mono text-xs sm:w-48 text-ink placeholder:text-muted focus:border-navy focus:outline-none"
+            className="w-full min-w-0 rounded-md border border-hairline bg-paper px-3 py-1.5 font-mono text-xs text-ink placeholder:text-muted focus:border-navy focus:outline-none sm:w-48"
           />
         </label>
-        <p role="status" aria-live="polite" className="font-mono text-xs text-muted">
+        {/* The card layout has no column headers to click, so the sort moves
+            here on a phone. Same state, same URL param. */}
+        <SortControl
+          options={SORT_OPTIONS}
+          value={sort.key}
+          dir={sort.dir}
+          onPick={(key) => pick(key)}
+          onToggleDir={() => toggle(sort.key)}
+        />
+        <p
+          role="status"
+          aria-live="polite"
+          className="w-full font-mono text-xs text-muted sm:w-auto"
+        >
           {filter.trim()
             ? `${formatInt(rows.length)} de ${formatInt(positions.length)} posições`
             : `${formatInt(positions.length)} posições`}

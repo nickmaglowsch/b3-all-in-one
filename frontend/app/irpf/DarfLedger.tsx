@@ -141,8 +141,11 @@ export function DarfLedger({ year }: { year: number }) {
         </p>
       )}
 
+      {/* rtable: below `md` each month becomes a card — see globals.css. Eight
+          columns of apuração in a 340px box put the IR devido, the vencimento and
+          the "registrar pagamento" button all off-screen. */}
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="rtable w-full text-sm">
           <thead>
             <tr className="border-b border-hairline text-left text-xs text-muted">
               <th className="py-2 pr-3 font-medium">Apuração</th>
@@ -160,26 +163,34 @@ export function DarfLedger({ year }: { year: number }) {
               const key = keyOf(m);
               return (
                 <tr key={key} className="border-b border-hairline/60 align-middle">
-                  <td className="py-2 pr-3 whitespace-nowrap">{formatApuracao(m.apuracao)}</td>
+                  <td className="rt-title py-2 pr-3 whitespace-nowrap font-medium">
+                    {formatApuracao(m.apuracao)}
+                  </td>
                   <td className="py-2 pr-3 whitespace-nowrap text-muted">
-                    {CLASSE_LABEL[m.classe] ?? m.classe}
+                    <span className="rt-label">Classe</span>
+                    <span className="rt-value">{CLASSE_LABEL[m.classe] ?? m.classe}</span>
                   </td>
                   <td className="py-2 pr-3 text-right">
-                    <Money value={m.base} />
+                    <span className="rt-label">Base</span>
+                    <span className="rt-value"><Money value={m.base} /></span>
                   </td>
                   <td className="py-2 pr-3 text-right font-mono tnum tabular-nums text-muted">
-                    {formatPercent(m.aliquota)}
+                    <span className="rt-label">Alíquota</span>
+                    <span className="rt-value">{formatPercent(m.aliquota)}</span>
                   </td>
                   <td className="py-2 pr-3 text-right">
-                    <Money value={m.ir_devido} />
+                    <span className="rt-label">IR devido</span>
+                    <span className="rt-value"><Money value={m.ir_devido} /></span>
                   </td>
                   <td className="py-2 pr-3 whitespace-nowrap text-muted">
-                    {formatDate(m.vencimento)}
+                    <span className="rt-label">Vencimento</span>
+                    <span className="rt-value">{formatDate(m.vencimento)}</span>
                   </td>
                   <td className="py-2 pr-3">
-                    <StatusChip status={m.status} />
+                    <span className="rt-label">Situação</span>
+                    <span className="rt-value"><StatusChip status={m.status} /></span>
                   </td>
-                  <td className="py-2 text-right whitespace-nowrap">
+                  <td className="rt-full py-2 text-right whitespace-nowrap">
                     {m.pagamento ? (
                       <button
                         type="button"

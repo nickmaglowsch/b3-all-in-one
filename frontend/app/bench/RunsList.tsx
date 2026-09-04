@@ -70,8 +70,11 @@ export function RunsList({
           {delMsg}
         </p>
       )}
+      {/* rtable: below `md` these rows are stacked cards — see globals.css. Five
+          columns of run metadata in a 340px box was three of them visible and the
+          rest behind a sideways scroll. */}
       <div className="overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
+        <table className="rtable w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-hairline">
               <th className="w-9 px-3 py-2" aria-label="Comparar" />
@@ -150,6 +153,9 @@ function Row({
       }`}
     >
       <td className="px-3 py-2.5 align-middle">
+        {/* On a phone the column header is gone, so a bare checkbox floating at
+            the top of the card says nothing about what ticking it does. */}
+        <span className="rt-label">Comparar</span>
         <input
           type="checkbox"
           checked={picked}
@@ -165,19 +171,23 @@ function Row({
           className="h-4 w-4 cursor-pointer accent-navy disabled:cursor-not-allowed disabled:opacity-30"
         />
       </td>
-      <td className="px-3 py-2.5 align-middle">
+      <td className="rt-title px-3 py-2.5 align-middle">
         <span className="font-medium text-ink">{run.strategy}</span>
         <span className="ml-2 font-mono text-[11px] text-muted">
           {run.id.slice(0, 8)}
         </span>
       </td>
       <td className="px-3 py-2.5 align-middle">
-        <StatusBadge status={run.status} />
+        <span className="rt-label">Status</span>
+        <span className="rt-value">
+          <StatusBadge status={run.status} />
+        </span>
       </td>
       <td className="px-3 py-2.5 text-right align-middle font-mono tnum tabular-nums text-muted">
-        {formatDateTime(run.created_at)}
+        <span className="rt-label">Criado</span>
+        <span className="rt-value">{formatDateTime(run.created_at)}</span>
       </td>
-      <td className="px-3 py-2.5 text-right align-middle">
+      <td className="rt-full px-3 py-2.5 text-right align-middle">
         <RowActions
           strategy={run.strategy}
           finished={finished}

@@ -261,6 +261,7 @@ function Results({ data }: { data: WhatIfResult }) {
     {
       key: "label",
       header: "Cenário",
+      mobile: "title",
       render: (r) => (
         <span className={r.real ? "font-semibold text-ink" : "text-ink"}>
           {r.label}

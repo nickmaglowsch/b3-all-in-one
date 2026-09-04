@@ -27,8 +27,16 @@ const columns: Column<ImportRow>[] = [
   {
     key: "filename",
     header: "Arquivo",
+    mobile: "title",
     render: (r) => (
-      <span className="block max-w-[22rem] truncate font-mono text-xs" title={r.filename}>
+      // Truncated in the desktop table's fixed column; wrapped on a phone, where
+      // the card is as tall as it needs to be and an ellipsis hides the one
+      // thing that tells two monthly extracts apart. `break-all` because these
+      // names have no spaces to break at.
+      <span
+        className="block break-all font-mono text-xs md:max-w-[22rem] md:truncate"
+        title={r.filename}
+      >
         {r.filename}
       </span>
     ),

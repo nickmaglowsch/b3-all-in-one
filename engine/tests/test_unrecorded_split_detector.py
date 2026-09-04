@@ -176,7 +176,7 @@ def _pctrank_cases():
 
 
 def test_expanding_pctrank_matches_the_apply_it_replaced():
-    from backtests.core.shared_data import _expanding_pctrank
+    from backtests.core.regimes import _expanding_pctrank
 
     for name, s in _pctrank_cases().items():
         pd.testing.assert_series_equal(
@@ -187,7 +187,7 @@ def test_expanding_pctrank_matches_the_apply_it_replaced():
 def test_expanding_pctrank_scores_a_missing_month_as_zero_not_nan():
     # Load-bearing quirk of the original: ibov_calm reads this at <= 0.70, so a
     # NaN here would flip a month from calm to not-calm.
-    from backtests.core.shared_data import _expanding_pctrank
+    from backtests.core.regimes import _expanding_pctrank
 
     v = np.arange(1.0, 21.0)
     v[15] = np.nan

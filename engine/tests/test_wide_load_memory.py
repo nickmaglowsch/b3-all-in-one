@@ -1,13 +1,15 @@
 """The price load, which is the largest thing a backtest does.
 
-Two changes live under here, and both are supposed to be invisible in the
-numbers: `_pivot_wide` scatters one value column at a time instead of reshaping
-all six at once (so the long frame and the wide frames are never both whole),
-and `load_market_panels` reads only the panels its caller names (so the daily
-high and low are not built for a run that never looks at them).
+The load is streamed: `stream_market_panels` walks the universe a few hundred
+names at a time, and the bundle reduces each batch to the rebalance grid before
+the next arrives, so the market's daily bars are never all resident. That only
+works because every daily reduction in this repository is per ticker — and it is
+only *correct* if a batch is exactly its slice of the whole-market frame.
 
-"Invisible" is the thing worth testing, so most of this file is equality against
-what `df.pivot` produces — the implementation these replaced.
+That invariant is what most of this file tests, along with the pieces it rests
+on: `_pivot_wide` scattering a value column at a time, `load_market_panels`
+reading only the panels and symbols it is asked for, and the session index that
+makes one batch's frame line up with another's.
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import pandas as pd
 import pytest
 
 from b3_pipeline import storage
+from backtests.core import markets
 from backtests.core import panels as loader
 
 
@@ -147,6 +150,89 @@ def test_the_six_panel_tuple_is_unchanged(plane):
     panels = loader.load_market_panels(plane, "2020-01-01", "2020-01-31", "B3")
     for frame, name in zip(frames, loader.HLC_PANELS):
         pd.testing.assert_frame_equal(frame, panels[name])
+
+
+# ── streaming: a batch is its slice of the market ────────────────────────────
+
+def test_streamed_batches_concatenate_to_the_whole_market_load(plane):
+    """The invariant the architecture rests on. If a batch were anything but its
+    own columns of the whole-market frame — a different fill, a shorter index, a
+    different order — then reducing batch by batch would quietly produce a
+    different backtest from reducing the market."""
+    whole = loader.load_market_panels(plane, "2020-01-01", "2020-01-31", "B3",
+                                      quiet=True)
+    parts: dict = {}
+    for batch in loader.stream_market_panels(plane, "2020-01-01", "2020-01-31",
+                                             "B3", size=1):
+        for name, frame in batch.items():
+            parts.setdefault(name, []).append(frame)
+
+    assert len(parts["adj_close"]) == 2, "one batch per name, so this streamed"
+    for name, frames in parts.items():
+        got = pd.concat(frames, axis=1)
+        pd.testing.assert_frame_equal(got, whole[name])
+
+
+def test_a_batch_carries_the_markets_sessions_not_its_own(plane):
+    """A subset only trades on some of the market's days. Reindexing to the
+    market's calendar *before* the forward fill is what makes the fill bridge a
+    gap the way it would have in the whole-market frame — and what makes two
+    batches line up column-wise at all."""
+    conn = sqlite3.connect(plane)
+    conn.execute("DELETE FROM prices WHERE ticker = 'VALE3' AND date = ?",
+                 ("2020-01-03",))
+    conn.commit()
+    conn.close()
+
+    batches = list(loader.stream_market_panels(plane, "2020-01-01", "2020-01-31",
+                                               "B3", size=1))
+    assert [list(b["adj_close"].columns) for b in batches] == [["PETR4"], ["VALE3"]]
+    for b in batches:
+        assert list(b["adj_close"].index.strftime("%Y-%m-%d")) == DAYS
+    # VALE3 did not print on the 3rd; the fill carries the 2nd across it exactly
+    # as the whole-market frame does.
+    vale = batches[1]["adj_close"]["VALE3"]
+    assert vale.loc["2020-01-03"] == vale.loc["2020-01-02"]
+
+
+def test_the_axes_are_the_market_and_respect_the_window(plane):
+    assert loader.market_symbols(plane, "2020-01-01", "2020-01-31", "B3") == [
+        "PETR4", "VALE3"]
+    assert list(loader.market_sessions(plane, "2020-01-01", "2020-01-31", "B3")
+                .strftime("%Y-%m-%d")) == DAYS
+    assert loader.market_symbols(plane, "2019-01-01", "2019-12-31", "B3") == []
+
+
+def test_the_shape_filter_reaches_the_symbol_scan(plane):
+    """`market_symbols` decides the batches, so a name the panels would drop must
+    not reach one — it would come back as a batch of nothing."""
+    conn = sqlite3.connect(plane)
+    conn.execute(
+        "INSERT INTO prices (ticker, isin_code, date, open, high, low, close,"
+        " adj_close, split_adj_high, split_adj_low, split_adj_close, volume)"
+        " VALUES ('PETR34', 'UNKNOWN', '2020-01-02', 1,1,1,1,1,1,1,1,1)")
+    conn.commit()
+    conn.close()
+    assert "PETR34" not in loader.market_symbols(
+        plane, "2020-01-01", "2020-01-31", "B3"), "a BDR is not a standard lot"
+
+
+def test_symbols_are_bound_as_values_never_interpolated(plane):
+    """A symbol comes off the plane. The one place a market's own data must never
+    reach is its query text."""
+    spec = markets.get("B3")
+    fragment, params = loader._symbol_filter(spec, ["PETR4", "VALE3"])
+    assert "PETR4" not in fragment and "VALE3" not in fragment
+    assert sorted(params.values()) == ["PETR4", "VALE3"]
+    assert loader._symbol_filter(spec, None) == ("", {})
+    assert loader._symbol_filter(spec, [])[0].strip() == "AND 1 = 0"
+
+
+def test_asking_for_no_symbols_yields_an_empty_frame_not_a_syntax_error(plane):
+    """`IN ()` is a syntax error in SQLite and a footgun in Postgres."""
+    got = loader.load_market_panels(plane, "2020-01-01", "2020-01-31", "B3",
+                                    panels=("adj_close",), symbols=[], quiet=True)
+    assert got["adj_close"].empty
 
 
 def test_turnover_is_not_forward_filled_but_prices_are(plane):

@@ -264,20 +264,124 @@ def test_the_monthly_frames_are_there_eagerly(bundle):
         assert dict.__contains__(bundle, key), key
 
 
-def test_the_high_and_low_panels_cost_one_extra_read_not_two(plane):
-    """They are a second query, taken only when something wants the high-low
-    range. Both come back from it, so reading the second is free."""
+def test_a_daily_panel_is_read_once_and_only_when_named(bundle):
+    """A panel is a query, so the bundle has to be able to say which one. The
+    high-low range names three; nothing reads the rest, and a second read of one
+    already built is a dict lookup."""
+    import backtests.core.panels as plane
+
+    with patch.object(plane, "stream_market_panels",
+                      wraps=plane.stream_market_panels) as reader:
+        bundle["high_low_range_20d"]
+        bundle["split_adj_high"]
+        bundle["split_adj_low"]
+        bundle["split_adj_close"]
+    asked = [call.kwargs["panels"] for call in reader.call_args_list]
+    assert asked == [("split_adj_high",), ("split_adj_low",),
+                     ("split_adj_close",)], "one read per panel, in the order named"
+    assert "adj_close" in bundle.deferred_keys(), "and nothing else was touched"
+
+
+def test_batching_the_universe_does_not_change_the_bundle(plane, monkeypatch):
+    """The whole architecture in one assertion. The grid is reduced a batch at a
+    time so the market's daily bars are never resident; if that produced anything
+    but the frames a whole-market load produced, every backtest would quietly
+    move."""
+    import backtests.core.panels as plane_mod
+
+    def _build():
+        with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+             patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+            return build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+
+    monkeypatch.setattr(plane_mod, "SYMBOL_BATCH", 1)      # one name per batch
+    streamed = _build()
+    monkeypatch.setattr(plane_mod, "SYMBOL_BATCH", 500)    # the whole market
+    whole = _build()
+
+    for key in ("px", "ret", "raw_close", "adtv", "log_ret", "has_glitch",
+                "mf_composite", "vol_5m", "vol_2m", "adj_close",
+                "split_adj_close", "close_px", "fin_vol", "atr_m", "ma200_m",
+                "autocorr_20d", "rolling_vol_20d_daily", "high_low_range_20d"):
+        pd.testing.assert_frame_equal(streamed[key], whole[key], obj=key)
+
+
+def test_the_grid_is_reduced_without_the_market_ever_being_resident(plane):
+    """What `build_shared_data` keeps is the rebalance grid. A daily panel is a
+    query it has not made — which is the difference between ~26 MB a frame and
+    ~580 MB a frame on the US plane."""
     with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
          patch("backtests.core.shared_data.download_benchmark", _mock_bench):
         shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
 
-    import backtests.core.shared_data as sd
-    with patch.object(sd, "load_market_panels",
-                      wraps=sd.load_market_panels) as loader:
-        shared["high_low_range_20d"]
-        shared["split_adj_high"]
-        shared["split_adj_low"]
-    assert loader.call_count == 1
+    for key in ("adj_close", "split_adj_close", "close_px", "fin_vol",
+                "split_adj_high", "split_adj_low"):
+        assert not dict.__contains__(shared, key), f"{key} should not be resident"
+        assert key in shared, f"{key} should still be readable"
+    assert shared["px"].shape[0] < shared["adj_close"].shape[0], \
+        "the grid is coarser than the bars it came from"
+
+
+def test_a_panel_can_be_read_for_a_subset_of_names(plane):
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+
+    one = shared["panel"]("adj_close", columns=["VALE3"])
+    assert list(one.columns) == ["VALE3"]
+    pd.testing.assert_series_equal(one["VALE3"], shared["adj_close"]["VALE3"])
+    assert one.index.equals(shared["adj_close"].index), "same sessions either way"
+
+
+def test_a_name_the_plane_has_no_bars_for_comes_back_empty_not_misaligned(plane):
+    """Columns are placed by name. A requested symbol the plane never printed is
+    absent from its batch, and placing by position would shift every column
+    after it one to the left."""
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+
+    got = shared["panel"]("adj_close", columns=["PETR4", "NOPE3", "VALE3"])
+    assert list(got.columns) == ["PETR4", "NOPE3", "VALE3"]
+    assert got["NOPE3"].isna().all()
+    pd.testing.assert_series_equal(got["VALE3"], shared["adj_close"]["VALE3"])
+
+
+def test_daily_returns_are_the_panel_diffed_without_the_panel(plane):
+    """`pct_change` is per ticker, so it belongs in the batch — reading the
+    prices and then diffing them holds both at once."""
+    with patch("backtests.core.shared_data.download_cdi_daily", _mock_cdi), \
+         patch("backtests.core.shared_data.download_benchmark", _mock_bench):
+        shared = build_shared_data(plane, "2019-06-01", "2020-03-31", "ME")
+
+    pd.testing.assert_frame_equal(
+        shared["daily_returns"]("split_adj_close"),
+        shared["split_adj_close"].pct_change())
+
+
+def test_releasing_the_heap_is_safe_to_call_and_says_nothing():
+    """Best effort by contract: a platform without glibc keeps what it had."""
+    assert memory.release() is None
+    assert memory.release() is None
+
+
+def test_the_daily_nav_path_reads_only_the_names_the_book_held(bundle):
+    """`strategy_daily_values` wants a dozen columns. Handing it the market's
+    whole daily close to use twenty of them is what did not fit."""
+    from backtests.core.metrics import strategy_daily_values
+    import backtests.core.panels as plane
+
+    # A column per candidate, a zero in all but one — the shape a real
+    # target_weights frame has, and the reason "scope to target_weights.columns"
+    # scoped nothing.
+    weights = pd.DataFrame({"PETR4": [1.0, 1.0], "VALE3": [0.0, 0.0]},
+                           index=bundle["ret"].index[-2:])
+    with patch.object(plane, "stream_market_panels",
+                      wraps=plane.stream_market_panels) as reader:
+        out = strategy_daily_values(bundle, weights, 100_000.0)
+    assert not out.empty
+    assert reader.call_args.kwargs["symbols"] == ["PETR4"], \
+        "a name the book never held is not a name to read bars for"
 
 
 def test_a_deferred_panel_is_what_the_eager_one_used_to_be(bundle, plane):

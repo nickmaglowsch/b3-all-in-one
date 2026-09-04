@@ -113,6 +113,34 @@ def reconstruct_daily_values(
     return out[~out.index.duplicated(keep="first")]
 
 
+def _held_daily_returns(shared: dict, target_weights: pd.DataFrame):
+    """Daily returns of the names in `target_weights`.
+
+    Through the bundle's scoped reader when it has one, and off a resident frame
+    otherwise — a hand-built ``shared`` dict in a test, or a caller that already
+    holds the panel. ``None`` when neither is available, which is the "fall back
+    to cadence drawdown" signal the caller already handles.
+    """
+    reader = shared.get("daily_returns")
+    if not callable(reader):
+        resident = shared.get("split_adj_close")
+        return None if resident is None else resident.pct_change()
+    # The names the book actually held, not the names it could have held. A
+    # target_weights frame carries a column per candidate and a zero in almost
+    # all of them — on the US plane, eleven thousand columns to describe a
+    # thirty-name book. `reconstruct_daily_values` ignores a column that is
+    # always zero (and its own guard only refuses a *missing* column that
+    # carries weight), so reading the daily close for the rest is pure cost:
+    # it is what took a US run from 1.1 GB to 5.8 GB after the load was fixed.
+    held = [c for c in target_weights.columns
+            if c not in ("CDI_ASSET", "IBOV")
+            and float(target_weights[c].abs().max() or 0.0) > 0.0]
+    return reader("split_adj_close", columns=held)
+
+
+
+
+
 def strategy_daily_values(
     shared: dict,
     target_weights: pd.DataFrame,
@@ -126,21 +154,32 @@ def strategy_daily_values(
     from run_simulation is blind to mid-period crashes (see
     :func:`reconstruct_daily_values`). Returns an empty Series if the required
     daily data isn't present, in which case callers fall back to cadence DD.
+
+    What it needs is the daily path of the names the book actually held — a
+    dozen or two — so when the bundle can scope a panel by ticker it is asked to
+    (`shared["panel"]`, see shared_data). Reading the market's whole daily close
+    to use twenty columns of it is what a US backtest could not afford.
     """
-    daily_close = shared.get("split_adj_close")
-    if daily_close is None:
+    daily_ret = _held_daily_returns(shared, target_weights)
+    if daily_ret is None:
         return pd.Series(dtype=float)
-    daily_ret = daily_close.pct_change()
+
+    # The sleeves that are not columns of the price matrix: the cash leg, the
+    # benchmark, and any downloaded ETF the FixedWeight blend engine stashed on
+    # the bundle. Gathered and joined once — assigning them in one at a time
+    # reconsolidates the whole frame per column, which on a wide book is a full
+    # copy of it each time.
+    extra = {}
     cdi_daily = shared.get("cdi_daily")
     if cdi_daily is not None:
-        daily_ret["CDI_ASSET"] = cdi_daily                 # cash sleeve
+        extra["CDI_ASSET"] = cdi_daily
     ibov_px = shared.get("ibov_px")
     if "IBOV" in target_weights.columns and ibov_px is not None:
-        daily_ret["IBOV"] = ibov_px.pct_change()
-    # Daily returns for downloaded ETF sleeves (IVVB11, DIVO11, …) that the
-    # FixedWeight blend engine stashed here — not in the B3 price matrix.
-    for col, series in (shared.get("_daily_asset_ret") or {}).items():
-        daily_ret[col] = series
+        extra["IBOV"] = ibov_px.pct_change()
+    extra.update(shared.get("_daily_asset_ret") or {})
+    if extra:
+        daily_ret = pd.concat(
+            [daily_ret, pd.DataFrame(extra).reindex(daily_ret.index)], axis=1)
     return reconstruct_daily_values(target_weights, daily_ret, initial_capital)
 
 

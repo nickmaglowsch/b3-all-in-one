@@ -154,19 +154,6 @@ def sector_membership_asof(
 import requests
 
 
-# What the callers ask for -> what the plane calls it. `^BVSP` is Yahoo's symbol
-# for the Ibovespa; the sleeves were asked for with Yahoo's `.SA` suffix. Both
-# now resolve on the plane, because every series these benchmarks need is
-# already there.
-#
-# The sleeves are ordinary COTAHIST tickers and read `prices`. The Ibovespa is
-# not an instrument and is in no COTAHIST year, so it is stored as `$IBOV` in
-# `external_prices` — B3's own published index, in points, every session, by
-# b3_pipeline/ibov_series.py. A `$` symbol routes to that table; see there for
-# why the index and not a fund that tracks it.
-BENCHMARK_ALIASES = {"^BVSP": "$IBOV", "IBOV": "$IBOV"}
-
-
 def _plane_series(table: str, column: str, symbol: str, start: str, end: str,
                   market: str = None, symbol_column: str = "ticker") -> pd.Series:
     """One ticker's daily column out of the plane, as a date-indexed Series.
@@ -217,6 +204,10 @@ def download_benchmark(ticker: str, start: str, end: str, *,
     if symbol.startswith("$"):
         # The `$` namespace is global by shape — $CDI, $IPCA, $USDBRL and the
         # stored indices belong to no single market, so they are not scoped.
+        # The Ibovespa is one of them: it is not an instrument and is in no
+        # COTAHIST year, so b3_pipeline/ibov_series.py writes B3's own published
+        # index, in points, every session, as `$IBOV` in `external_prices` — see
+        # there for why the index and not a fund that tracks it.
         return download_index_level(symbol, start, end)
     return _plane_series(spec.table, "adj_close", symbol, start, end,
                          market=None if spec.table == "prices" else spec.key,

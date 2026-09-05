@@ -20,7 +20,6 @@ single-threaded caller under it with room to spare; do not parallelise this
 without a shared limiter.
 """
 
-import io
 import json
 import logging
 import os
@@ -160,8 +159,3 @@ def download_bulk_facts(dest: str) -> str:
 def download_bulk_submissions(dest: str) -> str:
     """Fetch `submissions.zip` to `dest`."""
     return download_bulk(SUBMISSIONS_URL, dest)
-
-
-def read_bulk_member(blob: bytes) -> dict:
-    """One member's JSON, for tests that build an archive in memory."""
-    return json.load(io.BytesIO(blob))

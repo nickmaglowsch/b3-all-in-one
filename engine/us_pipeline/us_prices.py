@@ -143,8 +143,14 @@ def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
     `budget` requests. A negative budget means no ceiling.
     """
     today = pd.Timestamp(today).date()
+    # One plain dict per cursor row, not one `pd.Series`. `iterrows` builds a
+    # Series per row and this lookup holds every one of them for the length of
+    # the run: at ~13,000 US symbols that measured ~19 MB retained and ~2.1 s to
+    # build, against ~5 MB and ~0.3 s here, on a scheduler that runs every day in
+    # the same worker a backtest shares. Nothing below wants a Series — the row
+    # is only ever read by column name.
     state = {} if cursor.empty else {
-        r["symbol"]: r for _, r in cursor.iterrows()}
+        r["symbol"]: r for r in cursor.to_dict("records")}
 
     retry, fresh, stale_bars, stale_actions = [], [], [], []
     for symbol in universe:

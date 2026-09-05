@@ -8,9 +8,6 @@ from datetime import datetime
 BASE_COTAHIST_URL = (
     "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{year}.ZIP"
 )
-DAILY_COTAHIST_URL = (
-    "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_D{date:%d%m%Y}.ZIP"
-)
 B3_CASH_DIVIDENDS_URL = "https://sistemaswebb3-listados.b3.com.br/listedCompaniesProxy/CompanyCall/GetListedCashDividends/{payload}"
 B3_STOCK_CORP_ACTIONS_URL = "https://sistemaswebb3-listados.b3.com.br/listedCompaniesProxy/CompanyCall/GetListedSupplementCompany/{payload}"
 B3_COMPANY_LIST_URL = (
@@ -115,39 +112,6 @@ CVM_START_YEAR = 2010
 # from the fundamentals_monthly forward-fill (companies that stop filing must
 # not keep their last values forever).
 FUNDAMENTALS_MAX_STALENESS_DAYS = 400
-
-# NOTE: This layout dictionary is for reference only and may not exactly match
-# the field positions used in parser.py (which hardcodes the correct offsets).
-# Do not use this dict for programmatic parsing.
-COTAHIST_LAYOUT = {
-    "tipo_registro": (0, 2),
-    "data_pregao": (2, 10),
-    "cod_bdi": (10, 12),
-    "cod_negociacao": (12, 24),
-    "tipo_mercado": (24, 27),
-    "nome_empresa": (27, 39),
-    "especificacao_papel": (39, 49),
-    "prazo_dias_termo": (49, 52),
-    "moeda_referencia": (52, 56),
-    "preco_abertura": (56, 69),
-    "preco_negocio": (69, 82),
-    "preco_maximo": (82, 95),
-    "preco_minimo": (95, 108),
-    "preco_medio": (108, 121),
-    "preco_ultimo_negocio": (121, 134),
-    "preco_melhor_oferta_compra": (134, 147),
-    "preco_melhor_oferta_venda": (147, 160),
-    "total_negocios": (147, 152),
-    "quantidade_total_titulos": (152, 170),
-    "volume_total_titulos": (170, 188),
-    "preco_exercicio": (188, 201),
-    "indicador_correcao": (201, 202),
-    "data_vencimento": (202, 210),
-    "fator_cotacao": (210, 217),
-    "preco_exercicio_pontos": (217, 230),
-    "cod_isin": (230, 242),
-    "num_distribuicao": (242, 245),
-}
 
 B3_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Brand } from "@/components/Brand";
+import { EntryLink } from "@/components/landing/EntryLink";
 import { Reveal } from "@/components/landing/Motion";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { AVULSOS, BASE as CARTEIRA, BUNDLE, TUDO } from "@/lib/modules";
@@ -566,18 +567,16 @@ export default function LandingPage() {
             >
               Planos
             </a>
-            <Link
-              href="/login"
+            <EntryLink
               className="py-2 text-sm font-medium text-muted transition-colors hover:text-ink"
             >
               Entrar
-            </Link>
-            <Link
-              href="/login"
+            </EntryLink>
+            <EntryLink
               className="rounded-md bg-navy px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
             >
               Começar grátis
-            </Link>
+            </EntryLink>
           </nav>
         </div>
       </header>
@@ -600,12 +599,11 @@ export default function LandingPage() {
             desconta o imposto no backtest e emite a DARF.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
-            <Link
-              href="/login"
+            <EntryLink
               className="rounded-md bg-navy px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
             >
               Começar grátis
-            </Link>
+            </EntryLink>
             <a
               href="#motor"
               className="rounded-md border border-hairline bg-panel px-5 py-3 text-sm font-semibold text-ink transition-colors hover:bg-hairline/40"
@@ -944,12 +942,11 @@ export default function LandingPage() {
             </div>
 
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
-              <Link
-                href="/login"
+              <EntryLink
                 className="rounded-md bg-navy px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
               >
                 Começar grátis
-              </Link>
+              </EntryLink>
               <p className="text-sm text-muted">
                 Nenhum módulo é obrigatório. Cancele quando quiser.
               </p>
@@ -965,12 +962,11 @@ export default function LandingPage() {
           <p className="mt-4 max-w-xl text-muted">
             Leva um minuto para importar o primeiro extrato.
           </p>
-          <Link
-            href="/login"
+          <EntryLink
             className="mt-8 inline-block rounded-md bg-navy px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
           >
             Começar grátis
-          </Link>
+          </EntryLink>
         </section>
       </main>
 

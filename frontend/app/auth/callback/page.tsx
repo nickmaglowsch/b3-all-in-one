@@ -2,6 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { setToken } from "@/lib/api";
+import { APP_HOME } from "@/lib/routes";
 
 // Landing spot after Google OAuth: the API redirects here with the JWT in the URL
 // *fragment* (#token=<jwt>), never the query string — a query string is logged by
@@ -32,7 +33,7 @@ export default function AuthCallbackPage() {
     setToken(token);
     // Full navigation (not router.replace) so the token never lingers in history
     // and the app re-reads auth from a clean URL.
-    window.location.replace("/portfolio");
+    window.location.replace(APP_HOME);
   }, []);
 
   return (

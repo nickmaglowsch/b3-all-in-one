@@ -2,18 +2,34 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { API_URL, devLogin, googleLogin } from "@/lib/api";
+import { useEffect, useState } from "react";
+import { API_URL, devLogin, getToken, googleLogin } from "@/lib/api";
+import { postLoginTarget } from "@/lib/routes";
 import { Brand } from "@/components/Brand";
 
 // Dev-login only exists when the API runs with ENVIRONMENT=development; in prod
 // it 404s, so only show that button when pointed at a local API.
 const IS_LOCAL = API_URL.includes("localhost") || API_URL.includes("127.0.0.1");
 
+// Only same-site paths — an absolute `next` would be an open redirect. See
+// postLoginTarget in lib/routes.ts, where the rule is tested.
+const nextParam = () => new URLSearchParams(window.location.search).get("next");
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A session that already exists does not sign in again. This page is public, so
+  // AppShell's guard never runs here, and every entrance to it — the landing's
+  // "Entrar", a bookmark, the back button after a logout that was not one — ended
+  // on a login form the visitor had no reason to fill in.
+  //
+  // Storage is client-only, so this cannot be an href: the export is prerendered
+  // and the guess would be baked in. Effect on mount, before anything is typed.
+  useEffect(() => {
+    if (getToken()) router.replace(postLoginTarget(nextParam()));
+  }, [router]);
 
   async function handleGoogle() {
     setLoading(true);
@@ -31,9 +47,7 @@ export default function LoginPage() {
     setError(null);
     try {
       await devLogin();
-      // Only same-site paths — an absolute `next` would be an open redirect.
-      const next = new URLSearchParams(window.location.search).get("next");
-      router.replace(next?.startsWith("/") && !next.startsWith("//") ? next : "/portfolio");
+      router.replace(postLoginTarget(nextParam()));
     } catch (e) {
       setError(e instanceof Error ? e.message : "Falha ao entrar.");
       setLoading(false);

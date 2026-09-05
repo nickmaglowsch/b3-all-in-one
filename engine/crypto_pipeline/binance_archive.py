@@ -40,7 +40,6 @@ ORIGIN = "https://s3-ap-northeast-1.amazonaws.com/data.binance.vision"
 _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
 SPOT_MONTHLY = "data/spot/monthly/klines"
-SPOT_DAILY = "data/spot/daily/klines"
 
 # Kline CSVs are headerless with 12 columns. Only these are worth storing:
 # column 5 is base-asset volume (how many coins) and column 7 is quote volume

@@ -190,13 +190,13 @@ COMMON_REBALANCE_FREQ = ParameterSpec(
     description="Portfolio rebalancing frequency",
     choices=["ME", "QE", "W-FRI"],
 )
-COMMON_CONTRIBUTION = ParameterSpec(
-    "contribution", "Monthly Buy-In (BRL)", "float", 0.0,
-    description="Periodic buy-in (aporte) added every calendar month and "
-                "allocated by the rebalance — the holding farthest below its "
-                "target gets the most. Negative = withdrawal. 0 = lump sum only.",
-    step=500.0,
-)
+# There is deliberately no COMMON_CONTRIBUTION. `run_simulation(contribution=)`
+# is real and takes a monthly buy-in (aporte), but no strategy has ever exposed
+# it as a parameter and no spec can reach it, so the ParameterSpec that sat here
+# was a form field for a control the frontend never rendered. Add it back
+# alongside the strategy that first offers it, not before.
+
+
 def market_param(default: str = markets.DEFAULT) -> "ParameterSpec":
     """The market selector every spec-driven strategy exposes.
 

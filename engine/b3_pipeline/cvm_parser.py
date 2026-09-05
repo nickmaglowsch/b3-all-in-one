@@ -48,8 +48,6 @@ LIABILITY_ACCOUNT_MAP = {
     "2.02.01": "_long_debt",   # Empréstimos e Financiamentos (LP)
 }
 
-ALL_ACCOUNT_MAP = {**INCOME_ACCOUNT_MAP, **ASSET_ACCOUNT_MAP, **LIABILITY_ACCOUNT_MAP}
-
 # Legal filing deadlines (days after period end), used as a conservative
 # filing_date fallback when DT_RECEB is unavailable. Using period_end directly
 # would leak results into backtests months before they were public.

@@ -262,7 +262,6 @@ def run_simulation(
             "or both (initial_capital=0 with a contribution is a pure-DCA run)."
         )
 
-    # Initialize the ledgers
     pt_pos = {}  # Pre-tax ledger
     at_pos = {}  # After-tax ledger
 
@@ -307,7 +306,6 @@ def run_simulation(
 
         ret_row = returns_matrix.iloc[i]
 
-        # ── First month initialization ───
         if not initialized:
             for t, w in t_weights.items():
                 if w != 0:

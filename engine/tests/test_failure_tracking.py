@@ -72,7 +72,6 @@ class TestFetchFailureTracking:
         storage.record_fetch_failure(conn, "ARZZ", "GetListedSupplementCompany", "520 error")
         storage.record_fetch_failure(conn, "BMGB", "GetListedSupplementCompany", "timeout")
 
-        # Resolve one of them
         storage.resolve_fetch_failure(conn, "ARZZ", "GetListedSupplementCompany")
 
         unresolved = storage.get_unresolved_failures(conn)

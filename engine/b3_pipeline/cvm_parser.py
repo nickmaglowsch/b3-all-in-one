@@ -308,7 +308,6 @@ def _extract_metrics_from_csvs(
             except Exception:
                 pass
 
-    # Filter + pivot each statement type
     frames = {}
     fallback_days = FILING_DEADLINE_DAYS.get(doc_type, 90)
 
@@ -372,7 +371,6 @@ def _extract_metrics_from_csvs(
         logger.warning(f"No usable CSV data found in {source_file}")
         return pd.DataFrame(), pd.DataFrame()
 
-    # Collect all group keys from any available frame
     group_keys = ["cnpj_clean", "period_end_parsed", "filing_date_parsed", "version"]
 
     def _wide_metrics(raw_df, pivot_df, account_map):
@@ -390,7 +388,6 @@ def _extract_metrics_from_csvs(
         wide.columns.name = None
         return wide
 
-    # Build wide tables per statement
     wide_parts = []
     for key, (raw_df, pivot_df) in frames.items():
         if key == "dre":
@@ -401,7 +398,6 @@ def _extract_metrics_from_csvs(
             account_map = LIABILITY_ACCOUNT_MAP
         wide_parts.append(_wide_metrics(raw_df, pivot_df, account_map))
 
-    # Start from the first wide part and merge the rest
     merged = wide_parts[0]
     for part in wide_parts[1:]:
         merged = merged.merge(part, on=group_keys, how="outer")
@@ -413,21 +409,17 @@ def _extract_metrics_from_csvs(
     net = parts["_short_debt"].fillna(0) + parts["_long_debt"].fillna(0) - parts["_cash"].fillna(0)
     merged["net_debt"] = net.where(parts.notna().any(axis=1))
 
-    # Drop intermediate helper columns
     for col in ["_cash", "_short_debt", "_long_debt"]:
         if col in merged.columns:
             merged.drop(columns=[col], inplace=True)
 
-    # Build filing_id
     merged["filing_id"] = merged.apply(
         lambda r: f"{r['cnpj_clean']}_{doc_type}_{r['period_end_parsed']}_{r['version']}",
         axis=1,
     )
 
-    # Resolve ticker from map
     merged["ticker"] = merged["cnpj_clean"].map(cnpj_ticker_map)
 
-    # Infer fiscal_year and quarter
     merged["fiscal_year"] = merged["period_end_parsed"].apply(
         lambda d: int(d[:4]) if d else None
     )

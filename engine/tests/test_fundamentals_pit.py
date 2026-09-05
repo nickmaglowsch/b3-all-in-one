@@ -181,7 +181,6 @@ def test_load_fundamentals_pit_forward_fills(tmp_path):
 
     db_path = str(tmp_path / "test.sqlite")
 
-    # Create DB with schema
     conn = sqlite3.connect(db_path)
     storage.init_db(conn)
 
@@ -208,7 +207,6 @@ def test_load_fundamentals_pit_forward_fills(tmp_path):
     conn.commit()
     conn.close()
 
-    # Load with load_fundamentals_pit
     wide = load_fundamentals_pit(db_path, "revenue", "2023-01-01", "2023-09-30", freq="ME")
 
     assert "PETR" in wide.columns, "PETR should be a column in the wide DataFrame"

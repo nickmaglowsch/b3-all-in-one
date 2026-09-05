@@ -74,7 +74,6 @@ def test_init_db_rebuild_drops_and_recreates(mem_conn):
     cursor.execute("SELECT COUNT(*) FROM cvm_companies")
     assert cursor.fetchone()[0] == 0, "Table should be empty after rebuild"
 
-    # Table must still exist
     cursor.execute("PRAGMA table_info(cvm_companies)")
     cols = cursor.fetchall()
     assert len(cols) > 0, "cvm_companies table should still exist after rebuild"
@@ -264,12 +263,10 @@ def test_upsert_cad_company_dates_inserts_new_row(mem_conn):
 
 def test_upsert_cad_company_dates_does_not_overwrite_ticker(mem_conn):
     """upsert_cad_company_dates() must NOT overwrite an existing ticker."""
-    # Insert company with ticker via the regular upsert
     seed_cvm_company(
         mem_conn, cnpj="12345678000100", ticker="PETR",
         company_name="Petrobras", cvm_code="9512", b3_trading_name="PETROBRAS"
     )
-    # Now upsert CAD dates for same CNPJ
     df = pd.DataFrame([{
         "cnpj": "12345678000100",
         "cvm_code": "9512",

@@ -57,7 +57,6 @@ def tmp_db(tmp_path):
                 1000.0, 100.0, 500.0, 10000000000.0)
     """)
 
-    # Insert fundamentals_monthly rows
     monthly_rows = [
         ("2023-01-31", "PETR3", 10.0, 500.0, 1000.0, 100.0, 10_000_000_000.0),
         ("2023-02-28", "PETR3", 10.0, 500.0, 1000.0, 100.0, 10_000_000_000.0),
@@ -113,7 +112,6 @@ def test_build_shared_data_monthly_keys_empty_when_table_empty(mock_bench, mock_
     from backtests.core.shared_data import build_shared_data
     import sqlite3 as sq
 
-    # Empty the table
     conn = sq.connect(tmp_db)
     conn.execute("DELETE FROM fundamentals_monthly")
     conn.commit()

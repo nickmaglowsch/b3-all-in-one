@@ -233,16 +233,13 @@ def test_include_historical_flag_in_cli():
 def test_run_pipeline_historical_upserts_filings(tmp_path):
     """With include_historical=True and a valid IPE ZIP, filings rows are processed."""
 
-    # Use a temp DB file
     db_path = tmp_path / "test.sqlite"
     conn = sqlite3.connect(str(db_path))
     conn.execute("PRAGMA foreign_keys = OFF")
     storage.init_db(conn)
 
-    # Create a minimal IPE zip
     ipe_zip = _make_ipe_zip(2008)
 
-    # Return the IPE zip for year 2008, None for others
     def ipe_download_side_effect(year, force=False):
         if year == 2008:
             return ipe_zip

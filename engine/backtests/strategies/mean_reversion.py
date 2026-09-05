@@ -146,7 +146,6 @@ class MeanReversionCompositeStrategy(StrategyBase):
             shared_data, params, freq, on_grid=on_grid)
         win_rate_ratio_m, rolling_vol_20d_m = on_grid.get("win_rate"), on_grid["vol"]
 
-        # Apply glitch mask to alpha
         if has_glitch is not None:
             glitch_m = has_glitch.resample(freq).last()
             alpha[glitch_m == 1] = np.nan
@@ -169,7 +168,6 @@ class MeanReversionCompositeStrategy(StrategyBase):
         # ATR ratio gate (from sub_signals if sub_E was computed)
         atr_ratio_m = sub_signals.get("atr_ratio_m")
 
-        # Build returns and target weights matrices
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
         tw["CDI_ASSET"] = 0.0
         r = ret.copy()
@@ -182,14 +180,12 @@ class MeanReversionCompositeStrategy(StrategyBase):
         for i in range(start_idx, len(ret)):
             date = ret.index[i]
 
-            # Layer 1: Check regime
             if date in risk_on.index:
                 is_risk_on = bool(risk_on.loc[date])
             else:
                 is_risk_on = False
 
             if not is_risk_on and risk_off_exposure == 0.0:
-                # Full CDI allocation
                 tw.iloc[i, tw.columns.get_loc("CDI_ASSET")] = 1.0
                 continue
 
@@ -250,7 +246,6 @@ class MeanReversionCompositeStrategy(StrategyBase):
             n_long = max(5, int(len(valid) * long_pct))
             long_tickers = valid.nlargest(n_long).index.tolist()
 
-            # Determine gross exposure
             long_gross = risk_off_exposure if not is_risk_on else 1.0
 
             # Vol-parity sizing for long leg
@@ -270,7 +265,6 @@ class MeanReversionCompositeStrategy(StrategyBase):
                     1.0 / len(long_tickers), index=long_tickers
                 )
 
-            # Assign long weights
             for t, w in long_weights.items():
                 if t in tw.columns:
                     tw.iloc[i, tw.columns.get_loc(t)] = w * long_gross

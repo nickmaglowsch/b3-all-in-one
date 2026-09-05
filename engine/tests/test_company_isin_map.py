@@ -52,7 +52,6 @@ def test_company_isin_map_table_exists(mem_conn):
 def test_company_isin_map_primary_key(mem_conn):
     """company_isin_map primary key is (cnpj, isin_code)."""
     cursor = mem_conn.cursor()
-    # Insert a row
     mem_conn.execute("""
         INSERT INTO company_isin_map (cnpj, isin_code, ticker, share_class, is_primary, first_seen, last_seen)
         VALUES ('33000167000101', 'BRPETRACNOR9', 'PETR3', 'ON', 1, '2020-01-01', '2024-12-31')
@@ -84,7 +83,6 @@ def test_populate_company_isin_map_fills_rows(mem_conn):
     Given cvm_companies with ticker='PETR' and prices with PETR3/PETR4 ISINs,
     populate_company_isin_map should create rows linking CNPJ to ISINs.
     """
-    # Seed cvm_companies
     seed_cvm_company(
         mem_conn,
         cnpj="33000167000101",

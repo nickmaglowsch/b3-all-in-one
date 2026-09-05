@@ -258,7 +258,6 @@ def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             net_income_ttm = excluded.net_income_ttm
     """
 
-    # Fill optional columns not present in df with None
     optional_cols = [
         "ticker", "fiscal_year", "quarter",
         "revenue", "net_income", "ebitda", "total_assets", "equity", "net_debt",
@@ -452,7 +451,6 @@ def upsert_fundamentals_monthly(conn: sqlite3.Connection, df: pd.DataFrame) -> i
             net_income_ttm = excluded.net_income_ttm
     """
 
-    # Fill optional columns not present in df with None
     optional_cols = [
         "revenue", "net_income", "ebitda", "total_assets", "equity", "net_debt",
         "shares_outstanding", "net_income_ttm",

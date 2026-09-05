@@ -49,10 +49,8 @@ class DualMomentumStrategy(StrategyBase):
             freq = "ME"
             ivvb_ret = ivvb_px.resample(freq).last().pct_change().dropna()
         except Exception:
-            # Fallback: if IVVB11 not available, use zeros
             ivvb_ret = pd.Series(0.0, index=ibov_ret.index, name="IVVB11")
 
-        # Align
         common_idx = ibov_ret.index.intersection(cdi_monthly.index).intersection(ivvb_ret.index)
         df = pd.DataFrame({
             "IBOV_ASSET": ibov_ret.reindex(common_idx),

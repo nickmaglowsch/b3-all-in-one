@@ -461,7 +461,6 @@ def retry_failed_companies() -> None:
                 logger.warning(f"Retry failed for {company_code}")
                 continue
 
-            # Success -- process the data
             storage.resolve_fetch_failure(conn, company_code, failure["endpoint"])
             logger.info(f"Successfully fetched {company_code}")
 

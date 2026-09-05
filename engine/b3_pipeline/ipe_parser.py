@@ -116,7 +116,6 @@ def parse_ipe_zip(
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    # Clean CNPJ
     cnpj_col = "CNPJ_Companhia" if "CNPJ_Companhia" in df.columns else None
     if cnpj_col is None:
         logger.warning("No CNPJ column found in IPE CSV")
@@ -128,7 +127,6 @@ def parse_ipe_zip(
     if df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    # Parse dates
     date_ref_col = "Data_Referencia" if "Data_Referencia" in df.columns else None
     date_entry_col = "Data_Entrega" if "Data_Entrega" in df.columns else None
     versao_col = "Versao" if "Versao" in df.columns else None
@@ -148,18 +146,15 @@ def parse_ipe_zip(
         lambda v: int(float(v)) if v and str(v).strip() not in ("", "nan") else 1
     ) if versao_col else 1
 
-    # Fiscal year from period_end
     df["fiscal_year"] = df["period_end"].apply(
         lambda d: int(d[:4]) if d else None
     )
 
-    # Build filing_id: {cnpj}_IPE_{period_end}_{version}
     df["filing_id"] = df.apply(
         lambda r: f"{r['cnpj_clean']}_IPE_{r['period_end'] or 'unknown'}_{r['version']}",
         axis=1,
     )
 
-    # Ticker from map
     df["ticker"] = df["cnpj_clean"].map(cnpj_ticker_map).where(
         df["cnpj_clean"].isin(cnpj_ticker_map), None
     )

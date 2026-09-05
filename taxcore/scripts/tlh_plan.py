@@ -119,7 +119,6 @@ def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
             continue
         if period > cur_period:
             continue  # future-dated row (data anomaly); ignore
-        # AÇÕES
         ag, ap = m["AÇÃO_gross"], m["AÇÃO_pnl"]
         if ag > 0:
             if ag <= ISENCAO_LIMIT:
@@ -133,7 +132,6 @@ def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
                     acoes_carry -= offset
                 else:
                     acoes_carry += -ap
-        # FIIs
         fg, fp = m["FII_gross"], m["FII_pnl"]
         if fg > 0:
             if fp > 0:
@@ -366,7 +364,6 @@ def render_report(sells_realized: list[dict], carry: dict, mtd: dict,
     w("> ⚠ **Não é orientação fiscal nem ordem de execução.** Use como guia para "
       "decisão; confirme cotações no momento da execução.\n")
 
-    # --- Situação atual ---
     w("\n## Situação do mês (antes das vendas propostas)\n")
     w("| Bucket | Vendas brutas MTD | PnL realizado MTD | Prejuízo acumulado |")
     w("|---|---|---|---|")
@@ -374,7 +371,6 @@ def render_report(sells_realized: list[dict], carry: dict, mtd: dict,
         w(f"| {cls} | R$ {mtd[cls]['gross']:,.2f} | R$ {mtd[cls]['pnl']:+,.2f} "
           f"| R$ {carry[cls]:,.2f} |")
 
-    # --- Vendas alvo ---
     w("\n## Vendas alvo (propostas)\n")
     if not sells_realized:
         w("Nenhuma venda válida informada.")
@@ -420,7 +416,6 @@ def render_report(sells_realized: list[dict], carry: dict, mtd: dict,
                   f"| R$ {p['price']:.4f} | R$ {p['realized_loss']:+,.2f} |")
                 i += 1
                 all_losers.append(p)
-        # Add the original sell instructions explicitly
         w("\nE as vendas-alvo já listadas acima na seção 'Vendas alvo'.\n")
 
         w("\n### T+1 (próximo pregão) — recompra dos losers\n")
@@ -433,7 +428,6 @@ def render_report(sells_realized: list[dict], carry: dict, mtd: dict,
             w(f"| {p['ticker']} | {p['qty']:g} | recompra ~ preço de mercado "
               f"do dia (custo médio será resetado para o novo preço) |")
 
-    # --- Resultado esperado ---
     w("\n## Resultado esperado pós-execução\n")
     w("| Bucket | Gross final | PnL líquido | Carry usado | IR esperado |")
     w("|---|---|---|---|---|")
@@ -444,7 +438,6 @@ def render_report(sells_realized: list[dict], carry: dict, mtd: dict,
         w(f"| {cls} | R$ {d['final_gross']:,.2f} | R$ {d['final_pnl']:+,.2f} "
           f"| R$ {d['carry_used']:,.2f} | R$ {d['ir']:,.2f} |")
 
-    # --- Caveats ---
     w("\n## Avisos\n")
     w("- **Slippage T→T+1**: preços podem se mover entre venda e recompra. Em "
       "papéis voláteis a perda pode virar lucro (ou aumentar). Considere "

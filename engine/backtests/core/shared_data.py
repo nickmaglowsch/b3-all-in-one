@@ -185,12 +185,10 @@ def build_shared_data(
 
     shared = memory.LazyShared({
         # ── price / return data ───────────────────────────────────────────────
-        # `panel` is not a frame: it is how a caller asks for daily bars, by name
-        # and optionally by ticker. See read_panel — and note that the daily
-        # panels themselves are deferred below, so reading one is a query.
         # Not frames: how a caller asks for daily bars, by panel and optionally
-        # by ticker. `stream` hands them over a batch at a time and is the one
-        # to reach for; `panel` gathers, which costs the whole frame.
+        # by ticker. The daily panels are deferred below, so reading one is a
+        # query. `stream` hands them over a batch at a time and is the one to
+        # reach for; `panel` gathers, which costs the whole frame.
         "panel": view.panel,
         "stream": view.stream,
         # The market's daily calendar. Published because a caller that streams

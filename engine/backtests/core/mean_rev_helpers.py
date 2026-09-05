@@ -275,7 +275,6 @@ def _compute_trailing_ic(
             break
         sig_row = signal_monthly.iloc[j]
         fwd_row = fwd_ret_monthly.iloc[j]
-        # Only stocks with both values
         both_valid = sig_row.notna() & fwd_row.notna()
         if both_valid.sum() < 10:
             continue
@@ -318,13 +317,11 @@ def compute_signal_stability(
     expected_sign = {s: 1.0 for s in signal_names}  # all signals are positive-IC after sign flip
 
     if not signal_names:
-        # No valid signals — return empty DataFrame
         return pd.DataFrame()
 
     dates = sub_signals[signal_names[0]].index
     n_months = len(dates)
 
-    # Initialize output with base weights
     weight_records = []
 
     if not enable:
@@ -335,13 +332,11 @@ def compute_signal_stability(
             weight_records.append(row)
         return pd.DataFrame(weight_records).set_index("date")
 
-    # Track consecutive flipped IC counts
     flip_counts = {s: 0 for s in signal_names}
     active = {s: True for s in signal_names}
     last_check_month = -999  # force first check
 
     for i in range(n_months):
-        # Check if it's time for an IC check
         months_since_check = i - last_check_month
         warmup_ok = i >= trailing_months + 1  # need trailing window + 1 for forward returns
 
@@ -370,7 +365,6 @@ def compute_signal_stability(
                 if flip_counts[s] >= flip_threshold:
                     active[s] = False
 
-        # Compute effective weights for this month
         active_signals = [s for s in signal_names if active[s]]
         row = {"date": dates[i]}
 

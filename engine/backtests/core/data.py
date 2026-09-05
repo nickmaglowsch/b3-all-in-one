@@ -430,7 +430,6 @@ def _pit_frame(
     )
     wide = wide.mask(stale)
 
-    # Slice to only the rebalance calendar dates within the requested window
     wide = wide.reindex(rebal_dates)
     return wide.loc[wide.index >= pd.Timestamp(start)]
 
@@ -658,7 +657,6 @@ def compute_pe_ratio_dynamic(
     market_cap = prices * (shares / _SHARES_SCALE)
     net_income_brl = net_income * 1_000.0
     result = market_cap / net_income_brl
-    # Mask invalid denominators/numerators
     result = result.where(net_income_brl > 0)
     result = result.where(shares > 0)
     result = result.where(prices > 0)

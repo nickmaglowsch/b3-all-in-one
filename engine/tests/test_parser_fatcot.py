@@ -12,7 +12,6 @@ from pathlib import Path
 
 
 # We test at the function level to avoid needing real ZIP files.
-# Import the helpers directly.
 from b3_pipeline.parser import parse_cotahist_file
 
 

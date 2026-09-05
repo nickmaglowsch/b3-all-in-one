@@ -234,7 +234,6 @@ class BesstQualityStrategy(StrategyBase):
                 td, fund, close_px.loc[td], med63.loc[td], actions,
                 min_market_cap=0.0, min_adtv=min_adtv, require_earnings=True,
             )
-            # BESST sector membership
             sel = sel[sel["root"].isin(BESST_ROOTS)]
             # regular dividend payer
             if not sel.empty:

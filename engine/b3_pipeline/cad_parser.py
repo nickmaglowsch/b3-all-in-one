@@ -78,26 +78,21 @@ def parse_cad_file(file_path: Union[Path, io.StringIO]) -> pd.DataFrame:
         return pd.DataFrame(columns=["cnpj", "cvm_code", "company_name",
                                      "listing_date", "delisting_date", "is_active"])
 
-    # Ensure required columns exist (handle missing gracefully)
     for col in ("CNPJ_CIA", "CD_CVM", "DENOM_SOCIAL", "DT_REG", "DT_CANCEL", "SIT"):
         if col not in df.columns:
             df[col] = None
 
-    # Clean CNPJ
     df["cnpj"] = df["CNPJ_CIA"].apply(lambda x: _clean_cnpj(str(x) if x else ""))
     df = df.dropna(subset=["cnpj"])
     df = df[df["cnpj"] != ""]
 
-    # Parse dates
     df["listing_date"] = df["DT_REG"].apply(_parse_date)
     df["delisting_date"] = df["DT_CANCEL"].apply(_parse_date)
 
-    # is_active: True only when SIT == 'ATIVO'
     df["is_active"] = df["SIT"].apply(
         lambda s: str(s).strip().upper() == "ATIVO" if s and str(s) not in ("nan", "None") else False
     )
 
-    # Rename and select output columns
     df = df.rename(columns={
         "CD_CVM": "cvm_code",
         "DENOM_SOCIAL": "company_name",
@@ -105,7 +100,6 @@ def parse_cad_file(file_path: Union[Path, io.StringIO]) -> pd.DataFrame:
 
     result = df[["cnpj", "cvm_code", "company_name", "listing_date", "delisting_date", "is_active"]].copy()
 
-    # Normalise: replace pandas NaT/NaN strings with None for date columns
     for col in ("listing_date", "delisting_date"):
         result[col] = result[col].where(result[col].notna(), None)
         result[col] = result[col].apply(

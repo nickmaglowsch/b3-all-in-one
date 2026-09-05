@@ -98,7 +98,6 @@ def materialize_fundamentals_monthly(conn: sqlite3.Connection) -> int:
 
     cursor = conn.cursor()
 
-    # Check if fundamentals_pit has any rows with a ticker
     cursor.execute(
         "SELECT MIN(filing_date) FROM fundamentals_pit WHERE ticker IS NOT NULL"
     )
@@ -109,7 +108,6 @@ def materialize_fundamentals_monthly(conn: sqlite3.Connection) -> int:
 
     earliest_filing_date = row[0]
 
-    # Build month-end grid from earliest filing to today
     today = dt.date.today()
     month_ends = pd.date_range(
         start=earliest_filing_date, end=today.strftime("%Y-%m-%d"), freq="ME"
@@ -117,10 +115,8 @@ def materialize_fundamentals_monthly(conn: sqlite3.Connection) -> int:
     if len(month_ends) == 0:
         return 0
 
-    # Build ADTV ticker map: {cnpj: best_ticker}
     adtv_map = _build_adtv_ticker_map(conn)
 
-    # Load all fundamentals_pit rows with a matched ticker
     raw_metrics = [
         "revenue", "net_income", "ebitda", "total_assets", "equity",
         "net_debt", "shares_outstanding", "net_income_ttm",
@@ -502,12 +498,10 @@ def run_fundamentals_pipeline(
     conn = storage.get_connection()
 
     try:
-        # Step 1
         logger.info("")
         logger.info("Step 1/10: Initializing database...")
         storage.init_db(conn, rebuild=rebuild, cvm_only=True)
 
-        # Step 2
         logger.info("")
         logger.info("Step 2/10: Determining year range...")
         _orig_start_year = start_year  # preserve before default override (needed for IPE range)
@@ -603,7 +597,6 @@ def run_fundamentals_pipeline(
         cnpj_ticker_map = cvm_storage.get_cvm_company_map(conn)
         logger.info(f"CNPJ → ticker map: {len(cnpj_ticker_map):,} companies")
 
-        # Step 6
         logger.info("")
         logger.info("Step 6/10: Parsing and upserting DFP filings...")
         for zip_path in dfp_paths:
@@ -623,7 +616,6 @@ def run_fundamentals_pipeline(
             except Exception as e:
                 logger.error(f"Failed to parse DFP file {zip_path}: {e}")
 
-        # Step 7
         logger.info("")
         logger.info("Step 7/10: Parsing and upserting ITR filings...")
         for zip_path in itr_paths:
@@ -643,7 +635,6 @@ def run_fundamentals_pipeline(
             except Exception as e:
                 logger.error(f"Failed to parse ITR file {zip_path}: {e}")
 
-        # Step 8
         logger.info("")
         logger.info("Step 8/10: Parsing and upserting FRE filings (shares outstanding)...")
         for zip_path in fre_paths:
@@ -677,11 +668,9 @@ def run_fundamentals_pipeline(
         logger.info("Computing net_income_ttm (trailing twelve months)...")
         compute_net_income_ttm(conn)
 
-        # Step 9
         logger.info("")
         logger.info("Step 9/10: Valuation ratio columns removed — ratios computed dynamically at query time.")
 
-        # Step 9b
         if not skip_monthly:
             logger.info("")
             logger.info("Step 9b/10: Materializing monthly fundamentals snapshot...")
@@ -691,7 +680,6 @@ def run_fundamentals_pipeline(
             logger.info("")
             logger.info("Step 9b/10: Skipping monthly snapshot (--skip-monthly)")
 
-        # Step 10
         logger.info("")
         logger.info("Step 10/10: Summary statistics...")
         stats = cvm_storage.get_fundamentals_stats(conn)
@@ -710,7 +698,6 @@ def run_fundamentals_pipeline(
             ipe_start = max(2003, user_start or 2003)
             ipe_end = min(IPE_END_YEAR, end_year or IPE_END_YEAR)
 
-            # Step 11: CAD download and company date upsert
             logger.info("")
             logger.info("Step 11/13: Downloading and parsing CVM CAD company register...")
             cad_path = cad_downloader.download_cad_file(force=force_download)
@@ -762,7 +749,6 @@ def run_fundamentals_pipeline(
                     if ipe_path is None:
                         logger.warning(f"IPE {year}: download failed — skipping")
                         continue
-                    # Index companies from IPE
                     ipe_companies = ipe_parser.extract_ipe_company_index(ipe_path)
                     if ipe_companies:
                         cvm_storage.bulk_upsert_companies_index(conn, ipe_companies)
@@ -788,11 +774,9 @@ def run_fundamentals_pipeline(
                     logger.error(f"IPE {year}: failed to process — {e}")
             logger.info(f"IPE total filings processed: {total_ipe_filings:,}")
 
-            # Propagate tickers into any new IPE fundamentals_pit rows
             ticker_rows = cvm_storage.populate_tickers_from_cvm_companies(conn)
             logger.info(f"Ticker propagation (post-IPE): {ticker_rows:,} rows updated")
 
-            # Step 13: Re-run monthly snapshot for IPE rows
             logger.info("")
             logger.info("Step 13/13: Rebuilding monthly snapshot...")
             # IPE adds no financial rows to fundamentals_pit, so monthly snapshot is

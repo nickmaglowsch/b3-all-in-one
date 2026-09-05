@@ -443,7 +443,6 @@ def detect_splits_from_prices(
     prices = prices.copy()
     prices["date"] = _normalize_date_series(prices["date"])
 
-    # Build a lookup set of (isin_code, ex_date) for existing actions
     existing_keys: set = set()
     if not existing_stock_actions.empty:
         for _, row in existing_stock_actions.iterrows():
@@ -661,7 +660,6 @@ def filter_fatcot_redundant_splits(
         if ex_date is None:
             continue
 
-        # Get prices for this ISIN around the ex_date
         isin_prices = prices_by_isin.get(isin)
         if isin_prices is None or len(isin_prices) < 2:
             continue
@@ -675,7 +673,6 @@ def filter_fatcot_redundant_splits(
             if d is None:
                 continue
 
-            # Check if this date is within the window of the ex_date
             day_diff = abs((d - ex_date).days) if hasattr(d, 'days') else abs((pd.Timestamp(d) - pd.Timestamp(ex_date)).days)
             if day_diff > date_window:
                 continue
@@ -879,7 +876,6 @@ def compute_all_adjustments(
     """
     logger.info("Starting adjustment computation...")
 
-    # Filter out B3 API splits that are redundant with fatcot transitions
     stock_actions = filter_fatcot_redundant_splits(stock_actions, prices)
 
     # Drop/correct B3 API actions that contradict observed COTAHIST price ratios

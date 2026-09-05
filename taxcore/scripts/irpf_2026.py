@@ -321,7 +321,6 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
     cur_eoy = pd.Timestamp(f"{year}-12-31")
     for code, g in rf.groupby("code"):
         g = g.sort_values("Data")
-        # Categorize each row
         def cat(r):
             m = r["mov_type"]
             d = r["dir"]
@@ -355,10 +354,8 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
         g = g.assign(cat=g.apply(cat, axis=1))
 
         aplic_total = g.loc[g["cat"] == "aplic", "Valor"].sum()
-        # Aplic event date (first one)
         aplic_dates = g.loc[g["cat"] == "aplic", "Data"]
         first_aplic = aplic_dates.min() if not aplic_dates.empty else None
-        # Exit event (first resgate or frozen)
         exit_rows = g[g["cat"].isin(["resgate", "frozen"])]
         first_exit = exit_rows["Data"].min() if not exit_rows.empty else None
         is_frozen = (g["cat"] == "frozen").any()
@@ -630,7 +627,6 @@ def main(argv: list[str]) -> int:
 
     w("> ⚠ **Não é orientação fiscal.** Confira tudo contra os Informes de Rendimentos dos brokers antes de submeter. CNPJs de pagadores (companhias / FIIs) você obtém do informe — este relatório fornece os totais e codifica os bens.\n")
 
-    # -- BENS E DIREITOS --
     w(f"\n## 1) Bens e Direitos — Ficha Bens e Direitos\n")
     w(f"Para cada posição abaixo, abra **Bens e Direitos → Novo** no programa IRPF, "
       f"escolha o Grupo e Código indicados, cole a Discriminação, e preencha "
@@ -731,7 +727,6 @@ def main(argv: list[str]) -> int:
         w(f"Nenhuma posição de CDB / LCI / LCA / CRI identificada nos relatórios de "
           f"Movimentação carregados.\n")
 
-    # -- RENDIMENTOS --
     w(f"\n## 2) Rendimentos recebidos em {Y}\n")
 
     w(f"\n### 2.1) Rendimentos Isentos e Não Tributáveis (Ficha)\n")
@@ -911,7 +906,6 @@ def main(argv: list[str]) -> int:
     else:
         w(f"\nNenhum prêmio de opções registrado em {Y} (todas as opções foram pré-{Y-1}).\n")
 
-    # -- RENDA VARIÁVEL --
     w(f"\n## 3) Renda Variável — Operações Comuns + FII ({Y})\n")
     w(f"Ficha **Renda Variável → Operações Comuns/Day-Trade**. Preencha por mês:\n")
     w(f"- **AÇÕES (operações comuns)**: isenção R$ 20.000/mês em vendas brutas. Se "
@@ -980,7 +974,6 @@ def main(argv: list[str]) -> int:
     w(f"\n**Total IR sobre FIIs em {Y}**: R$ {fii_year_tax:,.2f}")
     w(f"\n**Saldo prejuízo FIIs a compensar p/ {Y+1}**: R$ {fii_carry:,.2f}")
 
-    # ETF_RV / BDR
     has_bdr_etf = monthly_df[["BDR_gross","ETF_RV_gross"]].sum().sum() > 0
     if has_bdr_etf:
         w(f"\n### Tabela mensal {Y} — BDRs e ETFs de Renda Variável (15% sem isenção)")
@@ -1010,7 +1003,6 @@ def main(argv: list[str]) -> int:
           f"NÃO entram em \"Renda Variável\". Use os dados do Informe do broker para "
           f"preencher o ficha \"Rendimentos sujeitos a tributação exclusiva\".*")
 
-    # -- CHECKLIST FINAL --
     w(f"\n## 4) Checklist antes de submeter\n")
     w(f"- [ ] Conferir cada linha de \"Bens e Direitos\" (ações / FIIs / ETFs) contra o Informe de Posição do broker em 31/12/{Y}.")
     w(f"- [ ] Conferir saldos de CDBs / LCIs / LCAs / CRIs contra o Informe de Rendimentos do broker (valores com juros acumulados podem diferir do valor de aplicação aqui listado).")

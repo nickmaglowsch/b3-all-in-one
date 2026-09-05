@@ -101,7 +101,6 @@ def fetch_company_data(trading_name: str, conn=None) -> Optional[dict]:
             except json.JSONDecodeError:
                 pass
 
-        # If it's a list, we probably want the first element
         if isinstance(data, list) and len(data) > 0:
             return data[0]
         elif isinstance(data, dict):

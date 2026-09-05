@@ -5,15 +5,14 @@ Loads and precomputes all DataFrames needed by strategy plugins, once per run,
 so every strategy in a backtest reads the same frames instead of each rebuilding
 them. This is the single entry point the headless scripts/ runners go through.
 
-**Once per run, and only if read.** The bundle is a ``memory.LazyShared``: the
-monthly frames and the benchmark series are built up front (they are small, and
-almost everything wants them), while every *daily* (date x ticker) panel is
-registered as a thunk and built on first access. That distinction is the whole
-point. A daily panel is `sessions x names`, and on the US plane over a 2000..today
-window that is hundreds of MB apiece — the MA200, the ATR proxy and the five
-mean-reversion features came to a multiple of the worker's entire memory limit,
-built unconditionally, for strategies that read none of them. A US backtest died
-with SIGKILL in the builder before a single signal had been generated.
+**What a run keeps is the rebalance grid.** The bundle is a
+``memory.LazyShared`` holding frames of `rebalances x names` — small, and what
+almost every strategy actually reads. Daily `sessions x names` panels are
+hundreds of MB apiece on the US plane, so none of them is resident: each is
+registered as a thunk that queries the plane, and the grid itself is reduced from
+streamed batches (`plane.MarketView`) so the market's bars are never all in
+memory at once. Building them eagerly is what killed a US backtest with SIGKILL
+before a single signal had been generated.
 
 Readers do not change: ``shared["ret"]``, ``shared.get("has_glitch")``,
 ``"atr_m" in shared`` and ``dict(shared)`` all behave as they did. See
@@ -21,6 +20,7 @@ backtests.core.memory for the mapping's contract.
 """
 from __future__ import annotations
 
+import functools
 import logging
 from pathlib import Path
 
@@ -28,41 +28,70 @@ import numpy as np
 import pandas as pd
 
 from backtests.core import (
-    fundamentals, markets, mean_rev_helpers, memory, splits, universe,
+    fundamentals, markets, mean_rev_helpers, memory, regimes, universe,
 )
+from backtests.core import plane
 from backtests.core.data import (
-    BASE_PANELS, load_market_panels, download_benchmark, download_cdi_daily,
-    load_sector_pit,
+    download_benchmark, download_cdi_daily, load_sector_pit,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _expanding_pctrank(s: pd.Series) -> pd.Series:
-    """Where each observation sits in the distribution of everything before it.
+def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
+    """Register what the bundle derives from daily bars — none of it built yet.
 
-    Replaces ``expanding(min_periods=12).apply(lambda x: (x.iloc[-1] >= x).mean())``,
-    which rebuilt a Series per window and ran a Python callback per period — 11 ms
-    over 20 years of month ends, 51 ms at weekly cadence, on every backtest.
+    Every frame here is (sessions x names) at daily resolution, or reduced from
+    one: a few hundred MB on B3, several gigabytes on the US plane — which is how
+    a 2000..today run reached the worker's mem_limit.
 
-    Two details of the callback are load-bearing and reproduced rather than
-    tidied, because ibov_calm thresholds this at <= 0.70 and would flip:
-
-      · it divides by the window *length*, not the non-NaN count, so leading gaps
-        drag the rank down. Hence `/ arange`, not `rank(pct=True)`.
-      · on a period with no observation, `NaN >= x` is all-False and the mean is
-        0.0, not NaN — a missing month would read as "calmest ever". Preserved
-        here; changing it is a signal change, not a refactor.
-
-        That second branch turns out to be unreachable with real data: checked
-        against 21 years of ^BVSP (2005-2026), `ibov_vol_20d` resampled to ME, QE
-        and W-FRI has no post-warmup gaps at any of the three, because B3 never
-        goes a whole month, quarter or Mon-Fri week without trading. It is kept
-        as defensive behaviour, not because anything depends on it.
+    Each thunk holds its intermediates only while it runs: `_ma200_m` resamples
+    the daily rolling mean and lets the daily frame go, and `atr_m` recomputes the
+    ATR proxy rather than reading `atr_20d_daily`, so asking for the monthly frame
+    does not pin the daily one. A spec that reads both pays for the proxy twice in
+    CPU and once in memory, which is the right way round.
     """
-    ranked = s.expanding(min_periods=12).rank(method="max")
-    out = ranked / np.arange(1, len(s) + 1)
-    return out.mask(s.isna() & s.notna().cumsum().ge(12), 0.0)
+    def _ma200_m():
+        return (shared["adj_close"].rolling(200, min_periods=200)
+                .mean().resample(freq).last())
+
+    def _atr_daily():
+        return shared["adj_close"].pct_change().abs().ewm(
+            span=14, min_periods=14).mean()
+
+    def _mr(fn, *args):
+        return lambda: fn(shared["adj_close"], *args)
+
+    shared.defer("ma200_m", _ma200_m)
+    shared.defer("above_ma200", lambda: shared["px"] > shared["ma200_m"])
+    shared.defer("dist_ma200", lambda: shared["px"] / shared["ma200_m"] - 1)
+    shared.defer("atr_20d_daily", _atr_daily)
+    shared.defer("atr_m", lambda: _atr_daily().resample(freq).last())
+
+    # Mean-reversion features, each derived on its own so a spec that wants one
+    # does not build the other four; the `pct_change` they each recompute is one
+    # transient frame against five kept ones.
+    shared.defer("autocorr_20d", _mr(mean_rev_helpers.autocorr, 20, 10))
+    shared.defer("autocorr_60d", _mr(mean_rev_helpers.autocorr, 60, 30))
+    shared.defer("rolling_vol_20d_daily",
+                 _mr(mean_rev_helpers.rolling_vol_daily, 20, 10))
+    shared.defer("rolling_vol_60d_daily",
+                 _mr(mean_rev_helpers.rolling_vol_daily, 60, 30))
+    shared.defer("high_low_range_20d",
+                 lambda: mean_rev_helpers.high_low_range(
+                     shared["split_adj_high"], shared["split_adj_low"],
+                     shared["split_adj_close"]))
+
+    # Every daily panel, none resident until something reads one — the bundle's
+    # half of "a panel is a query". One panel per ask, ~580 MB on the US plane,
+    # rather than four of them for every run.
+    for key in plane.PANEL_OF:
+        shared.defer(key, functools.partial(shared["panel"], key))
+
+    # Nothing downstream reads the mask — it is the loader that stops the price
+    # fill at a delisting — but it is part of the bundle's published shape.
+    shared.defer("tradable",
+                 lambda: universe.tradable_mask(intervals, sessions, symbols))
 
 
 def build_shared_data(
@@ -94,44 +123,22 @@ def build_shared_data(
     spec = markets.get(market)
     lookback = 12  # default lookback periods
 
-    # ── 1. Load raw data ──────────────────────────────────────────────────────
-    # The base panels only. The daily high and low are read separately and only
-    # if something asks for them (see the deferred group below) — their one
-    # consumer is the mean-reversion high-low range, and on the US plane they are
-    # ~1.2 GB that most runs never look at.
-    panels = load_market_panels(db_path, start, end, spec.key, panels=BASE_PANELS)
-    adj_close = panels["adj_close"]
-    split_adj_close = panels["split_adj_close"]
-    close_px = panels["close"]
-    fin_vol = panels["fin_volume"]
-    del panels
+    # ── 1. The market, as a view rather than a load ──────────────────────────
+    view = plane.MarketView(db_path, start, end, spec)
+    sessions, symbols = view.sessions, view.symbols
+
     # CDI whatever the equity sleeve is: the cash a Brazilian holder parks in does
     # not change because the book is in US names.
     cdi_daily = download_cdi_daily(start, end)
     ibov_px = download_benchmark(spec.benchmark, start, end, market=spec.key)
 
-    # ── 1b. Fix unrecorded splits ────────────────────────────────────────────
-    # B3 only. The detector fires on a persistent, calm-volume overnight
-    # repricing by a clean ratio — an unrecorded grupamento there, an ordinary
-    # Tuesday in crypto, where it would silently rewrite price history.
-    if spec.detect_splits:
-        adj_close = splits.detect_and_fix_unrecorded(adj_close, close_px, fin_vol)
+    # ── 2. The rebalance grid, reduced batch by batch ────────────────────────
+    px, raw_close, adtv = view.grid(freq)
+    ret = px.pct_change()
 
-    # ── 2. Resample ───────────────────────────────────────────────────────────
     ibov_ret = ibov_px.resample(freq).last().pct_change().dropna()
     cdi_ret = (1 + cdi_daily).resample(freq).prod() - 1
     cdi_monthly = cdi_ret.copy()
-
-    px = adj_close.resample(freq).last()
-    ret = px.pct_change()
-    raw_close = close_px.resample(freq).last()
-    adtv = fin_vol.resample(freq).mean()
-    # The daily close and turnover have now given up everything the common path
-    # wants — the split fix above and these two monthly aggregates. Four
-    # strategies read them daily, all of them B3 books where a panel is a few
-    # tens of MB; on the US plane the pair is ~1.2 GB held for the whole run so
-    # that one run in nine can have it. Dropped here and re-read on demand.
-    del close_px, fin_vol
 
     log_ret = np.log1p(ret)
     # B3's -0.45 catches 2:1 (-50%) and 3:1 (-67%) splits that slip past the
@@ -144,21 +151,13 @@ def build_shared_data(
     # ── 3. Regime signals ─────────────────────────────────────────────────────
     # COPOM easing: CDI was lower 1 month ago vs 4 months ago
     is_easing = cdi_monthly.shift(1) < cdi_monthly.shift(4)
-
-    # IBOV regime signals
-    ibov_daily_ret = ibov_px.pct_change()
-    ibov_vol_20d = ibov_daily_ret.rolling(20).std()
-    ibov_vol_m = ibov_vol_20d.resample(freq).last()
-    ibov_vol_pctrank = _expanding_pctrank(ibov_vol_m)
-    ibov_calm = ibov_vol_pctrank <= 0.70
-
-    ibov_ret_20d = ibov_px.pct_change(20)
-    ibov_ret_m = ibov_ret_20d.resample(freq).last()
-    ibov_uptrend = ibov_ret_m > 0
-
-    ibov_m = ibov_px.resample(freq).last()
-    ibov_ma10 = ibov_m.rolling(10).mean()
-    ibov_above = ibov_m > ibov_ma10
+    bench = regimes.benchmark_signals(ibov_px, freq)
+    ibov_daily_ret = bench["daily_ret"]
+    ibov_vol_m = bench["vol_m"]
+    ibov_vol_pctrank = bench["vol_pctrank"]
+    ibov_calm = bench["calm"]
+    ibov_uptrend = bench["uptrend"]
+    ibov_above = bench["above"]
 
     # Multifactor composite (momentum + low-vol)
     mom_sig = log_ret.shift(1).rolling(lookback).sum()
@@ -179,16 +178,24 @@ def build_shared_data(
     # IBOV vol series (monthly, for AdaptiveLowVol regime)
     ibov_vol_monthly = ibov_vol_m.copy()
 
-    # The security master, read once. `universe.survivorship` would give the same
-    # two frames, but it builds both eagerly and the mask is a full daily bool
-    # panel that no strategy reads — so the read is hoisted here and the mask is
-    # deferred with the rest of the daily work below.
+    # The security master, read once. `universe.survivorship` builds both frames
+    # eagerly and the mask is a full daily bool panel no strategy reads, so the
+    # read is hoisted here and the mask deferred with the rest of the daily work.
     intervals = universe.load_listing_intervals(db_path, spec.key)
 
     shared = memory.LazyShared({
         # ── price / return data ───────────────────────────────────────────────
-        "adj_close": adj_close,
-        "split_adj_close": split_adj_close,
+        # `panel` is not a frame: it is how a caller asks for daily bars, by name
+        # and optionally by ticker. See read_panel — and note that the daily
+        # panels themselves are deferred below, so reading one is a query.
+        # Not frames: how a caller asks for daily bars, by panel and optionally
+        # by ticker. `stream` hands them over a batch at a time and is the one
+        # to reach for; `panel` gathers, which costs the whole frame.
+        "panel": view.panel,
+        "stream": view.stream,
+        # The market's daily calendar. Published because a caller that streams
+        # has no frame to read an index off — the daily NAV path needs one.
+        "sessions": sessions,
         "px": px,
         "ret": ret,
         "log_ret": log_ret,
@@ -233,96 +240,22 @@ def build_shared_data(
         "vol_2m": vol_2m,
         "vol_20d": vol_2m,   # backward-compat alias
         # ── mean-reversion features that are benchmark/CDI series ────────────
-        # Series, not panels: one column, so they cost nothing to build and stay
-        # eager alongside the rest of the regime signals they belong with.
+        # Series, not panels: one column, so they stay eager alongside the regime
+        # signals they belong with.
         "cdi_cumul_63d": mean_rev_helpers.cdi_cumul(cdi_daily),
         "ibov_vol_20d_daily": ibov_daily_ret.rolling(20).std().shift(1),
         "ibov_ret_20d_daily": ibov_px.pct_change(20),
         # ── survivorship (see backtests.core.universe) ────────────────────────
-        # dense=False: the only reader is `universe.fill_returns`, which
-        # reindexes this onto the returns matrix, and a dense daily grid here is
-        # ~400 MB of NaN on the US plane to carry a few thousand real numbers.
+        # dense=False: its only reader reindexes it, and a dense daily grid is
+        # ~400 MB of NaN to carry a few thousand real numbers.
         "delist_ret": universe.delisting_returns(
-            intervals, adj_close.index, adj_close.columns, dense=False),
-        # What this window's data cannot support, as codes. Unconditional and
-        # self-contained: every branch lives inside coverage_notes, which
-        # degrades to an empty list rather than costing a backtest its run.
+            intervals, sessions, symbols, dense=False),
+        # What this window's data cannot support, as codes. Every branch lives
+        # inside coverage_notes, which degrades to [] rather than failing a run.
         "data_warnings": universe.coverage_notes(db_path, spec.key, start, end),
     })
 
-    # ── 4. Daily panels, built on first read ──────────────────────────────────
-    #
-    # Everything below is (sessions x names) at daily resolution. On B3 that is a
-    # few hundred MB in total and nobody noticed; on the US plane it is several
-    # gigabytes, which is how a 2000..today US run reached the worker's mem_limit
-    # and came back as `killed by SIGKILL` with an empty stderr.
-    #
-    # Each thunk holds its own intermediates only for as long as it runs:
-    # `_ma200_m` resamples the daily rolling mean and lets the daily frame go, and
-    # `atr_m` recomputes the ATR proxy rather than reading
-    # `shared["atr_20d_daily"]`, so asking for the monthly frame does not pin the
-    # daily one for the rest of the run. A spec that reads both pays for the proxy
-    # twice in CPU and once in memory, which is the right way round.
-
-    def _ma200_m():
-        return adj_close.rolling(200, min_periods=200).mean().resample(freq).last()
-
-    def _atr_daily():
-        return adj_close.pct_change().abs().ewm(span=14, min_periods=14).mean()
-
-    def _reread(**names) -> dict:
-        """Panels re-read from the plane, under the names the bundle uses.
-
-        `load_market_panels` names a panel after the plane's column; the bundle
-        has always called two of them `close_px` and `fin_vol`, and renaming
-        those would reach every strategy, every stored spec and every
-        signals.yaml entry.
-        """
-        got = load_market_panels(db_path, start, end, spec.key,
-                                 panels=tuple(names.values()))
-        return {key: got[panel] for key, panel in names.items()}
-
-    # Regime frames off the 200-day mean.
-    shared.defer("ma200_m", _ma200_m)
-    shared.defer("above_ma200", lambda: px > shared["ma200_m"])
-    shared.defer("dist_ma200", lambda: px / shared["ma200_m"] - 1)
-
-    # The ATR proxy, daily and resampled.
-    shared.defer("atr_20d_daily", _atr_daily)
-    shared.defer("atr_m", lambda: _atr_daily().resample(freq).last())
-
-    # Mean-reversion features. Each is derived independently so a spec that wants
-    # one does not build the other four; the shared `pct_change` they each
-    # recompute is one transient frame against five kept ones.
-    shared.defer("autocorr_20d",
-                 lambda: mean_rev_helpers.autocorr(adj_close, 20, 10))
-    shared.defer("autocorr_60d",
-                 lambda: mean_rev_helpers.autocorr(adj_close, 60, 30))
-    shared.defer("rolling_vol_20d_daily",
-                 lambda: mean_rev_helpers.rolling_vol_daily(adj_close, 20, 10))
-    shared.defer("rolling_vol_60d_daily",
-                 lambda: mean_rev_helpers.rolling_vol_daily(adj_close, 60, 30))
-    shared.defer("high_low_range_20d",
-                 lambda: mean_rev_helpers.high_low_range(
-                     shared["split_adj_high"], shared["split_adj_low"],
-                     split_adj_close))
-
-    # The two panels that come back off the plane rather than off `adj_close`,
-    # each pair in one read: the four strategies that want the daily close all
-    # want the daily turnover beside it, and the high-low range needs both sides
-    # of the range, so splitting either pair would only buy a second query.
-    shared.defer_group(
-        ("close_px", "fin_vol"),
-        lambda: _reread(close_px="close", fin_vol="fin_volume"))
-    shared.defer_group(
-        ("split_adj_high", "split_adj_low"),
-        lambda: _reread(split_adj_high="split_adj_high",
-                        split_adj_low="split_adj_low"))
-
-    # Nothing downstream reads the mask — it is the loader that stops the price
-    # fill at a delisting — but it is part of the bundle's published shape.
-    shared.defer("tradable", lambda: universe.tradable_mask(
-        intervals, adj_close.index, adj_close.columns))
+    _defer_derived(shared, freq, intervals, sessions, symbols)
 
     # ── Point-in-time CVM sector classification (survivorship-free, from FCA) ──
     # Long-format [ticker, ref_date, sector]. Sourced from the FCA zips alongside
@@ -340,4 +273,11 @@ def build_shared_data(
     if include_fundamentals:
         fundamentals.attach(shared, db_path, start, end, freq, ret, spec.key)
 
+    # The boundary between loading the market and running a strategy over it.
+    # Building the grid-level frames — the ranks in mf_composite, the rolling
+    # windows, the glitch mask — churns through a dozen temporaries the size of
+    # the grid, and on the US plane that is ~500 MB the allocator keeps unless
+    # asked. Nothing above is still needed; hand it back before the strategy
+    # starts, so what it sees is a floor and not somebody else's high-water mark.
+    memory.release()
     return shared

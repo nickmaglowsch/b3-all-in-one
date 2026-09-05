@@ -218,36 +218,78 @@ fixed ETF/CDI blends.
 |--------|-------------|
 | `data.py` | Loads B3 data through `storage.get_connection` (SQLite or Postgres); downloads CDI (BCB); reads benchmarks off the plane |
 | `shared_data.py` | Builds the shared frame bundle (`ret`, `log_ret`, `adj_close`, `adtv`, `f_*`, regime flags…) consumed by every strategy; the daily panels in it are built on first read |
-| `memory.py` | The backtest's memory budget (`ENGINE_BACKTEST_MEM_MB`, `ENGINE_MEM_TRACE`) and the lazy bundle `shared_data` returns |
+| `memory.py` | The memory budget (`ENGINE_BACKTEST_MEM_MB`, `ENGINE_MEM_TRACE`), the heap release, and the lazy bundle `shared_data` returns |
+| `panels.py` | Daily price panels off the plane, by name/symbol/session — and `stream_market_panels`, which walks the universe a batch at a time |
+| `reshape.py` | Long price rows -> a wide (date x ticker) grid, one value column at a time |
+| `regimes.py` | The benchmark's regime flags (vol percentile, uptrend, above its mean) |
 | `simulation.py` | Tax-aware multi-asset simulator (CGT, loss carryforward, slippage, margin, R$20k exemption) |
 | `signal_dsl.py` | Safe `ast`-parsed expression interpreter for factor signals |
 | `config_strategy.py` | YAML `rank_and_hold` / `fixed_weight` engines |
 | `strategy_base.py` / `strategy_registry.py` | Plugin base class + auto-discovery registry (plugin classes *and* `specs/*.yaml`) |
 | `metrics.py` | Sharpe, Calmar, max drawdown, annualised return/vol at any frequency |
 
-#### Memory
+#### Memory: a panel is a query
 
-A backtest's working set is set by the market, not by the tenant: a daily
+A backtest's working set is set by the market, not by the tenant. A daily
 `(date x ticker)` panel over a US 2000..today window is ~11,000 symbols by
-~6,500 sessions, several hundred MB apiece, and the bundle derives a dozen of
-them. Three things keep that inside a container:
+~6,500 sessions — about 580 MB — and the loader used to build six of them out of
+a long frame it held whole at the same time. That is 6 GB before a signal exists.
 
-* **The panels are built on first read.** `shared_data` returns a
-  `memory.LazyShared`, so a momentum book never allocates the mean-reversion
-  features, the ATR proxy or the MA200. Reads are unchanged — `shared["ret"]`,
-  `.get()`, `in`, `dict(shared)`.
-* **The load holds one copy, not two.** `data._pivot_wide` scatters one value
-  column at a time off the long frame instead of reshaping all of them at once,
-  and both database paths fetch in batches (`b3_pipeline/sql_stream.py`).
-* **The process caps its own heap.** `memory.guard()` sets `RLIMIT_DATA` from
-  the container's cgroup limit, so an overrun is a `MemoryError` naming a line
-  rather than a SIGKILL naming nothing. Every run reports `peak_rss_mb` in its
-  metrics.
+**What a run keeps is the rebalance grid**, frames of `rebalances x names`
+(301 x 11,000, ~26 MB each). The market's daily bars are never all resident:
+
+* **The grid is reduced from streamed batches.** `panels.stream_market_panels`
+  walks the universe a few hundred names at a time and `shared_data` reduces each
+  batch before the next arrives. This is only sound because every daily reduction
+  in this repo is *per ticker* — the split fix is a per-column loop, and
+  `resample`/`rolling`/`ewm` reduce each column independently — so a batch's
+  output is exactly its columns of the whole-market frame. Cross-sectional work
+  (the ranks in `mf_composite`, the liquidity dedup) happens after, on the grid.
+* **A daily panel is a query, not a field.** `shared["adj_close"]` and friends are
+  deferred; reading one streams it into a preallocated block. `shared["panel"]`
+  and `shared["daily_returns"]` take a `columns=` subset, which is how the daily
+  NAV path reads the book's holdings instead of the market.
+* **The heap is handed back.** `memory.release()` collects and `malloc_trim`s at
+  batch boundaries: streaming frees a large block per batch, and glibc keeps
+  every one of them — resident, and counted by the container — until asked.
+* **The process caps itself.** `memory.guard()` sets `RLIMIT_DATA` from the cgroup
+  limit, so an overrun is a `MemoryError` naming a line rather than a SIGKILL
+  naming nothing. Every run reports `peak_rss_mb` in its metrics.
+* **The daily NAV path is a sum over names.** Within a rebalance segment the NAV
+  is `nav · (Σᵢ wᵢ·growthᵢ(t) + resid)`, so `metrics._reconstruct` accumulates it
+  a batch at a time into one array of `len(sessions)` floats. A book that rotates
+  monthly has held nearly every name in the universe by the end — 9,694 of 11,000
+  on a 26-year US run — so this was ~950 MB of every run's peak, for a curve that
+  only feeds drawdown and Calmar.
+
+**Strategies read daily bars through the same door.** A strategy whose signal is
+a per-ticker chain — a rolling window, a ratio to the name's own mean, a
+resample — declares it as a reduction and gets the grid back:
+
+```python
+from backtests.core.strategy_base import daily_on_grid, on_grid_ffill
+
+measures = daily_on_grid(
+    shared_data, "adj_close", ret,
+    energy=lambda px: on_grid_ffill(realised_energy(px, window), ret),
+    entropy=lambda px: on_grid_ffill(directional_entropy(px, window), ret))
+```
+
+Each reduction runs inside the batch its bars arrive in, and several share one
+pass over the plane. The rule is that a reduction must be per ticker — anything
+cross-sectional (a `rank(axis=1)`) belongs after, on the grid. `qdl` is the one
+strategy that cannot use it: it slices arbitrary daily windows inside its
+rebalance loop, and it is B3-bound, where a panel is tens of MB.
+
+The `at_rebalance(...)` signals in `signals.yaml` (`daily_low_vol`,
+`win_rate_mean_rev`) still evaluate over a resident `adj_close` — the DSL
+evaluator has no batching yet.
 
 | Variable | Effect |
 |----------|--------|
 | `ENGINE_BACKTEST_MEM_MB` | Heap cap in MB. `0` disables it. Default: 80% of the cgroup limit, or none when there is no limit |
 | `ENGINE_BACKTEST_MEM_FRACTION` | The fraction used for that default |
+| `ENGINE_PANEL_BATCH` | Names per streamed batch (default 400) |
 | `ENGINE_MEM_TRACE=1` | Print peak RSS per stage to stderr |
 
 ## Testing

@@ -2,6 +2,8 @@
 Core metrics and evaluation utilities for backtesting.
 """
 
+import itertools
+
 import numpy as np
 import pandas as pd
 
@@ -68,49 +70,128 @@ def reconstruct_daily_values(
     (missing columns are treated as flat / zero return, e.g. an uninvested
     cash residual).
     """
-    cols = [c for c in target_weights.columns if c in daily_ret.columns]
-    if not cols:
-        return pd.Series(dtype=float)
-    # Guard against silent wrongness: if any held sleeve has no daily series
-    # (e.g. a downloaded ETF the caller didn't supply), bail so the caller falls
-    # back to cadence DD rather than a path that zeros that sleeve.
-    missing = [c for c in target_weights.columns if c not in daily_ret.columns]
+    return _reconstruct(target_weights, daily_ret.index, daily_ret.columns,
+                        [daily_ret], initial_capital)
+
+
+def _investable_weights(target_weights: pd.DataFrame, available, days):
+    """`target_weights` trimmed to what can actually be priced, or ``None``.
+
+    ``None`` is the "fall back to cadence drawdown" signal the caller handles: no
+    priceable column, no daily calendar, no row with any weight on it, or — the
+    one worth guarding — a held sleeve with no daily series at all, e.g. a
+    downloaded ETF the caller did not supply. Zeroing that sleeve would print a
+    path that is quietly wrong rather than absent.
+    """
+    have = set(available)
+    cols = [c for c in target_weights.columns if c in have]
+    missing = [c for c in target_weights.columns if c not in have]
+    if not cols or len(days) == 0:
+        return None
     if missing and float(target_weights[missing].abs().sum(axis=1).max()) > 1e-4:
-        return pd.Series(dtype=float)
+        return None
     tw = target_weights[cols].fillna(0.0)
     live = tw.index[tw.abs().sum(axis=1) > 0]
-    if len(live) == 0:
+    return None if len(live) == 0 else tw.loc[live[0]:]
+
+
+def _segments(reb: pd.Index, days: pd.DatetimeIndex) -> list:
+    """``(rebalance date, positions in `days`)`` per holding period.
+
+    Trading days strictly after each rebalance up to and including the next — a
+    clean partition even when the marks are calendar month-ends (resample
+    labels) that are not themselves trading days.
+    """
+    spans = []
+    for i, d0 in enumerate(reb):
+        d1 = reb[i + 1] if i + 1 < len(reb) else days[-1]
+        pos = np.flatnonzero((days > d0) & (days <= d1))
+        if len(pos):
+            spans.append((d0, pos))
+    return spans
+
+
+def _reconstruct(target_weights: pd.DataFrame, days, available, chunks,
+                 initial_capital: float) -> pd.Series:
+    """The path above, over column chunks that arrive one at a time.
+
+    Within a rebalance segment the NAV is `nav * (Σ_i w_i · growth_i(t) + resid)`
+    — a *sum over names* of each name's own cumulative growth. So it decomposes:
+    a chunk of names contributes its own terms to that sum and nothing else, and
+    the segment's factor path can be accumulated a chunk at a time into one array
+    of `len(days)` floats. NAV is then chained across segments at the end, which
+    needs no price data at all.
+
+    That is what lets the daily path be reconstructed for a book of ten thousand
+    names without ten thousand columns of daily returns in memory — it was ~950 MB
+    of the peak of every US run, for a curve that only feeds drawdown and Calmar.
+
+    `chunks` must cover the held names once each; overlapping chunks would
+    double-count. `available` is every column they will supply between them,
+    needed up front for the missing-sleeve guard below.
+    """
+    days = pd.DatetimeIndex(days)
+    tw = _investable_weights(target_weights, available, days)
+    if tw is None:
         return pd.Series(dtype=float)
-    tw = tw.loc[live[0]:]
-    reb = tw.index
-    dr = daily_ret[cols]
+    cols, reb = list(tw.columns), tw.index
+    spans = _segments(reb, days)
+
+    factor = np.zeros(len(days))
+    covered: set = set()
+    for chunk in chunks:
+        part = [c for c in cols if c in chunk.columns]
+        if not part:
+            continue
+        covered.update(part)
+        weights, returns = tw[part], chunk[part].to_numpy(dtype=float)
+        for d0, pos in spans:
+            # Clip daily returns to the simulator's own guard band (_apply_returns)
+            # so an unrecorded-split print can't crater the reconstructed path.
+            seg = np.where(np.isnan(returns[pos]), 0.0, returns[pos])
+            growth = np.cumprod(1.0 + np.clip(seg, -0.90, 5.0), axis=0)
+            factor[pos] += growth @ weights.loc[d0].to_numpy()
+        del weights, returns
+
+    # A column the caller said it had but supplied no data for holds flat, which
+    # is what an all-NaN column does in the gathered form: zero returns, growth
+    # of one, its weight carried unchanged. Absent from the sum it would read as
+    # weight zero instead — a silent haircut on every segment that held it.
+    flat = [c for c in cols if c not in covered]
+    if flat:
+        for d0, pos in spans:
+            factor[pos] += float(tw.loc[d0, flat].sum())
 
     # Scale-free: this path only feeds ratio metrics (drawdown, Calmar), and a
     # pure-DCA run starts at 0 — which would flatten it to zeros and print a
     # fake 0% max DD. Any positive base gives the same ratios.
     nav = float(initial_capital) or 1.0
     segments = [pd.Series([nav], index=[reb[0]])]
-    for i, d0 in enumerate(reb):
-        d1 = reb[i + 1] if i + 1 < len(reb) else dr.index[-1]
-        # Trading days strictly after this rebalance, up to and including the
-        # next one — a clean partition even when d0/d1 are calendar month-ends
-        # (resample labels) that aren't themselves trading days.
-        seg = dr.loc[(dr.index > d0) & (dr.index <= d1)]
-        if seg.empty:
-            continue
-        w = tw.loc[d0].to_numpy()
-        resid = 1.0 - float(w.sum())     # uninvested fraction: hold flat as cash,
-                                         # don't vaporize it (else NAV fake-drops
-                                         # to Σw at every not-fully-invested rebalance)
-        # Clip daily returns to the simulator's own guard band (_apply_returns)
-        # so an unrecorded-split print can't crater the reconstructed path.
-        growth = (1.0 + seg.fillna(0.0).clip(-0.90, 5.0)).cumprod()   # per-asset cum growth
-        seg_nav = pd.Series(((growth.to_numpy() * w).sum(axis=1) + resid) * nav, index=seg.index)
-        segments.append(seg_nav)
-        nav = float(seg_nav.iloc[-1])
+    for d0, pos in spans:
+        # The uninvested fraction: held flat as cash, not vaporized (else NAV
+        # fake-drops to Σw at every not-fully-invested rebalance).
+        resid = 1.0 - float(tw.loc[d0].to_numpy().sum())
+        seg_nav = (factor[pos] + resid) * nav
+        segments.append(pd.Series(seg_nav, index=days[pos]))
+        nav = float(seg_nav[-1])
 
     out = pd.concat(segments)
     return out[~out.index.duplicated(keep="first")]
+
+
+def _extra_sleeves(shared: dict, target_weights: pd.DataFrame) -> dict:
+    """The daily return series that are not columns of the price matrix: the cash
+    leg, the benchmark, and any downloaded ETF the FixedWeight blend engine
+    stashed on the bundle."""
+    extra = {}
+    cdi_daily = shared.get("cdi_daily")
+    if cdi_daily is not None:
+        extra["CDI_ASSET"] = cdi_daily
+    ibov_px = shared.get("ibov_px")
+    if "IBOV" in target_weights.columns and ibov_px is not None:
+        extra["IBOV"] = ibov_px.pct_change()
+    extra.update(shared.get("_daily_asset_ret") or {})
+    return extra
 
 
 def strategy_daily_values(
@@ -118,30 +199,45 @@ def strategy_daily_values(
     target_weights: pd.DataFrame,
     initial_capital: float = 100_000.0,
 ) -> pd.Series:
-    """Daily NAV path for a strategy's rebalance-date weights, built from the
-    daily price data already in ``shared``.
+    """Daily NAV path for a strategy's rebalance-date weights.
 
     Single source of truth so Max Drawdown / Calmar reflect intra-rebalance lows
     for EVERY strategy and rebalance regime — the rebalance-cadence equity curve
     from run_simulation is blind to mid-period crashes (see
     :func:`reconstruct_daily_values`). Returns an empty Series if the required
     daily data isn't present, in which case callers fall back to cadence DD.
+
+    Streamed when the bundle can stream. A book that rotates monthly over a big
+    universe has held nearly every name in it by the end — 9,694 of 11,000 on a
+    26-year US run — so "only the names it held" is not the saving it sounds
+    like. Feeding those names to `_reconstruct` a batch at a time is: the path is
+    a sum over names, so it never needs more than one batch of daily returns and
+    one array of `len(sessions)` floats.
     """
-    daily_close = shared.get("split_adj_close")
-    if daily_close is None:
-        return pd.Series(dtype=float)
-    daily_ret = daily_close.pct_change()
-    cdi_daily = shared.get("cdi_daily")
-    if cdi_daily is not None:
-        daily_ret["CDI_ASSET"] = cdi_daily                 # cash sleeve
-    ibov_px = shared.get("ibov_px")
-    if "IBOV" in target_weights.columns and ibov_px is not None:
-        daily_ret["IBOV"] = ibov_px.pct_change()
-    # Daily returns for downloaded ETF sleeves (IVVB11, DIVO11, …) that the
-    # FixedWeight blend engine stashed here — not in the B3 price matrix.
-    for col, series in (shared.get("_daily_asset_ret") or {}).items():
-        daily_ret[col] = series
-    return reconstruct_daily_values(target_weights, daily_ret, initial_capital)
+    extra = _extra_sleeves(shared, target_weights)
+    held = [c for c in target_weights.columns
+            if c not in extra
+            and float(target_weights[c].abs().max() or 0.0) > 0.0]
+
+    stream, sessions = shared.get("stream"), shared.get("sessions")
+    if not callable(stream) or sessions is None:
+        # A hand-built bundle (tests) or a caller that already holds the panel.
+        daily_close = shared.get("split_adj_close")
+        if daily_close is None:
+            return pd.Series(dtype=float)
+        daily_ret = daily_close.pct_change()
+        if extra:
+            daily_ret = pd.concat(
+                [daily_ret, pd.DataFrame(extra).reindex(daily_ret.index)], axis=1)
+        return reconstruct_daily_values(target_weights, daily_ret, initial_capital)
+
+    days = pd.DatetimeIndex(sessions)
+    sleeves = pd.DataFrame(extra).reindex(days) if extra else pd.DataFrame(index=days)
+    chunks = itertools.chain(
+        [sleeves],
+        stream("split_adj_close", columns=held, reduce=lambda f: f.pct_change()))
+    return _reconstruct(target_weights, days, [*held, *extra], chunks,
+                        initial_capital)
 
 
 def build_metrics(

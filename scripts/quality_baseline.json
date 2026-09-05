@@ -22,7 +22,7 @@
     "engine/backtests/core/simulation.py::_execute_rebalance": 13,
     "engine/backtests/core/simulation.py::run_simulation": 15,
     "engine/backtests/core/strategy_registry.py::discover": 15,
-    "engine/backtests/strategies/mean_reversion.py::generate_signals": 24,
+    "engine/backtests/strategies/mean_reversion.py::generate_signals": 23,
     "engine/backtests/strategies/sp500_b3.py::select_constituents": 15,
     "engine/backtests/strategies/teva_ativos_reais.py::generate_signals": 14,
     "frontend/app/bench/StrategyForm.tsx::StrategyFormInner": 30,

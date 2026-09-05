@@ -8,11 +8,33 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from backtests.core.mean_rev_helpers import alpha_inputs, rolling_vol_daily
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
     COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
     COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
+
+
+def _gate_reductions(freq: str, want_win_rate: bool) -> dict:
+    """The win-rate and vol-parity gates, as reductions to fold into one pass.
+
+    Both are daily -> monthly chains that touch each name on its own, so they
+    ride along with the alpha score's own pass over the bars rather than opening
+    a second one. A pass over the US plane is ~90 seconds; this strategy took
+    three of them before these were folded in, which put a US run within a
+    minute of the subprocess timeout.
+    """
+    def win_rate_ratio(bars):
+        rate = (bars["adj_close"].pct_change() > 0).rolling(20, min_periods=10).mean()
+        ratio = rate / (rate.rolling(60, min_periods=30).mean() + 1e-8)
+        return ratio.resample(freq).last()
+
+    gates = {"vol": lambda bars: rolling_vol_daily(
+        bars["adj_close"], 20, 10).resample(freq).last()}
+    if want_win_rate:
+        gates["win_rate"] = win_rate_ratio
+    return gates
 
 
 class MeanReversionCompositeStrategy(StrategyBase):
@@ -108,14 +130,21 @@ class MeanReversionCompositeStrategy(StrategyBase):
         raw_close = shared_data["raw_close"]
         cdi_monthly = shared_data["cdi_monthly"]
         ibov_ret = shared_data["ibov_ret"]
-        rolling_vol_20d_daily = shared_data["rolling_vol_20d_daily"]
         has_glitch = shared_data.get("has_glitch")
 
         # Layer 1: Regime filter
         risk_on = compute_regime_filter(shared_data, params, freq)
 
-        # Layer 2: Composite alpha score
-        alpha, sub_signals = compute_alpha_score(shared_data, params, freq)
+        # Layer 2: Composite alpha score. One pass over the plane produces both
+        # its per-ticker inputs and this strategy's own two gates — see
+        # mean_rev_helpers.alpha_inputs.
+        on_grid = alpha_inputs(
+            shared_data, freq, ret,
+            extra=_gate_reductions(
+                freq, params.get("enable_win_rate_filter", "Yes") == "Yes"))
+        alpha, sub_signals = compute_alpha_score(
+            shared_data, params, freq, on_grid=on_grid)
+        win_rate_ratio_m, rolling_vol_20d_m = on_grid.get("win_rate"), on_grid["vol"]
 
         # Apply glitch mask to alpha
         if has_glitch is not None:
@@ -137,25 +166,8 @@ class MeanReversionCompositeStrategy(StrategyBase):
         else:
             stability_weights = None
 
-        # Pre-compute win rate ratio (daily → monthly, aligned to ret columns)
-        enable_win_rate_filter = params.get("enable_win_rate_filter", "Yes") == "Yes"
-        if enable_win_rate_filter:
-            daily_ret_d = shared_data["adj_close"].pct_change()
-            win_rate_20d = (daily_ret_d > 0).rolling(20, min_periods=10).mean()
-            win_rate_ratio_d = win_rate_20d / (win_rate_20d.rolling(60, min_periods=30).mean() + 1e-8)
-            win_rate_ratio_m = (
-                win_rate_ratio_d
-                .resample(freq).last()
-                .reindex(columns=ret.columns)
-            )
-        else:
-            win_rate_ratio_m = None
-
         # ATR ratio gate (from sub_signals if sub_E was computed)
         atr_ratio_m = sub_signals.get("atr_ratio_m")
-
-        # Vol-parity weights (resample to monthly)
-        rolling_vol_20d_m = rolling_vol_20d_daily.resample(freq).last()
 
         # Build returns and target weights matrices
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)

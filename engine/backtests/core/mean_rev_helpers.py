@@ -142,26 +142,80 @@ def compute_regime_filter(
     return risk_on
 
 
+# The bars every per-ticker input below is derived from. One tuple, so they come
+# off the plane in a single pass — a pass is ~90s at US scale, and this strategy
+# used to take three of them.
+_ALPHA_PANELS = ("adj_close", "split_adj_high", "split_adj_low", "split_adj_close")
+
+
+def alpha_inputs(shared_data: dict, freq: str, grid: pd.DataFrame,
+                 extra: dict | None = None) -> dict:
+    """The per-ticker half of the alpha score, already on the rebalance grid.
+
+    Every sub-signal in `compute_alpha_score` is a chain of per-ticker operations
+    — a rolling window, a ratio to the name's own mean, a resample — followed by
+    a cross-sectional rank. Only the rank is cross-sectional, and it happens on
+    what this returns. So everything here is computed inside the batch its bars
+    arrive in and never exists at the market's width: this strategy read five
+    daily panels at once (~580 MB each on the US plane) plus a rolling window
+    over each, and peaked past 11 GB. These frames are ~26 MB apiece.
+
+    ``extra`` lets the caller add its own reductions to the same pass. That is
+    not a convenience: the reads are the expensive part, and a caller that wants
+    two more grids off the same bars should not pay for the plane twice.
+    """
+    from backtests.core.strategy_base import daily_on_grid
+
+    def ratio_to_own_mean(daily: pd.DataFrame) -> pd.DataFrame:
+        """A name against its own 60-day norm — elevated vol reads as trending."""
+        return daily / daily.rolling(60, min_periods=30).mean().replace(0, np.nan)
+
+    def hlr(bars: dict) -> pd.DataFrame:
+        return high_low_range(bars["split_adj_high"], bars["split_adj_low"],
+                              bars["split_adj_close"])
+
+    def atr(bars: dict) -> pd.DataFrame:
+        return bars["adj_close"].pct_change().abs().ewm(
+            span=14, min_periods=14).mean()
+
+    reductions = dict(
+        return_60d_m=lambda b: b["adj_close"].pct_change(60).resample(freq).last(),
+        ac20_m=lambda b: autocorr(b["adj_close"], 20, 10).resample(freq).last(),
+        ac60_m=lambda b: autocorr(b["adj_close"], 60, 30).resample(freq).last(),
+        vol_ratio_m=lambda b: (
+            rolling_vol_daily(b["adj_close"], 60, 30)
+            / rolling_vol_daily(b["adj_close"], 20, 10).replace(0, np.nan)
+        ).resample(freq).last(),
+        atr_ratio_m=lambda b: ratio_to_own_mean(atr(b)).resample(freq).last(),
+        hlr_m=lambda b: hlr(b).resample(freq).last(),
+        hl_vol_ratio_m=lambda b: ratio_to_own_mean(hlr(b)).resample(freq).last(),
+    )
+    reductions.update(extra or {})
+    return daily_on_grid(shared_data, _ALPHA_PANELS, grid, **reductions)
+
+
 def compute_alpha_score(
     shared_data: dict,
     params: dict,
     freq: str = "ME",
+    on_grid: dict | None = None,
 ) -> tuple[pd.DataFrame, dict[str, pd.DataFrame]]:
     """
     Layer 2: Composite alpha score from sub-signals A–D (and optional E).
+
+    ``on_grid`` is `alpha_inputs`' output, passed in by a caller that already
+    made that pass over the plane for reductions of its own; computed here when
+    it is not.
 
     Returns:
         alpha_score: DataFrame (month-end x ticker) with composite score [0,1] range
         sub_signals: dict with keys sub_A..sub_D for IC monitoring,
                      plus optional "atr_ratio_m" (raw ratio, for the ATR gate).
     """
-    adj_close = shared_data["adj_close"]
-    high_low_range_20d = shared_data["high_low_range_20d"]
-    rolling_vol_20d_daily = shared_data["rolling_vol_20d_daily"]
-    rolling_vol_60d_daily = shared_data["rolling_vol_60d_daily"]
-    autocorr_20d = shared_data["autocorr_20d"]
-    autocorr_60d = shared_data["autocorr_60d"]
     cdi_cumul_63d = shared_data["cdi_cumul_63d"]
+    grid = shared_data["ret"]
+    if on_grid is None:
+        on_grid = alpha_inputs(shared_data, freq, grid)
 
     w_vol = params.get("w_vol", 0.25)
     w_macro = params.get("w_macro", 0.25)
@@ -169,37 +223,26 @@ def compute_alpha_score(
     w_vol_ratio = params.get("w_vol_ratio", 0.25)
 
     # ── Sub-signal A: Volatility Reversal ──────────────────────────────────
-    hlr_m = high_low_range_20d.resample(freq).last()
-    vol_ratio = rolling_vol_60d_daily / rolling_vol_20d_daily.replace(0, np.nan)
-    vol_ratio_m = vol_ratio.resample(freq).last()
-
-    rank_hlr = (-hlr_m).rank(axis=1, pct=True)
-    rank_vol_ratio = (-vol_ratio_m).rank(axis=1, pct=True)
+    rank_hlr = (-on_grid["hlr_m"]).rank(axis=1, pct=True)
+    rank_vol_ratio = (-on_grid["vol_ratio_m"]).rank(axis=1, pct=True)
     sub_A = (rank_hlr + rank_vol_ratio) / 2.0
 
     # ── Sub-signal B: Macro-Relative Momentum ─────────────────────────────
-    return_60d = adj_close.pct_change(60)
-    return_60d_m = return_60d.resample(freq).last()
     cdi_63d_m = cdi_cumul_63d.resample(freq).last()
     # Avoid division by zero; broadcast Series across columns
     cdi_63d_safe = cdi_63d_m.replace(0, np.nan)
-    macro_ratio = return_60d_m.div(cdi_63d_safe, axis=0)
+    macro_ratio = on_grid["return_60d_m"].div(cdi_63d_safe, axis=0)
     sub_B = macro_ratio.rank(axis=1, pct=True)
 
     # ── Sub-signal C: Autocorrelation Regime ───────────────────────────────
-    ac60_m = autocorr_60d.resample(freq).last()
-    ac20_m = autocorr_20d.resample(freq).last()
-    rank_ac60 = (-ac60_m).rank(axis=1, pct=True)
-    rank_ac20 = (-ac20_m).rank(axis=1, pct=True)
+    rank_ac60 = (-on_grid["ac60_m"]).rank(axis=1, pct=True)
+    rank_ac20 = (-on_grid["ac20_m"]).rank(axis=1, pct=True)
     sub_C = (rank_ac60 + rank_ac20) / 2.0
 
     # ── Sub-signal D: High-Low Range ratio to own 60d mean ─────────────────
     # Stocks whose current vol is elevated above their own norm get a LOW score
     # (likely trending, not mean-reverting). Negative IC → flip sign before ranking.
-    hl_60d_mean = high_low_range_20d.rolling(60, min_periods=30).mean()
-    hl_vol_ratio = high_low_range_20d / hl_60d_mean.replace(0, np.nan)
-    hl_vol_ratio_m = hl_vol_ratio.resample(freq).last()
-    sub_D = (-hl_vol_ratio_m).rank(axis=1, pct=True)  # low ratio → high rank → mean-rev candidate
+    sub_D = (-on_grid["hl_vol_ratio_m"]).rank(axis=1, pct=True)
 
     # ── Composite ──────────────────────────────────────────────────────────
     alpha = w_vol * sub_A + w_macro * sub_B + w_autocorr * sub_C + w_vol_ratio * sub_D
@@ -209,17 +252,10 @@ def compute_alpha_score(
         "sub_B": sub_B,
         "sub_C": sub_C,
         "sub_D": sub_D,
+        # Not added to composite alpha; the raw ratio for the ATR gate in
+        # generate_signals, not for the IC guard.
+        "atr_ratio_m": on_grid["atr_ratio_m"],
     }
-
-    # ── Sub-signal E (optional): ATR ratio to own 60d mean ─────────────────
-    # Not added to composite alpha; stored as raw ratio for the ATR gate in generate_signals.
-    atr_20d_daily = shared_data.get("atr_20d_daily")
-    if atr_20d_daily is not None:
-        atr_60d_mean = atr_20d_daily.rolling(60, min_periods=30).mean()
-        atr_ratio = atr_20d_daily / atr_60d_mean.replace(0, np.nan)
-        atr_ratio_m = atr_ratio.resample(freq).last()
-        sub_signals["atr_ratio_m"] = atr_ratio_m  # raw ratio for gate, not for IC guard
-
     return alpha, sub_signals
 
 

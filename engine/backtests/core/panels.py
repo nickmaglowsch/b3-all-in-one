@@ -8,24 +8,40 @@ every run whatever the strategy read, out of a long frame it held whole at the
 same time — which is how a US backtest reached the worker's `mem_limit` and came
 back as `killed by SIGKILL`.
 
-Three things here keep that bounded, none of which changes a number:
+**A panel is a query, not a resident structure.** That is the shape of this
+module and the thing to keep true. Nothing that reads daily bars in this
+repository does anything *across* tickers with them: every consumer — the
+bundle's own MA200 and ATR and mean-reversion features, and all eight strategies
+that touch a daily frame — is a per-ticker time-series reduction (`pct_change`,
+`rolling`, `ewm`) read at rebalance dates. Cross-sectional work happens on the
+rebalance grid, after the reduction. So the universe splits by column, and
+`stream_market_panels` walks it a few hundred names at a time: each batch is
+loaded, reduced by the caller, and dropped before the next arrives. Peak memory
+becomes the batch plus whatever the caller keeps, instead of the whole market.
 
-  * `load_market_panels` builds only the panels its caller names.
-  * `_pivot_wide` scatters one value column at a time, popping each off the long
-    frame as it goes, so the long frame and the panels are never both whole.
-  * `_ffill_in_place` overwrites its input list rather than building a second one.
+Everything else here supports that:
+
+  * `load_market_panels` builds only the panels its caller names, for only the
+    symbols it names, aligned to a session index it can supply — which is what
+    lets a batch's output line up with every other batch's.
+  * `reshape` turns each batch's rows into its grids without ever holding both
+    the rows and the grids whole.
 
 `data.py` keeps the rest — benchmarks, CDI, fundamentals, PIT sectors — and
 re-exports the entry points below so every existing caller keeps its import.
 """
 from __future__ import annotations
 
-import numpy as np
+import os
+
 import pandas as pd
 
 from b3_pipeline import storage
 
-from backtests.core import markets, universe
+from backtests.core import markets, memory, universe
+from backtests.core.reshape import (
+    _ffill_in_place, _normalise_long, _pivot_wide,
+)
 
 
 def _safe_dsn(dsn) -> str:
@@ -44,123 +60,6 @@ def _safe_dsn(dsn) -> str:
         return text  # no credentials in the URL
     user = creds.split(":", 1)[0]
     return f"{scheme}://{user}:***@{host}"
-
-
-def _normalise_long(df: pd.DataFrame) -> pd.DataFrame:
-    """A freshly-read long frame, with its two key columns made cheap.
-
-    ``date`` becomes datetime64 — every caller did this itself. ``ticker`` becomes
-    a category, which is the part that matters: on pandas 2 the driver hands back
-    a distinct Python ``str`` object *per row*, so the US plane's ~30M bars carry
-    a couple of gigabytes of duplicated four-character symbols. Factorizing to
-    codes plus one copy of each name is the same column an order of magnitude
-    smaller, and `_pivot_wide` has to factorize it anyway. (pandas 3 infers a
-    string dtype that is already compact; the conversion is cheap there and keeps
-    one code path rather than two.)
-
-    The categorical never leaves this module: `_pivot_wide` reads it through
-    ``factorize`` and materialises the names into a plain object Index, so no
-    downstream ``reindex`` ever meets a CategoricalIndex it can refuse.
-    """
-    df["date"] = pd.to_datetime(df["date"])
-    if not isinstance(df["ticker"].dtype, pd.CategoricalDtype):
-        df["ticker"] = df["ticker"].astype("category")
-    return df
-
-
-def _positions(keys: pd.Series) -> tuple:
-    """``(position per row, the sorted distinct keys)`` — the halves of a pivot.
-
-    A categorical column already carries exactly this: `astype("category")` sorts
-    its categories, so the codes *are* the sorted positions and re-factorizing
-    would only redo the work `_normalise_long` paid for. Taking the categories
-    rather than the codes' own index is also what keeps the resulting frames'
-    columns a plain Index: `pd.factorize` of a categorical hands back a
-    CategoricalIndex, and a CategoricalIndex refuses the very `reindex` calls
-    every downstream reader makes.
-    """
-    if isinstance(keys.dtype, pd.CategoricalDtype):
-        keys = keys.cat.remove_unused_categories()
-        codes = keys.cat.codes.to_numpy()
-        if (codes < 0).any():
-            raise ValueError(f"price rows with no {keys.name} cannot be reshaped")
-        return codes, keys.cat.categories
-    codes, uniques = pd.factorize(keys, sort=True)
-    if (codes < 0).any():
-        raise ValueError(f"price rows with no {keys.name} cannot be reshaped")
-    return codes, pd.Index(uniques)
-
-
-def _pivot_wide(df: pd.DataFrame, values: list[str]) -> list[pd.DataFrame]:
-    """One (date x ticker) grid per value column, built by scatter, not by pivot.
-
-    ``df.pivot(index, columns, values=[...])`` reshapes every value column at
-    once, so the whole block of wide frames exists *alongside* the long frame
-    that produced it. On B3 that is a few hundred MB and nobody noticed. On the
-    US plane a window of 2000..today is ~11,000 symbols over ~6,500 sessions:
-    the six wide frames are ~3.4 GB and the long frame another ~3 GB, and both
-    were live at the same instant. That is what the worker's mem_limit killed.
-
-    Here the row/column positions are factorized once and each value column is
-    ``pop``ed off the long frame, scattered into its own grid and released. The
-    long frame shrinks by exactly as much as the wide frames grow, so the peak
-    is roughly the answer rather than the answer plus its input. Same values,
-    same dtypes, same sorted index and columns — ``pivot`` sorts both, and so
-    does ``factorize(sort=True)``.
-
-    An empty input is special-cased: a multi-value pivot of no rows produces a
-    column MultiIndex whose value level exists but is unused, so `wide[v]` raises
-    KeyError where the single-value pivot returned an empty frame. A fresh
-    database with no prices yet is a real state (it is what CI runs against), so
-    it gets the empty frames it used to get.
-    """
-    if df.empty:
-        return [
-            pd.DataFrame(index=pd.Index([], name="date"),
-                         columns=pd.Index([], name="ticker"), dtype=float)
-            for _ in values
-        ]
-
-    rows, dates = _positions(df["date"])
-    cols, tickers = _positions(df["ticker"])
-    index = pd.DatetimeIndex(dates, name="date")
-    columns = pd.Index(tickers, name="ticker")
-
-    # `pivot` raises on a repeated (date, ticker); a scatter would silently keep
-    # whichever row landed last. The plane's primary keys make it impossible, so
-    # this is a guard rather than a code path — but a silent wrong price is not
-    # an acceptable way to find out the key changed. One bool grid, O(n).
-    seen = np.zeros((len(index), len(columns)), dtype=bool)
-    seen[rows, cols] = True
-    if int(seen.sum()) != len(rows):
-        raise ValueError("Index contains duplicate entries, cannot reshape")
-    del seen
-
-    out = []
-    for value in values:
-        # pop, not [], so the long frame gives back the column we just consumed.
-        grid = np.full((len(index), len(columns)), np.nan)
-        grid[rows, cols] = df.pop(value).astype(float).to_numpy()
-        out.append(pd.DataFrame(grid, index=index, columns=columns))
-    return out
-
-
-def _ffill_in_place(frames: list, tradable: pd.DataFrame, upto: int) -> None:
-    """``ffill_until_delisting`` over ``frames[:upto]``, in place.
-
-    ``upto`` is where the price panels end and financial volume begins: volume is
-    deliberately left unfilled so a day a name did not trade averages in as
-    missing rather than as a repeat of the last session's turnover.
-
-    In place, because the obvious ``[f(x) for x in frames]`` holds every input
-    alive until the last output is built — five daily panels in and five out,
-    ten live at the peak. Overwriting the list slot drops each input the moment
-    its output exists, so the peak is the panels plus one. Callers must hand the
-    list over rather than keep their own names for its frames, or the slot
-    assignment frees nothing.
-    """
-    for i in range(upto):
-        frames[i] = universe.ffill_until_delisting(frames[i], tradable)
 
 
 def load_b3_data(db_path: str, start: str, end: str) -> tuple:
@@ -268,16 +167,150 @@ HLC_PANELS = ("adj_close", "split_adj_high", "split_adj_low", "split_adj_close",
 BASE_PANELS = ("adj_close", "split_adj_close", "close", "fin_volume")
 
 
+# Names per streamed batch. Sized so one batch's panels are tens of MB whatever
+# the market: 400 names over a 26-year daily window is ~21 MB a panel. Bigger
+# batches amortise the per-query overhead but buy back the memory this exists to
+# avoid; smaller ones turn one scan into hundreds. ENGINE_PANEL_BATCH overrides.
+SYMBOL_BATCH = 400
+
+
+def _symbol_filter(spec, symbols) -> tuple:
+    """``(SQL fragment, params)`` restricting a panel query to `symbols`.
+
+    Generated placeholders, never an interpolated literal: these are database
+    values, and the one place a market's own data must not reach is its query text.
+    """
+    if symbols is None:
+        return "", {}
+    names = list(symbols)
+    if not names:
+        # An empty IN () is a syntax error in SQLite and a footgun in Postgres.
+        return " AND 1 = 0", {}
+    keys = [f"sym{i}" for i in range(len(names))]
+    fragment = f" AND {spec.symbol_column} IN ({', '.join(':' + k for k in keys)})"
+    return fragment, dict(zip(keys, names))
+
+
+def market_symbols(db_path: str, start: str, end: str,
+                   market: str = markets.DEFAULT) -> list:
+    """Every instrument that printed in the window, sorted — the batching axis.
+
+    One index scan, and it is the only way to split the universe by column before
+    reading any of it. The shape filter is applied here too, so a batch never
+    carries a name the panels would have dropped anyway.
+
+    Sorted through pandas, not `sorted()`: this order is where the batch
+    boundaries fall, and `_pivot_wide` orders each batch's columns with pandas'
+    own sort. Two orders that agree on ASCII tickers and disagree elsewhere would
+    make a streamed frame a column permutation of the whole-market one.
+    """
+    spec = markets.get(market)
+    b3 = spec.table == "prices"
+    shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
+    scope = "" if b3 else " AND market = :market"
+    params = {"start": start, "end": end}
+    if not b3:
+        params["market"] = spec.key
+    sql = (f"SELECT DISTINCT {spec.symbol_column} AS ticker FROM {spec.table}"    # noqa: S608
+           f" WHERE date >= :start AND date <= :end{scope}{shape}")
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn, params=params)
+    if df.empty:
+        return []
+    return list(pd.Index(df["ticker"].astype(str)).sort_values())
+
+
+def market_sessions(db_path: str, start: str, end: str,
+                    market: str = markets.DEFAULT) -> pd.DatetimeIndex:
+    """Every date the market printed on in the window, sorted.
+
+    The index every batch is aligned to. Taken from the market rather than from a
+    calendar, so holidays, half days and the plane's own gaps are whatever the
+    plane says they are — which is what makes a batch's frame identical to its
+    slice of a whole-market load.
+    """
+    spec = markets.get(market)
+    b3 = spec.table == "prices"
+    shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
+    scope = "" if b3 else " AND market = :market"
+    params = {"start": start, "end": end}
+    if not b3:
+        params["market"] = spec.key
+    sql = (f"SELECT DISTINCT date FROM {spec.table}"                             # noqa: S608
+           f" WHERE date >= :start AND date <= :end{scope}{shape}")
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn, params=params)
+    if df.empty:
+        return pd.DatetimeIndex([], name="date")
+    return pd.DatetimeIndex(sorted(pd.to_datetime(df["date"])), name="date")
+
+
+def batch_size() -> int:
+    """`SYMBOL_BATCH`, or ``ENGINE_PANEL_BATCH`` when a deployment has tuned it."""
+    raw = os.environ.get("ENGINE_PANEL_BATCH", "").strip()
+    try:
+        return max(1, int(raw)) if raw else SYMBOL_BATCH
+    except ValueError:
+        return SYMBOL_BATCH
+
+
+def stream_market_panels(db_path: str, start: str, end: str,
+                         market: str = markets.DEFAULT,
+                         panels: tuple = HLC_PANELS,
+                         size: int | None = None,
+                         sessions=None, symbols=None):
+    """Yield ``{panel: frame}`` a few hundred names at a time.
+
+    The whole market's daily bars never exist at once. Each batch is a slice of
+    what `load_market_panels` would have returned — same rows, same fill, same
+    dtypes, just fewer columns — so a caller that reduces each batch per ticker
+    and concatenates the results gets exactly the whole-market answer, at the
+    cost of one batch instead of the market. Reduce inside the loop: holding a
+    batch past the next one is a bug the generator cannot prevent.
+    """
+    if sessions is None:
+        sessions = market_sessions(db_path, start, end, market)
+    if symbols is None:
+        symbols = market_symbols(db_path, start, end, market)
+    size = size or batch_size()
+    total = (len(symbols) + size - 1) // size
+    print(f"⬇  Streaming {markets.get(market).key} daily bars from "
+          f"{_safe_dsn(db_path)} ({start} to {end}): {len(symbols):,} names in "
+          f"{total} batch(es) of {size}...")
+    for n, i in enumerate(range(0, len(symbols), size), start=1):
+        batch = symbols[i:i + size]
+        yield load_market_panels(db_path, start, end, market, panels,
+                                 symbols=batch, sessions=sessions, quiet=True)
+        # The caller has reduced this batch and dropped it, so this is the moment
+        # its memory is free — and the moment glibc would otherwise keep it. See
+        # memory.release: without this the batches accumulate in the arena and
+        # streaming saves nothing the container can see.
+        memory.release()
+        print(f"   … batch {n}/{total} ({len(batch)} names) reduced", flush=True)
+
+
 def load_market_panels(db_path: str, start: str, end: str,
                        market: str = markets.DEFAULT,
-                       panels: tuple = HLC_PANELS) -> dict:
+                       panels: tuple = HLC_PANELS,
+                       symbols=None, sessions=None, quiet: bool = False) -> dict:
     """``{panel: wide (date x ticker) frame}`` for one market and window.
 
-    ``panels`` is the lever this exists for. Every panel is `sessions x names` at
-    daily resolution — on the US plane over a 2000..today window, ~580 MB each —
-    and the loader used to build all six for every run whatever the strategy
-    read. Naming the ones you need keeps the unread ones out of the query, out of
-    the long frame, and out of memory.
+    Three levers, and the whole point of the module is that a caller uses them
+    rather than asking for the market:
+
+    ``panels`` — which frames to build. Every one is `sessions x names` at daily
+    resolution; on the US plane over a 2000..today window that is ~580 MB each.
+
+    ``symbols`` — which names to build them for. ``None`` means every name in the
+    window, which is what makes the answer big; `stream_market_panels` passes a
+    few hundred at a time.
+
+    ``sessions`` — the daily index to align to. A symbol subset trades on only
+    some of the market's days, so its own scatter produces a shorter index than
+    another subset's. Reindexing onto the market's full session index *before*
+    the forward fill lines every batch up with every other, and makes each one
+    identical to its slice of a whole-market load: the fill then bridges a gap
+    the batch did not print on exactly as it would have in the larger frame.
 
     Prices are forward-filled while each name was listed and blanked after
     (`universe.ffill_until_delisting`); turnover is left unfilled so a day a name
@@ -294,30 +327,42 @@ def load_market_panels(db_path: str, start: str, end: str,
     if "fin_volume" in panels:
         wanted.append("fin_volume")
 
-    print(f"⬇  Loading {spec.key} HLC data from {_safe_dsn(db_path)} "
-          f"({start} to {end})...")
+    if not quiet:
+        print(f"⬇  Loading {spec.key} HLC data from {_safe_dsn(db_path)} "
+              f"({start} to {end})...")
 
     b3 = spec.table == "prices"
     projection = _B3_PANEL_SQL if b3 else _CONVERTED_PANEL_SQL
     shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
     scope = "" if b3 else " AND market = :market"
+    pick, params = _symbol_filter(spec, symbols)
+    params.update(start=start, end=end)
+    if not b3:
+        params["market"] = spec.key
     query = (
         f"SELECT date, {spec.symbol_column} AS ticker,"                          # noqa: S608
         f" {', '.join(projection[p] for p in wanted)}"
-        f" FROM {spec.table} WHERE date >= :start AND date <= :end{scope}{shape}"
+        f" FROM {spec.table} WHERE date >= :start AND date <= :end"
+        f"{scope}{shape}{pick}"
     )
-    params = {"start": start, "end": end}
-    if not b3:
-        params["market"] = spec.key
 
     with storage.get_connection(db_path) as conn:
         df = storage.read_sql(query, conn, params=params)
 
     df = _normalise_long(df)
 
-    print("🔄  Pivoting HLC data to wide format...")
+    if not quiet:
+        print("🔄  Pivoting HLC data to wide format...")
     frames = _pivot_wide(df, wanted)
     del df                       # the long frame is empty by now; drop the shell
+
+    if sessions is not None:
+        # Before the fill, never after: the fill has to see the market's whole
+        # calendar to bridge a day this subset did not print on the way the
+        # whole-market frame would have.
+        index = pd.DatetimeIndex(sessions, name="date")
+        for i in range(len(frames)):
+            frames[i] = frames[i].reindex(index)
 
     # Forward fill prices to handle missing days, leave volume as-is. Stops at
     # each name's delisting — see load_b3_data.
@@ -326,7 +371,8 @@ def load_market_panels(db_path: str, start: str, end: str,
         frames[0].index, frames[0].columns)
     _ffill_in_place(frames, tradable, upto=prices)
 
-    print(f"✅  Loaded HLC for {frames[0].shape[1]} unique {spec.key} tickers.")
+    if not quiet:
+        print(f"✅  Loaded HLC for {frames[0].shape[1]} unique {spec.key} tickers.")
     return dict(zip(wanted, frames))
 
 

@@ -140,3 +140,38 @@ async def test_whatif_unknown_strategy_404(client):
     r = await client.post(
         "/whatif", json={"strategy_ids": ["NopeNope"]}, headers=headers)
     assert r.status_code == 404
+
+
+async def test_run_whatif_reads_summary_and_curve_then_cleans_up(monkeypatch, tmp_path):
+    """The replay subprocess, faked: argv, the JSON summary, the after-tax curve
+    read from the scratch dir, and that dir gone afterwards — on success and on
+    an engine failure alike."""
+    import subprocess
+    from pathlib import Path
+
+    from platform_app import b3run, enginerun, routes_whatif
+
+    monkeypatch.setattr(b3run.settings, "uploads_dir", str(tmp_path))
+    seen = {}
+
+    def fake(script, args, extra_env=None):
+        seen.update(script=script, args=args, env=extra_env, out=Path(args[1]))
+        (Path(args[1]) / "curves.csv").write_text(
+            "date,aftertax,pretax\n2024-01-02,100.0,101.0\n")
+        return subprocess.CompletedProcess(args, 0, stdout='log\n{"cagr": 0.1}\n', stderr="")
+
+    monkeypatch.setattr(enginerun, "run_script", fake)
+    out = routes_whatif._run_whatif("S", {"flows": []}, "t1", {"E": "1"})
+    assert out == {"summary": {"cagr": 0.1},
+                   "curve": [{"date": "2024-01-02", "aftertax": 100.0}]}
+    assert seen["script"] == "run_backtest_json.py"
+    assert seen["args"] == ["S", str(seen["out"]), '{"flows": []}']
+    assert seen["env"] == {"E": "1"}
+    assert seen["out"].parent == b3run.workspace_root("t1")
+    assert not seen["out"].exists()
+
+    monkeypatch.setattr(enginerun, "run_script", lambda s, a, e=None:
+                        subprocess.CompletedProcess(a, 1, stdout="", stderr="boom"))
+    with pytest.raises(RuntimeError, match="^boom$"):
+        routes_whatif._run_whatif("S", {}, "t1")
+    assert not any(b3run.workspace_root("t1").iterdir())

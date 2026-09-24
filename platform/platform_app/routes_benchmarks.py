@@ -25,7 +25,8 @@ import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from platform_app import enginerun, subprocs
+from platform_app import enginerun
+from platform_app.routes_portfolio_index import bounded
 from platform_app.tenancy import get_current_tenant
 
 benchmarks_router = APIRouter(prefix="/benchmarks", tags=["benchmarks"])
@@ -72,10 +73,7 @@ def clear_cache() -> None:
 def _run_bench(start: str, end: str, names: list[str]) -> dict:
     """scripts/bench_series.py in the engine venv → {name: {date: level}, ...}.
     Blocking — call via to_thread."""
-    proc = enginerun.run_script("bench_series.py", [start, end, ",".join(names)])
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-    return subprocs.last_json(proc.stdout, strict=True)
+    return enginerun.run_json("bench_series.py", [start, end, ",".join(names)])
 
 
 def _parse_keys(keys: str | None) -> list[str]:
@@ -148,7 +146,5 @@ async def _levels(start: str, end: str, names: list[str]) -> dict[str, dict]:
     except Exception:
         return {}
     out = {n: raw[n] for n in names if raw.get(n)}
-    if len(_CACHE) > _CACHE_MAX:
-        _CACHE.clear()
-    _CACHE[key] = out
+    bounded(_CACHE, _CACHE_MAX)[key] = out
     return out

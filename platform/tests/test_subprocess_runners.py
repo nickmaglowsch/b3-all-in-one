@@ -345,3 +345,64 @@ def test_last_json_keeps_looking_past_a_line_that_only_looks_like_json():
     would lose the payload the run actually produced."""
     text = '{"nav": 1}\n{"partial": tru\n'
     assert subprocs.last_json(text) == {"nav": 1}
+
+
+# ── The throwaway workspace every taxcore run builds ──────────────────────────
+# Import, IRPF, DARF and TLH each used to spell out mkdtemp-under-the-tenant,
+# seed, run, rmtree-in-finally. One context manager now; these pin what each of
+# those copies promised.
+
+def test_workspace_is_seeded_under_the_tenants_root_and_removed(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    with b3run.workspace("tenant-a", "b3probe-") as ws:
+        assert ws.parent == b3run.workspace_root("tenant-a")
+        assert ws.name.startswith("b3probe-")
+        assert (ws / "scripts").is_dir() and (ws / "sitecustomize.py").exists()
+        assert (ws / "data").is_dir() and (ws / "b3_imports").is_dir()
+    assert not ws.exists()
+
+
+def test_workspace_is_removed_when_the_body_raises(monkeypatch, tmp_path):
+    """The tenant's whole trade history is in there; an error must not leave it."""
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    with pytest.raises(RuntimeError), b3run.workspace("tenant-b", "b3probe-") as ws:
+        raise RuntimeError("boom")
+    assert not ws.exists()
+
+
+# ── run_json: the "shell a script, answer with its JSON" shape ────────────────
+
+def test_run_json_returns_the_payload_after_progress_lines(
+    monkeypatch, tmp_path, this_interpreter
+):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "emit.py").write_text(
+        "import sys, json; print('warming up'); print(json.dumps({'args': sys.argv[1:]}))")
+    monkeypatch.setattr(enginerun, "ENGINE", tmp_path)
+    assert enginerun.run_json("emit.py", ["a", "b"]) == {"args": ["a", "b"]}
+
+
+def test_run_json_raises_the_output_tail_on_failure(monkeypatch, tmp_path, this_interpreter):
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "fail.py").write_text(
+        "import sys; print('x' * 3000, file=sys.stderr); sys.exit(2)")
+    monkeypatch.setattr(enginerun, "ENGINE", tmp_path)
+    with pytest.raises(RuntimeError) as exc:
+        enginerun.run_json("fail.py", [])
+    assert str(exc.value) == ("x" * 3000 + "\n")[-2000:]
+
+
+def test_advise_weights_puts_params_right_after_the_strategy(monkeypatch):
+    calls = []
+
+    def fake(script, args, extra_env=None):
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout='{"ok": 1}', stderr="")
+
+    monkeypatch.setattr(enginerun, "run_script", fake)
+    enginerun.advise_weights(strategy="S", params={"rebalance_freq": "QE"},
+                             positions={"A": 1}, nav_cash=2)
+    assert calls == [["S", "--params", '{"rebalance_freq": "QE"}',
+                      "--positions", '{"A": 1}', "--nav-cash", "2.0"]]

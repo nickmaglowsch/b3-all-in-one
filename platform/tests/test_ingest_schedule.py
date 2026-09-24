@@ -214,3 +214,39 @@ async def test_market_status_survives_an_absent_market_plane(client, monkeypatch
     assert body["prices"]["rows"] == 0
     assert body["prices"]["max_date"] is None
     routes._market_status_cache = None
+
+
+INGEST_MODULES = {
+    "prices": ["b3_pipeline.main", "--force-download",
+               "--start-year", str(settings.ingest_start_year)],
+    "fundamentals": ["b3_pipeline.cvm_main"],
+    "instruments": ["b3_pipeline.instruments_backfill"],
+    "crypto": ["crypto_pipeline.crypto_main"],
+    "us_symbols": ["us_pipeline.symbol_directory"],
+    "us_fundamentals": ["us_pipeline.us_main"],
+    "us_listing": ["us_pipeline.us_listing"],
+    "us_daily": ["us_pipeline.us_daily"],
+    "wiki_backfill": ["us_pipeline.wiki_backfill"],
+    "us_prices": ["us_pipeline.us_prices"],
+    "spx": ["us_pipeline.spx_series"],
+}
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("kind", sorted(INGEST_MODULES))
+async def test_each_ingest_task_is_wired_to_its_module(monkeypatch, kind):
+    """Name, queue, one-pending-run lock, and the exact module argv each kind
+    runs, recorded under its own kind in ingest_runs."""
+    import subprocess
+
+    task = getattr(tasks_ingest, f"ingest_{kind}")
+    assert task.name == f"ingest_{kind}"
+    assert task.queue == "ingest"
+    assert task.queueing_lock == f"ingest_{kind}"
+
+    seen = []
+    monkeypatch.setattr(enginerun, "run_module", lambda args, timeout_s=None: (
+        seen.append(args) or subprocess.CompletedProcess(args, 0, stdout="", stderr="")))
+    result = await task.func(timestamp=0)
+    assert seen == [INGEST_MODULES[kind]]
+    assert (result["kind"], result["status"]) == (kind, "done")

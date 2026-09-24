@@ -123,3 +123,10 @@ async def test_empty_grid_short_circuits_without_shelling(monkeypatch):
     monkeypatch.setattr(idx, "_run_bench", lambda s, e: called.append(1))
     assert await idx._benchmarks([]) == {}
     assert not called
+
+
+def test_bounded_drops_the_lot_only_past_the_cap():
+    cache = {1: "a", 2: "b"}
+    assert idx.bounded(cache, 2) is cache and cache == {1: "a", 2: "b"}
+    cache[3] = "c"
+    assert idx.bounded(cache, 2) is cache and cache == {}

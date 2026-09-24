@@ -15,29 +15,13 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import seed_tenant_tables
+from tests.conftest import auth as _auth, seed_tenant_tables
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-PASSWORD = "privacypassword"
-
-
-async def _auth(client, email: str) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
-
 
 async def _enterprise(client, email: str) -> dict[str, str]:
-    headers = await _auth(client, email)
-    r = await client.post(
-        "/billing/dev-modules", json={"modules": ["empresarial"]}, headers=headers
-    )
-    assert r.status_code == 200, r.text
-    return headers
+    return await _auth(client, email, ["empresarial"])
 
 
 async def _create_book(client, headers, label: str) -> str:

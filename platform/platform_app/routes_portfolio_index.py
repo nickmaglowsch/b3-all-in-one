@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import enginerun, portfolio_index as pidx, subprocs
+from platform_app import enginerun, portfolio_index as pidx
 from platform_app.db import get_async_session, get_engine_pool
 from platform_app.models import CashEvent, RendaFixaMark, RendaFixaTerms, Trade
 from platform_app.tenancy import get_current_tenant
@@ -239,11 +239,13 @@ _BENCH_CACHE: dict[tuple, dict[str, list[float]]] = {}
 _CACHE_MAX = 256
 
 
-def _bounded(cache: dict) -> dict:
-    """Every key carries a date, so entries are never reused past their day —
-    without a bound the dict just grows by one entry per distinct window per day.
-    Dropping the lot on overflow is fine; the next call refills what it needs."""
-    if len(cache) > _CACHE_MAX:
+def bounded(cache: dict, cap: int) -> dict:
+    """``cache``, emptied first if it holds more than ``cap`` entries. Shared by
+    every process-lifetime memo in the API: their keys carry a date, so entries
+    are never reused past their day — without a bound the dict just grows by one
+    entry per distinct window per day. Dropping the lot on overflow is fine; the
+    next call refills what it needs."""
+    if len(cache) > cap:
         cache.clear()
     return cache
 
@@ -266,7 +268,7 @@ async def _trading_grid(start: datetime.date) -> list[datetime.date]:
     grid = _GRID_CACHE.get(key)
     if grid is None:
         grid = await _fetch_grid(await get_engine_pool(), start)
-        _bounded(_GRID_CACHE)[key] = grid
+        bounded(_GRID_CACHE, _CACHE_MAX)[key] = grid
     return grid
 
 
@@ -363,10 +365,7 @@ async def _plane(tickers: list[str], start: datetime.date) -> tuple[list, dict]:
 def _run_bench(start: str, end: str) -> dict:
     """scripts/bench_series.py in the engine venv → {ibov, cdi, offline}.
     Blocking — call via to_thread."""
-    proc = enginerun.run_script("bench_series.py", [start, end])
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-    return subprocs.last_json(proc.stdout, strict=True)
+    return enginerun.run_json("bench_series.py", [start, end])
 
 
 async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
@@ -426,7 +425,7 @@ async def _benchmarks(grid: list[datetime.date]) -> dict[str, list[float]]:
     # would otherwise pin "no benchmarks" for the rest of the day over what may
     # be a momentary outage — the same posture market_status takes with an
     # unreachable plane.
-    _bounded(_BENCH_CACHE)[key] = out
+    bounded(_BENCH_CACHE, _CACHE_MAX)[key] = out
     return out
 
 

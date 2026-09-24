@@ -8,12 +8,15 @@ same technique as ``taxcore/tests/golden/conftest.py``.
 """
 from __future__ import annotations
 
+import contextlib
 import csv
 import datetime
 import io
 import os
 import shutil
 import subprocess
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 from platform_app import subprocs
@@ -70,6 +73,17 @@ def seed_workspace(ws: Path) -> Path:
     (ws / "b3_imports").mkdir(parents=True, exist_ok=True)
     (ws / "sitecustomize.py").write_text(_NETGUARD)
     return ws
+
+
+@contextlib.contextmanager
+def workspace(tenant_id: object, prefix: str) -> Iterator[Path]:
+    """A seeded throwaway workspace under ``workspace_root(tenant_id)``, removed
+    on exit — including when the body raises, since it holds the tenant's book."""
+    ws = Path(tempfile.mkdtemp(prefix=prefix, dir=workspace_root(tenant_id)))
+    try:
+        yield seed_workspace(ws)
+    finally:
+        shutil.rmtree(ws, ignore_errors=True)
 
 
 def run_module(ws: Path, module_args: list[str]) -> subprocess.CompletedProcess:

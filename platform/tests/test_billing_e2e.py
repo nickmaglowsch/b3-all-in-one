@@ -22,11 +22,11 @@ import stripe
 
 from platform_app.billing import CARTEIRA, EMPRESARIAL
 from platform_app.config import settings
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 EMAIL = "assinatura-e2e@example.com"
-PASSWORD = "e2epassword"
 SECRET = "whsec_e2e_secret"
 
 
@@ -150,10 +150,7 @@ def _prices_of(checkout: dict) -> list[str]:
 
 
 async def test_subscription_lifecycle(client, fake_stripe):
-    await client.post("/auth/register", json={"email": EMAIL, "password": PASSWORD})
-    r = await client.post("/auth/jwt/login", data={"username": EMAIL, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    headers = await auth(client, EMAIL)
     tenant_id = (await client.get("/me", headers=headers)).json()["id"]
 
     # ── 1. Sem assinatura: só a carteira, e o 402 diz qual módulo falta ────────
@@ -279,9 +276,7 @@ async def test_subscription_lifecycle(client, fake_stripe):
 
 async def test_empresarial_is_bought_alone_and_opens_the_client_books(client, fake_stripe):
     email = "empresarial-e2e@example.com"
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post("/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    headers = await auth(client, email)
     tenant_id = (await client.get("/me", headers=headers)).json()["id"]
 
     # Misturar o bundle com um módulo que ele já contém é cobrar duas vezes.

@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from platform_app.config import settings
 from platform_app.db import get_async_session
 from platform_app.models import BacktestRun
-from platform_app.tenancy import get_current_tenant
+from platform_app.tenancy import get_current_tenant, get_owned
 
 backtest_retention_router = APIRouter(prefix="/backtests", tags=["backtests"])
 
@@ -113,12 +113,7 @@ async def delete_backtest(
     answer routes._get_run gives, so deleting cannot be used to probe for ids
     that exist elsewhere."""
     _user, tid = tenant
-    try:
-        run = await session.get(BacktestRun, uuid.UUID(run_id))
-    except ValueError:
-        run = None
-    if run is None or run.tenant_id != tid:
-        raise HTTPException(404, "backtest not found")
+    run = await get_owned(session, BacktestRun, run_id, tid, "backtest not found")
     if run.status not in FINISHED:
         raise HTTPException(
             409, f"rodada em andamento (status={run.status}) — aguarde terminar")

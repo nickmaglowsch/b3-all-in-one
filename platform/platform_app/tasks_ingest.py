@@ -82,157 +82,126 @@ async def ingest_prices(timestamp: int = 0) -> dict:
     ])
 
 
-@app.periodic(cron=settings.ingest_fundamentals_cron)
-@app.task(name="ingest_fundamentals", queue="ingest", queueing_lock="ingest_fundamentals")
-async def ingest_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices re: default
-    """Refresh CVM fundamentals (fundamentals_pit), which the f_* signals read."""
-    return await _record_ingest("fundamentals", ["b3_pipeline.cvm_main"])
+def _ingest_task(kind: str, module: str, cron: str | None):
+    """Register ``ingest_<kind>``, running ``python -m <module>`` on the ingest
+    queue with one pending run per kind (see above). Scheduled on ``cron``;
+    ``None`` means deferred by hand only. ``timestamp`` defaults for the reason
+    given on ingest_prices."""
+    name = f"ingest_{kind}"
+
+    async def ingest(timestamp: int = 0) -> dict:
+        return await _record_ingest(kind, [module])
+
+    task = app.task(name=name, queue="ingest", queueing_lock=name)(ingest)
+    return task if cron is None else app.periodic(cron=cron)(task)
 
 
-@app.periodic(cron=settings.ingest_instruments_cron)
-@app.task(name="ingest_instruments", queue="ingest", queueing_lock="ingest_instruments")
-async def ingest_instruments(timestamp: int = 0) -> dict:  # see ingest_prices re: default
-    """Rebuild the B3 security master from the price plane.
+# Refresh CVM fundamentals (fundamentals_pit), which the f_* signals read.
+ingest_fundamentals = _ingest_task(
+    "fundamentals", "b3_pipeline.cvm_main", settings.ingest_fundamentals_cron)
 
-    This is what switches survivorship correction on for B3: until `instruments`
-    has rows, `backtests.core.universe` treats every ticker as always-listed and
-    the loaders behave exactly as they did before it existed. Separate from
-    ingest_prices, and later in the day, because it reads what that job wrote.
-    """
-    return await _record_ingest("instruments", ["b3_pipeline.instruments_backfill"])
+# Rebuild the B3 security master from the price plane.
+#
+# This is what switches survivorship correction on for B3: until `instruments`
+# has rows, `backtests.core.universe` treats every ticker as always-listed and
+# the loaders behave exactly as they did before it existed. Separate from
+# ingest_prices, and later in the day, because it reads what that job wrote.
+ingest_instruments = _ingest_task(
+    "instruments", "b3_pipeline.instruments_backfill", settings.ingest_instruments_cron)
 
+# Refresh the crypto plane from Binance's public archive.
+#
+# Enumerates every spot pair the archive has ever held, delisted ones included
+# — that enumeration is the survivorship property, so there is no "only the
+# live ones" fast path to add here later.
+ingest_crypto = _ingest_task(
+    "crypto", "crypto_pipeline.crypto_main", settings.ingest_crypto_cron)
 
-@app.periodic(cron=settings.ingest_crypto_cron)
-@app.task(name="ingest_crypto", queue="ingest", queueing_lock="ingest_crypto")
-async def ingest_crypto(timestamp: int = 0) -> dict:  # see ingest_prices re: default
-    """Refresh the crypto plane from Binance's public archive.
+# Capture today's consolidated US symbol directory.
+#
+# This is what makes the US plane survivorship-free going forward: a symbol's
+# appearance and disappearance across these daily captures is its listing
+# interval, and nobody publishes them historically for free. A day not captured
+# is listing history that cannot be recovered — the same reason B3's daily file
+# is a daily obligation rather than a backfill.
+ingest_us_symbols = _ingest_task(
+    "us_symbols", "us_pipeline.symbol_directory", settings.ingest_us_symbols_cron)
 
-    Enumerates every spot pair the archive has ever held, delisted ones included
-    — that enumeration is the survivorship property, so there is no "only the
-    live ones" fast path to add here later.
-    """
-    return await _record_ingest("crypto", ["crypto_pipeline.crypto_main"])
+# Refresh US point-in-time fundamentals from SEC XBRL.
+#
+# Bootstraps itself: an empty plane takes the bulk `companyfacts.zip` pass —
+# the one that gets the companies which stopped filing — and a populated one
+# walks the CIKs it already has. Deciding from the plane rather than from a
+# flag is what stops this reporting success having walked an empty list.
+#
+# The archive lands on the engine data volume, so the ~1.5 GB download happens
+# on the first run and not again.
+ingest_us_fundamentals = _ingest_task(
+    "us_fundamentals", "us_pipeline.us_main", settings.ingest_us_fundamentals_cron)
 
+# The US listing record, backwards.
+#
+# Two requests return every US stock and ETF ever listed, alive or delisted,
+# with an IPO date and a delisting date. That is the half the daily directory
+# capture cannot reach: it builds forward from the day it started, so a
+# company that delisted in 2011 had no interval at all and the point-in-time
+# universe treated it as tradable on every date.
+#
+# Runs before the directory capture so a same-day disagreement between the two
+# is visible in `ingest_runs` in the order it happened.
+ingest_us_listing = _ingest_task(
+    "us_listing", "us_pipeline.us_listing", settings.ingest_us_listing_cron)
 
-@app.periodic(cron=settings.ingest_us_symbols_cron)
-@app.task(name="ingest_us_symbols", queue="ingest",
-          queueing_lock="ingest_us_symbols")
-async def ingest_us_symbols(timestamp: int = 0) -> dict:  # see ingest_prices
-    """Capture today's consolidated US symbol directory.
+# Keep the US plane current: re-adjust for splits, then append the session.
+#
+# The counterpart to a history that arrives as a file. The bulk dump is loaded
+# by hand and is correct on the day it is loaded; this is what stops it going
+# stale, in one request per session against a free tier that allows five a
+# minute.
+#
+# Two steps and the order is the point. A split-adjusted vendor re-scales its
+# own history when a split executes and the stored history does not move, so
+# appending the new bar first would splice a quarter-price session onto a
+# full-price one and fabricate a -75% return — the artefact `glitch_down` is
+# built to mask, which is what makes it dangerous. `us_daily` re-scales the
+# old rows first, once per split ever, keyed on the vendor's split id.
+#
+# A session that has not closed is not a failure: the free tier refuses it by
+# name, the run stops there and reports it, and the next run picks it up.
+ingest_us_daily = _ingest_task(
+    "us_daily", "us_pipeline.us_daily", settings.ingest_us_daily_cron)
 
-    This is what makes the US plane survivorship-free going forward: a symbol's
-    appearance and disappearance across these daily captures is its listing
-    interval, and nobody publishes them historically for free. A day not captured
-    is listing history that cannot be recovered — the same reason B3's daily file
-    is a daily obligation rather than a backfill.
-    """
-    return await _record_ingest("us_symbols", ["us_pipeline.symbol_directory"])
+# Fifty-six years of US history from the WIKI bulk export. Deliberately not
+# periodic (cron=None). Every other ingest here has a cron because its source
+# keeps publishing; WIKI was frozen in April 2018 and never will again, so a
+# schedule would re-read the same 15.4M rows forever. Deferred by hand, once,
+# and re-run only to repair.
+#
+# One free key, one request: 15.4M bars over 3,199 tickers from 1962, with the
+# corporate actions in the rows — so the bars land `total_return` rather than
+# the `split_only` a split-adjusted feed can give.
+#
+# It fills 1962..2018-03-27 and nothing after. The bulk `d_us_txt` dump covers
+# the gap and, for every symbol it can serve, takes the symbol over; what
+# stays here is the tail that file alone has — 1,502 names that died inside
+# WIKI's maintenance window, which the dump does not carry because it holds
+# only what is currently listed. Worth running first on an empty plane anyway:
+# it is one request and it is fast.
+ingest_wiki_backfill = _ingest_task("wiki_backfill", "us_pipeline.wiki_backfill", None)
 
+# Spend the day's request budget on the US bars still missing.
+#
+# Daily, and every day counts: the free tier is a hard 25 requests a day
+# against ~11k symbols, so this is a slice of a long job rather than a refresh.
+# The cursor is what makes the slices add up — see `us_pipeline.us_prices`.
+#
+# Exhausting the budget is a normal outcome, not a failure, and the run says so
+# in its summary rather than in its exit code.
+ingest_us_prices = _ingest_task(
+    "us_prices", "us_pipeline.us_prices", settings.ingest_us_prices_cron)
 
-@app.periodic(cron=settings.ingest_us_fundamentals_cron)
-@app.task(name="ingest_us_fundamentals", queue="ingest",
-          queueing_lock="ingest_us_fundamentals")
-async def ingest_us_fundamentals(timestamp: int = 0) -> dict:  # see ingest_prices
-    """Refresh US point-in-time fundamentals from SEC XBRL.
-
-    Bootstraps itself: an empty plane takes the bulk `companyfacts.zip` pass —
-    the one that gets the companies which stopped filing — and a populated one
-    walks the CIKs it already has. Deciding from the plane rather than from a
-    flag is what stops this reporting success having walked an empty list.
-
-    The archive lands on the engine data volume, so the ~1.5 GB download happens
-    on the first run and not again.
-    """
-    return await _record_ingest("us_fundamentals", ["us_pipeline.us_main"])
-
-
-@app.periodic(cron=settings.ingest_us_listing_cron)
-@app.task(name="ingest_us_listing", queue="ingest",
-          queueing_lock="ingest_us_listing")
-async def ingest_us_listing(timestamp: int = 0) -> dict:  # see ingest_prices
-    """The US listing record, backwards.
-
-    Two requests return every US stock and ETF ever listed, alive or delisted,
-    with an IPO date and a delisting date. That is the half the daily directory
-    capture cannot reach: it builds forward from the day it started, so a
-    company that delisted in 2011 had no interval at all and the point-in-time
-    universe treated it as tradable on every date.
-
-    Runs before the directory capture so a same-day disagreement between the two
-    is visible in `ingest_runs` in the order it happened.
-    """
-    return await _record_ingest("us_listing", ["us_pipeline.us_listing"])
-
-
-@app.periodic(cron=settings.ingest_us_daily_cron)
-@app.task(name="ingest_us_daily", queue="ingest",
-          queueing_lock="ingest_us_daily")
-async def ingest_us_daily(timestamp: int = 0) -> dict:  # see ingest_prices
-    """Keep the US plane current: re-adjust for splits, then append the session.
-
-    The counterpart to a history that arrives as a file. The bulk dump is loaded
-    by hand and is correct on the day it is loaded; this is what stops it going
-    stale, in one request per session against a free tier that allows five a
-    minute.
-
-    Two steps and the order is the point. A split-adjusted vendor re-scales its
-    own history when a split executes and the stored history does not move, so
-    appending the new bar first would splice a quarter-price session onto a
-    full-price one and fabricate a -75% return — the artefact `glitch_down` is
-    built to mask, which is what makes it dangerous. `us_daily` re-scales the
-    old rows first, once per split ever, keyed on the vendor's split id.
-
-    A session that has not closed is not a failure: the free tier refuses it by
-    name, the run stops there and reports it, and the next run picks it up.
-    """
-    return await _record_ingest("us_daily", ["us_pipeline.us_daily"])
-
-
-# Deliberately not `@app.periodic`. Every other ingest here has a cron because
-# its source keeps publishing; WIKI was frozen in April 2018 and never will
-# again, so a schedule would re-read the same 15.4M rows forever. Deferred by
-# hand, once, and re-run only to repair.
-@app.task(name="ingest_wiki_backfill", queue="ingest",
-          queueing_lock="ingest_wiki_backfill")
-async def ingest_wiki_backfill(timestamp: int = 0) -> dict:  # see ingest_prices
-    """Fifty-six years of US history from the WIKI bulk export.
-
-    One free key, one request: 15.4M bars over 3,199 tickers from 1962, with the
-    corporate actions in the rows — so the bars land `total_return` rather than
-    the `split_only` a split-adjusted feed can give.
-
-    It fills 1962..2018-03-27 and nothing after. The bulk `d_us_txt` dump covers
-    the gap and, for every symbol it can serve, takes the symbol over; what
-    stays here is the tail that file alone has — 1,502 names that died inside
-    WIKI's maintenance window, which the dump does not carry because it holds
-    only what is currently listed. Worth running first on an empty plane anyway:
-    it is one request and it is fast.
-    """
-    return await _record_ingest("wiki_backfill", ["us_pipeline.wiki_backfill"])
-
-
-@app.periodic(cron=settings.ingest_us_prices_cron)
-@app.task(name="ingest_us_prices", queue="ingest",
-          queueing_lock="ingest_us_prices")
-async def ingest_us_prices(timestamp: int = 0) -> dict:  # see ingest_prices
-    """Spend the day's request budget on the US bars still missing.
-
-    Daily, and every day counts: the free tier is a hard 25 requests a day
-    against ~11k symbols, so this is a slice of a long job rather than a refresh.
-    The cursor is what makes the slices add up — see `us_pipeline.us_prices`.
-
-    Exhausting the budget is a normal outcome, not a failure, and the run says so
-    in its summary rather than in its exit code.
-    """
-    return await _record_ingest("us_prices", ["us_pipeline.us_prices"])
-
-
-@app.periodic(cron=settings.ingest_spx_cron)
-@app.task(name="ingest_spx", queue="ingest", queueing_lock="ingest_spx")
-async def ingest_spx(timestamp: int = 0) -> dict:  # see ingest_prices
-    """The US benchmark, as a BRL total-return series under `$SPX`.
-
-    Three requests. Kept out of the price job because it must not queue behind an
-    eleven-thousand-symbol backfill: a bench with no ruler is what this fixes.
-    """
-    return await _record_ingest("spx", ["us_pipeline.spx_series"])
+# The US benchmark, as a BRL total-return series under `$SPX`.
+#
+# Three requests. Kept out of the price job because it must not queue behind an
+# eleven-thousand-symbol backfill: a bench with no ruler is what this fixes.
+ingest_spx = _ingest_task("spx", "us_pipeline.spx_series", settings.ingest_spx_cron)

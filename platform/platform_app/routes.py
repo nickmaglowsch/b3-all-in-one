@@ -13,7 +13,6 @@ import io
 import json
 import math
 import shutil
-import tempfile
 import uuid
 import zipfile
 from datetime import date
@@ -36,8 +35,9 @@ from platform_app.models import (
     Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
     TaxSummary, Trade, UserStrategy,
 )
-from platform_app.routes_portfolio_index import current_rf_marks
-from platform_app.tenancy import get_current_tenant, get_optional_tenant
+from platform_app.routes_portfolio_index import bounded, current_rf_marks
+from platform_app.routes_portfolio_settings import _settings_dict
+from platform_app.tenancy import get_current_tenant, get_optional_tenant, get_owned
 
 imports_router = APIRouter(prefix="/imports", tags=["imports"])
 portfolio_router = APIRouter(prefix="/portfolio", tags=["portfolio"])
@@ -300,16 +300,8 @@ async def get_price_history(
 
 # Allow-listed so `sort` can never reach the query as raw SQL. Anything not on
 # this map falls back to date, which is also the default.
-_TRADE_SORTS = {
-    "date": Trade.date,
-    "side": Trade.side,
-    "market": Trade.market,
-    "broker": Trade.broker,
-    "ticker": Trade.ticker,
-    "qty": Trade.qty,
-    "price": Trade.price,
-    "amount": Trade.amount,
-}
+_TRADE_SORTS = {c: getattr(Trade, c) for c in (
+    "date", "side", "market", "broker", "ticker", "qty", "price", "amount")}
 
 
 @portfolio_router.get("/trades")
@@ -479,21 +471,13 @@ _SLEEVE_WEIGHTS_CACHE: dict[tuple, dict] = {}
 _CACHE_MAX = 1024
 
 
-def _bounded(cache: dict) -> dict:
-    if len(cache) > _CACHE_MAX:
-        cache.clear()
-    return cache
-
-
 def _needs_funds_msg(strategies: list[str]) -> str:
     """pt-BR message naming the strategy/strategies that need fundamentals data."""
     uniq = list(dict.fromkeys(strategies))
     names = ", ".join(f"'{s}'" for s in uniq)
-    if len(uniq) == 1:
-        return (f"A estratégia {names} precisa de dados fundamentalistas, que "
-                f"ainda não foram ingeridos neste ambiente.")
-    return (f"As estratégias {names} precisam de dados fundamentalistas, que "
-            f"ainda não foram ingeridos neste ambiente.")
+    who = (f"A estratégia {names} precisa" if len(uniq) == 1
+           else f"As estratégias {names} precisam")
+    return f"{who} de dados fundamentalistas, que ainda não foram ingeridos neste ambiente."
 
 
 async def _fundamentals_available() -> bool:
@@ -516,32 +500,11 @@ async def _advise(**kwargs) -> dict:
 
 async def _advise_strategy(strategy: str, freq: str, extra_env: dict | None = None) -> dict:
     """Advise a strategy's target weights at the given rebalance cadence (freq).
-    freq='ME' is the default path — identical to today. A non-default cadence is
-    threaded as ``--params rebalance_freq`` through the engine script (enginerun's
-    advise_weights wrapper exposes no params passthrough); reuses run_script + its
-    exit-code-3 / last-JSON parsing, no new engine code. extra_env points the
-    registry at the tenant's user specs when the strategy is a user ref."""
-    if freq == "ME":
-        return await _advise(strategy=strategy, extra_env=extra_env)
-
-    def _run() -> dict:
-        proc = enginerun.run_script(
-            "advise_weights.py",
-            [strategy, "--params", json.dumps({"rebalance_freq": freq})],
-            extra_env,
-        )
-        if proc.returncode == enginerun.NEEDS_FUNDAMENTALS_EXIT:
-            raise enginerun._needs_fundamentals(proc.stderr, strategy)
-        if proc.returncode != 0:
-            raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-        return subprocs.last_json(proc.stdout, strict=True)
-
-    try:
-        return await asyncio.to_thread(_run)
-    except enginerun.EngineNeedsFundamentals:
-        raise
-    except RuntimeError as e:
-        raise HTTPException(500, f"advise_weights failed: {e}")
+    freq='ME' is the default path and passes no params; a non-default cadence is
+    threaded as ``--params rebalance_freq`` through the engine script. extra_env
+    points the registry at the tenant's user specs when the strategy is a user ref."""
+    params = None if freq == "ME" else {"rebalance_freq": freq}
+    return await _advise(strategy=strategy, params=params, extra_env=extra_env)
 
 
 # ── Per-tenant portfolio settings (spec/05 Features 3 & 4) ────────────────────
@@ -556,17 +519,6 @@ async def _cash_cdi_tickers(session: AsyncSession, tid: uuid.UUID) -> set[str]:
         )
     )).all()
     return {t.upper() for t in rows}
-
-
-async def _rebalance_settings(session: AsyncSession, tid: uuid.UUID) -> dict:
-    """buy_only_laggards / sell_only_for_harvest / cadence. Absent row → defaults
-    that reproduce today's rebalance behavior exactly."""
-    row = await session.get(RebalanceSettings, tid)
-    if row is None:
-        return {"buy_only_laggards": False, "sell_only_for_harvest": False, "cadence": "ME"}
-    return {"buy_only_laggards": bool(row.buy_only_laggards),
-            "sell_only_for_harvest": bool(row.sell_only_for_harvest),
-            "cadence": row.cadence}
 
 
 async def _combined_target(
@@ -588,11 +540,7 @@ async def _combined_target(
     user_rows = (await session.scalars(
         select(UserStrategy).where(UserStrategy.tenant_id == tid)
     )).all()
-    extra_env = (
-        {"ENGINE_USER_SPECS_DIR": str(specstore.materialize_user_specs(
-            [(str(r.id), r.spec) for r in user_rows], tid))}
-        if user_rows else {}
-    )
+    extra_env = specstore.specs_env(user_rows, tid)
     user_upd = {r.name: r.updated_at.isoformat() if r.updated_at else "" for r in user_rows}
 
     today = date.today().isoformat()
@@ -629,7 +577,7 @@ async def _combined_target(
         for (ref, key), res in zip(todo, results):
             if isinstance(res, BaseException):
                 continue          # classified below, so one failure is not fatal here
-            _bounded(_SLEEVE_WEIGHTS_CACHE)[key] = res
+            bounded(_SLEEVE_WEIGHTS_CACHE, _CACHE_MAX)[key] = res
         # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
         # others mid-flight; anything that is not that is still a real failure.
         failures = {ref: res for (ref, _k), res in zip(todo, results)
@@ -767,7 +715,7 @@ async def create_rebalance_plan(
       · sell_only_for_harvest → keep only sells that realize a loss;
       · cadence → the rebalance freq passed to the combined target."""
     _user, tid = tenant
-    settings_ = await _rebalance_settings(session, tid)
+    settings_ = _settings_dict(await session.get(RebalanceSettings, tid))
     cadence = settings_["cadence"]
     buy_only = settings_["buy_only_laggards"]
     harvest_only = settings_["sell_only_for_harvest"]
@@ -858,7 +806,6 @@ _TRADE_HEADER = ["date", "side", "market", "maturity", "broker", "ticker",
                  "qty", "price", "amount", "__source_file", "signed_qty"]
 _EVENT_HEADER = ["date", "ticker", "event_type", "event_category", "is_amortization",
                  "qty", "price", "amount", "broker", "__source_file"]
-_OVERRIDE_HEADER = ["date", "ticker", "kind", "qty", "price", "amount", "note"]
 _POSITION_HEADER = ["ticker", "qty", "avg_cost", "total_cost", "market"]
 
 
@@ -869,8 +816,8 @@ async def _book_csv_rows(
 
     Plain attribute reads off already-loaded ORM instances (microseconds), done
     on the loop so the worker thread that writes the CSVs never touches a
-    Session. Shared by the IRPF report and the DARF apuração so the two can
-    never write differently-shaped books for the same script to read.
+    Session. Shared by the IRPF report, the DARF apuração and the TLH plan so
+    they can never write differently-shaped books for taxcore to read.
     """
     trades = (await session.scalars(
         select(Trade).where(Trade.tenant_id == tid).order_by(Trade.id)
@@ -884,6 +831,12 @@ async def _book_csv_rows(
         [[e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
           e.qty, e.price, e.amount, e.broker, e.source_file] for e in events],
     )
+
+
+def _write_book(ws: Path, trade_rows: list[list], event_rows: list[list]) -> None:
+    """The two CSVs every irpf_2026 / tlh_plan run reads (build_timeline)."""
+    b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
+    b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
 
 
 @irpf_router.post("/reports")
@@ -902,8 +855,7 @@ async def irpf_report(
         select(Import).where(Import.tenant_id == tid, Import.kind == "movimentacao")
     )).all()
 
-    override_rows = [
-        [o.date, o.ticker, o.kind, o.qty, o.price, o.amount, o.note] for o in overrides]
+    override_rows = tasks._override_rows(overrides)
     extracts = [(imp.stored_path, imp.filename) for imp in movs]
 
     def _work():
@@ -913,19 +865,14 @@ async def irpf_report(
         to run inline. The API is one uvicorn process with no --workers, so that
         stalled every concurrent request for the duration.
         """
-        ws = Path(tempfile.mkdtemp(prefix="b3irpf-", dir=b3run.workspace_root(tid)))
-        try:
-            b3run.seed_workspace(ws)
-            b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
-            b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
-            b3run.write_csv(
-                ws / "data" / "cost_basis_overrides.csv", _OVERRIDE_HEADER, override_rows)
+        with b3run.workspace(tid, "b3irpf-") as ws:
+            _write_book(ws, trade_rows, event_rows)
+            b3run.write_csv(ws / "data" / "cost_basis_overrides.csv",
+                            tasks._OVERRIDE_HEADER, override_rows)
             for stored_path, filename in extracts:
                 if Path(stored_path).exists():
                     shutil.copy(stored_path, ws / "b3_imports" / filename)
             return b3run.run_module(ws, ["scripts.irpf_2026", "--year", str(body.year)])
-        finally:
-            shutil.rmtree(ws, ignore_errors=True)
 
     proc = await asyncio.to_thread(_work)
     if proc.returncode != 0:
@@ -1013,15 +960,10 @@ async def _run_apuracao(
         return []
 
     def _work():
-        ws = Path(tempfile.mkdtemp(prefix="b3darf-", dir=b3run.workspace_root(tid)))
-        try:
-            b3run.seed_workspace(ws)
-            b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
-            b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
+        with b3run.workspace(tid, "b3darf-") as ws:
+            _write_book(ws, trade_rows, event_rows)
             return b3run.run_module(
                 ws, ["scripts.irpf_2026", "--year", str(year), "--json"])
-        finally:
-            shutil.rmtree(ws, ignore_errors=True)
 
     proc = await asyncio.to_thread(_work)
     if proc.returncode != 0:
@@ -1178,25 +1120,12 @@ async def _run_tlh_plan(
 ) -> dict:
     """Run taxcore's tlh_plan --json over the tenant's book with the given sells.
     Shared by POST /tlh/plans and the rebalance advisor's tax overlay."""
-    trades = (await session.scalars(
-        select(Trade).where(Trade.tenant_id == tid).order_by(Trade.id)
-    )).all()
-    events = (await session.scalars(
-        select(CashEvent).where(CashEvent.tenant_id == tid).order_by(CashEvent.id)
-    )).all()
+    trade_rows, event_rows = await _book_csv_rows(session, tid)
     positions = (await session.scalars(
         select(Position).where(Position.tenant_id == tid).order_by(Position.ticker)
     )).all()
-
-    # Materialise every row payload here, on the loop: these are plain attribute
-    # reads off already-loaded ORM instances (microseconds), and doing them now
-    # means the worker thread below never touches a Session.
-    trade_rows = [
-        [t.date, t.side, t.market, t.maturity, t.broker, t.ticker,
-         t.qty, t.price, t.amount, t.source_file, t.signed_qty] for t in trades]
-    event_rows = [
-        [e.date, e.ticker, e.event_type, e.event_category, e.is_amortization,
-         e.qty, e.price, e.amount, e.broker, e.source_file] for e in events]
+    # Materialised on the loop for the same reason as _book_csv_rows: the worker
+    # thread below never touches a Session.
     position_rows = [
         [p.ticker, p.qty, p.avg_cost, p.total_cost, p.market] for p in positions]
     # asyncpg, so it has to run on the loop rather than inside the thread.
@@ -1218,16 +1147,13 @@ async def _run_tlh_plan(
         uvicorn process with no --workers, so a book being written to disk
         stopped every other request in flight.
         """
-        ws = Path(tempfile.mkdtemp(prefix="b3tlh-", dir=b3run.workspace_root(tid)))
-        try:
-            b3run.seed_workspace(ws)
+        with b3run.workspace(tid, "b3tlh-") as ws:
             # tlh_plan reads: data/trades.csv + data/cash_events.csv (build_timeline),
             # data/positions.csv (canonical holdings), and the latest price snapshot in
             # each of data/{snapshots,fii_snapshots,external_prices} (via _common.price_lookup).
             # It does NOT read cost_basis_overrides. cash_events header must mirror the
             # canonical CSV (source_file -> __source_file) like the IRPF route.
-            b3run.write_csv(ws / "data" / "trades.csv", _TRADE_HEADER, trade_rows)
-            b3run.write_csv(ws / "data" / "cash_events.csv", _EVENT_HEADER, event_rows)
+            _write_book(ws, trade_rows, event_rows)
             b3run.write_csv(ws / "data" / "positions.csv", _POSITION_HEADER, position_rows)
             # Price source = the engine market plane (Postgres), the same prices the
             # rebalance trades come from — works in-image where taxcore/data is excluded.
@@ -1238,8 +1164,6 @@ async def _run_tlh_plan(
                 ["papel", "cotacao"], price_rows,
             )
             return b3run.run_module(ws, args)
-        finally:
-            shutil.rmtree(ws, ignore_errors=True)
 
     proc = await asyncio.to_thread(_work)
     if proc.returncode == 2:  # validation error (bad/oversized sell)
@@ -1418,14 +1342,20 @@ _TENANT_GALLERY: dict[uuid.UUID, tuple[tuple, list]] = {}  # tid -> (fingerprint
 _SIGNALS_CACHE: list | None = None                       # named-signal catalog, global
 
 
+async def _list_json(script: str, extra_env: dict | None = None) -> list:
+    """Shell an engine list_*.py script and parse the JSON array it prints."""
+    proc = await asyncio.to_thread(enginerun.run_script, f"{script}.py", [], extra_env)
+    if proc.returncode != 0:
+        raise HTTPException(500, f"{script} failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    return json.loads(proc.stdout)
+
+
 async def _builtins() -> list[dict]:
     """The built-in gallery (no ENGINE_USER_SPECS_DIR), tagged source=builtin."""
     global _STRATEGIES_CACHE
     if _STRATEGIES_CACHE is None:
-        proc = await asyncio.to_thread(enginerun.run_script, "list_strategies.py", [])
-        if proc.returncode != 0:
-            raise HTTPException(500, f"list_strategies failed: {(proc.stderr or proc.stdout)[-2000:]}")
-        _STRATEGIES_CACHE = [{**s, "source": "builtin"} for s in json.loads(proc.stdout)]
+        _STRATEGIES_CACHE = [
+            {**s, "source": "builtin"} for s in await _list_json("list_strategies")]
     return _STRATEGIES_CACHE
 
 
@@ -1450,15 +1380,11 @@ async def _gallery(session: AsyncSession, tid: uuid.UUID | None) -> list[dict]:
     rows = (await session.scalars(
         select(UserStrategy).where(UserStrategy.tenant_id == tid)
     )).all()
-    d = specstore.materialize_user_specs([(str(r.id), r.spec) for r in rows], tid)
-    proc = await asyncio.to_thread(
-        enginerun.run_script, "list_strategies.py", [], {"ENGINE_USER_SPECS_DIR": str(d)})
-    if proc.returncode != 0:
-        raise HTTPException(500, f"list_strategies failed: {(proc.stderr or proc.stdout)[-2000:]}")
+    listed = await _list_json("list_strategies", specstore.specs_env(rows, tid))
     user_names = {r.name for r in rows}
     merged = [{**s, "source": "user" if s["name"] in user_names else "builtin"}
-              for s in json.loads(proc.stdout)]
-    _bounded(_TENANT_GALLERY)[tid] = (fingerprint, merged)
+              for s in listed]
+    bounded(_TENANT_GALLERY, _CACHE_MAX)[tid] = (fingerprint, merged)
     return merged
 
 
@@ -1477,10 +1403,7 @@ async def list_signals() -> list[dict]:
     """Named-signal catalog for the factor picker (shell list_signals.py once)."""
     global _SIGNALS_CACHE
     if _SIGNALS_CACHE is None:
-        proc = await asyncio.to_thread(enginerun.run_script, "list_signals.py", [])
-        if proc.returncode != 0:
-            raise HTTPException(500, f"list_signals failed: {(proc.stderr or proc.stdout)[-2000:]}")
-        _SIGNALS_CACHE = json.loads(proc.stdout)
+        _SIGNALS_CACHE = await _list_json("list_signals")
     return _SIGNALS_CACHE
 
 
@@ -1669,13 +1592,7 @@ def _user_strategy_dict(r: UserStrategy) -> dict:
 
 
 async def _get_user_strategy(sid: str, tid: uuid.UUID, session: AsyncSession) -> UserStrategy:
-    try:
-        row = await session.get(UserStrategy, uuid.UUID(sid))
-    except ValueError:
-        row = None
-    if row is None or row.tenant_id != tid:
-        raise HTTPException(404, "strategy not found")
-    return row
+    return await get_owned(session, UserStrategy, sid, tid, "strategy not found")
 
 
 @strategies_router.get("/user")
@@ -1710,6 +1627,19 @@ async def create_user_strategy(
     return {**_user_strategy_dict(row), "warnings": warnings}
 
 
+async def _other_portfolios(
+    session: AsyncSession, tid: uuid.UUID, exclude_id: uuid.UUID
+) -> list[UserStrategy]:
+    """The tenant's user portfolios (fixed_weight) other than ``exclude_id`` —
+    the only specs that can name another strategy in a sleeve."""
+    return list(await session.scalars(
+        select(UserStrategy).where(
+            UserStrategy.tenant_id == tid, UserStrategy.kind == "fixed_weight",
+            UserStrategy.id != exclude_id,
+        )
+    ))
+
+
 async def _cascade_rename(
     session: AsyncSession, tid: uuid.UUID, old: str, new: str, exclude_id: uuid.UUID
 ) -> None:
@@ -1720,13 +1650,7 @@ async def _cascade_rename(
         .where(PortfolioSleeve.tenant_id == tid, PortfolioSleeve.strategy_ref == old)
         .values(strategy_ref=new)
     )
-    others = (await session.scalars(
-        select(UserStrategy).where(
-            UserStrategy.tenant_id == tid, UserStrategy.kind == "fixed_weight",
-            UserStrategy.id != exclude_id,
-        )
-    )).all()
-    for o in others:
+    for o in await _other_portfolios(session, tid, exclude_id):
         sleeves = o.spec.get("sleeves", [])
         if any(sl.get("strategy") == old for sl in sleeves):
             o.spec = {**o.spec, "sleeves": [
@@ -1776,13 +1700,7 @@ async def delete_user_strategy(
     )
     if n:
         raise HTTPException(409, f"{row.name!r} is a live sleeve — remove it from /portfolio/sleeves first")
-    others = (await session.scalars(
-        select(UserStrategy).where(
-            UserStrategy.tenant_id == tid, UserStrategy.kind == "fixed_weight",
-            UserStrategy.id != row.id,
-        )
-    )).all()
-    for o in others:
+    for o in await _other_portfolios(session, tid, row.id):
         if any(sl.get("strategy") == row.name for sl in o.spec.get("sleeves", [])):
             raise HTTPException(409, f"{row.name!r} is referenced by portfolio {o.name!r}")
     await session.delete(row)
@@ -1928,13 +1846,7 @@ async def list_backtests(
 
 
 async def _get_run(rid: str, tid: uuid.UUID, session: AsyncSession) -> BacktestRun:
-    try:
-        run = await session.get(BacktestRun, uuid.UUID(rid))
-    except ValueError:
-        run = None
-    if run is None or run.tenant_id != tid:
-        raise HTTPException(404, "backtest not found")
-    return run
+    return await get_owned(session, BacktestRun, rid, tid, "backtest not found")
 
 
 @backtests_router.get("/{run_id}")

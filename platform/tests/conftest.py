@@ -105,6 +105,24 @@ async def seed_tenant_tables(session, tenant_id) -> list:
     return tables
 
 
+PASSWORD = "correct-horse-battery-staple"
+
+
+async def auth(client, email: str, modules=None) -> dict[str, str]:
+    """Register (idempotent) and log in ``email``; returns bearer headers. With
+    ``modules``, also grants exactly those via the dev-modules shortcut."""
+    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
+    r = await client.post(
+        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
+    assert r.status_code == 200, r.text
+    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    if modules is not None:
+        r = await client.post(
+            "/billing/dev-modules", json={"modules": list(modules)}, headers=headers)
+        assert r.status_code == 200, r.text
+    return headers
+
+
 async def _admin(sql: str) -> None:
     engine = create_async_engine(ADMIN_DSN, isolation_level="AUTOCOMMIT")
     async with engine.connect() as conn:

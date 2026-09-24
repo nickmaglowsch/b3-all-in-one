@@ -132,3 +132,12 @@ async def test_guard_422_without_fundamentals(client, empty_engine_db):
     finally:
         await _clear_sleeves()
         routes._SLEEVE_WEIGHTS_CACHE.clear()
+
+
+async def test_needs_funds_msg_singular_plural_and_dedup():
+    assert routes._needs_funds_msg(["A", "A"]) == (
+        "A estratégia 'A' precisa de dados fundamentalistas, que ainda não foram "
+        "ingeridos neste ambiente.")
+    assert routes._needs_funds_msg(["A", "B", "A"]) == (
+        "As estratégias 'A', 'B' precisam de dados fundamentalistas, que ainda não "
+        "foram ingeridos neste ambiente.")

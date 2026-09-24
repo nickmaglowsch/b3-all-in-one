@@ -15,24 +15,16 @@ implementation details, so they stay true however the work is moved off.
 import asyncio
 import time
 
+from functools import partial
+
 import pytest
 
 from platform_app.billing import SELLABLE as ALL_MODULES
+from tests.conftest import auth
 
-PASSWORD = "correct-horse-battery-staple"
 
 
-async def _auth(client, email: str, modules: list[str] | None = None) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert (await client.post(
-        "/billing/dev-modules",
-        json={"modules": modules if modules is not None else list(ALL_MODULES)},
-        headers=headers)).status_code == 200
-    return headers
+_auth = partial(auth, modules=ALL_MODULES)
 
 
 class LoopMonitor:

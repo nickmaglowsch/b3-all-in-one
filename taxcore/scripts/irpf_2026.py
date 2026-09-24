@@ -28,6 +28,9 @@ from pathlib import Path
 import pandas as pd
 
 from scripts import load_b3 as _load_b3
+# The apuração rules live in their own module — see scripts/apuracao.py for why.
+# Re-exported here because callers and tests import them from this script.
+from scripts.apuracao import CLASSES_APURACAO, monthly_apuracao
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -199,13 +202,12 @@ def build_timeline() -> pd.DataFrame:
     trades = trades[trades["market"].astype(str).str.contains(
         equity_pat, case=False, na=False, regex=True)].copy()
     # For Renda Fixa, only keep proper ETF ticker shape (LFTB11 etc.) — not
-    # CDB / LCI / LCA contract codes. We test the ticker against the standard
-    # B3 stock-ticker pattern.
-    rf_etf_re = re.compile(r"^[A-Z][A-Z0-9]{3}\d{1,2}$")
+    # CDB / LCI / LCA contract codes. We test the ticker against load_b3's
+    # standard B3 stock-ticker pattern.
     is_rf = trades["market"].astype(str).str.contains("Renda Fixa", case=False, na=False)
-    is_eq = ~is_rf
-    valid_ticker = trades["ticker"].astype(str).apply(lambda s: bool(rf_etf_re.match(s)))
-    trades = trades[is_eq | (is_rf & valid_ticker)].copy()
+    valid_ticker = trades["ticker"].astype(str).apply(
+        lambda s: bool(_load_b3._TICKER_RE.match(s)))
+    trades = trades[~is_rf | valid_ticker].copy()
 
     # Guarded by the round-lot shape: a bare F-strip would truncate a renda fixa
     # contract code ending in F. The pattern is load_b3's, not a copy of it.
@@ -222,27 +224,27 @@ def build_timeline() -> pd.DataFrame:
     events = events[~events["ticker"].astype(str).str.match(
         RF_PREFIX_RE.pattern, case=False, na=False)].copy()
 
-    rows = []
-    for _, t in trades.iterrows():
-        rows.append({
-            "ticker": t["ticker_root"], "date": t["date"],
-            "kind": "buy" if t["is_buy"] else "sell",
-            "qty": float(t["qty"]),
-            "amount": float(t["qty"]) * float(t["price"]),
-            "broker": t.get("broker", ""),
-        })
-    for _, e in events.iterrows():
-        cat = e.get("event_category")
-        if cat == "qty_event":
-            rows.append({"ticker": str(e["ticker"]), "date": e["date"], "kind": "qty_event",
-                         "qty": float(e["qty"]) if pd.notna(e["qty"]) else 0.0,
-                         "amount": 0.0, "broker": e.get("broker", "")})
-        elif cat == "amortization":
-            rows.append({"ticker": str(e["ticker"]), "date": e["date"], "kind": "amort",
-                         "qty": 0.0,
-                         "amount": float(e["amount"]) if pd.notna(e["amount"]) else 0.0,
-                         "broker": e.get("broker", "")})
-    return pd.DataFrame(rows).sort_values(["ticker", "date"]).reset_index(drop=True)
+    trade_rows = pd.DataFrame({
+        "ticker": trades["ticker_root"], "date": trades["date"],
+        "kind": ["buy" if b else "sell" for b in trades["is_buy"]],
+        "qty": trades["qty"].astype(float),
+        "amount": trades["qty"].astype(float) * trades["price"].astype(float),
+        "broker": trades.get("broker", ""),
+    })
+    # Only qty_events and amortizations move qty or cost; kept in file order.
+    kind = events.get("event_category", pd.Series(index=events.index, dtype=object)).map(
+        {"qty_event": "qty_event", "amortization": "amort"})
+    events, kind = events[kind.notna()], kind.dropna()
+    is_qty = kind == "qty_event"
+    event_rows = pd.DataFrame({
+        "ticker": events["ticker"].map(str), "date": events["date"], "kind": kind,
+        "qty": events["qty"].astype(float).fillna(0.0).where(is_qty, 0.0),
+        "amount": events["amount"].astype(float).fillna(0.0).where(~is_qty, 0.0),
+        "broker": events.get("broker", ""),
+    })
+    rows = [f for f in (trade_rows, event_rows) if not f.empty]
+    return pd.concat(rows, ignore_index=True).sort_values(
+        ["ticker", "date"]).reset_index(drop=True)
 
 
 def snapshot_positions(tl: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
@@ -276,6 +278,17 @@ def snapshot_positions(tl: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
                         "total_cost": round(cost, 2),
                         "broker": broker})
     return pd.DataFrame(out)
+
+
+# IRPF código (grupo 04) and kind label per renda fixa prefix: 02 for taxed
+# (CDB, RDB, Tesouro), 03 for isentos (LCI/LCA/CRI/CRA, debêntures
+# incentivadas). An unlisted prefix is taxed and labelled as itself.
+RF_KINDS = {
+    **{p: ("03", f"{p} (renda fixa isenta)") for p in ("LCI", "LCA", "CRI", "CRA")},
+    **{p: ("02", f"{p} (renda fixa tributada)") for p in ("CDB", "RDB", "LC", "LF")},
+    **{p: ("02", f"{p} (Tesouro Direto)") for p in ("TESOURO", "LFT", "LTN", "NTN")},
+    "DEB": ("03", "Debênture incentivada"),
+}
 
 
 def renda_fixa_year_end(year: int) -> pd.DataFrame:
@@ -460,22 +473,7 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
         # *wrong* one for a mixed-case "Debênture" (tributado instead of isento).
         prefix = code.split(" - ")[0].upper()
 
-        # IRPF classification: 04-02 for taxed (CDB, RDB, Tesouro), 04-03 for isentos (LCI/LCA/CRI/CRA, debêntures incentivadas)
-        if prefix in ("LCI", "LCA", "CRI", "CRA"):
-            irpf_g, irpf_c = "04", "03"
-            kind_label = f"{prefix} (renda fixa isenta)"
-        elif prefix in ("CDB", "RDB", "LC", "LF"):
-            irpf_g, irpf_c = "04", "02"
-            kind_label = f"{prefix} (renda fixa tributada)"
-        elif prefix in ("TESOURO", "LFT", "LTN", "NTN"):
-            irpf_g, irpf_c = "04", "02"
-            kind_label = f"{prefix} (Tesouro Direto)"
-        elif prefix == "DEB":
-            irpf_g, irpf_c = "04", "03"
-            kind_label = "Debênture incentivada"
-        else:
-            irpf_g, irpf_c = "04", "02"
-            kind_label = prefix
+        irpf_c, kind_label = RF_KINDS.get(prefix, ("02", prefix))
 
         rows.append({
             "code": code,
@@ -490,7 +488,7 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
             "rendimento_cur": rendimento_cur,
             "juros_cur": round(juros_cur, 2),
             "incomplete": incomplete,
-            "irpf_grupo": irpf_g,
+            "irpf_grupo": "04",
             "irpf_codigo": irpf_c,
         })
     return pd.DataFrame(rows)
@@ -520,13 +518,6 @@ def realized_per_month(tl: pd.DataFrame, year: int) -> pd.DataFrame:
             elif r["kind"] == "amort":
                 cost = max(0.0, cost - r["amount"])
     return pd.DataFrame(rows)
-
-
-# The apuração rules live in their own module — see scripts/apuracao.py for why.
-# Re-exported here because callers and tests import them from this script.
-from scripts.apuracao import (  # noqa: E402
-    ALIQUOTA, CLASSES_APURACAO, ISENCAO_LIMIT, monthly_apuracao,
-)
 
 
 def main(argv: list[str]) -> int:
@@ -594,8 +585,8 @@ def main(argv: list[str]) -> int:
     bens = bens[(bens["qty_prev"] > 0) | (bens["qty_cur"] > 0)].copy()
     bens["broker"] = bens["broker_cur"].where(bens["broker_cur"].astype(str).str.strip() != "",
                                               bens["broker_prev"])
-    bens[["group", "code", "label"]] = bens["ticker"].apply(
-        lambda t: pd.Series(irpf_classification(t)))
+    bens[["group", "code", "label"]] = pd.DataFrame(
+        bens["ticker"].map(irpf_classification).tolist(), index=bens.index)
     bens = bens.sort_values(["group", "code", "ticker"]).reset_index(drop=True)
 
     # ----- Income aggregations for the year -----
@@ -612,7 +603,6 @@ def main(argv: list[str]) -> int:
     rendimentos = by_type("Rendimento")
     rendimentos = rendimentos[rendimentos["event_category"] == "income"]
     reembolsos = yr[yr["event_category"] == "reembolso"]
-    amortizacoes = yr[yr["event_category"] == "amortization"]
     premios = yr[yr["event_category"] == "premium"]
 
     # ----- Render markdown -----

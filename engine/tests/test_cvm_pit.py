@@ -13,42 +13,26 @@ All tests use in-memory synthetic ZIPs / in-memory SQLite — no network, no rea
 from __future__ import annotations
 
 import io
-import sqlite3
 import zipfile
 
-import pandas as pd
 import pytest
 
-from b3_pipeline import cvm_storage, fca_parser, storage
+from b3_pipeline import cvm_storage, fca_parser
 from b3_pipeline.cvm_main import compute_net_income_ttm, materialize_fundamentals_monthly
 from b3_pipeline.cvm_parser import parse_dfp_zip, parse_fre_zip, parse_itr_zip
+from tests.conftest import csv_bytes
 
 
 # ── Fixture helpers ────────────────────────────────────────────────────────────
-
-def _csv_bytes(rows: list[dict]) -> bytes:
-    """Convert a list of dicts to semicolon-delimited CSV bytes (latin-1)."""
-    buf = io.StringIO()
-    pd.DataFrame(rows).to_csv(buf, sep=";", index=False)
-    return buf.getvalue().encode("latin-1")
-
 
 def _zip_with(files: dict[str, list[dict]]) -> io.BytesIO:
     """Build an in-memory ZIP with {csv_name: rows}."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         for name, rows in files.items():
-            zf.writestr(name, _csv_bytes(rows))
+            zf.writestr(name, csv_bytes(rows))
     buf.seek(0)
     return buf
-
-
-@pytest.fixture
-def mem_conn():
-    conn = sqlite3.connect(":memory:")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
 
 
 def _insert_pit_row(conn, **kwargs):

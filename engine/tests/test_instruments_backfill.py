@@ -12,12 +12,7 @@ import sqlite3
 import pandas as pd
 
 from b3_pipeline import instruments_backfill, storage
-
-
-def _db(tmp_path):
-    conn = sqlite3.connect(str(tmp_path / "b3.sqlite"))
-    storage.init_db(conn)
-    return conn
+from tests.conftest import sqlite_db
 
 
 def _price(conn, ticker, date, isin="UNKNOWN"):
@@ -58,7 +53,7 @@ def _stored(conn, symbol):
 
 
 def test_observed_bounds_come_from_the_price_plane(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for d in ("2010-01-04", "2015-06-30", "2020-12-30"):
         _price(conn, "PETR4", d)
     row = _row(conn, "PETR4")
@@ -69,14 +64,14 @@ def test_observed_bounds_come_from_the_price_plane(tmp_path):
 def test_a_ticker_nobody_delisted_stays_open_ended(tmp_path):
     """The refusal that matters. A B3 name can go quiet and come back, and a
     year can be missing from the plane entirely — silence is not a delisting."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "MGLU3", "2010-01-04")
     assert pd.isna(_row(conn, "MGLU3")["delisting_date"])
     assert _stored(conn, "MGLU3")["delist_reason"] is None
 
 
 def test_a_cvm_delisting_is_recorded(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "VALE5", "2010-01-04")
     _price(conn, "VALE5", "2017-06-30")
     _cvm(conn, "111", "VALE", delisting="2017-06-30")
@@ -87,7 +82,7 @@ def test_a_claimed_delisting_is_clamped_to_the_last_traded_session(tmp_path):
     """CVM's date is a registration event and often lands months after the last
     trade. Taken literally it would let the forward fill carry a flat price
     across that gap — the smaller version of the bug this all removes."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "OGXP3", "2010-01-04")
     _price(conn, "OGXP3", "2013-05-31")
     _cvm(conn, "222", "OGXP", delisting="2014-12-31")
@@ -95,7 +90,7 @@ def test_a_claimed_delisting_is_clamped_to_the_last_traded_session(tmp_path):
 
 
 def test_the_earlier_of_the_two_sources_wins(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "ABCD3", "2010-01-04")
     _price(conn, "ABCD3", "2018-01-04")
     _cvm(conn, "333", "ABCD", delisting="2016-01-01")
@@ -106,14 +101,14 @@ def test_the_earlier_of_the_two_sources_wins(tmp_path):
 def test_nothing_is_ever_marked_worthless(tmp_path):
     """CVM records that a company deregistered, not what shareholders recovered.
     Guessing zero would fabricate a total loss on every acquisition."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "VALE5", "2010-01-04")
     _cvm(conn, "111", "VALE", delisting="2010-01-04")
     assert _row(conn, "VALE5")["is_worthless"] == 0
 
 
 def test_the_unknown_isin_sentinel_does_not_leak(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "MGLU3", "2010-01-04", isin="UNKNOWN")
     _price(conn, "PETR4", "2010-01-04", isin="BRPETRACNPR6")
     assert _stored(conn, "MGLU3")["isin_code"] is None
@@ -121,7 +116,7 @@ def test_the_unknown_isin_sentinel_does_not_leak(tmp_path):
 
 
 def test_backfill_is_idempotent(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _price(conn, "PETR4", "2010-01-04")
     from b3_pipeline import market_storage
     for _ in range(2):
@@ -131,7 +126,7 @@ def test_backfill_is_idempotent(tmp_path):
 
 
 def test_an_empty_plane_writes_nothing(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     assert instruments_backfill.build(conn).empty
 
 

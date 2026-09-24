@@ -11,39 +11,14 @@ from __future__ import annotations
 
 import io
 import logging
-import re
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import pandas as pd
 
+from .cvm_parser import _clean_cnpj, _parse_date
+
 logger = logging.getLogger(__name__)
-
-
-# ── Private helpers ────────────────────────────────────────────────────────────
-
-def _clean_cnpj(raw: str) -> Optional[str]:
-    """Strip CNPJ formatting and return 14-digit string or None."""
-    if not raw:
-        return None
-    digits = re.sub(r"\D", "", str(raw))
-    return digits if len(digits) == 14 else None
-
-
-def _parse_date(val) -> Optional[str]:
-    """Parse date string, trying YYYY-MM-DD then DD/MM/YYYY. Returns YYYY-MM-DD or None."""
-    if val is None:
-        return None
-    s = str(val).strip()
-    if s in ("", "nan", "NaT", "None"):
-        return None
-    from datetime import datetime
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return None
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────

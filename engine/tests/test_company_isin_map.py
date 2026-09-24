@@ -20,16 +20,6 @@ from b3_pipeline import storage, cvm_storage
 from tests.conftest import seed_cvm_company
 
 
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 1. Table creation
 # ──────────────────────────────────────────────────────────────────────────────

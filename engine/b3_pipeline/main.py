@@ -35,6 +35,47 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _fetch_level_series(conn) -> None:
+    """Steps 5c–5d: third-party level series, each one allowed to fail alone.
+
+    Same posture as 5b for every one of them: an unreachable feed leaves what it
+    prices where it was before the step existed — open contracts unpriced and
+    disclosed, the benchmark overlay disclosed as unavailable, Tesouro titles
+    accrued if the tenant entered terms and disclosed as unpriced if not.
+    """
+    steps = (
+        # The CDI and IPCA levels renda fixa accrues against. Rewritten whole
+        # each run from a fixed epoch, so a stored level never depends on the
+        # window that happened to fetch it — no resume state, nothing to heal.
+        ("5c", "BCB index series (CDI, IPCA)", "BCB index series",
+         lambda: index_series.build(datetime.now().date())),
+        # The Ibovespa, from B3's own publication. Same whole-rewrite posture as
+        # 5c, and for the same reason — one request per year, no resume state.
+        ("5c2", "Ibovespa index series", "Ibovespa series",
+         lambda: ibov_series.build(datetime.now().date())),
+        # Tesouro Direto. Renda fixa with no ticker, like a CDB — except the
+        # issuer publishes a daily price for every title, so these need no
+        # accrual model and no indexer from the tenant at all.
+        #
+        # Resumes from the latest stored date, which step 5b deliberately does
+        # not: this file carries its whole history on every request, so a day a
+        # network error skipped is still there tomorrow. Nothing rolls off.
+        ("5d", "Tesouro Direto prices", "Tesouro Direto",
+         lambda: tesouro_direto.build(
+             storage.max_external_price_date(conn, tesouro_direto.SOURCE)
+             or tesouro_direto.TESOURO_START)),
+    )
+    for step, what, name, build in steps:
+        logger.info("")
+        logger.info(f"Step {step}/9: Fetching {what}...")
+        try:
+            rows = build()
+            if not rows.empty:
+                storage.upsert_external_prices(conn, rows)
+        except Exception as e:
+            logger.error(f"{name} fetch failed, continuing: {e}")
+
+
 def run_pipeline(
     rebuild: bool = False,
     year: Optional[int] = None,
@@ -209,52 +250,7 @@ def run_pipeline(
             # it was before this step existed.
             logger.error(f"External price fetch failed, continuing: {e}")
 
-        # The CDI and IPCA levels renda fixa accrues against. Rewritten whole
-        # each run from a fixed epoch, so a stored level never depends on the
-        # window that happened to fetch it — no resume state, nothing to heal.
-        logger.info("")
-        logger.info("Step 5c/9: Fetching BCB index series (CDI, IPCA)...")
-        try:
-            levels = index_series.build(datetime.now().date())
-            if not levels.empty:
-                storage.upsert_external_prices(conn, levels)
-        except Exception as e:
-            # Same posture: an unreachable BCB leaves open contracts unpriced and
-            # disclosed, which is exactly where they were before this step.
-            logger.error(f"BCB index series fetch failed, continuing: {e}")
-
-        # The Ibovespa, from B3's own publication. Same whole-rewrite posture as
-        # 5c, and for the same reason — one request per year, no resume state.
-        logger.info("")
-        logger.info("Step 5c2/9: Fetching Ibovespa index series...")
-        try:
-            ibov = ibov_series.build(datetime.now().date())
-            if not ibov.empty:
-                storage.upsert_external_prices(conn, ibov)
-        except Exception as e:
-            # An unreachable B3 leaves the benchmark overlay disclosed as
-            # unavailable, which the chart already knows how to say.
-            logger.error(f"Ibovespa series fetch failed, continuing: {e}")
-
-        # Tesouro Direto. Renda fixa with no ticker, like a CDB — except the
-        # issuer publishes a daily price for every title, so these need no
-        # accrual model and no indexer from the tenant at all.
-        #
-        # Resumes from the latest stored date, which step 5b deliberately does
-        # not: this file carries its whole history on every request, so a day a
-        # network error skipped is still there tomorrow. Nothing rolls off.
-        logger.info("")
-        logger.info("Step 5d/9: Fetching Tesouro Direto prices...")
-        try:
-            stored = storage.max_external_price_date(conn, tesouro_direto.SOURCE)
-            marks = tesouro_direto.build(stored or tesouro_direto.TESOURO_START)
-            if not marks.empty:
-                storage.upsert_external_prices(conn, marks)
-        except Exception as e:
-            # Same posture as 5b/5c: an unreachable Tesouro leaves those titles
-            # where they were before this step — accrued if the tenant entered
-            # terms, disclosed as unpriced if not.
-            logger.error(f"Tesouro Direto fetch failed, continuing: {e}")
+        _fetch_level_series(conn)
 
         if not skip_corporate_actions:
             logger.info("")
@@ -341,39 +337,7 @@ def run_pipeline(
                     f"Step 9b/10: Retrying {len(unresolved)} previously failed corporate "
                     "action fetches..."
                 )
-                ticker_to_isin = storage.get_ticker_isin_map(conn)
-                for failure in unresolved:
-                    company_code = failure["company_code"]
-                    logger.info(f"  Retrying {company_code}...")
-                    company_data = b3_corporate_actions.fetch_company_data(
-                        company_code, conn=conn
-                    )
-                    if company_data is None:
-                        logger.warning(f"  Retry still failed for {company_code}")
-                        continue
-                    storage.resolve_fetch_failure(conn, company_code, failure["endpoint"])
-                    stock_divs = company_data.get("stockDividends", [])
-                    if stock_divs:
-                        corp_df, stock_df, skipped_df = b3_corporate_actions.parse_stock_dividends(
-                            stock_divs
-                        )
-                        if not corp_df.empty:
-                            storage.upsert_corporate_actions(conn, corp_df)
-                        if not stock_df.empty:
-                            storage.upsert_stock_actions(conn, stock_df)
-                        if not skipped_df.empty:
-                            storage.upsert_skipped_events(conn, skipped_df)
-                    full_trading_name = company_data.get("tradingName", "").strip()
-                    if full_trading_name:
-                        cash_divs = b3_corporate_actions.fetch_cash_dividends_paginated(
-                            full_trading_name
-                        )
-                        if cash_divs:
-                            corp_df = b3_corporate_actions.parse_cash_dividends(
-                                cash_divs, company_code, ticker_to_isin
-                            )
-                            if not corp_df.empty:
-                                storage.upsert_corporate_actions(conn, corp_df)
+                _retry_failures(conn, unresolved, nested=True)
 
         logger.info("")
         logger.info("Step 10/10: Summary statistics...")
@@ -427,6 +391,55 @@ def _run_update_cnpj_map() -> None:
         logger.info(f"Done. Upserted {updated} CNPJ mappings into cvm_companies.")
 
 
+def _retry_failures(conn, failures: list, nested: bool = False) -> None:
+    """Re-fetch each recorded failure; resolve and store the ones that now answer.
+
+    `nested` is the run_pipeline step 9b flavour: indented, terser log lines.
+    """
+    ticker_to_isin = storage.get_ticker_isin_map(conn)
+    indent = "  " if nested else ""
+    for failure in failures:
+        company_code = failure["company_code"]
+        logger.info(f"{indent}Retrying {company_code}...")
+        company_data = b3_corporate_actions.fetch_company_data(company_code, conn=conn)
+        if company_data is None:
+            logger.warning(f"  Retry still failed for {company_code}" if nested
+                           else f"Retry failed for {company_code}")
+            continue
+        storage.resolve_fetch_failure(conn, company_code, failure["endpoint"])
+        if not nested:
+            logger.info(f"Successfully fetched {company_code}")
+        _store_company_actions(conn, company_data, company_code, ticker_to_isin)
+
+
+def _store_company_actions(conn, company_data: dict, company_code: str,
+                           ticker_to_isin: dict) -> None:
+    stock_divs = company_data.get("stockDividends", [])
+    if stock_divs:
+        corp_df, stock_df, skipped_df = b3_corporate_actions.parse_stock_dividends(
+            stock_divs
+        )
+        if not corp_df.empty:
+            storage.upsert_corporate_actions(conn, corp_df)
+        if not stock_df.empty:
+            storage.upsert_stock_actions(conn, stock_df)
+        if not skipped_df.empty:
+            storage.upsert_skipped_events(conn, skipped_df)
+
+    # Also fetch cash dividends for recovered companies
+    full_trading_name = company_data.get("tradingName", "").strip()
+    if full_trading_name:
+        cash_divs = b3_corporate_actions.fetch_cash_dividends_paginated(
+            full_trading_name
+        )
+        if cash_divs:
+            corp_df = b3_corporate_actions.parse_cash_dividends(
+                cash_divs, company_code, ticker_to_isin
+            )
+            if not corp_df.empty:
+                storage.upsert_corporate_actions(conn, corp_df)
+
+
 def retry_failed_companies() -> None:
     """
     Re-fetch corporate actions for companies that previously failed.
@@ -447,48 +460,7 @@ def retry_failed_companies() -> None:
             return
 
         logger.info(f"Found {len(failures)} unresolved failures to retry")
-
-        ticker_to_isin = storage.get_ticker_isin_map(conn)
-
-        for failure in failures:
-            company_code = failure["company_code"]
-            logger.info(f"Retrying {company_code}...")
-
-            company_data = b3_corporate_actions.fetch_company_data(
-                company_code, conn=conn
-            )
-            if company_data is None:
-                logger.warning(f"Retry failed for {company_code}")
-                continue
-
-            storage.resolve_fetch_failure(conn, company_code, failure["endpoint"])
-            logger.info(f"Successfully fetched {company_code}")
-
-            stock_divs = company_data.get("stockDividends", [])
-            if stock_divs:
-                corp_df, stock_df, skipped_df = b3_corporate_actions.parse_stock_dividends(
-                    stock_divs
-                )
-                if not corp_df.empty:
-                    storage.upsert_corporate_actions(conn, corp_df)
-                if not stock_df.empty:
-                    storage.upsert_stock_actions(conn, stock_df)
-                if not skipped_df.empty:
-                    storage.upsert_skipped_events(conn, skipped_df)
-
-            # Also fetch cash dividends for recovered companies
-            full_trading_name = company_data.get("tradingName", "").strip()
-            if full_trading_name:
-                cash_divs = b3_corporate_actions.fetch_cash_dividends_paginated(
-                    full_trading_name
-                )
-                if cash_divs:
-                    corp_df = b3_corporate_actions.parse_cash_dividends(
-                        cash_divs, company_code, ticker_to_isin
-                    )
-                    if not corp_df.empty:
-                        storage.upsert_corporate_actions(conn, corp_df)
-
+        _retry_failures(conn, failures)
         logger.info("Retry complete")
     finally:
         conn.close()

@@ -124,6 +124,46 @@ class TestFetchCompanyData:
 
         assert result is None
 
+    def test_records_the_error_message_per_failure_kind(self):
+        """Network errors are stored verbatim; any parse error as ParseError."""
+        import requests as _requests
+
+        cases = [
+            (dict(side_effect=_requests.RequestException("timeout")), "timeout"),
+            (dict(return_value=_make_response(json_raise=ValueError("bad json"))),
+             "ParseError: bad json"),
+            (dict(return_value=_make_response(json_raise=TypeError("odd"))),
+             "ParseError: odd"),
+            (dict(return_value=_make_response(json_raise=AttributeError("attr"))),
+             "ParseError: attr"),
+        ]
+        for mock_kwargs, expected in cases:
+            conn = _in_memory_conn()
+            with patch("b3_pipeline.b3_corporate_actions.requests.get", **mock_kwargs):
+                assert fetch_company_data("FAIL", conn=conn) is None
+            rows = conn.execute(
+                "SELECT endpoint, error_message FROM fetch_failures"
+            ).fetchall()
+            conn.close()
+            assert rows == [("GetListedSupplementCompany", expected)]
+
+    def test_a_failure_to_record_the_failure_is_swallowed(self):
+        """Tracking is best-effort: a broken conn must not turn None into a raise."""
+        import requests as _requests
+
+        conn = sqlite3.connect(":memory:")  # no fetch_failures table
+        with patch(
+            "b3_pipeline.b3_corporate_actions.requests.get",
+            side_effect=_requests.RequestException("timeout"),
+        ):
+            assert fetch_company_data("FAIL", conn=conn) is None
+        with patch(
+            "b3_pipeline.b3_corporate_actions.requests.get",
+            return_value=_make_response(json_raise=TypeError("odd")),
+        ):
+            assert fetch_company_data("FAIL", conn=conn) is None
+        conn.close()
+
     def test_returns_none_when_response_is_empty_list(self):
         """An empty list response should result in None."""
         with patch(

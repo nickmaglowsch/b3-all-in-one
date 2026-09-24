@@ -18,16 +18,6 @@ from b3_pipeline import storage, cvm_storage
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema including fundamentals tables."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
-
-
 def _insert_price(conn, ticker, date, close, volume=1000):
     """Helper: insert a minimal prices row."""
     conn.execute(

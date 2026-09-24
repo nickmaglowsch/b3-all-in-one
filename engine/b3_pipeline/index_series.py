@@ -29,6 +29,8 @@ import pandas as pd
 import requests
 from dateutil.relativedelta import relativedelta
 
+from .external_prices import level_rows
+
 logger = logging.getLogger(__name__)
 
 # Marks this loader's rows in the shared table. storage's resume helpers scope on
@@ -104,20 +106,7 @@ def build(end: datetime.date, start: datetime.date = INDEX_SERIES_START) -> pd.D
             logger.warning(f"SGS {series} returned nothing for {start}–{end}")
             continue
         level = (1.0 + rates).cumprod()
-        frames.append(pd.DataFrame({
-            "ticker": ticker,
-            "isin_code": "UNKNOWN",
-            "date": level.index,
-            # A rate has no range and no volume. NULL rather than faked from
-            # the level, the same posture external_prices.parse_file takes on
-            # `open` — but as NaN, not None: a column that is None all the way
-            # down infers object dtype, and upsert_external_prices' containment
-            # check compares close against low before it looks at notna().
-            "open": float("nan"), "high": float("nan"), "low": float("nan"),
-            "close": level.to_numpy(),
-            "volume": 0.0,
-            "source": SOURCE,
-        }))
+        frames.append(level_rows(ticker, level.index, level.to_numpy(), SOURCE))
         logger.info(f"{ticker}: {len(level):,} points, "
                     f"level {level.iloc[-1]:.4f} at {level.index[-1]:%Y-%m-%d}")
 

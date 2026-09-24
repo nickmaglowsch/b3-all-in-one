@@ -9,19 +9,8 @@ from __future__ import annotations
 import sqlite3
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import storage
-
-
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema and one price row pre-inserted."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
 
 
 def _insert_price_row(conn: sqlite3.Connection) -> None:

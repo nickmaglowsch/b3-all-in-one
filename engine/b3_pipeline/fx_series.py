@@ -30,6 +30,7 @@ import logging
 
 import pandas as pd
 
+from .external_prices import level_rows
 from .index_series import fetch_sgs
 
 logger = logging.getLogger(__name__)
@@ -73,17 +74,7 @@ def build(end: datetime.date, start: datetime.date = FX_SERIES_START) -> pd.Data
 
     logger.info(f"{USDBRL_TICKER}: {len(rates):,} points, "
                 f"{rates.iloc[-1]:.4f} at {rates.index[-1]:%Y-%m-%d}")
-    return pd.DataFrame({
-        "ticker": USDBRL_TICKER,
-        "isin_code": "UNKNOWN",
-        "date": rates.index,
-        # A published rate has no range and no volume. NaN, not None, for the
-        # dtype reason index_series.build documents.
-        "open": float("nan"), "high": float("nan"), "low": float("nan"),
-        "close": rates.to_numpy(),
-        "volume": 0.0,
-        "source": SOURCE,
-    })
+    return level_rows(USDBRL_TICKER, rates.index, rates.to_numpy(), SOURCE)
 
 
 def load(conn, start=None, end=None) -> pd.Series:

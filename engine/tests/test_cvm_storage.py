@@ -9,21 +9,10 @@ from __future__ import annotations
 import sqlite3
 
 import pandas as pd
-import pytest
 
 from b3_pipeline import storage
 from b3_pipeline import cvm_storage
 from tests.conftest import seed_cvm_company
-
-
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")  # allow testing without FK cascades
-    storage.init_db(conn)
-    yield conn
-    conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -190,6 +179,31 @@ def test_get_summary_stats_includes_fundamentals_keys(mem_conn):
     assert stats["total_fundamentals_pit"] == 0
 
 
+def test_get_summary_stats_full_shape(mem_conn):
+    mem_conn.executemany(
+        "INSERT INTO prices (ticker, isin_code, date, close) VALUES (?, ?, ?, ?)",
+        [("PETR4", "BRPETR", "2024-01-02", 1.0), ("PETR4", "BRPETR", "2024-01-03", 1.0),
+         ("VALE3", "BRVALE", "2024-01-05", 1.0)])
+    storage.record_fetch_failure(mem_conn, "X", "E", "m")
+    seed_cvm_company(mem_conn, "1", "PETR", "Petrobras", "9512", "PETROBRAS")
+    stats = storage.get_summary_stats(mem_conn)
+    assert stats == {
+        "total_prices": 3, "total_tickers": 2, "total_isins": 2,
+        "date_range": ("2024-01-02", "2024-01-05"),
+        "total_corporate_actions": 0, "total_detected_splits": 0,
+        "total_stock_actions": 0, "total_skipped_events": 0,
+        "unresolved_fetch_failures": 1, "total_cvm_companies": 1,
+        "total_cvm_filings": 0, "total_fundamentals_pit": 0,
+    }
+    assert isinstance(stats["date_range"], tuple)
+    # Very old files have no CVM tables at all; those counts default to 0.
+    for table in ("fundamentals_pit", "cvm_filings", "cvm_companies"):
+        mem_conn.execute(f"DROP TABLE {table}")
+    stats = storage.get_summary_stats(mem_conn)
+    assert (stats["total_cvm_companies"], stats["total_cvm_filings"],
+            stats["total_fundamentals_pit"]) == (0, 0, 0)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. get_cvm_company_map
 # ──────────────────────────────────────────────────────────────────────────────
@@ -239,6 +253,76 @@ def test_migrate_schema_adds_listing_date_columns():
     assert "listing_date" in cols, "listing_date column should exist after migration"
     assert "delisting_date" in cols, "delisting_date column should exist after migration"
     conn.close()
+
+
+def _cols(conn, table):
+    return {row[1]: row[2] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def test_init_db_migrates_every_added_column_on_an_old_sqlite_file():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript("""
+        CREATE TABLE prices (ticker TEXT NOT NULL, isin_code TEXT NOT NULL,
+            date DATE NOT NULL, close REAL, PRIMARY KEY (ticker, date));
+        CREATE TABLE cvm_companies (cnpj TEXT NOT NULL PRIMARY KEY, ticker TEXT);
+        CREATE TABLE fundamentals_pit (filing_id TEXT NOT NULL PRIMARY KEY,
+            cnpj TEXT, ticker TEXT, period_end DATE, filing_date DATE);
+        CREATE TABLE fundamentals_monthly (month_end DATE NOT NULL,
+            ticker TEXT NOT NULL, PRIMARY KEY (month_end, ticker));
+        INSERT INTO cvm_companies VALUES ('1', 'PETR4'), ('2', NULL);
+    """)
+    storage.init_db(conn)
+    assert _cols(conn, "prices")["quotation_factor"] == "INTEGER"
+    companies = _cols(conn, "cvm_companies")
+    assert (companies["listing_date"], companies["delisting_date"],
+            companies["ticker_root"]) == ("DATE", "DATE", "TEXT")
+    pit = _cols(conn, "fundamentals_pit")
+    assert (pit["net_income_ttm"], pit["shares_on"], pit["shares_pn"]) == ("REAL",) * 3
+    assert _cols(conn, "fundamentals_monthly")["net_income_ttm"] == "REAL"
+    # The column arrives backfilled, and indexed.
+    assert conn.execute("SELECT cnpj, ticker_root FROM cvm_companies ORDER BY cnpj"
+                        ).fetchall() == [("1", "PETR"), ("2", None)]
+    assert conn.execute("SELECT 1 FROM sqlite_master WHERE type='index'"
+                        " AND name='idx_cvm_companies_ticker_root'").fetchone()
+    # The backfill is part of adding the column on SQLite, not of every init_db.
+    conn.execute("INSERT INTO cvm_companies (cnpj, ticker) VALUES ('3', 'VALE3')")
+    storage.init_db(conn)
+    assert conn.execute("SELECT ticker_root FROM cvm_companies WHERE cnpj='3'"
+                        ).fetchone() == (None,)
+    conn.close()
+
+
+def test_pg_migration_statements():
+    class Recorder:
+        def __init__(self):
+            self.sql = []
+
+        def cursor(self):
+            return self
+
+        def execute(self, sql, *args):
+            self.sql.append(" ".join(sql.split()))
+
+        def fetchone(self):
+            return ("double precision",)
+
+    rec = Recorder()
+    storage._migrate_schema_pg(rec)
+    assert rec.sql == [
+        "ALTER TABLE prices ADD COLUMN IF NOT EXISTS quotation_factor BIGINT DEFAULT 1",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS listing_date DATE",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS delisting_date DATE",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS ticker_root TEXT",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_monthly ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_on DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_pn DOUBLE PRECISION",
+        "SELECT data_type FROM information_schema.columns WHERE table_name = 'prices'"
+        " AND column_name = 'volume' AND table_schema = current_schema()",
+        "CREATE INDEX IF NOT EXISTS idx_cvm_companies_ticker_root ON cvm_companies(ticker_root);",
+        "UPDATE cvm_companies SET ticker_root = SUBSTR(ticker, 1, 4)"
+        " WHERE ticker IS NOT NULL AND ticker_root IS NULL",
+    ]
 
 
 def test_upsert_cad_company_dates_inserts_new_row(mem_conn):
@@ -352,3 +436,7 @@ def test_get_fundamentals_stats_includes_listing_counts(mem_conn):
     stats = cvm_storage.get_fundamentals_stats(mem_conn)
     assert stats["companies_with_listing_date"] == 1
     assert "companies_with_delisting_date" in stats
+    assert stats == {
+        "total_cvm_companies": 2, "total_cvm_filings": 0, "total_fundamentals_pit": 0,
+        "companies_with_listing_date": 1, "companies_with_delisting_date": 0,
+    }

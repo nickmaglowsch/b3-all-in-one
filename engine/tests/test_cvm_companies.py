@@ -3,24 +3,9 @@ Tests for CNPJ normalisation and the cnpj->ticker map (Task 02 — TDD).
 """
 from __future__ import annotations
 
-import sqlite3
-
-import pytest
-
-from b3_pipeline import storage
 from b3_pipeline import cvm_storage
-from b3_pipeline.b3_corporate_actions import _clean_cnpj
+from b3_pipeline.cvm_parser import _clean_cnpj
 from tests.conftest import seed_cvm_company
-
-
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

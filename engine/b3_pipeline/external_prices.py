@@ -172,6 +172,27 @@ def parse_file(body: bytes, tickers) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def level_rows(ticker, dates, closes, source: str) -> pd.DataFrame:
+    """`external_prices` rows for a series that is a level and nothing else —
+    an index, a rate, a published PU.
+
+    A level has no range and no volume. `open`/`high`/`low` stay NULL rather
+    than being faked from the close, the same posture parse_file takes on
+    `open` — but as NaN, not None: a column that is None all the way down
+    infers object dtype, and upsert_external_prices' containment check compares
+    close against low before it looks at notna().
+    """
+    return pd.DataFrame({
+        "ticker": ticker,
+        "isin_code": "UNKNOWN",
+        "date": dates,
+        "open": float("nan"), "high": float("nan"), "low": float("nan"),
+        "close": closes,
+        "volume": 0.0,
+        "source": source,
+    })
+
+
 def days_to_fetch(today: datetime.date, *, stored, pending, start,
                   heal_days: int, retention_days: int):
     """Decide what this run owes B3, and what it has to give up on.

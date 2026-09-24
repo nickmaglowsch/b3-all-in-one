@@ -7,8 +7,13 @@ These tests verify:
 3. get_unresolved_failures returns only unresolved entries
 4. resolve_fetch_failure marks an entry as resolved
 """
+import logging
 import sqlite3
 
+import pandas as pd
+import pytest
+
+from b3_pipeline import main as pipeline
 from b3_pipeline import storage
 
 
@@ -119,3 +124,59 @@ class TestFetchFailureTracking:
 
         assert row is not None
         assert row[0] >= 1, "retry_count should be incremented on duplicate failure"
+
+
+# ── Retrying the recorded failures (main.retry_failed_companies / step 9b) ───
+
+@pytest.fixture
+def retry_world(monkeypatch, tmp_path):
+    """Two recorded failures: OKAY now answers, DEAD still does not."""
+    db = tmp_path / "retry.sqlite"
+    monkeypatch.setattr(pipeline.storage, "get_connection", lambda: sqlite3.connect(db))
+    conn = sqlite3.connect(db)
+    storage.init_db(conn, rebuild=False)
+    storage.record_fetch_failure(conn, "DEAD", "GetListedSupplementCompany", "x")
+    storage.record_fetch_failure(conn, "OKAY", "GetListedSupplementCompany", "x")
+    writes = []
+    one = pd.DataFrame({"a": [1]})
+    b3 = pipeline.b3_corporate_actions
+    monkeypatch.setattr(b3, "fetch_company_data", lambda code, conn=None: None if code == "DEAD"
+                        else {"stockDividends": [{"s": 1}], "tradingName": " OKAY SA "})
+    monkeypatch.setattr(b3, "parse_stock_dividends",
+                        lambda divs: (one, one, pd.DataFrame()))
+    monkeypatch.setattr(b3, "fetch_cash_dividends_paginated",
+                        lambda name: writes.append(("cash_fetch", name)) or [{"c": 1}])
+    monkeypatch.setattr(b3, "parse_cash_dividends",
+                        lambda divs, code, isin_map: writes.append(("cash_parse", code)) or one)
+    for fn in ("upsert_corporate_actions", "upsert_stock_actions", "upsert_skipped_events"):
+        monkeypatch.setattr(pipeline.storage, fn,
+                            lambda c, df, _fn=fn: writes.append((_fn, len(df))))
+    return conn, writes
+
+
+EXPECTED_WRITES = [
+    ("upsert_corporate_actions", 1), ("upsert_stock_actions", 1),
+    ("cash_fetch", "OKAY SA"), ("cash_parse", "OKAY"), ("upsert_corporate_actions", 1),
+]
+
+
+def test_retry_failed_companies_resolves_what_now_answers(retry_world, caplog):
+    conn, writes = retry_world
+    with caplog.at_level(logging.INFO, logger=pipeline.logger.name):
+        pipeline.retry_failed_companies()
+    assert writes == EXPECTED_WRITES
+    assert [f["company_code"] for f in storage.get_unresolved_failures(conn)] == ["DEAD"]
+    msgs = [r.getMessage() for r in caplog.records]
+    assert "Retrying DEAD..." in msgs and "Retry failed for DEAD" in msgs
+    assert "Successfully fetched OKAY" in msgs
+
+
+def test_retry_failures_nested_logs_as_a_pipeline_step(retry_world, caplog):
+    conn, writes = retry_world
+    with caplog.at_level(logging.INFO, logger=pipeline.logger.name):
+        pipeline._retry_failures(conn, storage.get_unresolved_failures(conn), nested=True)
+    assert writes == EXPECTED_WRITES
+    assert [f["company_code"] for f in storage.get_unresolved_failures(conn)] == ["DEAD"]
+    msgs = [r.getMessage() for r in caplog.records]
+    assert "  Retrying OKAY..." in msgs and "  Retry still failed for DEAD" in msgs
+    assert not any("Successfully" in m for m in msgs)

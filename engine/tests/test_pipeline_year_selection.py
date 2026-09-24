@@ -133,3 +133,55 @@ def test_the_maintenance_modes_run_instead_of_the_pipeline(monkeypatch, dispatch
                                                            flag, expected):
     run_cli(monkeypatch, flag)
     assert dispatch == {expected: True}
+
+
+# --------------------------------------------------------------------------
+# Steps 5c/5c2/5d: whole-rewrite level series
+# --------------------------------------------------------------------------
+
+def test_level_series_steps_survive_each_others_failures(monkeypatch, caplog):
+    import datetime as _dt
+    import logging
+
+    written = []
+    rows = pd.DataFrame({"ticker": ["X"]})
+    stored = _dt.date(2024, 5, 1)
+
+    def boom(_today):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(pipeline.index_series, "build", lambda today: rows.assign(ticker="CDI"))
+    monkeypatch.setattr(pipeline.ibov_series, "build", boom)
+    monkeypatch.setattr(pipeline.tesouro_direto, "build",
+                        lambda start: rows.assign(ticker=str(start)))
+    monkeypatch.setattr(pipeline.storage, "max_external_price_date",
+                        lambda conn, source: stored if source == pipeline.tesouro_direto.SOURCE else None)
+    monkeypatch.setattr(pipeline.storage, "upsert_external_prices",
+                        lambda conn, df: written.append(df["ticker"].iloc[0]))
+    with caplog.at_level(logging.INFO, logger=pipeline.logger.name):
+        pipeline._fetch_level_series(conn=None)
+    assert written == ["CDI", "2024-05-01"]
+    msgs = [r.getMessage() for r in caplog.records]
+    assert msgs == [
+        "", "Step 5c/9: Fetching BCB index series (CDI, IPCA)...",
+        "", "Step 5c2/9: Fetching Ibovespa index series...",
+        "Ibovespa series fetch failed, continuing: down",
+        "", "Step 5d/9: Fetching Tesouro Direto prices...",
+    ]
+
+
+def test_level_series_skip_empty_frames_and_tesouro_starts_at_its_epoch(monkeypatch, caplog):
+    import logging
+
+    written, starts = [], []
+    monkeypatch.setattr(pipeline.index_series, "build", lambda today: pd.DataFrame())
+    monkeypatch.setattr(pipeline.ibov_series, "build", lambda today: pd.DataFrame())
+    monkeypatch.setattr(pipeline.tesouro_direto, "build",
+                        lambda start: starts.append(start) or pd.DataFrame())
+    monkeypatch.setattr(pipeline.storage, "max_external_price_date", lambda conn, source: None)
+    monkeypatch.setattr(pipeline.storage, "upsert_external_prices",
+                        lambda conn, df: written.append(df))
+    with caplog.at_level(logging.ERROR, logger=pipeline.logger.name):
+        pipeline._fetch_level_series(conn=None)
+    assert written == [] and caplog.records == []
+    assert starts == [pipeline.tesouro_direto.TESOURO_START]

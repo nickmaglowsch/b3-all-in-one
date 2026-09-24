@@ -16,12 +16,48 @@ that had it in the shell.
 """
 from __future__ import annotations
 
+import io
 import sqlite3
+import zipfile
 from typing import Optional
 
+import pandas as pd
 import pytest
 
 from b3_pipeline import storage
+
+
+@pytest.fixture
+def mem_conn():
+    """In-memory SQLite connection with full schema."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("PRAGMA foreign_keys = OFF")  # allow testing without FK cascades
+    storage.init_db(conn)
+    yield conn
+    conn.close()
+
+
+def sqlite_db(tmp_path) -> sqlite3.Connection:
+    """A file-backed SQLite plane with the full schema, under `tmp_path`."""
+    conn = sqlite3.connect(str(tmp_path / "engine.sqlite"))
+    storage.init_db(conn)
+    return conn
+
+
+def csv_bytes(rows: list[dict]) -> bytes:
+    """Rows as CVM ships them: semicolon-delimited CSV, latin-1."""
+    buf = io.StringIO()
+    pd.DataFrame(rows).to_csv(buf, sep=";", index=False)
+    return buf.getvalue().encode("latin-1")
+
+
+def ipe_zip(rows: list[dict], year: int = 2008) -> io.BytesIO:
+    """An in-memory IPE ZIP: one CSV, named as the real yearly file is."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"ipe_cia_aberta_{year}.csv", csv_bytes(rows))
+    buf.seek(0)
+    return buf
 
 
 def seed_cvm_company(

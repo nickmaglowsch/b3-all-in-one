@@ -23,12 +23,12 @@ slow one — then the structural guard: `iterrows` must not come back.
 from __future__ import annotations
 
 import datetime
-import sqlite3
 
 import pandas as pd
 import pytest
 from b3_pipeline import market_storage, storage, us_storage
 from us_pipeline import us_listing, us_prices
+from tests.conftest import sqlite_db
 
 TODAY = datetime.date(2026, 9, 1)
 
@@ -107,12 +107,6 @@ def test_select_work_does_not_build_a_series_per_symbol(monkeypatch):
 
 # ── us_listing.reconcile ────────────────────────────────────────────────────
 
-def _db(tmp_path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(tmp_path / "listing.sqlite"))
-    storage.init_db(conn)
-    return conn
-
-
 def _rows(n, prefix="SYM", status="active", ipo="2000-01-01", delisted=None):
     return pd.DataFrame([{
         "symbol": f"{prefix}{i}", "name": f"{prefix} {i} Inc",
@@ -144,7 +138,7 @@ def test_reconcile_reads_every_column_of_a_known_row(tmp_path):
     """`known` is the dict under change, and `_plan`/`_resolve`/`_foreign_delisting`
     between them read last_seen, delisting_date and delist_reason off it. One
     reconciliation that exercises all three."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     # Watched trading until 2011-06-10 — a claim before that is a recycled ticker.
     _seen_by_the_directory(conn, "RECYCLED", "2005-01-03", "2011-06-10")
     # Already delisted by another writer: this feed must never restate it.
@@ -175,7 +169,7 @@ def test_reconcile_reads_every_column_of_a_known_row(tmp_path):
 
 
 def test_a_settlement_date_a_few_days_early_is_pulled_to_the_observed_day(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(conn, "SLACK", "2005-01-03", "2011-06-10")
     delisted = _rows(1, "SLACK", status="delisted", delisted="2011-06-08") \
         .assign(symbol="SLACK")
@@ -184,7 +178,7 @@ def test_a_settlement_date_a_few_days_early_is_pulled_to_the_observed_day(tmp_pa
 
 
 def test_reconcile_does_not_build_a_series_per_known_symbol(tmp_path, monkeypatch):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(conn, "KNOWN", "2005-01-03", "2011-06-10")
     delisted = _rows(2, "DEAD", status="delisted", delisted="2010-01-01")
 
@@ -200,7 +194,7 @@ def test_the_lookup_holds_plain_rows_not_pandas_objects(n, tmp_path):
     """A direct read of the structure the two schedulers keep alive. `iterrows`
     would make each value a Series; the whole point of the change is that it is
     not one."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for i in range(n):
         _seen_by_the_directory(conn, f"K{i}", "2005-01-03", "2011-06-10")
     known_df = us_listing._known(conn)

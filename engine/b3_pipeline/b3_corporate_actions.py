@@ -8,7 +8,6 @@ listedCompaniesProxy backend, making B3 the single authoritative source.
 import base64
 import json
 import logging
-import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,14 +20,6 @@ import requests
 from . import config
 
 logger = logging.getLogger(__name__)
-
-
-def _clean_cnpj(raw: str) -> Optional[str]:
-    """Strip CNPJ formatting (dots, slashes, dashes) and return 14-digit string or None."""
-    if not raw:
-        return None
-    digits = re.sub(r"\D", "", str(raw))
-    return digits if len(digits) == 14 else None
 
 
 def _encode_payload(payload: dict) -> str:
@@ -78,8 +69,6 @@ def fetch_company_data(trading_name: str, conn=None) -> Optional[dict]:
     Returns:
         Raw JSON response or None on failure
     """
-    from . import storage as _storage
-
     payload = {
         "issuingCompany": trading_name.split()[0]
         if " " in trading_name
@@ -109,34 +98,27 @@ def fetch_company_data(trading_name: str, conn=None) -> Optional[dict]:
         return None
     except requests.RequestException as e:
         logger.warning(f"Failed to fetch company data for {trading_name}: {e}")
-        if conn is not None:
-            try:
-                _storage.record_fetch_failure(
-                    conn, trading_name, "GetListedSupplementCompany", str(e)
-                )
-            except Exception as track_err:
-                logger.debug(f"Failed to record fetch failure: {track_err}")
+        _record_failure(conn, trading_name, str(e))
         return None
-    except (json.JSONDecodeError, ValueError) as e:
+    # json.JSONDecodeError is a ValueError.
+    except (ValueError, AttributeError, TypeError) as e:
         logger.warning(f"Failed to parse response for {trading_name}: {e}")
-        if conn is not None:
-            try:
-                _storage.record_fetch_failure(
-                    conn, trading_name, "GetListedSupplementCompany", f"ParseError: {e}"
-                )
-            except Exception as track_err:
-                logger.debug(f"Failed to record fetch failure: {track_err}")
+        _record_failure(conn, trading_name, f"ParseError: {e}")
         return None
-    except (AttributeError, TypeError) as e:
-        logger.warning(f"Failed to parse response for {trading_name}: {e}")
-        if conn is not None:
-            try:
-                _storage.record_fetch_failure(
-                    conn, trading_name, "GetListedSupplementCompany", f"ParseError: {e}"
-                )
-            except Exception as track_err:
-                logger.debug(f"Failed to record fetch failure: {track_err}")
-        return None
+
+
+def _record_failure(conn, trading_name: str, message: str) -> None:
+    """Best-effort: a failure to track the failure must not mask the None."""
+    if conn is None:
+        return
+    from . import storage as _storage
+
+    try:
+        _storage.record_fetch_failure(
+            conn, trading_name, "GetListedSupplementCompany", message
+        )
+    except Exception as track_err:
+        logger.debug(f"Failed to record fetch failure: {track_err}")
 
 
 def fetch_cash_dividends_paginated(

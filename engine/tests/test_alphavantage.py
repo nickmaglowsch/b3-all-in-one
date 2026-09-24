@@ -8,11 +8,11 @@ in the repository — it answers 200 with an apology instead of erroring.
 from __future__ import annotations
 
 import datetime
-import sqlite3
 
 import pytest
-from b3_pipeline import storage, us_storage
+from b3_pipeline import us_storage
 from us_pipeline import alphavantage as av
+from tests.conftest import sqlite_db
 
 DAY = datetime.date(2026, 9, 1)
 
@@ -22,12 +22,6 @@ def _key(monkeypatch):
     monkeypatch.setenv("ALPHAVANTAGE_API_KEY", "TESTKEY")
     monkeypatch.delenv("ALPHAVANTAGE_RATE_PER_MIN", raising=False)
     monkeypatch.delenv("ALPHAVANTAGE_DAILY_BUDGET", raising=False)
-
-
-def _db(tmp_path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(tmp_path / "av.sqlite"))
-    storage.init_db(conn)
-    return conn
 
 
 class _Response:
@@ -82,14 +76,14 @@ def test_a_refusal_at_http_200_never_reaches_the_parser(tmp_path, monkeypatch,
                                                         body, expected):
     """The bug this prevents: `{"Note": ...}` handed to pandas parses as a
     one-column frame and lands in market_prices as a row."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _answer(monkeypatch, body)
     with pytest.raises(expected):
         _client(conn).get_csv("TIME_SERIES_DAILY", symbol="IBM")
 
 
 def test_real_csv_passes_through_untouched(tmp_path, monkeypatch):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     body = "timestamp,open,high,low,close,volume\n2026-08-31,1,2,0.5,1.5,10\n"
     _answer(monkeypatch, body)
     assert _client(conn).get_csv("TIME_SERIES_DAILY", symbol="IBM") == body
@@ -98,7 +92,7 @@ def test_real_csv_passes_through_untouched(tmp_path, monkeypatch):
 def test_a_json_endpoint_needs_its_documented_key_present(tmp_path, monkeypatch):
     """A JSON endpoint cannot use the brace heuristic — a refusal and a payload
     are both objects — so the check has to be positive."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _answer(monkeypatch, '{"symbol": "IBM", "data": [{"effective_date": "2020-01-01"}]}')
     assert _client(conn).get_json("SPLITS", symbol="IBM")["data"]
 
@@ -110,7 +104,7 @@ def test_a_json_endpoint_needs_its_documented_key_present(tmp_path, monkeypatch)
 def test_the_api_key_never_reaches_an_error_message(tmp_path, monkeypatch):
     """Ingest errors are stored in `ingest_runs.error` and logged. A request URL
     carries the key as a query parameter."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
 
     def boom(url, params=None, timeout=None):
         raise av.requests.RequestException(
@@ -129,7 +123,7 @@ def test_the_budget_is_durable_across_clients(tmp_path, monkeypatch):
     """An in-memory counter double-spends when the nightly job and a hand-run
     ingest land on the same day. At 25 requests a day that is the difference
     between progress and none."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _answer(monkeypatch, "timestamp,open,high,low,close,volume\n")
     _client(conn, budget=3).get_csv("LISTING_STATUS")
     _client(conn, budget=3).get_csv("LISTING_STATUS")
@@ -138,7 +132,7 @@ def test_the_budget_is_durable_across_clients(tmp_path, monkeypatch):
 
 
 def test_an_exhausted_budget_stops_before_the_request_goes_out(tmp_path, monkeypatch):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     calls = _answer(monkeypatch, "timestamp,open,high,low,close,volume\n")
     client = _client(conn, budget=1)
     client.get_csv("LISTING_STATUS")
@@ -150,7 +144,7 @@ def test_an_exhausted_budget_stops_before_the_request_goes_out(tmp_path, monkeyp
 def test_a_reserve_keeps_headroom_for_the_other_jobs(tmp_path, monkeypatch):
     """Three jobs share one key. Without a reserve the price backfill spends the
     whole day's allowance before the listing and benchmark jobs ever run."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _answer(monkeypatch, "timestamp,open,high,low,close,volume\n")
     greedy = _client(conn, budget=10, reserve=7)
     assert greedy.remaining == 3
@@ -164,7 +158,7 @@ def test_a_reserve_keeps_headroom_for_the_other_jobs(tmp_path, monkeypatch):
 
 def test_a_paid_key_has_no_local_ceiling(tmp_path, monkeypatch):
     """budget=0 is how a premium key is configured; the same code path runs."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _answer(monkeypatch, "timestamp,open,high,low,close,volume\n")
     client = _client(conn, budget=0)
     for _ in range(50):
@@ -176,7 +170,7 @@ def test_a_paid_key_has_no_local_ceiling(tmp_path, monkeypatch):
 def test_the_charge_lands_even_when_the_request_fails(tmp_path, monkeypatch):
     """A timed-out attempt consumed the vendor's allowance as far as anyone here
     can tell, and a budget that undercounts is one that gets the key throttled."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
 
     def boom(url, params=None, timeout=None):
         raise av.requests.RequestException("timeout")
@@ -199,7 +193,7 @@ def test_the_tier_is_configuration_not_code(monkeypatch):
 
 
 def test_pacing_waits_between_requests(tmp_path, monkeypatch):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _answer(monkeypatch, "timestamp,open,high,low,close,volume\n")
     slept = []
     monkeypatch.setattr(av.time, "sleep", slept.append)

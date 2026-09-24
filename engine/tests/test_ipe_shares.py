@@ -14,30 +14,12 @@ These tests confirm the Path B behavior:
 """
 from __future__ import annotations
 
-import io
-import zipfile
-
-import pandas as pd
-
 from b3_pipeline.ipe_parser import parse_ipe_zip, IPE_SHARES_COLUMN
 import b3_pipeline.ipe_parser as ipe_parser_module
+from tests.conftest import ipe_zip
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _csv_bytes(rows: list[dict]) -> bytes:
-    buf = io.StringIO()
-    pd.DataFrame(rows).to_csv(buf, sep=";", index=False)
-    return buf.getvalue().encode("latin-1")
-
-
-def _make_ipe_zip(rows: list[dict], year: int = 2008) -> io.BytesIO:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(f"ipe_cia_aberta_{year}.csv", _csv_bytes(rows))
-    buf.seek(0)
-    return buf
-
 
 def _ipe_row(cnpj="00.000.000/0001-91", dt_ref="2008-01-24") -> dict:
     return {
@@ -78,7 +60,7 @@ def test_ipe_parser_has_path_b_note_comment():
 def test_parse_ipe_zip_shares_outstanding_column_is_null():
     """shares_outstanding is always NULL in IPE fundamentals_df (Path B)."""
     rows = [_ipe_row()]
-    _, fundamentals_df = parse_ipe_zip(_make_ipe_zip(rows), cnpj_ticker_map={})
+    _, fundamentals_df = parse_ipe_zip(ipe_zip(rows), cnpj_ticker_map={})
     # fundamentals_df may be empty (since IPE has no financial data)
     # or have shares_outstanding column with all nulls
     if not fundamentals_df.empty and "shares_outstanding" in fundamentals_df.columns:
@@ -98,7 +80,7 @@ def test_no_propagate_ipe_shares_function_exists():
 def test_parse_ipe_zip_fundamentals_always_empty_for_financial_rows():
     """Even financial statement rows in IPE produce no financial metrics."""
     rows = [_ipe_row(dt_ref="2007-12-31")]  # annual report row
-    _, fundamentals_df = parse_ipe_zip(_make_ipe_zip(rows), cnpj_ticker_map={})
+    _, fundamentals_df = parse_ipe_zip(ipe_zip(rows), cnpj_ticker_map={})
     financial_cols = ["revenue", "net_income", "ebitda", "total_assets", "equity", "net_debt"]
     for col in financial_cols:
         if col in fundamentals_df.columns and not fundamentals_df.empty:

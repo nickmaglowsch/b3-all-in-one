@@ -8,18 +8,12 @@ anything.
 from __future__ import annotations
 
 import datetime
-import sqlite3
 
 import pandas as pd
 import pytest
 from b3_pipeline import market_storage, storage
 from us_pipeline import us_listing
-
-
-def _db(tmp_path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(tmp_path / "listing.sqlite"))
-    storage.init_db(conn)
-    return conn
+from tests.conftest import sqlite_db
 
 
 def _rows(n, prefix="SYM", status="active", ipo="2000-01-01", delisted=None):
@@ -53,7 +47,7 @@ def _instrument(conn, symbol):
 # ── The refusals ──────────────────────────────────────────────────────────────
 
 def test_a_truncated_active_file_is_refused_and_writes_nothing(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     with pytest.raises(ValueError, match="below the"):
         us_listing.reconcile(conn, _rows(10, "ACT"), _rows(3, "DEAD",
                                                            delisted="2010-01-01"))
@@ -63,14 +57,14 @@ def test_a_truncated_active_file_is_refused_and_writes_nothing(tmp_path):
 
 def test_an_empty_delisted_set_is_a_truncation_signature(tmp_path):
     """The delisted set is tens of thousands of rows and never empty."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     with pytest.raises(ValueError, match="no delisted"):
         us_listing.reconcile(conn, _plausible_active(), _rows(0, "DEAD"))
 
 
 def test_a_mass_delisting_is_refused_rather_than_applied(tmp_path):
     """A real day adds delistings in single digits."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for i in range(200):
         _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
     dead = _rows(200, "LIVE", status="delisted", delisted="2026-08-31")
@@ -85,7 +79,7 @@ def test_a_company_that_died_before_capture_began_finally_gets_an_interval(tmp_p
     """The whole point. `universe` treats an instrument with no interval as
     tradable on every date, so a 2008 casualty with no delisting_date is exactly
     the survivorship bias the plane exists to remove."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     dead = _rows(1, "LEH", status="delisted", ipo="1994-01-01",
                  delisted="2008-09-15")
     us_listing.reconcile(conn, _plausible_active(), dead)
@@ -102,7 +96,7 @@ def test_the_observed_bounds_are_never_restated_by_a_claim(tmp_path):
     """`first_seen`/`last_seen` are observed in the market and belong to the
     directory; this feed writes intervals and nothing else for a symbol the
     directory has seen."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(conn, "ACT0", "2026-01-05", "2026-08-31")
     us_listing.reconcile(conn, _plausible_active(), _rows(1, "DEAD",
                                                           status="delisted",
@@ -118,7 +112,7 @@ def test_the_observed_bounds_are_never_restated_by_a_claim(tmp_path):
 def test_a_delisting_is_never_dated_before_a_day_the_plane_saw_it_trade(tmp_path):
     """Settlement date versus last trade. The observed day is the one the plane
     can prove."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(conn, "DEAD0", "2026-01-05", "2026-08-31")
     us_listing.reconcile(conn, _plausible_active(),
                          _rows(1, "DEAD", status="delisted", delisted="2026-08-28"))
@@ -128,7 +122,7 @@ def test_a_delisting_is_never_dated_before_a_day_the_plane_saw_it_trade(tmp_path
 def test_a_claim_that_predates_recorded_trading_is_a_conflict_not_a_merge(tmp_path):
     """A ticker recycled onto a new company. Merging the two would put one
     company's fundamentals on the other's prices, so nothing is written."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(conn, "DEAD0", "2026-01-05", "2026-08-31")
     out = us_listing.reconcile(
         conn, _plausible_active(),
@@ -141,7 +135,7 @@ def test_a_claim_that_predates_recorded_trading_is_a_conflict_not_a_merge(tmp_pa
 def test_an_active_claim_does_not_resurrect_a_name_the_directory_watched_die(tmp_path):
     """Absence from the consolidated directory is evidence; a stale vendor
     snapshot is not."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(
         conn, "ACT0", "2026-01-05", "2026-06-30",
         delisting_date="2026-06-30",
@@ -156,7 +150,7 @@ def test_an_active_claim_does_not_resurrect_a_name_the_directory_watched_die(tmp
 def test_this_module_corrects_its_own_earlier_claims(tmp_path):
     """Self-correction is the one case where an active row clears a delisting:
     the previous claim came from here, so a newer one supersedes it."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     # First run: the vendor reports GONE0 as delisted and it is not in the
     # active file, so this module records the claim.
     us_listing.reconcile(conn, _plausible_active(),
@@ -172,7 +166,7 @@ def test_this_module_corrects_its_own_earlier_claims(tmp_path):
 
 
 def test_a_delisted_row_with_no_date_is_skipped_rather_than_guessed(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     dead = _rows(1, "DEAD", status="delisted")
     out = us_listing.reconcile(conn, _plausible_active(), dead)
     assert out["conflict_count"] == 0
@@ -184,7 +178,7 @@ def test_a_delisted_row_with_no_date_is_skipped_rather_than_guessed(tmp_path):
 def test_withdrawing_a_claim_does_not_touch_the_symbols_around_it(tmp_path):
     """Clearing one delisting must not clear five thousand. The rows carry
     different columns, so they cannot share one upsert."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _seen_by_the_directory(conn, "ACT0", "2026-01-05", "2026-08-31")
     us_listing.reconcile(conn, _plausible_active(),
                          _rows(1, "GONE", status="delisted", delisted="2020-01-01"))
@@ -204,7 +198,7 @@ def test_historical_delistings_the_plane_never_held_do_not_trip_the_ceiling(
     the names that predate this plane's capture is the entire point of this
     module. Counting them as delistings *of live instruments* made the first
     real run report 9,457 of 13,181 and refuse to do its own job."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for i in range(10):
         _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
     never_held = _rows(300, "HIST", status="delisted", delisted="2010-01-01")
@@ -218,7 +212,7 @@ def test_historical_delistings_the_plane_never_held_do_not_trip_the_ceiling(
 
 def test_a_live_holding_going_dark_still_counts_toward_the_ceiling(tmp_path):
     """The narrowing must not blind the guard to the case it exists for."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for i in range(10):
         _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
     mixed = pd.concat([
@@ -234,7 +228,7 @@ def test_a_live_holding_going_dark_still_counts_toward_the_ceiling(tmp_path):
 def test_the_first_reconciliation_can_opt_into_a_wider_ceiling(tmp_path):
     """A first run imports a standing backlog, not one day's delistings. The
     override is explicit per-run; the daily ceiling is left where it is."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for i in range(200):
         _seen_by_the_directory(conn, f"LIVE{i}", "2026-01-05", "2026-08-31")
     dead = _rows(200, "LIVE", status="delisted", delisted="2026-08-31")

@@ -62,3 +62,27 @@ def test_comma_decimals():
     assert _num("") is None
     assert _num(None) is None
     assert _num("n/a") is None
+
+
+def test_level_rows_shape_and_dtypes():
+    import numpy as np
+    import pandas as pd
+
+    from b3_pipeline.external_prices import level_rows
+
+    dates = pd.DatetimeIndex(["2024-01-02", "2024-01-03"])
+    df = level_rows("$X", dates, np.array([1.0, 1.5]), "src")
+    assert list(df.columns) == ["ticker", "isin_code", "date", "open", "high",
+                                "low", "close", "volume", "source"]
+    assert df["ticker"].tolist() == ["$X", "$X"]
+    assert (df["isin_code"] == "UNKNOWN").all()
+    assert list(df["date"]) == list(dates)
+    # NaN (float dtype), never None (object dtype): see level_rows.
+    for col in ("open", "high", "low"):
+        assert df[col].dtype == np.float64 and df[col].isna().all()
+    assert df["close"].tolist() == [1.0, 1.5]
+    assert df["volume"].dtype == np.float64 and (df["volume"] == 0.0).all()
+    assert (df["source"] == "src").all()
+    # Per-row tickers pass through, as tesouro_direto's titles do.
+    per_row = level_rows(np.array(["A", "B"]), dates, np.array([1.0, 2.0]), "src")
+    assert per_row["ticker"].tolist() == ["A", "B"]

@@ -45,12 +45,25 @@ SPLIT_ONLY = "split_only"
 TOTAL_RETURN = "total_return"
 
 
+def _backward_cumulative(ex_dates: np.ndarray, factors: np.ndarray,
+                         price_dates: np.ndarray) -> np.ndarray:
+    """Clamped product of the factors of every event strictly after each date.
+
+    `side="right"` is what makes it strict: the raw price already trades ex on
+    the ex-date itself, so the factor must not apply there.
+    """
+    suffix = np.ones(len(factors) + 1)
+    for i in range(len(factors) - 1, -1, -1):
+        suffix[i] = min(_MAX_CUMULATIVE, max(_MIN_CUMULATIVE,
+                                             factors[i] * suffix[i + 1]))
+    return suffix[np.searchsorted(ex_dates, price_dates, side="right")]
+
+
 def split_factors(dates: pd.Series, events: pd.DataFrame) -> np.ndarray:
     """Backward cumulative split factor for each date.
 
     `factor[d]` is the product of the ratios of every split whose ex-date is
-    strictly after `d`. `side="right"` is what makes it strict: the raw price
-    already trades ex on the ex-date itself, so the factor must not apply there.
+    strictly after `d`.
     """
     price_dates = pd.to_datetime(dates).values.astype("datetime64[ns]")
     if events is None or events.empty:
@@ -58,13 +71,7 @@ def split_factors(dates: pd.Series, events: pd.DataFrame) -> np.ndarray:
 
     events = events.dropna(subset=["ex_date"]).sort_values("ex_date")
     ex = pd.to_datetime(events["ex_date"]).values.astype("datetime64[ns]")
-    ratios = events["ratio"].values.astype(float)
-
-    suffix = np.ones(len(ratios) + 1)
-    for i in range(len(ratios) - 1, -1, -1):
-        suffix[i] = min(_MAX_CUMULATIVE, max(_MIN_CUMULATIVE,
-                                             ratios[i] * suffix[i + 1]))
-    return suffix[np.searchsorted(ex, price_dates, side="right")]
+    return _backward_cumulative(ex, events["ratio"].values.astype(float), price_dates)
 
 
 def dividend_factors(dates: pd.Series, closes: pd.Series,
@@ -104,13 +111,9 @@ def dividend_factors(dates: pd.Series, closes: pd.Series,
     if not per_event:
         return np.ones(len(price_dates))
 
-    ex_dates = np.array([e for e, _ in per_event], dtype="datetime64[ns]")
-    factors = np.array([f for _, f in per_event], dtype=float)
-    suffix = np.ones(len(factors) + 1)
-    for i in range(len(factors) - 1, -1, -1):
-        suffix[i] = min(_MAX_CUMULATIVE, max(_MIN_CUMULATIVE,
-                                             factors[i] * suffix[i + 1]))
-    return suffix[np.searchsorted(ex_dates, price_dates, side="right")]
+    return _backward_cumulative(
+        np.array([e for e, _ in per_event], dtype="datetime64[ns]"),
+        np.array([f for _, f in per_event], dtype=float), price_dates)
 
 
 def apply(bars: pd.DataFrame, splits, dividends) -> tuple:

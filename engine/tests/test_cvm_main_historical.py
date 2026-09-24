@@ -7,13 +7,11 @@ from __future__ import annotations
 
 import io
 import sqlite3
-import zipfile
 from unittest.mock import patch
-
-import pandas as pd
 
 from b3_pipeline import storage
 from b3_pipeline.cvm_main import run_fundamentals_pipeline
+from tests.conftest import ipe_zip
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -23,12 +21,6 @@ def _mem_conn():
     conn.execute("PRAGMA foreign_keys = OFF")
     storage.init_db(conn)
     return conn
-
-
-def _csv_bytes(rows: list[dict]) -> bytes:
-    buf = io.StringIO()
-    pd.DataFrame(rows).to_csv(buf, sep=";", index=False)
-    return buf.getvalue().encode("latin-1")
 
 
 def _make_ipe_zip(year: int = 2008) -> io.BytesIO:
@@ -43,11 +35,7 @@ def _make_ipe_zip(year: int = 2008) -> io.BytesIO:
         "Tipo_Apresentacao": "AP", "Protocolo_Entrega": "", "Versao": "1",
         "Link_Download": "https://example.com/doc",
     }]
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(f"ipe_cia_aberta_{year}.csv", _csv_bytes(rows))
-    buf.seek(0)
-    return buf
+    return ipe_zip(rows, year)
 
 
 # ── Tests ──────────────────────────────────────────────────────────────────────

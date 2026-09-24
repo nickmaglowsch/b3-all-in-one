@@ -17,16 +17,6 @@ from b3_pipeline import storage
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema including fundamentals tables."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
-
-
 def _insert_pit_row(conn, **kwargs):
     """Helper: insert a fundamentals_pit row with defaults for unspecified columns."""
     defaults = {

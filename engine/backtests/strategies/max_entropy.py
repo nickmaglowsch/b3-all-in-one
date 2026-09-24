@@ -49,8 +49,7 @@ import pandas as pd
 
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec, cap_and_renormalize, daily_on_grid, on_grid_ffill,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
 
 
@@ -127,25 +126,19 @@ def effective_positions(w: pd.Series) -> float:
 class MaxEntropyStrategy(StrategyBase):
     """Gibbs-ensemble allocation over the coldest names in thermal equilibrium."""
 
-    @property
-    def name(self) -> str:
-        return "MaxEntropy"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Maximum-entropy (Gibbs/Boltzmann) allocation. Keeps liquid names whose "
-            "daily up/down process is still near a coin flip (high Shannon entropy — "
-            "no persistent trend either way), takes the coldest by realised variance, "
-            "and weights them exp(-variance / temperature): the most diversified book "
-            "consistent with a risk budget. Temperature dials continuously from equal "
-            "weight (hot) to minimum-variance concentration (cold)."
-        )
+    name = "MaxEntropy"
+    description = (
+        "Maximum-entropy (Gibbs/Boltzmann) allocation. Keeps liquid names whose "
+        "daily up/down process is still near a coin flip (high Shannon entropy — "
+        "no persistent trend either way), takes the coldest by realised variance, "
+        "and weights them exp(-variance / temperature): the most diversified book "
+        "consistent with a risk budget. Temperature dials continuously from equal "
+        "weight (hot) to minimum-variance concentration (cold)."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+            *COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
             ParameterSpec(
                 "temperature", "Temperature", "float", 1.0,
                 description="Reduced units (multiples of the book's mean energy). "

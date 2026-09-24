@@ -24,33 +24,51 @@ import pandas as pd
 
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
 
 TRADING_DAYS_YEAR = 252
 
 
+def quality_gate(valid: pd.Series, f_ni_ttm: pd.DataFrame,
+                 f_equity: pd.DataFrame, row: int) -> pd.Series:
+    """Keep the names with positive PIT TTM net income AND positive equity at
+    fundamentals row ``row``.
+
+    The f_*_m columns are one best-ADTV ticker per company, so a universe ticker
+    is matched to its column by 4-char root (first column per root wins).
+    """
+    root_col: dict[str, str] = {}
+    for c in f_ni_ttm.columns:
+        root_col.setdefault(str(c)[:4], c)
+    ni_row = f_ni_ttm.iloc[row]
+    eq_row = f_equity.iloc[row] if not f_equity.empty else pd.Series(dtype=float)
+
+    def _quality(tk: str) -> bool:
+        col = root_col.get(tk[:4])
+        if col is None:
+            return False
+        ni = ni_row.get(col)
+        eq = eq_row.get(col)
+        return pd.notna(ni) and ni > 0 and pd.notna(eq) and eq > 0
+
+    return valid[[_quality(t) for t in valid.index]]
+
+
 class QMVStrategy(StrategyBase):
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "QMV"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Quality Momentum with Vol-Targeted CDI Overlay. Top-N risk-adjusted "
-            "momentum stocks gated on positive PIT TTM earnings and equity; "
-            "equity exposure scaled by target_vol / realized IBOV vol, "
-            "remainder in CDI."
-        )
+    name = "QMV"
+    description = (
+        "Quality Momentum with Vol-Targeted CDI Overlay. Top-N risk-adjusted "
+        "momentum stocks gated on positive PIT TTM earnings and equity; "
+        "equity exposure scaled by target_vol / realized IBOV vol, "
+        "remainder in CDI."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+            *COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
             ParameterSpec(
                 "top_n", "Number of Stocks", "int", 10,
                 description="Momentum stocks held (equal weight within equity sleeve)",
@@ -99,12 +117,6 @@ class QMVStrategy(StrategyBase):
         sig = mom / vol
         sig[has_glitch == 1] = np.nan
 
-        # map universe ticker -> fundamentals column via 4-char root
-        # (f_*_m columns are one best-ADTV ticker per company)
-        root_col: dict[str, str] = {}
-        for c in f_ni_ttm.columns:
-            root_col.setdefault(str(c)[:4], c)
-
         ann = np.sqrt(TRADING_DAYS_YEAR)
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
@@ -132,18 +144,7 @@ class QMVStrategy(StrategyBase):
 
             # quality gate: positive PIT TTM net income AND positive equity
             if not f_ni_ttm.empty and i - 1 < len(f_ni_ttm):
-                ni_row = f_ni_ttm.iloc[i - 1]
-                eq_row = f_equity.iloc[i - 1] if not f_equity.empty else pd.Series(dtype=float)
-
-                def _quality(tk: str) -> bool:
-                    col = root_col.get(tk[:4])
-                    if col is None:
-                        return False
-                    ni = ni_row.get(col)
-                    eq = eq_row.get(col)
-                    return pd.notna(ni) and ni > 0 and pd.notna(eq) and eq > 0
-
-                valid = valid[[_quality(t) for t in valid.index]]
+                valid = quality_gate(valid, f_ni_ttm, f_equity, i - 1)
 
             if len(valid) < 5:
                 tw.iloc[i, cdi_col] = 1.0

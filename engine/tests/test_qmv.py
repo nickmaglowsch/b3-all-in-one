@@ -74,3 +74,18 @@ def test_low_vol_regime_fully_invested():
     row = active.iloc[-1]
     assert row.drop("CDI_ASSET").sum() == pytest.approx(1.0)
     assert row["CDI_ASSET"] == pytest.approx(0.0)
+
+
+def test_quality_gate_matches_fundamentals_by_root():
+    from backtests.strategies.qmv import quality_gate
+
+    # f_* columns are one best-ADTV class per company: AAAA4 serves AAAA3, and
+    # the first column per root wins
+    ni = pd.DataFrame([[1.0, -1.0, 1.0, 1.0, np.nan]],
+                      columns=["AAAA4", "AAAA3", "BBBB3", "CCCC3", "DDDD3"])
+    eq = pd.DataFrame([[1.0, 1.0, 1.0, -1.0, 1.0]], columns=ni.columns)
+    valid = pd.Series(1.0, index=["AAAA3", "BBBB4", "CCCC3", "DDDD3", "EEEE3"])
+
+    assert list(quality_gate(valid, ni, eq, 0).index) == ["AAAA3", "BBBB4"]
+    # no equity frame -> nobody has positive equity
+    assert quality_gate(valid, ni, pd.DataFrame(), 0).empty

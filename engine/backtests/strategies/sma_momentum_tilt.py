@@ -29,8 +29,7 @@ import pandas as pd
 
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_REBALANCE_FREQ,
 )
 from backtests.core.data import download_benchmark
 
@@ -114,8 +113,7 @@ def _weights_row(formula: str, dists: dict, cap: float, floor: float, tilt: floa
 
 def _common_specs() -> list[ParameterSpec]:
     return [
-        COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-        COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_REBALANCE_FREQ,
+        *COMMON_RUN_SPECS, COMMON_REBALANCE_FREQ,
         ParameterSpec("sma_window", "SMA Window (days)", "int", 200,
                       description="Trailing daily SMA the distance is measured from",
                       min_value=20, max_value=400, step=10),
@@ -185,16 +183,6 @@ def _run(formula: str, shared: dict, params: dict) -> tuple[pd.DataFrame, pd.Dat
 
 class _SMATiltBase(StrategyBase):
     FORMULA = ""
-    NAME = ""
-    DESC = ""
-
-    @property
-    def name(self) -> str:
-        return self.NAME
-
-    @property
-    def description(self) -> str:
-        return self.DESC
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return _common_specs()
@@ -205,8 +193,8 @@ class _SMATiltBase(StrategyBase):
 
 class SMATiltCDIAbsorb(_SMATiltBase):
     FORMULA = "cdi_absorb"
-    NAME = "200SMA Tilt: Momentum Share + CDI Absorb"
-    DESC = (
+    name = "200SMA Tilt: Momentum Share + CDI Absorb"
+    description = (
         "DIVO11/IVVB11/CDI tilted by 200-SMA distance. Risk weight ∝ each ETF's "
         "distance ABOVE its SMA; CDI ∝ the summed shortfall of ETFs below their SMA "
         "(so CDI is held only when something is below trend). A max_weight cap keeps "
@@ -216,8 +204,8 @@ class SMATiltCDIAbsorb(_SMATiltBase):
 
 class SMATiltTwoBuckets(_SMATiltBase):
     FORMULA = "two_buckets"
-    NAME = "200SMA Tilt: Two 50% Buckets"
-    DESC = (
+    name = "200SMA Tilt: Two 50% Buckets"
+    description = (
         "DIVO11 and IVVB11 each own a 50% bucket, held only while above their 200-day "
         "SMA, otherwise that bucket rotates to CDI. Binary trend gate: each ETF is "
         "capped at 50%, and CDI runs 0→100% (full risk-off in a two-sided downtrend)."
@@ -226,8 +214,8 @@ class SMATiltTwoBuckets(_SMATiltBase):
 
 class SMATiltBaseline(_SMATiltBase):
     FORMULA = "baseline_floor"
-    NAME = "200SMA Tilt: Baseline Thirds + Tilt"
-    DESC = (
+    name = "200SMA Tilt: Baseline Thirds + Tilt"
+    description = (
         "Equal-thirds DIVO11/IVVB11/CDI anchor, tilted toward whichever ETF trades "
         "further above its 200-day SMA (gain = `tilt`), with a min_weight floor on "
         "every sleeve so none reaches 0 or 100% — CDI always keeps a defensive core."

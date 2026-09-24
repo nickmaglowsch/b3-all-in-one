@@ -23,18 +23,13 @@ from backtests.strategies.qdl import QDLStrategy
 class QDLFullEquityStrategy(QDLStrategy):
     """QDL stock sleeve, always fully invested (CDI overlay disabled)."""
 
-    @property
-    def name(self) -> str:
-        return "QDL-Equity"
-
-    @property
-    def description(self) -> str:
-        return (
-            "QDL with the CDI vol-target overlay removed — the identical "
-            "quality-dividend low-vol sleeve held always-fully-invested "
-            "(no de-risking into cash). Ablation to isolate the sleeve's own "
-            "contribution vs the overlay."
-        )
+    name = "QDL-Equity"
+    description = (
+        "QDL with the CDI vol-target overlay removed — the identical "
+        "quality-dividend low-vol sleeve held always-fully-invested "
+        "(no de-risking into cash). Ablation to isolate the sleeve's own "
+        "contribution vs the overlay."
+    )
 
     def get_parameter_specs(self):
         # target_vol is a dead knob here (forced to infinity), so hide it.

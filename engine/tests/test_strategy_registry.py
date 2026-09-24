@@ -41,10 +41,7 @@ def test_registry_singleton_is_cached_and_fully_built():
 
 def test_register_then_get_round_trips():
     class _Stub(StrategyBase):
-        @property
-        def name(self): return "_Stub"
-        @property
-        def description(self): return "stub"
+        name, description = "_Stub", "stub"
         def get_parameter_specs(self): return []
         def generate_signals(self, shared_data, params): return None, None
 
@@ -54,3 +51,13 @@ def test_register_then_get_round_trips():
     assert reg.names() == ["_Stub"]
     with pytest.raises(KeyError):
         reg.get("nope")
+
+
+def test_unnamed_strategy_defaults_to_blank_name():
+    """`name`/`description` are plain class attributes; an unnamed subclass
+    instantiates with '' (the sentinel discovery skips) instead of failing."""
+    class _Unnamed(StrategyBase):
+        def get_parameter_specs(self): return []
+        def generate_signals(self, shared_data, params): return None, None
+
+    assert (_Unnamed().name, _Unnamed().description) == ("", "")

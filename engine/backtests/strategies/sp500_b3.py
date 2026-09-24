@@ -34,6 +34,7 @@ testable without the database (see tests/test_sp500_b3.py).
 """
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from b3_pipeline import index_series, storage
@@ -128,14 +129,9 @@ def share_multiplier(
         & (actions["ex_date"] > pd.Timestamp(period_end))
         & (actions["ex_date"] <= pd.Timestamp(t))
     ]
-    mult = 1.0
-    for _, row in a.iterrows():
-        f = float(row["factor"])
-        if row["action_type"] == "BONUS_SHARES":
-            mult *= 1.0 + f / 100.0
-        else:  # STOCK_SPLIT or REVERSE_SPLIT: factor is directly new/old count
-            mult *= f
-    return mult
+    f = a["factor"].to_numpy(dtype=float)
+    # STOCK_SPLIT / REVERSE_SPLIT: factor is directly the new/old count
+    return float(np.prod(np.where(a["action_type"] == "BONUS_SHARES", 1.0 + f / 100.0, f)))
 
 
 def select_constituents(
@@ -481,20 +477,15 @@ class SP500B3Strategy(StrategyBase):
 
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "SP500-style B3 Index"
-
-    @property
-    def description(self) -> str:
-        return (
-            "S&P 500-methodology index on B3, point-in-time and survivorship-"
-            "bias-free. Quarterly rebalance; filters: market cap > R$2bn, 63d "
-            "median financial volume > R$2M, positive TTM net income, ROE > 0 "
-            "with equity > 0. Market-cap or equal weighting. Requires "
-            "b3_pipeline.cvm_main to have populated fundamentals_pit "
-            "(net_income_ttm column)."
-        )
+    name = "SP500-style B3 Index"
+    description = (
+        "S&P 500-methodology index on B3, point-in-time and survivorship-"
+        "bias-free. Quarterly rebalance; filters: market cap > R$2bn, 63d "
+        "median financial volume > R$2M, positive TTM net income, ROE > 0 "
+        "with equity > 0. Market-cap or equal weighting. Requires "
+        "b3_pipeline.cvm_main to have populated fundamentals_pit "
+        "(net_income_ttm column)."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [

@@ -11,8 +11,7 @@ import pandas as pd
 from backtests.core.mean_rev_helpers import alpha_inputs, rolling_vol_daily
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
 
 
@@ -40,24 +39,18 @@ def _gate_reductions(freq: str, want_win_rate: bool) -> dict:
 class MeanReversionCompositeStrategy(StrategyBase):
     """Mean-Reversion Composite Alpha with regime filter, vol-parity, and IC guard."""
 
-    @property
-    def name(self) -> str:
-        return "MeanRevComposite"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Cross-sectional mean-reversion composite alpha. "
-            "Layer 1: CDI/IBOV regime filter. "
-            "Layer 2: Volatility reversal + macro-relative momentum + autocorrelation scoring. "
-            "Layer 3: Vol-parity portfolio construction (long-only or long-short). "
-            "Layer 4: Rolling IC signal stability guard."
-        )
+    name = "MeanRevComposite"
+    description = (
+        "Cross-sectional mean-reversion composite alpha. "
+        "Layer 1: CDI/IBOV regime filter. "
+        "Layer 2: Volatility reversal + macro-relative momentum + autocorrelation scoring. "
+        "Layer 3: Vol-parity portfolio construction (long-only or long-short). "
+        "Layer 4: Rolling IC signal stability guard."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+            *COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
             ParameterSpec("min_price", "Min Price (BRL)", "float", 1.0,
                           min_value=0.0, max_value=10.0, step=0.5),
             ParameterSpec("w_vol", "Weight: Volatility Reversal", "float", 0.25,

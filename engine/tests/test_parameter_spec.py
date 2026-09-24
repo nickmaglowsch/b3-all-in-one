@@ -98,3 +98,11 @@ def test_required_fields_have_no_default(field):
     build a nameless parameter instead of failing loudly."""
     with pytest.raises(TypeError):
         ParameterSpec(**{f: "x" for f in POSITIONAL_ORDER if f != field})
+
+
+def test_common_run_specs_are_the_five_shared_run_controls_in_order():
+    from backtests.core import strategy_base as sb
+
+    assert [s.name for s in sb.COMMON_RUN_SPECS] == [
+        "start_date", "end_date", "initial_capital", "tax_rate", "slippage"]
+    assert sb.COMMON_RUN_SPECS[0] is sb.COMMON_START_DATE

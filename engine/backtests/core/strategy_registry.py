@@ -79,30 +79,29 @@ class StrategyRegistry:
                         logger.warning("Failed to instantiate strategy %s.%s: %s", modname, attr_name, e)
 
         # Config-driven strategies from backtests/strategies/specs/*.yaml
-        from backtests.core.config_strategy import RankAndHold, FixedWeight
-
-        kinds = {"rank_and_hold": RankAndHold, "fixed_weight": FixedWeight}
-        for path in sorted(SPECS_DIR.glob("*.yaml")) if SPECS_DIR.is_dir() else []:
-            try:
-                spec = yaml.safe_load(path.read_text())
-                self.register(kinds[spec["kind"]](spec))
-            except Exception as e:
-                logger.warning("Failed to load strategy spec %s: %s", path.name, e)
+        self._load_specs(SPECS_DIR)
 
         # Per-tenant user specs, materialized by the platform into a scratch dir
         # (JSON-as-YAML). Built-ins win on name collision: only register a user
-        # spec whose name is not already taken. Same load-and-warn wrapper.
+        # spec whose name is not already taken.
         user_dir = os.environ.get("ENGINE_USER_SPECS_DIR")
-        if user_dir and Path(user_dir).is_dir():
-            for path in sorted(Path(user_dir).glob("*.yaml")):
-                try:
-                    spec = yaml.safe_load(path.read_text())
-                    if spec["name"] in self._strategies:
-                        continue
-                    self.register(kinds[spec["kind"]](spec))
-                except Exception as e:
-                    logger.warning("Failed to load user strategy spec %s: %s", path.name, e)
+        if user_dir:
+            self._load_specs(Path(user_dir), user=True)
 
+    def _load_specs(self, spec_dir: Path, user: bool = False) -> None:
+        """Register every ``*.yaml`` spec in ``spec_dir``, warning past bad ones."""
+        from backtests.core.config_strategy import RankAndHold, FixedWeight
+
+        kinds = {"rank_and_hold": RankAndHold, "fixed_weight": FixedWeight}
+        for path in sorted(spec_dir.glob("*.yaml")) if spec_dir.is_dir() else []:
+            try:
+                spec = yaml.safe_load(path.read_text())
+                if user and spec["name"] in self._strategies:
+                    continue
+                self.register(kinds[spec["kind"]](spec))
+            except Exception as e:
+                logger.warning("Failed to load %sstrategy spec %s: %s",
+                               "user " if user else "", path.name, e)
 
 # ── Global singleton ──────────────────────────────────────────────────────────
 

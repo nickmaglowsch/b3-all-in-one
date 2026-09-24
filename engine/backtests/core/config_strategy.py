@@ -31,8 +31,7 @@ from backtests.core import markets, signal_dsl
 from backtests.core.strategy_base import (
     market_param,
     StrategyBase, ParameterSpec, keep_most_liquid_per_root,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE,
+    COMMON_RUN_SPECS, COMMON_START_DATE, COMMON_END_DATE,
 )
 
 
@@ -130,14 +129,15 @@ def _eval_regime(regime: dict, shared: dict, i: int):
     return None
 
 
-# ── Ranked-equity engine ──────────────────────────────────────────────────────
-
-class RankAndHold(StrategyBase):
-    """Generic rank -> top-N -> weight -> rebalance strategy, driven by a spec."""
+class _SpecStrategy(StrategyBase):
+    """A strategy whose name, description and market come from its spec."""
 
     def __init__(self, spec: dict) -> None:
         self.spec = spec
         self.market = markets.get(spec.get("market")).key
+        # A spec (or a strategy sleeve of one) may need CVM fundamentals; the
+        # spec declares it so the service loads them (can't query the registry
+        # here — we're being constructed *inside* registry discovery).
         self.needs_fundamentals = bool(spec.get("needs_fundamentals", False))
 
     @property
@@ -148,12 +148,17 @@ class RankAndHold(StrategyBase):
     def description(self) -> str:
         return self.spec.get("description", self.spec["name"])
 
+
+# ── Ranked-equity engine ──────────────────────────────────────────────────────
+
+class RankAndHold(_SpecStrategy):
+    """Generic rank -> top-N -> weight -> rebalance strategy, driven by a spec."""
+
     def get_parameter_specs(self) -> list[ParameterSpec]:
         uni, _spec = self.spec.get("universe", {}), markets.get(self.market)
         sel = self.spec.get("selection", {})
         specs = [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE,
+            *COMMON_RUN_SPECS,
             market_param(self.market),
             ParameterSpec("min_adtv", "Min ADTV (BRL)", "float",
                           float(uni.get("min_adtv", _spec.default_min_adtv)),
@@ -296,27 +301,11 @@ class RankAndHold(StrategyBase):
 
 # ── Fixed-weight blend engine ─────────────────────────────────────────────────
 
-class FixedWeight(StrategyBase):
+class FixedWeight(_SpecStrategy):
     """Constant-weight sleeves rebalanced on the grid. Sleeves are B3/Yahoo
     tickers (downloaded), the special asset ``CDI``, or another registered
     ``strategy`` (its whole book becomes one sleeve). Generic version of
     divo_cdi_ivvb.py:55-86."""
-
-    def __init__(self, spec: dict) -> None:
-        self.spec = spec
-        self.market = markets.get(spec.get("market")).key
-        # A strategy sleeve may need CVM fundamentals; the spec declares it so
-        # the service loads them (can't query the registry here — we're being
-        # constructed *inside* registry discovery).
-        self.needs_fundamentals = bool(spec.get("needs_fundamentals", False))
-
-    @property
-    def name(self) -> str:
-        return self.spec["name"]
-
-    @property
-    def description(self) -> str:
-        return self.spec.get("description", self.spec["name"])
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [

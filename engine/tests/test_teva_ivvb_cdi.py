@@ -33,13 +33,7 @@ def _run(monkeypatch, teva_rows: dict, ivvb_px: pd.Series | None = None):
     ret = pd.DataFrame(0.0, index=IDX, columns=TICKERS)
 
     class _StubTeva(StrategyBase):
-        @property
-        def name(self) -> str:
-            return "TevaAtivosReais"
-
-        @property
-        def description(self) -> str:
-            return "stub"
+        name, description = "TevaAtivosReais", "stub"
 
         def get_parameter_specs(self):
             return []

@@ -157,10 +157,7 @@ def test_fixed_weight_parks_nested_strategy_warmup_residual(monkeypatch):
     idx, shared = _blend_shared()  # tickers A, B
 
     class _Stub(StrategyBase):
-        @property
-        def name(self): return "_StubSleeve"
-        @property
-        def description(self): return "stub"
+        name, description = "_StubSleeve", "stub"
         def get_parameter_specs(self): return []
         def generate_signals(self, shared_data, params):
             ret = shared_data["ret"]

@@ -42,7 +42,7 @@ def test_online_mode_leaves_the_real_fetchers_alone():
     beating the index."""
     before = (data.download_benchmark, sd.download_benchmark,
               data.download_cdi_daily, sd.download_cdi_daily)
-    _install_benchmark_stubs(*WINDOW, offline=False)
+    _install_benchmark_stubs(offline=False)
     assert (data.download_benchmark, sd.download_benchmark,
             data.download_cdi_daily, sd.download_cdi_daily) == before
 
@@ -50,7 +50,7 @@ def test_online_mode_leaves_the_real_fetchers_alone():
 def test_offline_mode_patches_both_modules_not_just_the_one():
     """shared_data imported these names at import time, so patching only
     backtests.core.data leaves the call site untouched and the run hits BCB."""
-    _install_benchmark_stubs(*WINDOW, offline=True)
+    _install_benchmark_stubs(offline=True)
     for fetch_bench, fetch_cdi in ((data.download_benchmark, data.download_cdi_daily),
                                    (sd.download_benchmark, sd.download_cdi_daily)):
         bench = fetch_bench("^BVSP", *WINDOW)

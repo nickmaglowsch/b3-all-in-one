@@ -51,3 +51,24 @@ def test_no_env_var_is_a_no_op(tmp_path, monkeypatch):
     reg.discover()
     assert "MyUserMomentum" not in reg.names()
     assert "LowVol" in reg.names()   # built-ins still there
+
+
+def test_bad_user_spec_is_logged_and_skipped(tmp_path, monkeypatch, caplog):
+    _write(tmp_path, "bad.yaml", {"name": "Broken", "kind": "no_such_kind"})
+    _write(tmp_path, "good.yaml", {
+        "name": "MyUserBlend", "kind": "fixed_weight", "rebalance": "QE",
+        "sleeves": [{"asset": "CDI", "weight": 1.0}],
+    })
+    monkeypatch.setenv("ENGINE_USER_SPECS_DIR", str(tmp_path))
+    reg = StrategyRegistry()
+    with caplog.at_level("WARNING"):
+        reg.discover()
+    assert "Broken" not in reg.names() and "MyUserBlend" in reg.names()
+    assert "Failed to load user strategy spec bad.yaml: 'no_such_kind'" in caplog.text
+
+
+def test_missing_user_specs_dir_is_a_no_op(tmp_path, monkeypatch):
+    monkeypatch.setenv("ENGINE_USER_SPECS_DIR", str(tmp_path / "nope"))
+    reg = StrategyRegistry()
+    reg.discover()
+    assert "LowVol" in reg.names()

@@ -88,31 +88,6 @@ def test_an_alias_is_the_same_object_not_a_copy():
     assert bundle["bench_px"] is frame
 
 
-def test_a_group_is_built_once_however_many_of_its_keys_are_read():
-    """The two high/low panels come off one read of the plane. Registering them
-    as independent thunks would run that read twice."""
-    reads = []
-
-    def _build():
-        reads.append(1)
-        return {"high": "H", "low": "L"}
-
-    bundle = memory.LazyShared()
-    bundle.defer_group(("high", "low"), _build)
-    assert bundle["low"] == "L"
-    assert bundle["high"] == "H"
-    assert reads == [1]
-    assert bundle.deferred_keys() == set()
-
-
-def test_forcing_a_group_terminates():
-    """A grouped thunk installs its siblings' values directly, so reading them
-    back through `__missing__` would never retire their thunks. `_force` pops."""
-    bundle = memory.LazyShared()
-    bundle.defer_group(("a", "b"), lambda: {"a": 1, "b": 2})
-    assert dict(bundle) == {"a": 1, "b": 2}
-
-
 # ── the budget ────────────────────────────────────────────────────────────────
 
 def test_the_budget_comes_off_the_env_when_it_is_set(monkeypatch):

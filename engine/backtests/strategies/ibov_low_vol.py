@@ -12,8 +12,7 @@ import numpy as np
 import pandas as pd
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec, cap_and_renormalize, daily_on_grid, on_grid_ffill,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
 )
 
 
@@ -31,22 +30,16 @@ def inverse_vol_capped(vol: pd.Series, cap: float = 0.10) -> pd.Series:
 
 
 class IbovLowVolStrategy(StrategyBase):
-    @property
-    def name(self) -> str:
-        return "IbovLowVolB3"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Ibovespa Smart Low Volatility B3 replica. Selects the bottom 33% of "
-            "liquid B3 stocks by annualized EWMA(252) volatility, weighted by the "
-            "inverse of that volatility, capped at 10% per name."
-        )
+    name = "IbovLowVolB3"
+    description = (
+        "Ibovespa Smart Low Volatility B3 replica. Selects the bottom 33% of "
+        "liquid B3 stocks by annualized EWMA(252) volatility, weighted by the "
+        "inverse of that volatility, capped at 10% per name."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
+            *COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
             ParameterSpec(
                 "ewma_n", "EWMA Span (days)", "int", 252,
                 description="EWMA span for daily-return volatility",

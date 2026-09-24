@@ -4,7 +4,7 @@
 // only the failed ones. The criteria and the cutoff arithmetic live in
 // lib/retention (where they are tested); this is the control that offers them.
 import { useState } from "react";
-import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/api";
 import {
   PURGE_WINDOWS,
   type PurgeChoice,
@@ -115,9 +115,7 @@ export function RunsPurge() {
 
       {purge.error && (
         <span className="w-full text-right text-xs text-loss" role="alert">
-          {purge.error instanceof ApiError
-            ? purge.error.message
-            : "Falha ao limpar as rodadas."}
+          {errorText(purge.error, "Falha ao limpar as rodadas.")}
         </span>
       )}
     </div>

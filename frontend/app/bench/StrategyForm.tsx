@@ -6,7 +6,8 @@
 // real errors come back as ApiError.message.
 import { useMemo, useState } from "react";
 import type { SignalDef, Strategy, UserStrategy } from "@/lib/types";
-import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { REBALANCE_FREQS } from "@/lib/format";
 import { useSaveUserStrategy, useSignals, useStrategySpec } from "@/lib/strategies";
 import {
   RegimeEditor,
@@ -15,6 +16,7 @@ import {
   parseRegime,
   type RegimeValue,
 } from "./RegimeEditor";
+import { Field, inputCls } from "./Field";
 
 type SelMode = "top_pct" | "top_n";
 
@@ -55,12 +57,6 @@ const DEFAULTS: FormState = {
   weighting: "equal",
   rebalance: "ME",
 };
-
-const REBALANCE = [
-  { value: "ME", label: "Mensal" },
-  { value: "QE", label: "Trimestral" },
-  { value: "W-FRI", label: "Semanal" },
-] as const;
 
 // f_* shared-data keys are CVM fundamentals; \bf_ won't match fin_vol / has_glitch.
 const isFundExpr = (s: string) => /\bf_/.test(s);
@@ -233,11 +229,7 @@ function StrategyFormInner({
 
   const error = validate(f);
   const apiMsg =
-    save.error instanceof ApiError
-      ? save.error.message
-      : save.error
-        ? "Falha ao salvar a estratégia."
-        : null;
+    save.error ? errorText(save.error, "Falha ao salvar a estratégia.") : null;
 
   function submit() {
     setTried(true);
@@ -504,7 +496,7 @@ function StrategyFormInner({
             onChange={(e) => set("rebalance", e.target.value as FormState["rebalance"])}
             className={inputCls}
           >
-            {REBALANCE.map((r) => (
+            {REBALANCE_FREQS.map((r) => (
               <option key={r.value} value={r.value}>
                 {r.label} ({r.value})
               </option>
@@ -599,31 +591,6 @@ function ExprCheatSheet() {
         </p>
       ))}
     </div>
-  );
-}
-
-const inputCls =
-  "w-full rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink focus:border-navy focus:outline-none";
-
-function Field({
-  label,
-  hint,
-  className = "",
-  children,
-}: {
-  label: string;
-  hint?: string;
-  className?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className={`block ${className}`}>
-      <span className="mb-1 flex items-baseline gap-1.5">
-        <span className="text-xs font-medium text-ink">{label}</span>
-        {hint && <span className="font-mono text-[11px] text-muted">{hint}</span>}
-      </span>
-      {children}
-    </label>
   );
 }
 

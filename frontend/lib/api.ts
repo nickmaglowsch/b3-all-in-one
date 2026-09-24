@@ -115,6 +115,13 @@ export class ApiError extends Error {
   }
 }
 
+/** What to show for a failed request: the API's own message (written for the
+ *  user), else the screen's `fallback` — a network error or a bug has no
+ *  sentence worth showing. */
+export function errorText(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
 // 402 body from platform_app/billing.gate_detail. `modules` is what the tenant
 // *does* have — "you need bench" is only actionable next to it.
 export type ModuleRequired = {

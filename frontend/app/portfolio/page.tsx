@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { IncomeRow, Position, TradesPage } from "@/lib/types";
-import { useActiveBook } from "@/lib/hooks";
+import type { TradesPage } from "@/lib/types";
+import { useActiveBook, useIncome, usePositions } from "@/lib/hooks";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { Card } from "@/components/ui/Card";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, RetryButton } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { AllocationDonut } from "@/components/charts/AllocationDonut";
 import { SERIES } from "@/components/charts/theme";
@@ -79,10 +79,7 @@ export default function PortfolioPage() {
           ? undefined
           : "Carteira";
 
-  const q = useQuery({
-    queryKey: ["positions"],
-    queryFn: () => api<Position[]>("/portfolio/positions"),
-  });
+  const q = usePositions();
 
   // One request for the whole book — never one per row.
   const history = useQuery({
@@ -96,10 +93,7 @@ export default function PortfolioPage() {
   // state of an IRPF user who sold out. Gating the page on positions alone told
   // both of them nothing was ever imported, and hid the data they do have.
   // Same key as IncomeSection, so React Query serves one request for both.
-  const income = useQuery({
-    queryKey: ["income"],
-    queryFn: () => api<IncomeRow[]>("/portfolio/income"),
-  });
+  const income = useIncome();
   // Deliberately the SAME key and URL as TradesSection's first page, so the gate
   // and the table share one request instead of hitting /portfolio/trades twice.
   // Keep these in sync with TRADES_DEFAULTS if that component's defaults change.
@@ -193,17 +187,13 @@ export default function PortfolioPage() {
           title="Não foi possível carregar sua carteira."
           hint="A conexão com a API falhou. Nada foi perdido — seus extratos continuam importados."
           action={
-            <button
-              type="button"
+            <RetryButton
               onClick={() => {
                 if (q.isError) q.refetch();
                 if (income.isError) income.refetch();
                 if (tradeProbe.isError) tradeProbe.refetch();
               }}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
-            >
-              Tentar de novo
-            </button>
+            />
           }
         />
       ) : !hasAnyData ? (

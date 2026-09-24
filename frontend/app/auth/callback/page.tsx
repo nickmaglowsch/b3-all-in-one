@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect } from "react";
 import { setToken } from "@/lib/api";
+import { useBrowserValue } from "@/lib/hooks";
 import { APP_HOME } from "@/lib/routes";
 
 // Landing spot after Google OAuth: the API redirects here with the JWT in the URL
@@ -14,13 +15,11 @@ import { APP_HOME } from "@/lib/routes";
 const readHashToken = () =>
   new URLSearchParams(window.location.hash.slice(1)).get("token");
 
-const neverChanges = () => () => {};
-
 export default function AuthCallbackPage() {
   // Display only. `undefined` while the fragment is unreadable (the prerender),
   // `null` when it carries no token: "we cannot see the URL yet" and "the URL
   // has no token" are different answers, and only the second is a failed login.
-  const shown = useSyncExternalStore(neverChanges, readHashToken, () => undefined);
+  const shown = useBrowserValue(readHashToken, undefined);
 
   // The effect reads the hash itself rather than depending on `shown`, and runs
   // once. Storing the credential has to happen on the FIRST effect pass: the

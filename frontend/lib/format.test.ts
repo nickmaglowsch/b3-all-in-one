@@ -2,12 +2,16 @@ import { strict as assert } from "node:assert";
 import test from "node:test";
 
 import {
+  REBALANCE_FREQS,
+  compactBRL,
   formatDate,
   formatDateTime,
   formatInt,
+  formatMetricPct,
   formatMoney,
   formatPercent,
   formatQty,
+  formatRatio,
 } from "./format.ts";
 
 // Intl separa "R$" do número com espaço não-quebrável (U+00A0). Comparar contra
@@ -91,4 +95,35 @@ test("timestamp ausente vira travessão e um valor ilegível passa direto", () =
   for (const empty of [null, undefined, ""]) assert.equal(formatDateTime(empty), "—");
   // Sem a guarda de NaN sairia "Invalid Date" no lugar de uma data.
   assert.equal(formatDateTime("nunca"), "nunca");
+});
+
+// Métricas do motor já vêm em pontos percentuais (8.9 = 8,9%), não em fração.
+test("métrica percentual acrescenta % ao número, sem multiplicar por cem", () => {
+  assert.equal(formatMetricPct(8.9), "8,9%");
+  assert.equal(formatMetricPct(-8.15), "-8,15%");
+  assert.equal(formatMetricPct(8.9, true), "+8,9%");
+  assert.equal(formatMetricPct(-8.15, true), "-8,15%");
+  assert.equal(formatMetricPct(0, true), "0,0%", "zero não é ganho");
+  assert.equal(formatMetricPct(null), "—");
+});
+
+test("razão (Sharpe, Calmar) sai com duas casas, e ausente vira travessão", () => {
+  assert.equal(formatRatio(1.234), "1,23");
+  assert.equal(formatRatio(-0.5), "-0,50");
+  assert.equal(formatRatio(null), "—");
+});
+
+test("BRL compacto para eixos: mi, mil ou inteiro, sinal antes do R$", () => {
+  assert.equal(compactBRL(1_250_000), "R$ 1,3 mi");
+  assert.equal(compactBRL(-45_600), "-R$ 46 mil");
+  assert.equal(compactBRL(999.4), "R$ 999");
+  assert.equal(compactBRL(0), "R$ 0");
+});
+
+test("frequências de rebalance: códigos do motor com rótulos em português", () => {
+  assert.deepEqual(REBALANCE_FREQS, [
+    { value: "ME", label: "Mensal" },
+    { value: "QE", label: "Trimestral" },
+    { value: "W-FRI", label: "Semanal" },
+  ]);
 });

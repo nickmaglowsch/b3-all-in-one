@@ -1,9 +1,9 @@
 "use client";
 
-// Bench-local data hooks + formatters. Study note: metrics %-fields (e.g.
-// "Ann. Return (%)": 8.9) are already percent *numbers*, not fractions —
-// formatPct here appends "%" directly; the chart drawdown series IS a fraction
-// so it uses lib/format's formatPercent instead.
+// Bench-local data hooks + shaping. Study note: metrics %-fields (e.g.
+// "Ann. Return (%)": 8.9) are already percent *numbers*, not fractions — they go
+// through lib/format's formatMetricPct; the chart drawdown series IS a fraction
+// so it uses formatPercent instead.
 import {
   useMutation,
   useQueries,
@@ -166,24 +166,6 @@ export function usePurgeBacktests() {
 // ── formatters ────────────────────────────────────────────────────────────────
 
 export const kindLabel = (k: Strategy["kind"]) => (k === "spec" ? "espec" : "código");
-
-// Metric %-number (8.9 → "8,9%"). Signed prefixes an explicit +.
-export function formatMetricPct(n: number, signed = false): string {
-  const s = n.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
-  return `${signed && n > 0 ? "+" : ""}${s}%`;
-}
-
-export const formatRatio = (n: number) =>
-  n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// Compact BRL for chart axes / bar labels (NAV runs into 7 figures).
-export function compactBRL(v: number): string {
-  const a = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (a >= 1e6) return `${sign}R$ ${(a / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
-  if (a >= 1e3) return `${sign}R$ ${(a / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} mil`;
-  return `${sign}R$ ${a.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
-}
 
 // Column-oriented curves → row-oriented for recharts, keeping only wanted keys.
 // `date` is narrowed to string (the engine emits ISO dates) so the rows satisfy

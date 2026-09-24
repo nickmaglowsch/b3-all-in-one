@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import type { Strategy, StrategyParam } from "@/lib/types";
-import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/api";
+import { REBALANCE_FREQS } from "@/lib/format";
 import {
   buildRunParams,
   initialParamValues,
@@ -15,14 +16,11 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { IconChart } from "@/components/icons";
 import { KindBadge } from "./StrategyGallery";
 import { useCreateBacktest } from "./lib";
+import { Field, inputCls } from "./Field";
 
-// Ordered shortest → longest period so the list reads as a scale. The default
-// stays "ME" (see useState below); this only orders the options.
-const FREQS = [
-  { value: "W-FRI", label: "Semanal" },
-  { value: "ME", label: "Mensal" },
-  { value: "QE", label: "Trimestral" },
-];
+// Ordered shortest → longest period (weekly first) so the list reads as a
+// scale. The default stays "ME" (see useState below); this only orders them.
+const FREQS = [REBALANCE_FREQS[2], REBALANCE_FREQS[0], REBALANCE_FREQS[1]];
 
 export function RunPanel({
   strategy,
@@ -65,7 +63,8 @@ export function RunPanel({
     );
   }
 
-  const errMsg = requestError(create.error);
+  const errMsg =
+    create.error ? errorText(create.error, "Falha ao iniciar o backtest.") : null;
 
   return (
     <div>
@@ -208,11 +207,6 @@ function useStrategyParams(strategy: Strategy | null) {
   };
 }
 
-function requestError(error: unknown): string | null {
-  if (error instanceof ApiError) return error.message;
-  return error ? "Falha ao iniciar o backtest." : null;
-}
-
 // One control per declared param: a select when the spec enumerates choices, a
 // number input when it is numeric (min/max/step come straight off the spec, so
 // the browser's own stepper respects the strategy's bounds), text otherwise.
@@ -273,28 +267,5 @@ function ParamControl({
       placeholder={param.default === null ? "" : String(param.default)}
       className={cls}
     />
-  );
-}
-
-const inputCls =
-  "w-full rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink focus:border-navy focus:outline-none";
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-1 flex items-baseline gap-1.5">
-        <span className="text-xs font-medium text-ink">{label}</span>
-        {hint && <span className="font-mono text-[11px] text-muted">{hint}</span>}
-      </span>
-      {children}
-    </label>
   );
 }

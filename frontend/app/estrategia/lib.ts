@@ -2,9 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Position, Sleeve, SleevesSaveResult, Target } from "@/lib/types";
+import type { Sleeve, SleevesSaveResult, Target } from "@/lib/types";
 // Reused across the two feature dirs I own — same queryKey dedupes the fetch.
-export { useStrategies, useCreateBacktest, compactBRL } from "../bench/lib";
+export { useStrategies, useCreateBacktest } from "../bench/lib";
 
 export const CASH_REF = "CASH_CDI";
 
@@ -39,13 +39,6 @@ export function useTarget() {
   });
 }
 
-export function usePositions() {
-  return useQuery({
-    queryKey: ["positions"],
-    queryFn: () => api<Position[]>("/portfolio/positions"),
-  });
-}
-
 // ── portfolio settings: asset-as-CDI + rebalance behavior (spec/05 F3 & F4) ──
 
 export interface AssetOverride {
@@ -64,13 +57,6 @@ export const DEFAULT_REBALANCE: RebalanceSettings = {
   sell_only_for_harvest: false,
   cadence: "ME",
 };
-
-// mensal / trimestral / semanal — the engine's freq codes.
-export const CADENCE_OPTIONS: { value: string; label: string }[] = [
-  { value: "ME", label: "Mensal" },
-  { value: "QE", label: "Trimestral" },
-  { value: "W-FRI", label: "Semanal" },
-];
 
 export function useAssetOverrides() {
   return useQuery({

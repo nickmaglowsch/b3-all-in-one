@@ -1,15 +1,13 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { api } from "@/lib/api";
-import type { IncomeRow } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Money } from "@/components/ui/Money";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, RetryButton } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { IconReceipt } from "@/components/icons";
 import { formatMoney } from "@/lib/format";
+import { useIncome } from "@/lib/hooks";
 
 // event_category is the only breakdown the API exposes (income lumps dividendos +
 // JCP + rendimentos). Friendly pt-BR labels; unknown categories fall back capitalised.
@@ -48,10 +46,7 @@ function Cell({ value, bold }: { value: number; bold?: boolean }) {
 }
 
 export function IncomeSection() {
-  const q = useQuery({
-    queryKey: ["income"],
-    queryFn: () => api<IncomeRow[]>("/portfolio/income"),
-  });
+  const q = useIncome();
 
   // One live region for the section, at a fixed position outside every branch.
   // A region that is unmounted is destroyed rather than updated, so nothing ever
@@ -80,13 +75,7 @@ export function IncomeSection() {
           title="Não foi possível carregar os proventos."
           hint="A conexão com a API falhou. Seus lançamentos continuam importados."
           action={
-            <button
-              type="button"
-              onClick={() => q.refetch()}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
-            >
-              Tentar de novo
-            </button>
+            <RetryButton onClick={() => q.refetch()} />
           }
         />
       </Card>,

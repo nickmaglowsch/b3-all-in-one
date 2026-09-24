@@ -7,7 +7,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
-import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { useDeleteBacktest } from "./lib";
 
@@ -57,11 +57,7 @@ export function RunsList({
   }
 
   const delMsg =
-    del.error instanceof ApiError
-      ? del.error.message
-      : del.error
-        ? "Falha ao excluir a rodada."
-        : null;
+    del.error ? errorText(del.error, "Falha ao excluir a rodada.") : null;
 
   return (
     <div>

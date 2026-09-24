@@ -7,9 +7,10 @@ import type { TradesPage } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { SortControl } from "@/components/ui/SortControl";
+import { SortHeader, type Dir } from "@/components/ui/SortHeader";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, RetryButton } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatInt, formatQty } from "@/lib/format";
@@ -23,7 +24,6 @@ const TITLE = "Negociações";
 export const TRADES_DEFAULTS = { limit: 50, sort: "date", dir: "desc" } as const;
 
 type SortKey = "date" | "side" | "ticker" | "market" | "broker" | "qty" | "price" | "amount";
-type Dir = "asc" | "desc";
 
 // One spelling of each column name, read three ways: the desktop `<th>`, the
 // label on the card layout's line, and the phone's sort picker.
@@ -63,38 +63,6 @@ function SideBadge({ side }: { side: string }) {
     >
       {side}
     </span>
-  );
-}
-
-function SortHeader({
-  label,
-  active,
-  dir,
-  nextDir,
-  align,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  dir: Dir;
-  nextDir: Dir;
-  align: "left" | "right";
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={`Ordenar por ${label}, ${nextDir === "asc" ? "crescente" : "decrescente"}`}
-      className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-ink ${
-        active ? "text-ink" : ""
-      } ${align === "right" ? "flex-row-reverse" : ""}`}
-    >
-      {label}
-      <span aria-hidden className="text-[0.85em] leading-none">
-        {active ? (dir === "asc" ? "▲" : "▼") : "↕"}
-      </span>
-    </button>
   );
 }
 
@@ -180,13 +148,7 @@ export function TradesSection() {
           title="Não foi possível carregar as negociações."
           hint="A conexão com a API falhou. Seu histórico continua importado."
           action={
-            <button
-              type="button"
-              onClick={() => q.refetch()}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
-            >
-              Tentar de novo
-            </button>
+            <RetryButton onClick={() => q.refetch()} />
           }
         />
       </Card>,
@@ -239,7 +201,6 @@ export function TradesSection() {
   const head = (key: SortKey, align: "left" | "right") => {
     const active = sort.key === key;
     const label = COLUMN_LABEL[key];
-    const fallback = defaultDir(key);
     return {
       label,
       header: (
@@ -247,7 +208,7 @@ export function TradesSection() {
           label={label}
           active={active}
           dir={sort.dir}
-          nextDir={active ? (sort.dir === "asc" ? "desc" : "asc") : fallback}
+          fallback={defaultDir(key)}
           align={align}
           onClick={() => toggle(key)}
         />

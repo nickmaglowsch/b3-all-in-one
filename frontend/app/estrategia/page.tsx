@@ -13,8 +13,9 @@ import { SectionNav } from "@/components/ui/SectionNav";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { DivergingBars } from "@/components/charts/DivergingBars";
 import { IconCompass } from "@/components/icons";
-import { ApiError } from "@/lib/api";
-import { formatDate, formatPercent } from "@/lib/format";
+import { errorText } from "@/lib/api";
+import { usePositions } from "@/lib/hooks";
+import { REBALANCE_FREQS, compactBRL, formatDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
 import {
   useDeleteUserStrategy,
@@ -23,13 +24,10 @@ import {
   useUserStrategies,
 } from "@/lib/strategies";
 import {
-  CADENCE_OPTIONS,
   CASH_REF,
   DEFAULT_REBALANCE,
-  compactBRL,
   useAssetOverrides,
   useCreateBacktest,
-  usePositions,
   useRebalancePlan,
   useRebalanceSettings,
   useSaveAssetOverrides,
@@ -176,8 +174,15 @@ function SleevesEditor() {
     [strategies.data],
   );
 
-  const optLabel = (n: string) =>
-    needsFunds.has(n) ? `${n} · precisa de fundamentos` : n;
+  const optGroup = (label: string, names: string[]) => (
+    <optgroup label={label}>
+      {names.map((n) => (
+        <option key={n} value={n}>
+          {needsFunds.has(n) ? `${n} · precisa de fundamentos` : n}
+        </option>
+      ))}
+    </optgroup>
+  );
 
   const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
   const refs = rows.map((r) => r.strategy_ref);
@@ -227,6 +232,8 @@ function SleevesEditor() {
     setDirty(true);
     setRows(patch);
   };
+  const setField = (i: number, patch: Partial<Row>) =>
+    edit((rs) => rs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
   const onSave = () => {
     const body: Sleeve[] = rows.map((r) => ({
@@ -256,33 +263,13 @@ function SleevesEditor() {
             <div key={i} className="flex items-center gap-2">
               <select
                 value={r.strategy_ref}
-                onChange={(e) =>
-                  edit((rs) =>
-                    rs.map((x, j) =>
-                      j === i ? { ...x, strategy_ref: e.target.value } : x,
-                    ),
-                  )
-                }
+                onChange={(e) => setField(i, { strategy_ref: e.target.value })}
                 className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink"
               >
                 <option value="">selecione…</option>
                 <option value={CASH_REF}>Caixa (CDI)</option>
-                <optgroup label="Estratégias da plataforma">
-                  {builtinRefs.map((n) => (
-                    <option key={n} value={n}>
-                      {optLabel(n)}
-                    </option>
-                  ))}
-                </optgroup>
-                {userRefs.length > 0 && (
-                  <optgroup label="Minhas estratégias de regra">
-                    {userRefs.map((n) => (
-                      <option key={n} value={n}>
-                        {optLabel(n)}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
+                {optGroup("Estratégias da plataforma", builtinRefs)}
+                {userRefs.length > 0 && optGroup("Minhas estratégias de regra", userRefs)}
               </select>
               <div className="flex items-center gap-1">
                 <input
@@ -291,13 +278,7 @@ function SleevesEditor() {
                   max={100}
                   step={1}
                   value={r.target_pct}
-                  onChange={(e) =>
-                    edit((rs) =>
-                      rs.map((x, j) =>
-                        j === i ? { ...x, target_pct: e.target.value } : x,
-                      ),
-                    )
-                  }
+                  onChange={(e) => setField(i, { target_pct: e.target.value })}
                   className="w-20 rounded-md border border-hairline bg-paper px-2 py-1.5 text-right font-mono text-sm tnum text-ink"
                 />
                 <span className="font-mono text-sm text-muted">%</span>
@@ -340,19 +321,13 @@ function SleevesEditor() {
           )}
           {save.error && (
             <p className="text-xs text-loss" role="alert">
-              {save.error instanceof ApiError
-                ? save.error.message
-                : "Falha ao salvar os sleeves."}
+              {errorText(save.error, "Falha ao salvar os sleeves.")}
             </p>
           )}
           {save.isSuccess && !dirty && (
             <p className="text-xs text-gain">Sleeves salvos.</p>
           )}
-          {save.data?.warnings?.map((w, i) => (
-            <p key={i} className="text-xs text-series-4" role="status">
-              {w}
-            </p>
-          ))}
+          <Warnings warnings={save.data?.warnings} />
 
           <div className="space-y-2 border-t border-hairline pt-3">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted">
@@ -404,19 +379,13 @@ function SleevesEditor() {
             </p>
             {saveStrat.error && (
               <p className="text-xs text-loss" role="alert">
-                {saveStrat.error instanceof ApiError
-                  ? saveStrat.error.message
-                  : "Falha ao salvar a estratégia."}
+                {errorText(saveStrat.error, "Falha ao salvar a estratégia.")}
               </p>
             )}
             {saveStrat.isSuccess && (
               <p className="text-xs text-gain">Carteira salva.</p>
             )}
-            {saveStrat.data?.warnings?.map((w, i) => (
-              <p key={i} className="text-xs text-series-4" role="status">
-                {w}
-              </p>
-            ))}
+            <Warnings warnings={saveStrat.data?.warnings} />
           </div>
         </div>
       )}
@@ -424,6 +393,15 @@ function SleevesEditor() {
     <MinhasCarteiras onEdit={loadStrategy} activeEditId={editId} />
     </div>
   );
+}
+
+// Soft warnings the API echoes on a save (e.g. needs-funds).
+function Warnings({ warnings }: { warnings?: string[] }) {
+  return warnings?.map((w, i) => (
+    <p key={i} className="text-xs text-series-4" role="status">
+      {w}
+    </p>
+  ));
 }
 
 // ── saved portfolio strategies ───────────────────────────────────────────────
@@ -538,9 +516,7 @@ function MinhasCarteiras({
                 )}
                 {promote.error && promote.variables === u.id && (
                   <p className="mt-2 text-xs text-loss" role="alert">
-                    {promote.error instanceof ApiError
-                      ? promote.error.message
-                      : "Falha ao ativar."}
+                    {errorText(promote.error, "Falha ao ativar.")}
                   </p>
                 )}
                 {promote.isSuccess && promote.variables === u.id && (
@@ -550,16 +526,12 @@ function MinhasCarteiras({
                 )}
                 {del.error && del.variables === u.id && (
                   <p className="mt-2 text-xs text-loss" role="alert">
-                    {del.error instanceof ApiError
-                      ? del.error.message
-                      : "Falha ao excluir."}
+                    {errorText(del.error, "Falha ao excluir.")}
                   </p>
                 )}
                 {backtest.error && backtest.variables?.strategy === u.name && (
                   <p className="mt-2 text-xs text-loss" role="alert">
-                    {backtest.error instanceof ApiError
-                      ? backtest.error.message
-                      : "Falha ao enviar o backtest."}
+                    {errorText(backtest.error, "Falha ao enviar o backtest.")}
                   </p>
                 )}
               </li>
@@ -653,7 +625,7 @@ function AssetCdiSection() {
       )}
       {save.error && (
         <p className="mt-2 text-xs text-loss" role="alert">
-          {save.error instanceof ApiError ? save.error.message : "Falha ao salvar."}
+          {errorText(save.error, "Falha ao salvar.")}
         </p>
       )}
     </div>
@@ -701,7 +673,7 @@ function RebalanceBehaviorSection() {
               onChange={(e) => patch({ cadence: e.target.value })}
               className="rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink disabled:opacity-50"
             >
-              {CADENCE_OPTIONS.map((o) => (
+              {REBALANCE_FREQS.map((o) => (
                 <option key={o.value} value={o.value}>
                   {o.label}
                 </option>
@@ -712,7 +684,7 @@ function RebalanceBehaviorSection() {
       )}
       {save.error && (
         <p className="mt-2 text-xs text-loss" role="alert">
-          {save.error instanceof ApiError ? save.error.message : "Falha ao salvar."}
+          {errorText(save.error, "Falha ao salvar.")}
         </p>
       )}
     </div>
@@ -760,10 +732,7 @@ function TargetPanel() {
 
   // 409 = sleeves exist but target can't be built (shouldn't happen here, but be honest).
   if (target.error) {
-    const msg =
-      target.error instanceof ApiError
-        ? target.error.message
-        : "Falha ao calcular o alvo.";
+    const msg = errorText(target.error, "Falha ao calcular o alvo.");
     return (
       <Card title="Alvo x atual">
         <EmptyState
@@ -913,9 +882,7 @@ function RebalancePanel() {
 
         {plan.error && (
           <p className="text-sm text-loss" role="alert">
-            {plan.error instanceof ApiError
-              ? plan.error.message
-              : "Falha ao gerar o plano."}
+            {errorText(plan.error, "Falha ao gerar o plano.")}
           </p>
         )}
 
@@ -962,26 +929,23 @@ function PlanResult({ plan }: { plan: RebalancePlan }) {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Vender ({sells.length})
-          </p>
-          {sells.length ? (
-            <DataTable columns={tradeCols} rows={sells} getRowKey={(r) => r.ticker} label="Vendas sugeridas" />
-          ) : (
-            <p className="text-sm text-muted">Nenhuma venda necessária.</p>
-          )}
-        </div>
-        <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
-            Comprar ({buys.length})
-          </p>
-          {buys.length ? (
-            <DataTable columns={tradeCols} rows={buys} getRowKey={(r) => r.ticker} label="Compras sugeridas" />
-          ) : (
-            <p className="text-sm text-muted">Nenhuma compra necessária.</p>
-          )}
-        </div>
+        {(
+          [
+            ["Vender", sells, "Vendas sugeridas", "Nenhuma venda necessária."],
+            ["Comprar", buys, "Compras sugeridas", "Nenhuma compra necessária."],
+          ] as const
+        ).map(([title, rows, label, none]) => (
+          <div key={title}>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+              {title} ({rows.length})
+            </p>
+            {rows.length ? (
+              <DataTable columns={tradeCols} rows={rows} getRowKey={(r) => r.ticker} label={label} />
+            ) : (
+              <p className="text-sm text-muted">{none}</p>
+            )}
+          </div>
+        ))}
       </div>
 
       {buckets.length > 0 && (

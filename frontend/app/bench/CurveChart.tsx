@@ -7,10 +7,9 @@ import { useChartMode } from "@/components/charts/ChartMode";
 import { columnReturn } from "@/lib/chartMode";
 import { withBenchmarks } from "@/lib/benchmarks";
 import type { Dated } from "@/lib/chartRange";
-import { formatDate, formatPercent } from "@/lib/format";
+import { compactBRL, formatDate, formatPercent } from "@/lib/format";
 import { BenchmarkPicker } from "./BenchmarkPicker";
 import { useBenchmarkOverlay } from "./benchmarkOverlay";
-import { compactBRL } from "./lib";
 
 export type Row = Dated & Record<string, string | number>;
 

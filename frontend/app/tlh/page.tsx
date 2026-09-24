@@ -2,9 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { api, ApiError } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { Position } from "@/lib/types";
 import { formatMoney, formatQty } from "@/lib/format";
+import { usePositions } from "@/lib/hooks";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Money } from "@/components/ui/Money";
@@ -59,10 +60,7 @@ interface SellDraft {
 const CLASSES = ["AÇÃO", "FII"] as const;
 
 export default function TlhPage() {
-  const positions = useQuery({
-    queryKey: ["positions"],
-    queryFn: () => api<Position[]>("/portfolio/positions"),
-  });
+  const positions = usePositions();
   // Situation = month-to-date state; independent of hypothetical sells, so load
   // it once with an empty plan.
   const situation = useQuery({
@@ -181,9 +179,7 @@ export default function TlhPage() {
             role="alert"
           >
             <IconAlert size={15} className="mt-0.5 shrink-0" />
-            {plan.error instanceof ApiError
-              ? plan.error.message
-              : "Não foi possível montar o plano."}
+            {errorText(plan.error, "Não foi possível montar o plano.")}
           </p>
         )}
       </Card>

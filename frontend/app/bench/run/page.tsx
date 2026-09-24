@@ -11,18 +11,17 @@ import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
 import { AreaSeries } from "@/components/charts/AreaSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
-import { formatDate, formatPercent } from "@/lib/format";
-import { ApiError } from "@/lib/api";
-import type { BacktestRun } from "@/lib/types";
-import { CurveChart } from "../CurveChart";
 import {
   compactBRL,
-  curveRows,
+  formatDate,
   formatMetricPct,
+  formatPercent,
   formatRatio,
-  useBacktest,
-  useCurves,
-} from "../lib";
+} from "@/lib/format";
+import { errorText } from "@/lib/api";
+import type { BacktestRun } from "@/lib/types";
+import { CurveChart } from "../CurveChart";
+import { curveRows, useBacktest, useCurves } from "../lib";
 
 // The run id rides in ?id= rather than a path segment: a [id] route needs
 // generateStaticParams, and run ids only exist at runtime — `output: "export"`
@@ -57,11 +56,7 @@ function TearSheetView() {
         <LoadingSkeleton />
       ) : run.error ? (
         <ErrorCard
-          text={
-            run.error instanceof ApiError
-              ? run.error.message
-              : "Falha ao carregar o backtest."
-          }
+          text={errorText(run.error, "Falha ao carregar o backtest.")}
         />
       ) : run.data?.status === "error" ? (
         <ErrorCard text={run.data.error ?? "O backtest falhou sem mensagem."} />

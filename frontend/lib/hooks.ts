@@ -6,15 +6,45 @@ import { api, getPortfolioId, subscribePortfolio } from "./api";
 import { mesmoConjunto } from "./modules";
 import type {
   Health,
+  IncomeRow,
   MarketStatus,
   Me,
   Portfolio,
+  Position,
   PrivacySummary,
   Subscription,
 } from "./types";
 
+const neverChanges = () => () => {};
+
+/**
+ * A browser-only value that nothing changes while the page is open (the URL, the
+ * stored credential). useSyncExternalStore rather than setState-in-an-effect:
+ * `server` is the prerender's answer, which keeps the static export's HTML
+ * matching the first client render; `read` is the client's. Never subscribes.
+ */
+export function useBrowserValue<T, S>(read: () => T, server: S): T | S {
+  return useSyncExternalStore<T | S>(neverChanges, read, () => server);
+}
+
 export function useMe() {
   return useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me") });
+}
+
+// Book-scoped reads shared by several pages; one key each, so React Query serves
+// every caller from one request.
+export function usePositions() {
+  return useQuery({
+    queryKey: ["positions"],
+    queryFn: () => api<Position[]>("/portfolio/positions"),
+  });
+}
+
+export function useIncome() {
+  return useQuery({
+    queryKey: ["income"],
+    queryFn: () => api<IncomeRow[]>("/portfolio/income"),
+  });
 }
 
 export function usePortfolios() {

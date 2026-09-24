@@ -2,6 +2,16 @@ import Link from "next/link";
 import { Brand } from "@/components/Brand";
 import { EntryLink } from "@/components/landing/EntryLink";
 import { Reveal } from "@/components/landing/Motion";
+import {
+  ALIQUOTA,
+  BASE,
+  CUSTO,
+  DARF,
+  GANHO,
+  PREJUIZO,
+  VENDAS,
+  linePath,
+} from "@/lib/apuracao";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { AVULSOS, BASE as CARTEIRA, BUNDLE, TUDO } from "@/lib/modules";
 
@@ -300,15 +310,8 @@ function PositionsPanel() {
 }
 
 // ── stage 2 · the core ────────────────────────────────────────────────────────
-// The chain is closed: 24310 − 22028.80 = 2281.20 − 640 = 1641.20 × 15% = 246.18.
-const VENDAS = 24310;
-const CUSTO = 22028.8;
-const GANHO = VENDAS - CUSTO;
-const PREJUIZO = 640;
-const BASE = GANHO - PREJUIZO;
-const ALIQUOTA = 0.15;
-const DARF = Math.round(BASE * ALIQUOTA * 100) / 100;
-
+// The chain is closed: 24310 − 22028.80 = 2281.20 − 640 = 1641.20 × 15% = 246.18
+// (lib/apuracao).
 const APURACAO: {
   label: string;
   note?: string;
@@ -329,23 +332,6 @@ const APURACAO: {
 ];
 
 // ── stage 3 · the three outlets ───────────────────────────────────────────────
-function areaLine(values: number[], lo?: number, hi?: number) {
-  const min = lo ?? Math.min(...values);
-  const max = hi ?? Math.max(...values);
-  const rng = max - min || 1;
-  const W = 100,
-    H = 40,
-    P = 4;
-  const step = (W - P * 2) / (values.length - 1);
-  const xy = values.map((v, i): [number, number] => [
-    P + i * step,
-    H - P - ((v - min) / rng) * (H - P * 2),
-  ]);
-  return xy
-    .map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`)
-    .join(" ");
-}
-
 // The shared figure, marked wherever it surfaces. Navy tint at 6% is the same
 // "you are here" treatment the active nav item uses — the accent marking a
 // location, not colouring data.
@@ -391,7 +377,7 @@ function OutletBench() {
       <div className="mt-5 flex h-36 items-center">
         <svg viewBox="0 0 100 40" preserveAspectRatio="none" className="h-28 w-full" aria-hidden>
           <path
-            d={areaLine(bruto, lo, hi)}
+            d={linePath(bruto, lo, hi)}
             fill="none"
             stroke="var(--axis)"
             strokeWidth={1.4}
@@ -399,7 +385,7 @@ function OutletBench() {
             vectorEffect="non-scaling-stroke"
           />
           <path
-            d={areaLine(liquido, lo, hi)}
+            d={linePath(liquido, lo, hi)}
             fill="none"
             stroke="var(--series-1)"
             strokeWidth={1.8}

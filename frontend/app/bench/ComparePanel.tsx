@@ -8,13 +8,12 @@ import { Money } from "@/components/ui/Money";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { IconChart } from "@/components/icons";
+import { formatMetricPct, formatRatio } from "@/lib/format";
 import type { BacktestRun } from "@/lib/types";
 import { CompareChart } from "./CompareChart";
 import {
   MAX_COMPARE,
   type Metrics,
-  formatMetricPct,
-  formatRatio,
   mergeCurvesByDate,
   runLabels,
   seriesColor,

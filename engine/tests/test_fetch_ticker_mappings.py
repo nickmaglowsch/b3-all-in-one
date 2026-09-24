@@ -5,23 +5,9 @@ TDD: these tests are written BEFORE the implementation and should initially FAIL
 """
 from __future__ import annotations
 
-import sqlite3
 from unittest.mock import patch
 
-import pytest
-
-from b3_pipeline import storage
 from tests.conftest import seed_cvm_company
-
-
-@pytest.fixture
-def mem_conn():
-    """In-memory SQLite connection with full schema."""
-    conn = sqlite3.connect(":memory:")
-    conn.execute("PRAGMA foreign_keys = OFF")
-    storage.init_db(conn)
-    yield conn
-    conn.close()
 
 
 # ──────────────────────────────────────────────────────────────────────────────

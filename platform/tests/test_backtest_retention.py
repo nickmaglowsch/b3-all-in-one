@@ -22,27 +22,17 @@ on the row to find it by.
 
 import datetime
 import uuid
+from functools import partial
 from pathlib import Path
 
 import pytest
 
 from platform_app.billing import SELLABLE as ALL_MODULES
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-PASSWORD = "correct-horse-battery-staple"
-
-
-async def _auth(client, email: str) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert (await client.post(
-        "/billing/dev-modules", json={"modules": list(ALL_MODULES)}, headers=headers
-    )).status_code == 200
-    return headers
+_auth = partial(auth, modules=ALL_MODULES)
 
 
 async def _me(client, headers) -> uuid.UUID:
@@ -290,15 +280,41 @@ async def test_a_sweep_that_matches_nothing_is_a_zero(client):
 async def test_deleting_runs_needs_the_bench_module(client):
     """Same gate as every other /backtests route — a route that skipped it would
     let an unentitled account reach the tenant's rows."""
-    email = "retention-gate@example.com"
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert (await client.post(
-        "/billing/dev-modules", json={"modules": ["carteira"]}, headers=headers
-    )).status_code == 200
+    headers = await auth(client, "retention-gate@example.com", ["carteira"])
 
     assert (await client.delete("/backtests?keep=1", headers=headers)).status_code == 402
     assert (await client.delete(
         f"/backtests/{uuid.uuid4()}", headers=headers)).status_code == 402
+
+
+async def test_every_run_route_gives_the_same_404(client):
+    """Read, curves and delete answer junk, unknown and foreign ids identically,
+    so no route can be used to tell which ids exist elsewhere."""
+    headers = await _auth(client, "retention-same404@example.com")
+    stranger = await _seed(uuid.uuid4())
+    for rid in ("not-a-uuid", str(uuid.uuid4()), str(stranger)):
+        for method, path in (("GET", f"/backtests/{rid}"),
+                             ("GET", f"/backtests/{rid}/curves"),
+                             ("DELETE", f"/backtests/{rid}")):
+            r = await client.request(method, path, headers=headers)
+            assert (r.status_code, r.json()) == (404, {"detail": "backtest not found"}), (
+                method, path)
+
+
+async def test_get_owned_scopes_by_tenant():
+    from fastapi import HTTPException
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import BacktestRun
+    from platform_app.tenancy import get_owned
+
+    owner = uuid.uuid4()
+    rid = await _seed(owner)
+    async with async_session_maker() as session:
+        row = await get_owned(session, BacktestRun, str(rid), owner, "nope")
+        assert row.id == rid
+        for raw, tid in ((str(rid), uuid.uuid4()), ("junk", owner),
+                         (str(uuid.uuid4()), owner)):
+            with pytest.raises(HTTPException) as exc:
+                await get_owned(session, BacktestRun, raw, tid, "nope")
+            assert (exc.value.status_code, exc.value.detail) == (404, "nope")

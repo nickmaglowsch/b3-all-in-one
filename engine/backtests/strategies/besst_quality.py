@@ -153,19 +153,14 @@ class BesstQualityStrategy(StrategyBase):
 
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "BESST Quality"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Replica of the MarketVector Brazil BESST Quality index (BEST11 ETF): "
-            "companies in banking, electric power, insurance, telecom and "
-            "sanitation with positive PIT earnings and a regular dividend history, "
-            "market-cap weighted with an 8% per-name cap, rebalanced quarterly. "
-            "Requires fundamentals_pit. Weights use full (not free-float) market cap."
-        )
+    name = "BESST Quality"
+    description = (
+        "Replica of the MarketVector Brazil BESST Quality index (BEST11 ETF): "
+        "companies in banking, electric power, insurance, telecom and "
+        "sanitation with positive PIT earnings and a regular dividend history, "
+        "market-cap weighted with an 8% per-name cap, rebalanced quarterly. "
+        "Requires fundamentals_pit. Weights use full (not free-float) market cap."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         rebalance = ParameterSpec(

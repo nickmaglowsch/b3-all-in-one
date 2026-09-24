@@ -5,8 +5,8 @@ generates every mutant of a module into one file, and at 1100 lines the report s
 produced a 42 MB module that never finished importing. This module does it in seconds
 — and these are the lines where a surviving mutant is a real tax bug.
 
-`irpf_2026.py` re-exports all four names, so `from scripts.irpf_2026 import
-monthly_apuracao` still works.
+`irpf_2026.py` re-exports `CLASSES_APURACAO` and `monthly_apuracao`, so
+`from scripts.irpf_2026 import monthly_apuracao` still works.
 """
 from __future__ import annotations
 

@@ -212,19 +212,14 @@ class TwoLegValueStrategy(StrategyBase):
 
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "Two-Leg Value"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Integrated cheapness screen: liquidity floor, 180-day balance "
-            "freshness, health filter, then a two-leg ranking (non-financials by "
-            "EBITDA/EV, banks by P/L+P/VP) merged on cheapness percentiles, with "
-            "a value-trap filter (ROE, P/L) down to 20 equal-weighted names. "
-            "Quarterly rebalance (mid Apr/Jun/Sep/Dec). Requires fundamentals_pit."
-        )
+    name = "Two-Leg Value"
+    description = (
+        "Integrated cheapness screen: liquidity floor, 180-day balance "
+        "freshness, health filter, then a two-leg ranking (non-financials by "
+        "EBITDA/EV, banks by P/L+P/VP) merged on cheapness percentiles, with "
+        "a value-trap filter (ROE, P/L) down to 20 equal-weighted names. "
+        "Quarterly rebalance (mid Apr/Jun/Sep/Dec). Requires fundamentals_pit."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [

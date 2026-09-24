@@ -54,7 +54,7 @@ def _flat_series(start: str, end: str, name: str, value: float) -> pd.Series:
     return pd.Series(value, index=idx, name=name)
 
 
-def _install_benchmark_stubs(start: str, end: str, offline: bool) -> None:
+def _install_benchmark_stubs(offline: bool) -> None:
     """Replace the plane/BCB fetchers in the loaded modules with offline stubs.
     Patches both the data module and the name shared_data imported at import
     time. Only offline mode stubs anything — benchmarks read the plane now, so
@@ -142,7 +142,7 @@ def main() -> None:
         cfg.get("market") or params.get("market") or getattr(strat, "market", None)).key
 
     offline = os.environ.get("ENGINE_BENCH_OFFLINE") == "1"
-    _install_benchmark_stubs(start, end, offline)
+    _install_benchmark_stubs(offline)
 
     from backtests.core.shared_data import build_shared_data
     # db_path is ignored once ENGINE_DATABASE_URL routes to Postgres; pass the DSN

@@ -7,13 +7,13 @@ pipeline half runs against the real writers.
 from __future__ import annotations
 
 import datetime
-import sqlite3
 import zipfile
 
 import pandas as pd
 import pytest
 from b3_pipeline import storage
 from us_pipeline import us_adjust, wiki_archive, wiki_backfill
+from tests.conftest import sqlite_db
 
 TODAY = datetime.date(2026, 9, 2)
 PTAX = pd.Series([5.0], index=pd.to_datetime(["2014-01-01"]))
@@ -31,12 +31,6 @@ def _zip(tmp_path, lines, name="WIKI_PRICES_abc.csv", header=HEADER):
     with zipfile.ZipFile(path, "w") as zf:
         zf.writestr(name, "\n".join([header, *lines]) + "\n")
     return path
-
-
-def _db(tmp_path):
-    conn = sqlite3.connect(str(tmp_path / "wiki.sqlite"))
-    storage.init_db(conn)
-    return conn
 
 
 # ── the reader ────────────────────────────────────────────────────────────────
@@ -110,7 +104,7 @@ def test_a_missing_key_says_so_rather_than_failing_in_the_transport(monkeypatch)
 # ── the pipeline ──────────────────────────────────────────────────────────────
 
 def test_bars_land_with_both_adjusted_columns_and_a_total_return_tag(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     path = _zip(tmp_path, [
         _row("AAA", "2014-01-02", close=100.0),
         _row("AAA", "2014-01-03", close=50.0, split=2.0),
@@ -121,7 +115,7 @@ def test_bars_land_with_both_adjusted_columns_and_a_total_return_tag(tmp_path):
 
 
 def test_a_split_is_applied_backwards_to_the_split_adjusted_close(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     path = _zip(tmp_path, [
         _row("AAA", "2014-01-02", close=100.0),
         _row("AAA", "2014-01-03", close=50.0, split=2.0),
@@ -147,7 +141,7 @@ def test_the_frozen_dataset_never_claims_a_delisting(tmp_path):
     """The newest bar is 2018-03-27 for every live name in the file. Apple did
     not delist in March 2018, and a symbol's absence from a frozen file is a
     fact about the file."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     path = _zip(tmp_path, [_row("AAA", "2018-03-26"), _row("AAA", "2018-03-27")])
     for symbol, bars in wiki_archive.iter_symbols(str(path)):
         wiki_backfill.ingest_symbol(conn, symbol, bars, PTAX, TODAY)
@@ -163,7 +157,7 @@ def test_the_frozen_dataset_never_claims_a_delisting(tmp_path):
 def test_a_truncated_export_is_refused_after_the_stream(tmp_path):
     """The symbol count is only knowable once the stream ends, but a third of
     the history looks exactly like all of it unless the run says otherwise."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     path = _zip(tmp_path, [_row("AAA", "2018-03-27")])
     with pytest.raises(RuntimeError, match="below the floor"):
         wiki_backfill.run_pipeline(zip_path=str(path), today=TODAY)

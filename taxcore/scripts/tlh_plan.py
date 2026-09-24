@@ -39,16 +39,13 @@ from pathlib import Path
 import pandas as pd
 
 from scripts._common import price_lookup as latest_prices
-from scripts.apuracao import ISENCAO_LIMIT  # one copy of the R$20k rule
+from scripts.apuracao import ALIQUOTA, ISENCAO_LIMIT  # one copy of the rules
 from scripts.irpf_2026 import asset_class, build_timeline
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 POSITIONS = DATA / "positions.csv"
 REPORTS = ROOT / "reports"
-
-ACOES_RATE = 0.15
-FII_RATE = 0.20
 
 
 def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
@@ -254,7 +251,7 @@ def build_result(sells_realized: list[dict], carry: dict, mtd: dict,
         "month": date.today().strftime("%m/%Y"),
         "generated": date.today().isoformat(),
         "isencao_limit": ISENCAO_LIMIT,
-        "rates": {"AÇÃO": ACOES_RATE, "FII": FII_RATE},
+        "rates": {cls: ALIQUOTA[cls] for cls in ("AÇÃO", "FII")},
         "situation": {cls: {"gross_mtd": mtd[cls]["gross"],
                             "pnl_mtd": mtd[cls]["pnl"], "carry": carry[cls]}
                       for cls in ("AÇÃO", "FII")},
@@ -517,7 +514,8 @@ def main(argv: list[str]) -> int:
     plan_acoes: list[dict] = []
     plan_fii: list[dict] = []
 
-    for cls, rate in (("AÇÃO", ACOES_RATE), ("FII", FII_RATE)):
+    for cls in ("AÇÃO", "FII"):
+        rate = ALIQUOTA[cls]
         bucket_sells = [s for s in sells_realized if s["cls"] == cls]
         if not bucket_sells and mtd[cls]["gross"] == 0:
             continue  # nothing to plan for this bucket

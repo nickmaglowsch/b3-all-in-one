@@ -35,11 +35,7 @@ from backtests.core.data import sector_membership, sector_membership_asof
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
-    COMMON_START_DATE,
-    COMMON_END_DATE,
-    COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE,
-    COMMON_SLIPPAGE,
+    COMMON_RUN_SPECS,
 )
 
 _DB_PATH = Path(__file__).resolve().parents[2] / "b3_market_data.sqlite"
@@ -178,27 +174,18 @@ class TevaAtivosReaisStrategy(StrategyBase):
 
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "TevaAtivosReais"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Replica of the Teva Dividendos Ativos Reais index: dividend-focused "
-            "portfolio of Utilities (energy + saneamento), weighted 50% by market "
-            "cap and 50% by a 36-month capped Dividend Score, with a 10% "
-            "per-issuer cap. Universe is filtered point-in-time by CVM sector "
-            "(FCA data, survivorship-free). Semiannual rebalance."
-        )
+    name = "TevaAtivosReais"
+    description = (
+        "Replica of the Teva Dividendos Ativos Reais index: dividend-focused "
+        "portfolio of Utilities (energy + saneamento), weighted 50% by market "
+        "cap and 50% by a 36-month capped Dividend Score, with a 10% "
+        "per-issuer cap. Universe is filtered point-in-time by CVM sector "
+        "(FCA data, survivorship-free). Semiannual rebalance."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE,
-            COMMON_END_DATE,
-            COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE,
-            COMMON_SLIPPAGE,
+            *COMMON_RUN_SPECS,
             ParameterSpec(
                 "rebalance_freq", "Rebalance Frequency", "choice", "QE",
                 description="Rebalance cadence (methodology is semiannual; QE≈closest quarterly proxy)",

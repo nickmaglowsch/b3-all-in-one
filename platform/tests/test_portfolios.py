@@ -10,21 +10,11 @@ import uuid
 
 import pytest
 
-from tests.conftest import seed_tenant_tables
+from tests.conftest import auth as _auth, seed_tenant_tables
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-PASSWORD = "portfoliospassword"
 HEADER = "X-Portfolio-Id"
-
-
-async def _auth(client, email: str) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
 async def _set_modules(client, headers, *modules: str) -> None:

@@ -9,12 +9,11 @@ Offline — the directory text is built in-process in the documented shape.
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pytest
 
 from b3_pipeline import storage
 from us_pipeline import symbol_directory as sd
+from tests.conftest import sqlite_db
 
 HEADER = ("Nasdaq Traded|Symbol|Security Name|Listing Exchange|Market Category|"
           "ETF|Round Lot Size|Test Issue|Financial Status|CQS Symbol|"
@@ -35,12 +34,6 @@ def directory(symbols, etf=(), test=()) -> str:
 
 def many(n, prefix="SYM"):
     return [f"{prefix}{i:05d}" for i in range(n)]
-
-
-def _db(tmp_path):
-    conn = sqlite3.connect(str(tmp_path / "us.sqlite"))
-    storage.init_db(conn)
-    return conn
 
 
 def _instruments(conn):
@@ -79,7 +72,7 @@ def test_a_changed_file_shape_fails_loudly():
 # ── snapshots ─────────────────────────────────────────────────────────────────
 
 def test_the_first_snapshot_records_everything_as_live(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     snap = sd.parse_directory(directory(many(6_000)))
     out = sd.apply_snapshot(conn, snap, "2026-01-05")
     assert out["listed"] == 6_000 and out["delisted"] == 0
@@ -91,7 +84,7 @@ def test_the_first_snapshot_records_everything_as_live(tmp_path):
 def test_a_symbol_that_stops_appearing_is_delisted_at_its_last_sighting(tmp_path):
     """Dated at the last day the plane can prove it traded, not at the day the
     absence was noticed."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     sd.apply_snapshot(conn, sd.parse_directory(directory(many(6_000))), "2026-01-05")
     sd.apply_snapshot(conn, sd.parse_directory(directory(many(6_000))), "2026-01-06")
     out = sd.apply_snapshot(
@@ -106,7 +99,7 @@ def test_a_symbol_that_stops_appearing_is_delisted_at_its_last_sighting(tmp_path
 def test_first_seen_survives_later_snapshots(tmp_path):
     """The listing date is the first sighting, and a daily re-upsert must not
     keep resetting it to today."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     for day in ("2026-01-05", "2026-01-06", "2026-01-07"):
         sd.apply_snapshot(conn, sd.parse_directory(directory(many(6_000))), day)
     row = _instruments(conn).loc["SYM00000"]
@@ -118,7 +111,7 @@ def test_a_truncated_snapshot_is_refused_rather_than_delisting_the_market(tmp_pa
     """The guard this file exists for. One bad download must not write a
     delisting date onto every US symbol — that column is what the backtest
     universe slices by."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     sd.apply_snapshot(conn, sd.parse_directory(directory(many(6_000))), "2026-01-05")
 
     with pytest.raises(ValueError, match="truncated download"):
@@ -131,7 +124,7 @@ def test_a_truncated_snapshot_is_refused_rather_than_delisting_the_market(tmp_pa
 
 
 def test_nothing_is_written_when_a_snapshot_is_refused(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     with pytest.raises(ValueError):
         sd.apply_snapshot(conn, sd.parse_directory(directory(many(10))), "2026-01-05")
     assert storage.read_sql(
@@ -141,7 +134,7 @@ def test_nothing_is_written_when_a_snapshot_is_refused(tmp_path):
 def test_test_issues_are_recorded_and_flagged_not_dropped(tmp_path):
     """A symbol absent because it was a test issue and a symbol absent because it
     delisted must not look the same to a later reader."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     syms = many(6_000)
     sd.apply_snapshot(
         conn, sd.parse_directory(directory(syms, test={syms[0]})), "2026-01-05")
@@ -149,7 +142,7 @@ def test_test_issues_are_recorded_and_flagged_not_dropped(tmp_path):
 
 
 def test_etfs_are_kept_as_their_own_kind(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     syms = many(6_000)
     sd.apply_snapshot(
         conn, sd.parse_directory(directory(syms, etf={syms[1]})), "2026-01-05")
@@ -162,7 +155,7 @@ def test_a_delisted_symbol_that_returns_is_not_resurrected_by_accident(tmp_path)
     """Relistings happen. The row is updated in place with a fresh last_seen; the
     delisting date it already carries is the reader's business, not a reason to
     duplicate the symbol."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     syms = many(6_000)
     sd.apply_snapshot(conn, sd.parse_directory(directory(syms)), "2026-01-05")
     sd.apply_snapshot(conn, sd.parse_directory(directory(syms[1:])), "2026-01-06")

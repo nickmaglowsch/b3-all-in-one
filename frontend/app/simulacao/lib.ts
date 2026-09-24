@@ -1,12 +1,12 @@
 "use client";
 
-// Simulação-local hooks, types and formatters for the what-if replay
-// (POST /whatif). Kept local per feature; shares only the typed `api` wrapper
-// and the Strategy gallery type from lib/.
-import { useMutation, useQuery } from "@tanstack/react-query";
+// Simulação-local hooks, types and shaping for the what-if replay
+// (POST /whatif). Formatters live in lib/format.
+import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Dated } from "@/lib/chartRange";
-import type { Strategy } from "@/lib/types";
+// Same queryKey as the bench gallery, so the fetch is shared.
+export { useStrategies } from "../bench/lib";
 
 export interface CurvePoint {
   date: string;
@@ -34,14 +34,6 @@ export interface WhatIfBody {
   freq?: string;
 }
 
-export function useStrategies() {
-  return useQuery({
-    queryKey: ["strategies"],
-    queryFn: () => api<Strategy[]>("/strategies"),
-    staleTime: 60 * 60_000, // gallery only changes on image rebuild
-  });
-}
-
 export function useRunWhatIf() {
   return useMutation({
     mutationFn: (body: WhatIfBody) =>
@@ -50,31 +42,6 @@ export function useRunWhatIf() {
 }
 
 // ── formatters + shaping ──────────────────────────────────────────────────────
-
-export const FREQS = [
-  { value: "ME", label: "Mensal" },
-  { value: "QE", label: "Trimestral" },
-  { value: "W-FRI", label: "Semanal" },
-];
-
-// Metric %-number (8.9 → "8,9%"). Signed prefixes an explicit +.
-export function formatMetricPct(n: number | null, signed = false): string {
-  if (n == null) return "—";
-  const s = n.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
-  return `${signed && n > 0 ? "+" : ""}${s}%`;
-}
-
-export const formatRatio = (n: number | null) =>
-  n == null ? "—" : n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-// Compact BRL for chart axes (NAV runs into 6-7 figures).
-export function compactBRL(v: number): string {
-  const a = Math.abs(v);
-  const sign = v < 0 ? "-" : "";
-  if (a >= 1e6) return `${sign}R$ ${(a / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
-  if (a >= 1e3) return `${sign}R$ ${(a / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} mil`;
-  return `${sign}R$ ${a.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
-}
 
 // Total return of a scenario vs the money put in (fraction, for PctDelta).
 export const totalReturn = (finalValue: number, invested: number) =>

@@ -62,11 +62,11 @@ import pandas as pd
 
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV,
+    COMMON_RUN_SPECS, COMMON_MIN_ADTV,
 )
 from backtests.strategies.ibov_low_vol import ewma_annualized_vol, inverse_vol_capped
 from backtests.strategies.besst_quality import load_dividends, paid_regularly
+from backtests.strategies.qmv import quality_gate
 
 TRADING_DAYS_YEAR = 252
 _DB_PATH = Path(__file__).resolve().parents[2] / "b3_market_data.sqlite"
@@ -77,24 +77,18 @@ class QDLStrategy(StrategyBase):
 
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "QDL"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Quality-Dividend Low-Vol with CDI overlay. Regular dividend payers "
-            "with positive PIT earnings, holds the lowest-volatility names "
-            "inverse-vol weighted (10% cap), and scales equity exposure by "
-            "target_vol / realized sleeve vol with the remainder in CDI. Beats "
-            "the defensive-income indices by adding the cash overlay they lack."
-        )
+    name = "QDL"
+    description = (
+        "Quality-Dividend Low-Vol with CDI overlay. Regular dividend payers "
+        "with positive PIT earnings, holds the lowest-volatility names "
+        "inverse-vol weighted (10% cap), and scales equity exposure by "
+        "target_vol / realized sleeve vol with the remainder in CDI. Beats "
+        "the defensive-income indices by adding the cash overlay they lack."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_MIN_ADTV,
+            *COMMON_RUN_SPECS, COMMON_MIN_ADTV,
             # Methodology default is quarterly (matches BESST / Teva); overridden
             # from the common ME default.
             ParameterSpec(
@@ -163,12 +157,6 @@ class QDLStrategy(StrategyBase):
         # Daily returns for the sleeve's realized-vol estimate (overlay dial).
         daily_ret = daily_close.pct_change()
 
-        # Map universe ticker -> fundamentals column via 4-char root (one best-ADTV
-        # ticker per company in the f_*_m frames), mirroring QMV.
-        root_col: dict[str, str] = {}
-        for c in f_ni_ttm.columns:
-            root_col.setdefault(str(c)[:4], c)
-
         ann = np.sqrt(TRADING_DAYS_YEAR)
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
@@ -195,18 +183,7 @@ class QDLStrategy(StrategyBase):
 
             # ── quality gate: positive PIT TTM net income AND positive equity ─
             if not f_ni_ttm.empty and i - 1 < len(f_ni_ttm) and not valid.empty:
-                ni_row = f_ni_ttm.iloc[i - 1]
-                eq_row = f_equity.iloc[i - 1] if not f_equity.empty else pd.Series(dtype=float)
-
-                def _quality(tk: str) -> bool:
-                    col = root_col.get(tk[:4])
-                    if col is None:
-                        return False
-                    ni = ni_row.get(col)
-                    eq = eq_row.get(col)
-                    return pd.notna(ni) and ni > 0 and pd.notna(eq) and eq > 0
-
-                valid = valid[[_quality(t) for t in valid.index]]
+                valid = quality_gate(valid, f_ni_ttm, f_equity, i - 1)
 
             if len(valid) < 5:
                 tw.iloc[i, cdi_col] = 1.0  # not enough names → park in CDI

@@ -313,29 +313,19 @@ def upsert_cad_company_dates(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
 def get_fundamentals_stats(conn: sqlite3.Connection) -> dict:
     """Return counts for the fundamentals stats panel."""
     cursor = conn.cursor()
-
-    cursor.execute("SELECT COUNT(*) FROM cvm_companies")
-    total_cvm_companies = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM cvm_filings")
-    total_cvm_filings = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM fundamentals_pit")
-    total_fundamentals_pit = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM cvm_companies WHERE listing_date IS NOT NULL")
-    companies_with_listing_date = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM cvm_companies WHERE delisting_date IS NOT NULL")
-    companies_with_delisting_date = cursor.fetchone()[0]
-
-    return {
-        "total_cvm_companies": total_cvm_companies,
-        "total_cvm_filings": total_cvm_filings,
-        "total_fundamentals_pit": total_fundamentals_pit,
-        "companies_with_listing_date": companies_with_listing_date,
-        "companies_with_delisting_date": companies_with_delisting_date,
-    }
+    stats = {}
+    for key, sql in (
+        ("total_cvm_companies", "SELECT COUNT(*) FROM cvm_companies"),
+        ("total_cvm_filings", "SELECT COUNT(*) FROM cvm_filings"),
+        ("total_fundamentals_pit", "SELECT COUNT(*) FROM fundamentals_pit"),
+        ("companies_with_listing_date",
+         "SELECT COUNT(*) FROM cvm_companies WHERE listing_date IS NOT NULL"),
+        ("companies_with_delisting_date",
+         "SELECT COUNT(*) FROM cvm_companies WHERE delisting_date IS NOT NULL"),
+    ):
+        cursor.execute(sql)
+        stats[key] = cursor.fetchone()[0]
+    return stats
 
 
 def populate_company_isin_map(conn: sqlite3.Connection) -> int:

@@ -2,7 +2,6 @@ import asyncio
 import datetime
 import json
 import shutil
-import tempfile
 import uuid
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from platform_app import b3run, enginerun, specstore, subprocs
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import (
-    BacktestRun, CashEvent, CostBasisOverride, Import, IngestRun, Position,
+    BacktestRun, CashEvent, CostBasisOverride, Import, Position,
     RendaFixaMark, TaxSummary, Trade,
 )
 
@@ -151,9 +150,7 @@ async def process_imports(tenant_id: str) -> dict:
             extract copies, the CSV writes, the reads and the rmtree blocked the
             other slot and the worker's own bookkeeping for the duration.
             """
-            ws = Path(tempfile.mkdtemp(prefix="b3import-", dir=b3run.workspace_root(tid)))
-            try:
-                b3run.seed_workspace(ws)
+            with b3run.workspace(tid, "b3import-") as ws:
                 for stored_path, filename in extracts:
                     shutil.copy(stored_path, ws / "b3_imports" / filename)
                 b3run.write_csv(
@@ -175,8 +172,6 @@ async def process_imports(tenant_id: str) -> dict:
                     b3run.read_csv_rows(ws / "data" / "positions.csv"),
                     b3run.read_csv_rows(marks_csv) if marks_csv.exists() else [],
                 )
-            finally:
-                shutil.rmtree(ws, ignore_errors=True)
 
         proc, trades, events, positions, rf_marks = await asyncio.to_thread(_work)
         if proc.returncode != 0:

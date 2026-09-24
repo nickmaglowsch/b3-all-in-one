@@ -4,28 +4,21 @@ from __future__ import annotations
 import pandas as pd
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_REBALANCE_FREQ,
 )
 
 
 class CopomEasingStrategy(StrategyBase):
-    @property
-    def name(self) -> str:
-        return "COPOM Easing"
-
-    @property
-    def description(self) -> str:
-        return (
-            "COPOM Easing: Simple macro regime switch. "
-            "During COPOM easing (CDI declining), hold 100% IBOV. "
-            "During tightening, hold 100% CDI."
-        )
+    name = "COPOM Easing"
+    description = (
+        "COPOM Easing: Simple macro regime switch. "
+        "During COPOM easing (CDI declining), hold 100% IBOV. "
+        "During tightening, hold 100% CDI."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_REBALANCE_FREQ,
+            *COMMON_RUN_SPECS, COMMON_REBALANCE_FREQ,
             ParameterSpec(
                 "cdi_shift_short", "CDI Short Shift (periods)", "int", 1,
                 description="Short lag for CDI comparison (e.g. 1 = 1 month ago)",

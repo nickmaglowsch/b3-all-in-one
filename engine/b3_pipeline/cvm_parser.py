@@ -135,6 +135,14 @@ def extract_company_index(zip_path) -> list:
     return [(cnpj, cvm_code, name) for cnpj, (cvm_code, name) in result.items()]
 
 
+def _open_zip_source(zip_path) -> Tuple[str, zipfile.ZipFile]:
+    """Open a ZIP given as a path or an in-memory buffer (tests); returns (source name, zip)."""
+    if isinstance(zip_path, (str, Path)):
+        return Path(zip_path).name, zipfile.ZipFile(zip_path, "r")
+    zip_path.seek(0)
+    return "in-memory", zipfile.ZipFile(zip_path, "r")
+
+
 def _load_csv_from_zip(zf: zipfile.ZipFile, name_pattern: str) -> Optional[pd.DataFrame]:
     """Find a CSV matching the pattern (case-insensitive) inside the ZIP and load it."""
     matches = [
@@ -272,15 +280,7 @@ def _extract_metrics_from_csvs(
 
     Returns (filings_df, fundamentals_df).
     """
-    # Support both Path and BytesIO inputs (for testing with in-memory ZIPs)
-    if isinstance(zip_path, (str, Path)):
-        source_file = Path(zip_path).name
-        zf_ctx = zipfile.ZipFile(zip_path, "r")
-    else:
-        source_file = "in-memory"
-        zip_path.seek(0)
-        zf_ctx = zipfile.ZipFile(zip_path, "r")
-
+    source_file, zf_ctx = _open_zip_source(zip_path)
     with zf_ctx as zf:
         dre = _load_statement_with_ind_fallback(zf, "DRE")
         bpa = _load_statement_with_ind_fallback(zf, "BPA")
@@ -498,14 +498,7 @@ def parse_fre_zip(
     logger.info(f"Parsing FRE ZIP: {zip_path}")
     doc_type = "FRE"
 
-    if isinstance(zip_path, (str, Path)):
-        source_file = Path(zip_path).name
-        zf_ctx = zipfile.ZipFile(zip_path, "r")
-    else:
-        source_file = "in-memory"
-        zip_path.seek(0)
-        zf_ctx = zipfile.ZipFile(zip_path, "r")
-
+    source_file, zf_ctx = _open_zip_source(zip_path)
     with zf_ctx as zf:
         # Main FRE CSV has the filing receipt date (DT_RECEB) — standard columns
         main = _load_csv_from_zip(zf, f"fre_cia_aberta_{source_file[-8:-4]}.csv" if source_file != "in-memory" else "fre_cia_aberta")

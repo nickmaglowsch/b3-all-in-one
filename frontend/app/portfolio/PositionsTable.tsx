@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { SortControl } from "@/components/ui/SortControl";
+import { SortHeader, type Dir } from "@/components/ui/SortHeader";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
@@ -19,7 +20,6 @@ type SortKey =
   | "total_cost"
   | "market_value"
   | "pnl";
-type Dir = "asc" | "desc";
 
 const SORT_KEYS: SortKey[] = [
   "ticker",
@@ -61,42 +61,6 @@ const COLUMN_LABEL: Record<SortKey, string> = {
 };
 
 const SORT_OPTIONS = SORT_KEYS.map((key) => ({ key, label: COLUMN_LABEL[key] }));
-
-function SortHeader({
-  label,
-  active,
-  dir,
-  nextDir,
-  align,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  dir: Dir;
-  nextDir: Dir;
-  align: "left" | "right";
-  onClick: () => void;
-}) {
-  // The label names what the click will DO; the current state is on the <th> as
-  // aria-sort, which is where a screen reader expects it. Saying both in one
-  // string is how "Ativo (crescente)" ends up ambiguous about whether it
-  // describes the order now or the order after clicking.
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={`Ordenar por ${label}, ${nextDir === "asc" ? "crescente" : "decrescente"}`}
-      className={`inline-flex items-center gap-1 uppercase tracking-wide transition-colors hover:text-ink ${
-        active ? "text-ink" : ""
-      } ${align === "right" ? "flex-row-reverse" : ""}`}
-    >
-      {label}
-      <span aria-hidden className="text-[0.85em] leading-none">
-        {active ? (dir === "asc" ? "▲" : "▼") : "↕"}
-      </span>
-    </button>
-  );
-}
 
 export function PositionsTable({
   positions,
@@ -193,9 +157,7 @@ export function PositionsTable({
           label={label}
           active={active}
           dir={sort.dir}
-          nextDir={
-            active ? (sort.dir === "asc" ? "desc" : "asc") : DEFAULT_DIR[key]
-          }
+          fallback={DEFAULT_DIR[key]}
           align={align}
           onClick={() => toggle(key)}
         />

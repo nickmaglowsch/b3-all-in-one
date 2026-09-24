@@ -16,6 +16,7 @@ import pytest
 from b3_pipeline import config, storage
 from backtests.core.data import download_benchmark
 from us_pipeline import spx_series
+from tests.conftest import sqlite_db
 
 D = datetime.date
 TODAY = D(2026, 9, 1)
@@ -40,12 +41,6 @@ def _rates(value=5.5):
     return pd.Series([value], index=pd.to_datetime([D(2020, 1, 1)]))
 
 
-def _db(tmp_path):
-    conn = sqlite3.connect(str(tmp_path / "spx.sqlite"))
-    storage.init_db(conn)
-    return conn
-
-
 def test_the_level_is_in_reais_because_the_strategy_return_is(tmp_path):
     """metrics.json already declares currency BRL because a US book's Sharpe has
     the dollar inside it. A benchmark without the same conversion is the wrong
@@ -57,7 +52,7 @@ def test_the_level_is_in_reais_because_the_strategy_return_is(tmp_path):
 def test_the_total_return_number_lands_in_close_not_adj_close(tmp_path):
     """`download_benchmark` routes a $-prefixed symbol to `download_index_level`,
     which reads `close`. external_prices has no adjusted column."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     rows = spx_series.build(_Stub(dividends=[
         {"ex_dividend_date": "2026-08-31", "amount": "1.0"}]), _rates(1.0))
     storage.upsert_external_prices(conn, rows)

@@ -5,8 +5,6 @@ same convention as `test_sec_fundamentals.py`'s companyfacts fixtures.
 """
 from __future__ import annotations
 
-import sqlite3
-
 import pandas as pd
 import pytest
 from b3_pipeline import storage, us_storage
@@ -14,6 +12,7 @@ from us_pipeline import ticker_pit, us_main
 
 from tests.test_sec_fundamentals import doc as _facts_doc
 from tests.test_sec_fundamentals import fact
+from tests.conftest import sqlite_db
 
 
 def facts_doc(cik, **tags):
@@ -22,12 +21,6 @@ def facts_doc(cik, **tags):
     out = _facts_doc(**tags)
     out["cik"] = int(cik)
     return out
-
-
-def _db(tmp_path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(tmp_path / "pit.sqlite"))
-    storage.init_db(conn)
-    return conn
 
 
 def submission(cik, tickers, *, filings=("2005-03-01", "2009-09-15"),
@@ -87,7 +80,7 @@ def test_a_rename_gives_each_filing_the_name_the_market_knew_then(tmp_path):
     the rebalance grid, so the label has to be the one the market saw when the
     filing landed — otherwise the fundamentals column and the price column carry
     different names over the same window and never join."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_storage.upsert_ticker_pit(conn, pd.DataFrame([
         {"cik": "0001326801", "ticker": "FB", "start_date": "2012-05-18",
          "end_date": "2022-06-08", "source": "sec-submissions"},
@@ -102,7 +95,7 @@ def test_a_filing_older_than_the_recorded_bound_takes_the_nearest_name(tmp_path)
     """The backward source is coarse — it bounds by filing history, not by
     trading — so a fact from before the earliest bound is normal. The nearest
     name beats no name, and `CIK##########` is no name."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_storage.upsert_ticker_pit(conn, pd.DataFrame([
         {"cik": "0000806085", "ticker": "LEH", "start_date": "1994-01-05",
          "end_date": "2008-09-15", "source": "sec-submissions"}]))
@@ -110,7 +103,7 @@ def test_a_filing_older_than_the_recorded_bound_takes_the_nearest_name(tmp_path)
 
 
 def test_an_unknown_cik_resolves_to_nothing_rather_than_a_guess(tmp_path):
-    assert ticker_pit.resolver(_db(tmp_path), "0000000001")("2020-01-01") is None
+    assert ticker_pit.resolver(sqlite_db(tmp_path), "0000000001")("2020-01-01") is None
 
 
 # ── The whole point ───────────────────────────────────────────────────────────
@@ -119,7 +112,7 @@ def test_a_company_that_stopped_filing_is_reachable_by_the_ticker_it_had(tmp_pat
     """#38's own acceptance criterion. Before this, its facts were in the
     database, /market/status counted them, and no strategy could select them —
     survivorship bias surviving despite the plane being built without it."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_storage.upsert_ticker_pit(conn, ticker_pit.intervals_from_submission(
         submission(806085, ["LEH"], filings=("1994-01-05", "2008-09-15"),
                    still_filing=False)))
@@ -142,7 +135,7 @@ def test_a_company_that_stopped_filing_is_reachable_by_the_ticker_it_had(tmp_pat
 def test_a_filer_with_no_history_at_all_keeps_the_cik_placeholder(tmp_path):
     """Still the honest fallback where nothing resolved — and its count is what
     `scripts/us_coverage.py` reports as the size of what is left."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_main.ingest_company(
         conn, "0000000042",
         facts_doc(42, Revenues=[fact(1e6, "2007-12-31", "a1", "2008-02-01",
@@ -162,13 +155,13 @@ def _snapshot(n, extra=None):
 
 
 def test_a_truncated_snapshot_does_not_end_every_interval_in_the_market(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     with pytest.raises(ValueError, match="below the"):
         ticker_pit.apply_snapshot(conn, _snapshot(10), "2026-09-01")
 
 
 def test_a_pair_that_disappears_from_the_snapshot_is_closed(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     full = _snapshot(ticker_pit.MIN_PLAUSIBLE_PAIRS,
                      {"0000806085": "LEH"})
     ticker_pit.apply_snapshot(conn, full, "2026-09-01")

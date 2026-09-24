@@ -1,9 +1,9 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { api } from "@/lib/api";
-import { useSubscription } from "@/lib/hooks";
+import { useBrowserValue, useSubscription } from "@/lib/hooks";
 import { formatDate } from "@/lib/format";
 import {
   alternaModulo,
@@ -26,18 +26,10 @@ import { Card } from "@/components/ui/Card";
 // ?ligar=<módulo>. Read them once on mount (no useSearchParams => no Suspense
 // boundary needed for a static route).
 //
-// useSyncExternalStore rather than setState-in-an-effect: the value is not React
-// state, it is a browser value React has to be told about, and the server
-// snapshot is what keeps the static export's HTML matching the first client
-// render. Never subscribes — the query string does not change under this page.
-const neverChanges = () => () => {};
-
+// A browser value, not React state; the query string does not change under this
+// page.
 function useQueryParam(name: string) {
-  return useSyncExternalStore(
-    neverChanges,
-    () => new URLSearchParams(window.location.search).get(name),
-    () => null,
-  );
+  return useBrowserValue(() => new URLSearchParams(window.location.search).get(name), null);
 }
 
 function Aviso({ children, tone }: { children: string; tone?: "erro" }) {

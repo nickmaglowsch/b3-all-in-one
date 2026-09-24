@@ -357,3 +357,14 @@ test("uma tentativa que falhou também segura a próxima", async () => {
   await mod.refreshSession();
   assert.equal(calls.length, 1);
 });
+
+// A mensagem de um ApiError é a do servidor, escrita para o usuário; qualquer
+// outra falha (rede, bug) não tem uma frase que valha mostrar, e cai no texto
+// da tela.
+test("errorText mostra a mensagem da API, e o texto da tela para o resto", async () => {
+  const { mod } = await load();
+  const fallback = "Falha ao salvar.";
+  assert.equal(mod.errorText(new mod.ApiError(422, "Pesos somam 110%."), fallback), "Pesos somam 110%.");
+  assert.equal(mod.errorText(new TypeError("Failed to fetch"), fallback), fallback);
+  assert.equal(mod.errorText(null, fallback), fallback);
+});

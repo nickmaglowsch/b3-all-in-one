@@ -6,7 +6,7 @@
 // runs it unchanged.
 import { useState } from "react";
 import type { Strategy, UserStrategy } from "@/lib/types";
-import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/api";
 import { useDeleteUserStrategy, useUserStrategies } from "@/lib/strategies";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -46,12 +46,7 @@ export function UserStrategies({
     onConsumeClone();
   }
 
-  const delMsg =
-    del.error instanceof ApiError
-      ? del.error.message
-      : del.error
-        ? "Falha ao excluir."
-        : null;
+  const delMsg = del.error ? errorText(del.error, "Falha ao excluir.") : null;
 
   if (open) {
     return (

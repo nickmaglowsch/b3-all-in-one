@@ -26,12 +26,13 @@ Consequently:
 from __future__ import annotations
 
 import logging
-import re
 import zipfile
 from pathlib import Path
 from typing import Optional, Tuple
 
 import pandas as pd
+
+from .cvm_parser import _clean_cnpj, _parse_date
 
 logger = logging.getLogger(__name__)
 
@@ -45,30 +46,6 @@ IPE_SHARES_COLUMN = None
 
 
 # ── Private helpers ────────────────────────────────────────────────────────────
-
-def _clean_cnpj(raw: str) -> Optional[str]:
-    """Strip CNPJ formatting and return 14-digit string or None."""
-    if not raw:
-        return None
-    digits = re.sub(r"\D", "", str(raw))
-    return digits if len(digits) == 14 else None
-
-
-def _parse_date(val) -> Optional[str]:
-    """Parse date string, trying YYYY-MM-DD then DD/MM/YYYY. Returns YYYY-MM-DD or None."""
-    if val is None:
-        return None
-    s = str(val).strip()
-    if s in ("", "nan", "NaT", "None"):
-        return None
-    from datetime import datetime
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
-        except ValueError:
-            continue
-    return None
-
 
 def _open_zip(zip_path) -> Optional[zipfile.ZipFile]:
     """Open a ZipFile from Path or BytesIO. Returns None on error."""
@@ -130,8 +107,6 @@ def parse_ipe_zip(
     date_ref_col = "Data_Referencia" if "Data_Referencia" in df.columns else None
     date_entry_col = "Data_Entrega" if "Data_Entrega" in df.columns else None
     versao_col = "Versao" if "Versao" in df.columns else None
-    cvm_code_col = "Codigo_CVM" if "Codigo_CVM" in df.columns else None
-    nome_col = "Nome_Companhia" if "Nome_Companhia" in df.columns else None
 
     df["period_end"] = df[date_ref_col].apply(_parse_date) if date_ref_col else None
     df["filing_date"] = df[date_entry_col].apply(_parse_date) if date_entry_col else None

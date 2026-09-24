@@ -58,3 +58,20 @@ def test_ids_that_disappear_are_swept(tmp_path, monkeypatch):
     d = specstore.materialize_user_specs([(keep, {"name": "a"})], tenant)
 
     assert {f.name for f in d.glob("*.yaml")} == {f"{keep}.yaml"}
+
+
+def test_specs_env_materializes_rows_or_passes_nothing(tmp_path, monkeypatch):
+    """Zero-spec tenants get no env var at all — identical to a built-in call."""
+    from types import SimpleNamespace
+
+    from platform_app import specstore
+
+    monkeypatch.setattr(specstore.settings, "artifacts_dir", str(tmp_path))
+    tenant = uuid.uuid4()
+    assert specstore.specs_env([], tenant) == {}
+
+    row = SimpleNamespace(id=uuid.uuid4(), spec={"name": "x"})
+    env = specstore.specs_env([row], tenant)
+    d = tmp_path.resolve() / "user_specs" / str(tenant)
+    assert env == {"ENGINE_USER_SPECS_DIR": str(d)}
+    assert json.loads((d / f"{row.id}.yaml").read_text()) == {"name": "x"}

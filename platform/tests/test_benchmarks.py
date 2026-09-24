@@ -15,21 +15,13 @@ import datetime
 
 import pytest
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+from tests.conftest import auth
 
-PASSWORD = "benchmarkpassword"
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def _bencher(client, email: str) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    r = await client.post(
-        "/billing/dev-modules", json={"modules": ["bench"]}, headers=headers)
-    assert r.status_code == 200, r.text
-    return headers
+    return await auth(client, email, ["bench"])
 
 
 def _stub(monkeypatch, payload: dict, seen: list | None = None):
@@ -66,12 +58,7 @@ async def test_the_catalogue_is_the_list_the_picker_renders(client):
 async def test_the_bench_module_gates_both_routes(client):
     """A benchmark is only reachable from the bench, so it is gated with it —
     otherwise the cheapest plan gets the engine subprocess for free."""
-    await client.post(
-        "/auth/register", json={"email": "nobench@example.com", "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login",
-        data={"username": "nobench@example.com", "password": PASSWORD})
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    headers = await auth(client, "nobench@example.com")
 
     assert (await client.get("/benchmarks", headers=headers)).status_code == 402
     assert (await client.get(

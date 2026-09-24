@@ -34,6 +34,8 @@ import logging
 import pandas as pd
 import requests
 
+from .external_prices import level_rows
+
 logger = logging.getLogger(__name__)
 
 # Marks this loader's rows in the shared table. storage's resume helpers scope on
@@ -128,19 +130,8 @@ def build(start: datetime.date = TESOURO_START, url: str = URL) -> pd.DataFrame:
         logger.warning(f"Tesouro Direto file had nothing from {start} onward")
         return pd.DataFrame()
 
-    out = pd.DataFrame({
-        "ticker": df["ticker"].to_numpy(),
-        "isin_code": "UNKNOWN",
-        "date": df["date"].to_numpy(),
-        # A published PU has no range and no turnover. NaN rather than None: a
-        # column that is None all the way down infers object dtype, and
-        # upsert_external_prices compares close against low before it checks
-        # notna(). Same reasoning as index_series.build.
-        "open": float("nan"), "high": float("nan"), "low": float("nan"),
-        "close": df["close"].to_numpy(),
-        "volume": 0.0,
-        "source": SOURCE,
-    })
+    out = level_rows(df["ticker"].to_numpy(), df["date"].to_numpy(),
+                     df["close"].to_numpy(), SOURCE)
     logger.info(f"Tesouro Direto: {len(out):,} marks over "
                 f"{out['ticker'].nunique()} titles, "
                 f"{df['date'].min():%Y-%m-%d} to {df['date'].max():%Y-%m-%d}")

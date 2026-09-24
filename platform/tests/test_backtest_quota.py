@@ -15,20 +15,13 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.asyncio(loop_scope="session")
+from tests.conftest import auth
 
-PASSWORD = "quotapassword"
+pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 
 async def _trader(client, email: str) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    r = await client.post("/billing/dev-modules", json={"modules": ["bench"]}, headers=headers)
-    assert r.status_code == 200, r.text
-    return headers
+    return await auth(client, email, ["bench"])
 
 
 async def _seed_runs(tenant_id: uuid.UUID, statuses: list[str]) -> None:

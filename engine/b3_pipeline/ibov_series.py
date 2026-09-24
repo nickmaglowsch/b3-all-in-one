@@ -31,6 +31,7 @@ import pandas as pd
 import requests
 
 from . import config
+from .external_prices import level_rows
 
 logger = logging.getLogger(__name__)
 
@@ -119,18 +120,7 @@ def build(end: datetime.date, start_year: int = IBOV_START_YEAR) -> pd.DataFrame
 
     logger.info(f"{IBOV_TICKER}: {len(closes):,} sessions, "
                 f"{closes.iloc[-1]:,.2f} points at {closes.index[-1]:%Y-%m-%d}")
-    return pd.DataFrame({
-        "ticker": IBOV_TICKER,
-        "isin_code": "UNKNOWN",
-        "date": closes.index,
-        # An index level has no bar and no volume. NaN rather than faked from
-        # the close — same reasoning as index_series.build, including why it is
-        # NaN and not None.
-        "open": float("nan"), "high": float("nan"), "low": float("nan"),
-        "close": closes.to_numpy(),
-        "volume": 0.0,
-        "source": SOURCE,
-    })
+    return level_rows(IBOV_TICKER, closes.index, closes.to_numpy(), SOURCE)
 
 
 def demo() -> None:

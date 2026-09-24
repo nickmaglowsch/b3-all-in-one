@@ -37,17 +37,12 @@ class ValueCdiIvvbStrategy(StrategyBase):
     # Nests the Two-Leg Value sleeve, which reads fundamentals_pit.
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "Value / CDI / IVVB11 (thirds)"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Quarterly-rebalanced equal thirds: 1/3 Two-Leg Value equity basket, "
-            "1/3 CDI (cash), 1/3 IVVB11 (S&P 500 in BRL, from Yahoo). Parks in "
-            "CDI until the value basket first forms."
-        )
+    name = "Value / CDI / IVVB11 (thirds)"
+    description = (
+        "Quarterly-rebalanced equal thirds: 1/3 Two-Leg Value equity basket, "
+        "1/3 CDI (cash), 1/3 IVVB11 (S&P 500 in BRL, from Yahoo). Parks in "
+        "CDI until the value basket first forms."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         # Inherit the value sleeve's knobs; add only start/end at the top.

@@ -20,6 +20,7 @@ from platform_app.portfolio_index import (
     build_index, canonical, is_excluded, max_drawdown_pct, rebase,
     select_tickers, summarize, years_between,
 )
+from tests.conftest import auth
 
 D1, D2, D3 = date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4)
 
@@ -1078,14 +1079,7 @@ _PRE_RATE_PCT = 12.0
 async def _own_book(client, email: str) -> tuple[dict[str, str], uuid.UUID]:
     """A fresh account, not the shared dev tenant: these tests put a contract in
     a book and leave it there, and the dev book is read by half the suite."""
-    await client.post("/auth/register", json={"email": email, "password": "prepassword"})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": "prepassword"})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    r = await client.post(
-        "/billing/dev-modules", json={"modules": ["indice", "mercado"]}, headers=headers)
-    assert r.status_code == 200, r.text
+    headers = await auth(client, email, ["indice", "mercado"])
     return headers, uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
 
 

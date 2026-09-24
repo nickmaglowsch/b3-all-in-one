@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import type { TaxPlan, TaxSummary } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Money } from "@/components/ui/Money";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, InvestorPlanLink, RetryButton } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { IconReceipt } from "@/components/icons";
@@ -207,12 +207,7 @@ export function TaxSection() {
             title="A apuração do mês faz parte do plano Investidor."
             hint="Isenção de R$ 20 mil usada e disponível, prejuízo a compensar, IR devido e os candidatos a colheita — apurados pelo mesmo motor que gera seu IRPF."
             action={
-              <Link
-                href="/assinatura"
-                className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
-              >
-                Ver o plano Investidor
-              </Link>
+              <InvestorPlanLink />
             }
           />
         </Card>
@@ -226,13 +221,7 @@ export function TaxSection() {
           title="Não foi possível carregar a situação fiscal."
           hint="A conexão com a API falhou. Nada foi perdido."
           action={
-            <button
-              type="button"
-              onClick={() => q.refetch()}
-              className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
-            >
-              Tentar de novo
-            </button>
+            <RetryButton onClick={() => q.refetch()} />
           }
         />
       </Card>

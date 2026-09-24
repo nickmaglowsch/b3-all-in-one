@@ -20,11 +20,11 @@ import stripe
 
 from platform_app.billing import CARTEIRA, EMPRESARIAL, MODULES
 from platform_app.config import settings
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 EMAIL = "billing@example.com"
-PASSWORD = "billingpassword"
 WEBHOOK_SECRET = "whsec_test_secret"
 PRICES = {
     "irpf": "price_test_irpf",
@@ -47,12 +47,7 @@ async def _auth(client, email: str = EMAIL) -> dict[str, str]:
     """Sem `email`, o usuário compartilhado do arquivo. Com, um tenant só seu — o
     que os testes de webhook precisam: `stripe_subscription_id` é estado que sobra
     de um teste para o outro, e é exatamente o estado que eles medem."""
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD}
-    )
-    assert r.status_code == 200, r.text
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    return await auth(client, email)
 
 
 async def _set_modules(client, headers, *modules: str, status: str = "active") -> None:

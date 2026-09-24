@@ -543,6 +543,21 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
     logger.info("Database schema initialized")
 
 
+# Columns added after their table first shipped: the full CREATEs above already
+# carry them, so these only bite a database created from an older engine schema.
+# (table, column, SQLite type) — the Postgres type is the same _pg_ddl translation.
+_ADDED_COLUMNS = (
+    ("prices", "quotation_factor", "INTEGER DEFAULT 1"),
+    ("cvm_companies", "listing_date", "DATE"),
+    ("cvm_companies", "delisting_date", "DATE"),
+    ("cvm_companies", "ticker_root", "TEXT"),
+    ("fundamentals_pit", "net_income_ttm", "REAL"),
+    ("fundamentals_monthly", "net_income_ttm", "REAL"),
+    ("fundamentals_pit", "shares_on", "REAL"),
+    ("fundamentals_pit", "shares_pn", "REAL"),
+)
+
+
 def _migrate_schema_pg(conn) -> None:
     """Postgres equivalent of _migrate_schema: additive, idempotent column adds.
 
@@ -554,18 +569,9 @@ def _migrate_schema_pg(conn) -> None:
     (REAL -> DOUBLE PRECISION, INTEGER -> BIGINT).
     """
     cursor = conn.cursor()
-    additive = [
-        "ALTER TABLE prices ADD COLUMN IF NOT EXISTS quotation_factor BIGINT DEFAULT 1",
-        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS listing_date DATE",
-        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS delisting_date DATE",
-        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS ticker_root TEXT",
-        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
-        "ALTER TABLE fundamentals_monthly ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
-        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_on DOUBLE PRECISION",
-        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_pn DOUBLE PRECISION",
-    ]
-    for stmt in additive:
-        cursor.execute(stmt)
+    for table, col, col_type in _ADDED_COLUMNS:
+        cursor.execute(
+            _pg_ddl(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {col_type}"))
 
     # Widen prices.volume from the BIGINT an older schema created. Unlike the
     # additive statements above this is a rewriting ALTER that takes an ACCESS
@@ -597,72 +603,22 @@ def _migrate_schema_pg(conn) -> None:
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Apply non-destructive schema migrations for existing databases."""
     cursor = conn.cursor()
+    added = set()
+    for table, col, col_type in _ADDED_COLUMNS:
+        cursor.execute(f"PRAGMA table_info({table})")
+        cols = {row[1] for row in cursor.fetchall()}
+        if cols and col not in cols:
+            logger.info(f"Migrating: adding {col} column to {table}")
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {col_type}")
+            added.add(col)
 
-    # Add quotation_factor to prices if missing
-    cursor.execute("PRAGMA table_info(prices)")
-    prices_cols = {row[1] for row in cursor.fetchall()}
-    if "quotation_factor" not in prices_cols:
-        logger.info("Migrating: adding quotation_factor column to prices table")
-        cursor.execute(
-            "ALTER TABLE prices ADD COLUMN quotation_factor INTEGER DEFAULT 1"
-        )
-
-    # CVM fundamentals tables are created by CREATE TABLE IF NOT EXISTS above.
-    # Add listing_date / delisting_date to cvm_companies if missing (Task 03 migration).
-    cursor.execute("PRAGMA table_info(cvm_companies)")
-    cvm_companies_cols = {row[1] for row in cursor.fetchall()}
-    if "listing_date" not in cvm_companies_cols:
-        logger.info("Migrating: adding listing_date column to cvm_companies")
-        cursor.execute("ALTER TABLE cvm_companies ADD COLUMN listing_date DATE")
-    if "delisting_date" not in cvm_companies_cols:
-        logger.info("Migrating: adding delisting_date column to cvm_companies")
-        cursor.execute("ALTER TABLE cvm_companies ADD COLUMN delisting_date DATE")
-    if "ticker_root" not in cvm_companies_cols:
-        logger.info("Migrating: adding ticker_root column to cvm_companies")
-        cursor.execute("ALTER TABLE cvm_companies ADD COLUMN ticker_root TEXT")
-        cursor.execute(INDEX_CVM_COMPANIES_TICKER_ROOT)
+    if "ticker_root" in added:
         cursor.execute(
             "UPDATE cvm_companies SET ticker_root = SUBSTR(ticker, 1, 4)"
             " WHERE ticker IS NOT NULL AND ticker_root IS NULL"
         )
-
     # Ensure ticker_root index exists for both fresh and migrated DBs.
     cursor.execute(INDEX_CVM_COMPANIES_TICKER_ROOT)
-
-    # company_isin_map: created via SCHEMA_COMPANY_ISIN_MAP above (CREATE TABLE IF NOT EXISTS).
-    # Ensure indexes exist for existing DBs that were created before this table was added.
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_CNPJ)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_ISIN)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_TICKER)
-    cursor.execute(INDEX_COMPANY_ISIN_MAP_PRIMARY)
-
-    # fundamentals_monthly: created via SCHEMA_FUNDAMENTALS_MONTHLY (CREATE TABLE IF NOT EXISTS).
-    # Safe to call on existing DBs that already have the table.
-    cursor.execute(SCHEMA_FUNDAMENTALS_MONTHLY)
-    cursor.execute(INDEX_FUNDAMENTALS_MONTHLY_TICKER)
-    cursor.execute(INDEX_FUNDAMENTALS_MONTHLY_MONTH_END)
-
-    # company_tickers_pit: created via SCHEMA_COMPANY_TICKERS_PIT above; ensure
-    # it exists for DBs initialized before the FCA ingestion was added.
-    cursor.execute(SCHEMA_COMPANY_TICKERS_PIT)
-    cursor.execute(INDEX_COMPANY_TICKERS_PIT_ROOT)
-
-    # Add net_income_ttm to fundamentals_pit / fundamentals_monthly if missing
-    # (DBs created before the TTM computation was added).
-    for table in ("fundamentals_pit", "fundamentals_monthly"):
-        cursor.execute(f"PRAGMA table_info({table})")
-        cols = {row[1] for row in cursor.fetchall()}
-        if cols and "net_income_ttm" not in cols:
-            logger.info(f"Migrating: adding net_income_ttm column to {table}")
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN net_income_ttm REAL")
-
-    # Add per-class share counts to fundamentals_pit if missing
-    cursor.execute("PRAGMA table_info(fundamentals_pit)")
-    pit_cols = {row[1] for row in cursor.fetchall()}
-    for col in ("shares_on", "shares_pn"):
-        if pit_cols and col not in pit_cols:
-            logger.info(f"Migrating: adding {col} column to fundamentals_pit")
-            cursor.execute(f"ALTER TABLE fundamentals_pit ADD COLUMN {col} REAL")
 
 
 def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
@@ -757,6 +713,13 @@ def upsert_prices(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     return len(records)
 
 
+def _upsert_sql(table: str, cols: list, key: list) -> str:
+    """INSERT … ON CONFLICT(key) DO UPDATE of every non-key column."""
+    updates = ", ".join(f"{c} = excluded.{c}" for c in cols if c not in key)
+    return (f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})"
+            f" ON CONFLICT({', '.join(key)}) DO UPDATE SET {updates}")
+
+
 def upsert_external_prices(conn, df: pd.DataFrame) -> int:
     """Upsert marks from a non-COTAHIST feed into `external_prices`.
 
@@ -768,19 +731,6 @@ def upsert_external_prices(conn, df: pd.DataFrame) -> int:
     if df.empty:
         logger.warning("No external price records to upsert")
         return 0
-
-    sql = """
-        INSERT INTO external_prices (ticker, isin_code, date, open, high, low, close, volume, source)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(ticker, date) DO UPDATE SET
-            isin_code = excluded.isin_code,
-            open = excluded.open,
-            high = excluded.high,
-            low = excluded.low,
-            close = excluded.close,
-            volume = excluded.volume,
-            source = excluded.source
-    """
 
     df = df.copy()
     df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
@@ -795,7 +745,7 @@ def upsert_external_prices(conn, df: pd.DataFrame) -> int:
 
     cols = ["ticker", "isin_code", "date", "open", "high", "low", "close", "volume", "source"]
     records = df[cols].astype(object).where(pd.notna(df[cols]), None).values.tolist()
-    executemany(conn, sql, records)
+    executemany(conn, _upsert_sql("external_prices", cols, ["ticker", "date"]), records)
     conn.commit()
 
     logger.info(f"Upserted {len(records):,} external price records")
@@ -885,100 +835,53 @@ def pending_external_failures(conn, source: str) -> set:
     return {_as_date(r[0]) for r in rows if r and r[0]}
 
 
-def upsert_corporate_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Upsert corporate action records into the database."""
+def _upsert_rows(conn, df: pd.DataFrame, table: str, cols: list, key: list,
+                 noun: str, defaults: dict) -> int:
+    """The B3 corporate-action tables: key[1] is the date, absent optional
+    columns take `defaults`, and a missing `source` is B3's."""
     if df.empty:
-        logger.warning("No corporate action records to upsert")
+        logger.warning(f"No {noun} records to upsert")
         return 0
 
-    sql = """
-        INSERT INTO corporate_actions (isin_code, event_date, event_type, value, factor, source)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(isin_code, event_date, event_type) DO UPDATE SET
-            value = excluded.value,
-            factor = excluded.factor,
-            source = excluded.source
-    """
-
     df = df.copy()
-    df["event_date"] = pd.to_datetime(df["event_date"]).dt.strftime("%Y-%m-%d")
-    if "value" not in df.columns:
-        df["value"] = None
-    if "factor" not in df.columns:
-        df["factor"] = None
-    if "source" not in df.columns:
-        df["source"] = "B3"
-    else:
+    df[key[1]] = pd.to_datetime(df[key[1]]).dt.strftime("%Y-%m-%d")
+    for col, default in defaults.items():
+        if col not in df.columns:
+            df[col] = default
+    if "source" in cols:
         df["source"] = df["source"].fillna("B3")
 
-    cols = ["isin_code", "event_date", "event_type", "value", "factor", "source"]
     records = df[cols].values.tolist()
-
-    executemany(conn, sql, records)
+    executemany(conn, _upsert_sql(table, cols, key), records)
     conn.commit()
 
-    logger.info(f"Upserted {len(records):,} corporate action records")
+    logger.info(f"Upserted {len(records):,} {noun} records")
     return len(records)
+
+
+def upsert_corporate_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
+    """Upsert corporate action records into the database."""
+    return _upsert_rows(
+        conn, df, "corporate_actions",
+        ["isin_code", "event_date", "event_type", "value", "factor", "source"],
+        ["isin_code", "event_date", "event_type"], "corporate action",
+        {"value": None, "factor": None, "source": "B3"})
 
 
 def upsert_detected_splits(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     """Upsert detected split records into the database."""
-    if df.empty:
-        logger.warning("No detected split records to upsert")
-        return 0
-
-    sql = """
-        INSERT INTO detected_splits (isin_code, ex_date, split_factor, description)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(isin_code, ex_date) DO UPDATE SET
-            split_factor = excluded.split_factor,
-            description = excluded.description
-    """
-
-    df = df.copy()
-    df["ex_date"] = pd.to_datetime(df["ex_date"]).dt.strftime("%Y-%m-%d")
-    if "description" not in df.columns:
-        df["description"] = None
-
-    cols = ["isin_code", "ex_date", "split_factor", "description"]
-    records = df[cols].values.tolist()
-
-    executemany(conn, sql, records)
-    conn.commit()
-
-    logger.info(f"Upserted {len(records):,} detected split records")
-    return len(records)
+    return _upsert_rows(
+        conn, df, "detected_splits",
+        ["isin_code", "ex_date", "split_factor", "description"],
+        ["isin_code", "ex_date"], "detected split", {"description": None})
 
 
 def upsert_stock_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     """Upsert stock action records (splits, reverse splits, bonuses) into the database."""
-    if df.empty:
-        logger.warning("No stock action records to upsert")
-        return 0
-
-    sql = """
-        INSERT INTO stock_actions (isin_code, ex_date, action_type, factor, source)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(isin_code, ex_date, action_type) DO UPDATE SET
-            factor = excluded.factor,
-            source = excluded.source
-    """
-
-    df = df.copy()
-    df["ex_date"] = pd.to_datetime(df["ex_date"]).dt.strftime("%Y-%m-%d")
-    if "source" not in df.columns:
-        df["source"] = "B3"
-    else:
-        df["source"] = df["source"].fillna("B3")
-
-    cols = ["isin_code", "ex_date", "action_type", "factor", "source"]
-    records = df[cols].values.tolist()
-
-    executemany(conn, sql, records)
-    conn.commit()
-
-    logger.info(f"Upserted {len(records):,} stock action records")
-    return len(records)
+    return _upsert_rows(
+        conn, df, "stock_actions",
+        ["isin_code", "ex_date", "action_type", "factor", "source"],
+        ["isin_code", "ex_date", "action_type"], "stock action", {"source": "B3"})
 
 
 def replace_stock_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
@@ -1136,35 +1039,11 @@ def upsert_skipped_events(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
     """Upsert skipped event records (unrecognized B3 labels) into the database."""
     if df.empty:
         return 0
-
-    sql = """
-        INSERT INTO skipped_events (isin_code, event_date, label, factor, source, reason)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(isin_code, event_date, label) DO UPDATE SET
-            factor = excluded.factor,
-            source = excluded.source,
-            reason = excluded.reason
-    """
-
-    df = df.copy()
-    df["event_date"] = pd.to_datetime(df["event_date"]).dt.strftime("%Y-%m-%d")
-    if "factor" not in df.columns:
-        df["factor"] = None
-    if "source" not in df.columns:
-        df["source"] = "B3"
-    else:
-        df["source"] = df["source"].fillna("B3")
-    if "reason" not in df.columns:
-        df["reason"] = None
-
-    cols = ["isin_code", "event_date", "label", "factor", "source", "reason"]
-    records = df[cols].values.tolist()
-
-    executemany(conn, sql, records)
-    conn.commit()
-
-    logger.info(f"Upserted {len(records):,} skipped event records")
-    return len(records)
+    return _upsert_rows(
+        conn, df, "skipped_events",
+        ["isin_code", "event_date", "label", "factor", "source", "reason"],
+        ["isin_code", "event_date", "label"], "skipped event",
+        {"factor": None, "source": "B3", "reason": None})
 
 
 def record_fetch_failure(
@@ -1218,63 +1097,33 @@ def get_summary_stats(conn: sqlite3.Connection) -> dict:
     """Get summary statistics from the database."""
     cursor = conn.cursor()
 
-    cursor.execute("SELECT COUNT(*) FROM prices")
-    total_prices = cursor.fetchone()[0]
+    def count(sql: str) -> int:
+        cursor.execute(sql)
+        return cursor.fetchone()[0]
 
-    cursor.execute("SELECT COUNT(DISTINCT ticker) FROM prices")
-    total_tickers = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(DISTINCT isin_code) FROM prices")
-    total_isins = cursor.fetchone()[0]
-
+    stats = {key: count(sql) for key, sql in (
+        ("total_prices", "SELECT COUNT(*) FROM prices"),
+        ("total_tickers", "SELECT COUNT(DISTINCT ticker) FROM prices"),
+        ("total_isins", "SELECT COUNT(DISTINCT isin_code) FROM prices"),
+    )}
     cursor.execute("SELECT MIN(date), MAX(date) FROM prices")
     date_range = cursor.fetchone()
-
-    cursor.execute("SELECT COUNT(*) FROM corporate_actions")
-    total_actions = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM detected_splits")
-    total_splits = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM stock_actions")
-    total_stock_actions = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM skipped_events")
-    total_skipped = cursor.fetchone()[0]
-
-    cursor.execute("SELECT COUNT(*) FROM fetch_failures WHERE resolved = 0")
-    unresolved_failures = cursor.fetchone()[0]
+    stats["date_range"] = (date_range[0], date_range[1])
+    for key, sql in (
+        ("total_corporate_actions", "SELECT COUNT(*) FROM corporate_actions"),
+        ("total_detected_splits", "SELECT COUNT(*) FROM detected_splits"),
+        ("total_stock_actions", "SELECT COUNT(*) FROM stock_actions"),
+        ("total_skipped_events", "SELECT COUNT(*) FROM skipped_events"),
+        ("unresolved_fetch_failures", "SELECT COUNT(*) FROM fetch_failures WHERE resolved = 0"),
+    ):
+        stats[key] = count(sql)
 
     # CVM fundamentals counts (tables may not exist in very old DBs — default to 0)
-    try:
-        cursor.execute("SELECT COUNT(*) FROM cvm_companies")
-        total_cvm_companies = cursor.fetchone()[0]
-    except Exception:
-        total_cvm_companies = 0
-
-    try:
-        cursor.execute("SELECT COUNT(*) FROM cvm_filings")
-        total_cvm_filings = cursor.fetchone()[0]
-    except Exception:
-        total_cvm_filings = 0
-
-    try:
-        cursor.execute("SELECT COUNT(*) FROM fundamentals_pit")
-        total_fundamentals_pit = cursor.fetchone()[0]
-    except Exception:
-        total_fundamentals_pit = 0
-
-    return {
-        "total_prices": total_prices,
-        "total_tickers": total_tickers,
-        "total_isins": total_isins,
-        "date_range": (date_range[0], date_range[1]),
-        "total_corporate_actions": total_actions,
-        "total_detected_splits": total_splits,
-        "total_stock_actions": total_stock_actions,
-        "total_skipped_events": total_skipped,
-        "unresolved_fetch_failures": unresolved_failures,
-        "total_cvm_companies": total_cvm_companies,
-        "total_cvm_filings": total_cvm_filings,
-        "total_fundamentals_pit": total_fundamentals_pit,
-    }
+    for key, table in (("total_cvm_companies", "cvm_companies"),
+                       ("total_cvm_filings", "cvm_filings"),
+                       ("total_fundamentals_pit", "fundamentals_pit")):
+        try:
+            stats[key] = count(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+        except Exception:
+            stats[key] = 0
+    return stats

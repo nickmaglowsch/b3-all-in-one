@@ -221,3 +221,27 @@ def test_a_full_redemption_reconciles_when_the_report_carries_no_quantity(book):
     assert r["value_prev"] == pytest.approx(10_000.00)
     assert r["value_cur"] == 0.0
     assert r["rendimento_cur"] == pytest.approx(600.00)
+
+
+@pytest.mark.parametrize("produto, grupo, codigo, label", [
+    ("LCI - C - BANCO X S/A", "04", "03", "LCI (renda fixa isenta)"),
+    ("LCA - C - BANCO X S/A", "04", "03", "LCA (renda fixa isenta)"),
+    ("CRI - C - OPEA SECURITIZADORA S/A", "04", "03", "CRI (renda fixa isenta)"),
+    ("CRA - C - OPEA SECURITIZADORA S/A", "04", "03", "CRA (renda fixa isenta)"),
+    ("CDB - C - BANCO X S/A", "04", "02", "CDB (renda fixa tributada)"),
+    ("RDB - C - BANCO X S/A", "04", "02", "RDB (renda fixa tributada)"),
+    ("LC - C - BANCO X S/A", "04", "02", "LC (renda fixa tributada)"),
+    ("LF - C - BANCO X S/A", "04", "02", "LF (renda fixa tributada)"),
+    ("LFT - C - TESOURO NACIONAL", "04", "02", "LFT (Tesouro Direto)"),
+    ("LTN - C - TESOURO NACIONAL", "04", "02", "LTN (Tesouro Direto)"),
+    ("NTN - C - TESOURO NACIONAL", "04", "02", "NTN (Tesouro Direto)"),
+    ("Tesouro - Selic - TESOURO NACIONAL", "04", "02", "TESOURO (Tesouro Direto)"),
+    ("DEB - C - EMPRESA X S/A", "04", "03", "Debênture incentivada"),
+    # No ' - ' separator: the whole title is the prefix, which no bucket names,
+    # so it falls back to tributado under its own name.
+    ("Tesouro Selic 2029", "04", "02", "TESOURO SELIC 2029"),
+])
+def test_each_prefix_lands_on_its_irpf_codigo_and_label(book, produto, grupo, codigo, label):
+    r = only(book([["Credito", "01/06/2025", "APLICAÇÃO", produto,
+                    "XP", 1, 1_000.00, 1_000.00]]))
+    assert (r["irpf_grupo"], r["irpf_codigo"], r["kind_label"]) == (grupo, codigo, label)

@@ -143,3 +143,57 @@ async def test_no_sleeves_is_a_409(clear_sleeve_cache):
         with pytest.raises(HTTPException) as exc:
             await routes._combined_target(s, uuid.uuid4())
     assert exc.value.status_code == 409
+
+
+# ── What _advise_strategy actually shells ─────────────────────────────────────
+# A non-default cadence reaches the engine as `--params {"rebalance_freq": ...}`;
+# 'ME' (the default) passes no params at all, so the monthly path stays identical
+# to a plain advise_weights call.
+
+def _fake_run_script(calls, returncode=0, stdout='progress\n{"weights": {"X": 1.0}}\n',
+                     stderr=""):
+    import subprocess
+
+    def fake(script, args, extra_env=None):
+        calls.append((script, args, extra_env))
+        return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
+    return fake
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("freq, argv", [
+    ("ME", ["S"]),
+    ("QE", ["S", "--params", '{"rebalance_freq": "QE"}']),
+])
+async def test_advise_strategy_threads_the_cadence_as_params(monkeypatch, freq, argv):
+    from platform_app import enginerun
+
+    calls: list = []
+    monkeypatch.setattr(enginerun, "run_script", _fake_run_script(calls))
+    out = await routes._advise_strategy("S", freq, {"ENGINE_USER_SPECS_DIR": "/d"})
+    assert out == {"weights": {"X": 1.0}}
+    assert calls == [("advise_weights.py", argv, {"ENGINE_USER_SPECS_DIR": "/d"})]
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize("freq", ["ME", "W-FRI"])
+async def test_advise_strategy_failures(monkeypatch, freq):
+    """Exit 3 is the needs-fundamentals signal (a clean 422 upstream); any other
+    non-zero exit is a 500 carrying the tail of the engine's output."""
+    from fastapi import HTTPException
+
+    from platform_app import enginerun
+
+    monkeypatch.setattr(enginerun, "run_script", _fake_run_script(
+        [], returncode=3, stdout="",
+        stderr='{"strategy": "Two-Leg", "message": "sem fundamentos"}'))
+    with pytest.raises(enginerun.EngineNeedsFundamentals) as nf:
+        await routes._advise_strategy("S", freq)
+    assert (nf.value.strategy, nf.value.message) == ("Two-Leg", "sem fundamentos")
+
+    monkeypatch.setattr(enginerun, "run_script", _fake_run_script(
+        [], returncode=1, stdout="", stderr="Traceback: boom"))
+    with pytest.raises(HTTPException) as exc:
+        await routes._advise_strategy("S", freq)
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "advise_weights failed: Traceback: boom"

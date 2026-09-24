@@ -244,7 +244,7 @@ def _build_trades(
 def _build_shared(start: str, end: str, freq: str, needs_funds: bool):
     """Install the benchmark stubs and build the market plane once."""
     offline = os.environ.get("ENGINE_BENCH_OFFLINE") == "1"
-    _install_benchmark_stubs(start, end, offline)
+    _install_benchmark_stubs(offline)
     from backtests.core.shared_data import build_shared_data
 
     db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")

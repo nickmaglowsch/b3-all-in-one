@@ -255,26 +255,6 @@ class LazyShared(dict):
         """Register ``key`` as built by ``build()`` on first read."""
         self._thunks[key] = build
 
-    def defer_group(self, keys, build) -> None:
-        """Register keys that are built together — one read, several frames.
-
-        Reading any one of them runs ``build()`` once (it returns a dict keyed by
-        those names), installs all of them and clears the whole group's thunks,
-        so the second key is a plain dict hit. Registering them as independent
-        thunks would run the read once per key instead.
-        """
-        keys = tuple(keys)
-
-        def _one(key):
-            values = build()
-            for name in keys:
-                self._thunks.pop(name, None)
-                dict.__setitem__(self, name, values[name])
-            return dict.__getitem__(self, key)
-
-        for key in keys:
-            self._thunks[key] = functools.partial(_one, key)
-
     def alias(self, key: str, target: str) -> None:
         """Register ``key`` as another name for ``target``.
 
@@ -320,9 +300,8 @@ class LazyShared(dict):
     def _force(self) -> None:
         """Build every pending frame. The price of asking for the whole bundle.
 
-        Pops rather than reading through ``__missing__``: a grouped thunk installs
-        its siblings' values directly, so their entries are already present and
-        reading them would never retire the thunk — this loop would not end.
+        Pops rather than reading through ``__missing__``, and never overwrites a
+        value already set under a still-registered key.
         """
         while self._thunks:
             key, build = self._thunks.popitem()

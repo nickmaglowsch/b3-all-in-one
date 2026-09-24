@@ -13,26 +13,18 @@ The response stays a bare array: the frontend consumes these as ImportRow[] and
 BacktestRun[], and an envelope would be a breaking change bought for nothing.
 A caller detects truncation the usual way, len(result) == limit.
 """
+from functools import partial
+
 import pytest
 
 from platform_app.billing import SELLABLE as ALL_MODULES
+from tests.conftest import auth
 
-PASSWORD = "correct-horse-battery-staple"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-async def _auth(client, email: str, modules: list[str] | None = None) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    # /backtests is gated on needs_bench.
-    assert (await client.post(
-        "/billing/dev-modules",
-        json={"modules": modules if modules is not None else list(ALL_MODULES)},
-        headers=headers)).status_code == 200
-    return headers
+# /backtests is gated on needs_bench.
+_auth = partial(auth, modules=ALL_MODULES)
 
 
 async def _upload(client, headers, name: str) -> None:
@@ -118,3 +110,17 @@ async def test_default_limit_is_applied(client, path):
               for m in limit.metadata for a in ("ge", "le") if hasattr(m, a)}
     assert limit.default == 200, f"{path} default limit is {limit.default}"
     assert bounds == {"Ge": 1, "Le": 500}, f"{path} bounds are {bounds}"
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_trades_sort_is_allow_listed_and_says_which_values_exist(client):
+    headers = await _auth(client, "listbounds-trade-sort@example.com")
+    r = await client.get("/portfolio/trades?sort=bogus", headers=headers)
+    assert r.status_code == 422
+    assert r.json()["detail"] == (
+        "sort inválido: bogus. Use um de date, side, market, broker, ticker, qty, "
+        "price, amount.")
+    for col in ("date", "side", "market", "broker", "ticker", "qty", "price", "amount"):
+        for d in ("asc", "desc"):
+            r = await client.get(f"/portfolio/trades?sort={col}&dir={d}", headers=headers)
+            assert r.status_code == 200, (col, d, r.text)

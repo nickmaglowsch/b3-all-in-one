@@ -192,3 +192,103 @@ async def test_get_builtin_spec_for_clone(client):
 
     # Unknown name → 404.
     assert (await client.get("/strategies/NoSuchStrategy/spec")).status_code == 404
+
+
+# ── The list_*.py shell-outs, faked ───────────────────────────────────────────
+# Built-ins, the per-tenant gallery and the signal catalog each run one engine
+# listing script whose stdout is a JSON array; a failure is a 500 naming it.
+
+def _fake_list(calls, returncode=0, stdout="[]", stderr=""):
+    import subprocess
+
+    def fake(script, args, extra_env=None):
+        calls.append((script, args, extra_env))
+        return subprocess.CompletedProcess(args, returncode, stdout=stdout, stderr=stderr)
+    return fake
+
+
+@pytest.mark.parametrize("call, script", [
+    ("builtins", "list_strategies"), ("signals", "list_signals")])
+async def test_a_failed_listing_is_a_500_naming_the_script(monkeypatch, call, script):
+    from fastapi import HTTPException
+
+    from platform_app import enginerun, routes
+
+    monkeypatch.setattr(routes, "_STRATEGIES_CACHE", None)
+    monkeypatch.setattr(routes, "_SIGNALS_CACHE", None)
+    monkeypatch.setattr(enginerun, "run_script", _fake_list([], 1, "out", "err"))
+    fn = routes._builtins if call == "builtins" else routes.list_signals
+    with pytest.raises(HTTPException) as exc:
+        await fn()
+    assert (exc.value.status_code, exc.value.detail) == (500, f"{script} failed: err")
+
+
+async def test_listings_are_parsed_tagged_and_cached(monkeypatch):
+    from platform_app import enginerun, routes
+
+    monkeypatch.setattr(routes, "_STRATEGIES_CACHE", None)
+    monkeypatch.setattr(routes, "_SIGNALS_CACHE", None)
+    calls: list = []
+    monkeypatch.setattr(enginerun, "run_script",
+                        _fake_list(calls, stdout='[{"name": "B"}]'))
+    assert await routes._builtins() == [{"name": "B", "source": "builtin"}]
+    assert await routes.list_signals() == [{"name": "B"}]
+    await routes._builtins()
+    await routes.list_signals()
+    assert calls == [("list_strategies.py", [], None), ("list_signals.py", [], None)]
+
+
+async def test_tenant_gallery_points_the_engine_at_the_users_specs(monkeypatch):
+    import uuid
+
+    from fastapi import HTTPException
+
+    from platform_app import enginerun, routes
+    from platform_app.db import async_session_maker
+    from platform_app.models import UserStrategy
+
+    tid = uuid.uuid4()
+    async with async_session_maker() as s:
+        s.add(UserStrategy(tenant_id=tid, name="Mine", kind="rank_and_hold", spec={"a": 1}))
+        await s.commit()
+
+    calls: list = []
+    monkeypatch.setattr(enginerun, "run_script", _fake_list(
+        calls, stdout='[{"name": "B"}, {"name": "Mine"}]'))
+    async with async_session_maker() as s:
+        merged = await routes._gallery(s, tid)
+    assert merged == [{"name": "B", "source": "builtin"}, {"name": "Mine", "source": "user"}]
+    (script, args, env), = calls
+    assert (script, args) == ("list_strategies.py", [])
+    assert set(env) == {"ENGINE_USER_SPECS_DIR"}
+    assert env["ENGINE_USER_SPECS_DIR"].endswith(f"user_specs/{tid}")
+
+    routes._TENANT_GALLERY.pop(tid, None)
+    monkeypatch.setattr(enginerun, "run_script", _fake_list([], 1, "", "bad spec"))
+    async with async_session_maker() as s:
+        with pytest.raises(HTTPException) as exc:
+            await routes._gallery(s, tid)
+    assert exc.value.detail == "list_strategies failed: bad spec"
+
+
+async def test_foreign_junk_and_unknown_strategy_ids_are_the_same_404(client):
+    import uuid
+
+    from platform_app.db import async_session_maker
+    from platform_app.models import UserStrategy
+
+    h = await _headers(client)
+    async with async_session_maker() as s:
+        foreign = UserStrategy(tenant_id=uuid.uuid4(), name="Theirs",
+                               kind="fixed_weight", spec={})
+        s.add(foreign)
+        await s.commit()
+    for sid in ("junk", str(uuid.uuid4()), str(foreign.id)):
+        for method, path, body in (
+            ("PUT", f"/strategies/user/{sid}", _rank("Whatever")),
+            ("DELETE", f"/strategies/user/{sid}", None),
+            ("POST", f"/strategies/user/{sid}/promote", None),
+        ):
+            r = await client.request(method, path, json=body, headers=h)
+            assert (r.status_code, r.json()) == (404, {"detail": "strategy not found"}), (
+                method, path)

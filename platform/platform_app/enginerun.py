@@ -94,21 +94,38 @@ def run_module(
     )
 
 
+def _json_or_raise(proc: subprocess.CompletedProcess) -> dict:
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
+    return subprocs.last_json(proc.stdout, strict=True)
+
+
+def run_json(script: str, args: list[str], extra_env: dict | None = None) -> dict:
+    """run_script, answered with the JSON object the script printed. Raises
+    RuntimeError carrying the tail of its output on a non-zero exit (callers map
+    it to HTTP or swallow it). Blocking — call via to_thread."""
+    return _json_or_raise(run_script(script, args, extra_env))
+
+
 def advise_weights(
     *,
     strategy: str | None = None,
+    params: dict | None = None,
     weights: dict | None = None,
     positions: dict | None = None,
     nav_cash: float = 0.0,
     extra_env: dict | None = None,
 ) -> dict:
     """Run scripts/advise_weights.py and return its parsed JSON. Pass either a
-    ``strategy`` name (signals) or fixed ``weights`` (no signals). When
+    ``strategy`` name (signals, optionally overridden by ``params``, e.g.
+    ``{"rebalance_freq": "QE"}``) or fixed ``weights`` (no signals). When
     ``positions`` is given the payload also carries a trade list + valuations.
     Raises RuntimeError on a non-zero exit (caller maps to HTTP)."""
     args: list[str] = []
     if strategy:
         args.append(strategy)
+    if params is not None:
+        args += ["--params", json.dumps(params)]
     if weights is not None:
         args += ["--weights", json.dumps(weights)]
     if positions is not None:
@@ -116,9 +133,7 @@ def advise_weights(
     proc = run_script("advise_weights.py", args, extra_env)
     if proc.returncode == NEEDS_FUNDAMENTALS_EXIT:
         raise _needs_fundamentals(proc.stderr, strategy)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout)[-2000:])
-    return subprocs.last_json(proc.stdout, strict=True)
+    return _json_or_raise(proc)
 
 
 def _needs_fundamentals(stderr: str, strategy: str | None) -> EngineNeedsFundamentals:

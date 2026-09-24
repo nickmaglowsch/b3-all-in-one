@@ -5,28 +5,21 @@ import numpy as np
 import pandas as pd
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
-    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-    COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_REBALANCE_FREQ,
+    COMMON_RUN_SPECS, COMMON_REBALANCE_FREQ,
 )
 from backtests.core.data import download_benchmark
 
 
 class DualMomentumStrategy(StrategyBase):
-    @property
-    def name(self) -> str:
-        return "DualMomentum"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Dual Momentum (Antonacci). Each month, compares N-month momentum of IBOV vs IVVB11 (S&P in BRL). "
-            "Allocates 100% to the winner. If both are negative, moves to CDI (absolute momentum filter)."
-        )
+    name = "DualMomentum"
+    description = (
+        "Dual Momentum (Antonacci). Each month, compares N-month momentum of IBOV vs IVVB11 (S&P in BRL). "
+        "Allocates 100% to the winner. If both are negative, moves to CDI (absolute momentum filter)."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
-            COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
-            COMMON_TAX_RATE, COMMON_SLIPPAGE, COMMON_REBALANCE_FREQ,
+            *COMMON_RUN_SPECS, COMMON_REBALANCE_FREQ,
             ParameterSpec(
                 "lookback_months", "Momentum Lookback (months)", "int", 3,
                 description="Months of return history for the dual-momentum comparison",

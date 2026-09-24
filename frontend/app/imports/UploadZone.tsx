@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import { IconUpload, IconSpinner, IconAlert } from "@/components/icons";
 
 type Created = { id: string; filename: string; kind: string; status: string };
@@ -26,7 +26,7 @@ export function UploadZone() {
     },
     onError: (e) => {
       setPending([]);
-      setError(e instanceof ApiError ? e.message : "Falha ao enviar os arquivos.");
+      setError(errorText(e, "Falha ao enviar os arquivos."));
     },
   });
 

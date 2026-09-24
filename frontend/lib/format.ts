@@ -61,3 +61,30 @@ export function formatDateTime(iso: string | null | undefined): string {
   if (Number.isNaN(d.getTime())) return iso;
   return dateTime.format(d).replace(", ", " às ");
 }
+
+// Engine metric %-number (8.9 → "8,9%"), not a fraction. Signed prefixes an
+// explicit +; a missing metric reads "—".
+export function formatMetricPct(n: number | null, signed = false): string {
+  if (n == null) return "—";
+  const s = n.toLocaleString("pt-BR", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+  return `${signed && n > 0 ? "+" : ""}${s}%`;
+}
+
+export const formatRatio = (n: number | null) =>
+  n == null ? "—" : n.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// Compact BRL for chart axes / bar labels (NAV runs into 6-7 figures).
+export function compactBRL(v: number): string {
+  const a = Math.abs(v);
+  const sign = v < 0 ? "-" : "";
+  if (a >= 1e6) return `${sign}R$ ${(a / 1e6).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mi`;
+  if (a >= 1e3) return `${sign}R$ ${(a / 1e3).toLocaleString("pt-BR", { maximumFractionDigits: 0 })} mil`;
+  return `${sign}R$ ${a.toLocaleString("pt-BR", { maximumFractionDigits: 0 })}`;
+}
+
+// Rebalance frequencies: the engine's freq codes, mensal / trimestral / semanal.
+export const REBALANCE_FREQS = [
+  { value: "ME", label: "Mensal" },
+  { value: "QE", label: "Trimestral" },
+  { value: "W-FRI", label: "Semanal" },
+] as const;

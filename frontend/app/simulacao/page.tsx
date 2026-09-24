@@ -12,14 +12,16 @@ import { LineSeries } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { useChartMode } from "@/components/charts/ChartMode";
 import { IconClock, IconChart } from "@/components/icons";
-import { ApiError } from "@/lib/api";
-import { formatDate } from "@/lib/format";
-import type { Strategy } from "@/lib/types";
+import { errorText } from "@/lib/api";
 import {
-  FREQS,
+  REBALANCE_FREQS,
   compactBRL,
+  formatDate,
   formatMetricPct,
   formatRatio,
+} from "@/lib/format";
+import type { Strategy } from "@/lib/types";
+import {
   overlayCurves,
   totalReturn,
   useRunWhatIf,
@@ -60,11 +62,7 @@ export default function SimulacaoPage() {
   }
 
   const errMsg =
-    run.error instanceof ApiError
-      ? run.error.message
-      : run.error
-        ? "Falha ao rodar a simulação."
-        : null;
+    run.error ? errorText(run.error, "Falha ao rodar a simulação.") : null;
 
   return (
     <>
@@ -120,7 +118,7 @@ export default function SimulacaoPage() {
                 onChange={(e) => setFreq(e.target.value)}
                 className="w-full rounded-md border border-hairline bg-paper px-2.5 py-2 text-sm text-ink focus:border-navy focus:outline-none"
               >
-                {FREQS.map((f) => (
+                {REBALANCE_FREQS.map((f) => (
                   <option key={f.value} value={f.value}>
                     {f.label} ({f.value})
                   </option>

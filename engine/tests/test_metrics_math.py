@@ -171,13 +171,3 @@ def test_a_downloaded_etf_sleeve_is_taken_from_the_frame_that_carries_it():
         tw, initial_capital=100.0)
     assert nav.iloc[-1] == pytest.approx(50.0 + 55.0)
 
-
-def test_display_prints_a_row_for_every_metric_and_a_column_per_strategy(capsys):
-    a = m.build_metrics(monthly(0.05, -0.03), "Pre-Tax")
-    b = m.build_metrics(monthly(0.04, -0.02), "After-Tax")
-    m.display_metrics_table([a, b])
-    out = capsys.readouterr().out
-    assert "Pre-Tax" in out and "After-Tax" in out
-    for key in a:
-        if key != "Strategy":
-            assert key in out

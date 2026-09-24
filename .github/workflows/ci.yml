@@ -205,8 +205,8 @@ jobs:
       - run: cd frontend && npm ci
       - run: cd frontend && npm test
       # Green as of this commit. The `complexity` rule is a warning, not an error —
-      # its 18 pre-existing offenders are ratcheted by scripts/quality_gates.py
-      # instead, which is what fails a PR that adds a nineteenth.
+      # its 16 pre-existing offenders are ratcheted by scripts/quality_gates.py
+      # instead, which is what fails a PR that adds a seventeenth.
       - run: cd frontend && npm run lint
       # Type-checks, and with `output: "export"` also proves every route is
       # still prerenderable.

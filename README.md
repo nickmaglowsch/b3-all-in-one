@@ -423,8 +423,8 @@ sit on:
 | Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
 | Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, max 6 survivors | `ci.yml` |
 
-**The two structural gates are ratchets, not walls.** The repo has 63 functions over
-complexity 10 (45 Python, 18 TSX) and 28 modules over 400 lines today;
+**The two structural gates are ratchets, not walls.** The repo has 53 functions over
+complexity 10 (37 Python, 16 TSX) and 25 modules over 400 lines today;
 `scripts/quality_baseline.json` records every one. A PR fails if a baselined offender
 gets worse or a new one appears — never for the debt that was already there. After a
 genuine improvement:

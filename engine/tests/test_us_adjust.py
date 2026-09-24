@@ -123,3 +123,16 @@ def test_without_splits_nothing_is_adjusted_at_all():
     assert state == us_adjust.UNADJUSTED
     assert list(out["adj_close"]) == list(APPLE["close"])
     assert list(out["split_adj_close"]) == list(APPLE["close"])
+
+
+def test_backward_cumulative_is_a_clamped_strict_suffix_product():
+    ex = np.array(["2020-01-02", "2020-01-04"], dtype="datetime64[ns]")
+    dates = np.array(["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-05"],
+                     dtype="datetime64[ns]")
+    out = us_adjust._backward_cumulative(ex, np.array([0.5, 0.25]), dates)
+    assert out.tolist() == [0.125, 0.25, 0.25, 1.0]
+    # Beyond the bound is bad vendor data, so the product is clamped per step.
+    big = us_adjust._backward_cumulative(ex, np.array([1e3, 1e3]), dates)
+    assert big.tolist() == [100_000.0, 1e3, 1e3, 1.0]
+    tiny = us_adjust._backward_cumulative(ex, np.array([1e-3, 1e-3]), dates)
+    assert tiny.tolist() == [1e-5, 1e-3, 1e-3, 1.0]

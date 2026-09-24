@@ -12,17 +12,10 @@ import pandas as pd
 import pytest
 
 from b3_pipeline.cvm_parser import parse_dfp_zip, parse_itr_zip, parse_fre_zip
+from tests.conftest import csv_bytes
 
 
 # ── Fixture helpers ────────────────────────────────────────────────────────────
-
-def _csv_bytes(rows: list[dict]) -> bytes:
-    """Convert a list of dicts to semicolon-delimited CSV bytes (latin-1)."""
-    buf = io.StringIO()
-    df = pd.DataFrame(rows)
-    df.to_csv(buf, sep=";", index=False)
-    return buf.getvalue().encode("latin-1")
-
 
 def _make_fake_dfp_zip(
     dre_rows: list[dict],
@@ -32,9 +25,9 @@ def _make_fake_dfp_zip(
     """Build an in-memory ZIP with synthetic DRE/BPA/BPP CSVs."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("dfp_cia_aberta_DRE_con_2023.csv", _csv_bytes(dre_rows))
-        zf.writestr("dfp_cia_aberta_BPA_con_2023.csv", _csv_bytes(bpa_rows))
-        zf.writestr("dfp_cia_aberta_BPP_con_2023.csv", _csv_bytes(bpp_rows))
+        zf.writestr("dfp_cia_aberta_DRE_con_2023.csv", csv_bytes(dre_rows))
+        zf.writestr("dfp_cia_aberta_BPA_con_2023.csv", csv_bytes(bpa_rows))
+        zf.writestr("dfp_cia_aberta_BPP_con_2023.csv", csv_bytes(bpp_rows))
     buf.seek(0)
     return buf
 
@@ -42,9 +35,9 @@ def _make_fake_dfp_zip(
 def _make_fake_itr_zip(dre_rows, bpa_rows, bpp_rows) -> io.BytesIO:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("itr_cia_aberta_DRE_con_2023.csv", _csv_bytes(dre_rows))
-        zf.writestr("itr_cia_aberta_BPA_con_2023.csv", _csv_bytes(bpa_rows))
-        zf.writestr("itr_cia_aberta_BPP_con_2023.csv", _csv_bytes(bpp_rows))
+        zf.writestr("itr_cia_aberta_DRE_con_2023.csv", csv_bytes(dre_rows))
+        zf.writestr("itr_cia_aberta_BPA_con_2023.csv", csv_bytes(bpa_rows))
+        zf.writestr("itr_cia_aberta_BPP_con_2023.csv", csv_bytes(bpp_rows))
     buf.seek(0)
     return buf
 
@@ -52,7 +45,7 @@ def _make_fake_itr_zip(dre_rows, bpa_rows, bpp_rows) -> io.BytesIO:
 def _make_fake_fre_zip(capital_rows: list[dict]) -> io.BytesIO:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr("fre_cia_aberta_capital_social_2023.csv", _csv_bytes(capital_rows))
+        zf.writestr("fre_cia_aberta_capital_social_2023.csv", csv_bytes(capital_rows))
     buf.seek(0)
     return buf
 
@@ -446,3 +439,59 @@ def test_parse_fre_zip_zero_shares_stored_as_null():
     assert shares is None or (isinstance(shares, float) and math.isnan(shares)), (
         f"Expected NaN/None for zero shares, got {shares}"
     )
+
+
+# ── Shared CNPJ / date helpers ────────────────────────────────────────────────
+
+_DATE_CASES = [
+    (None, None), (float("nan"), None), (pd.NaT, None), ("", None), ("  ", None),
+    ("None", None), ("nan", None), ("NaT", None), (0, None), ("garbage", None),
+    ("2024-01-31", "2024-01-31"), (" 2024-01-31 ", "2024-01-31"),
+    ("31/01/2024", "2024-01-31"), ("2024-02-30", None),
+]
+_CNPJ_CASES = [
+    (None, None), ("", None), ("123", None), ("33.000.167/0001-01", "33000167000101"),
+    ("33000167000101", "33000167000101"), ("330001670001011", None),
+]
+
+
+@pytest.mark.parametrize("module", ["cvm_parser", "cad_parser", "ipe_parser", "fca_parser"])
+def test_parse_date_behaviour_table(module):
+    import importlib
+    parse = importlib.import_module(f"b3_pipeline.{module}")._parse_date
+    for val, expected in _DATE_CASES:
+        assert parse(val) == expected, (module, val)
+
+
+@pytest.mark.parametrize("module", ["cvm_parser", "cad_parser", "ipe_parser", "fca_parser"])
+def test_clean_cnpj_behaviour_table(module):
+    import importlib
+    clean = importlib.import_module(f"b3_pipeline.{module}")._clean_cnpj
+    for raw, expected in _CNPJ_CASES:
+        assert clean(raw) == expected, (module, raw)
+
+
+def test_cnpj_and_date_helpers_have_one_definition():
+    from b3_pipeline import cad_parser, cvm_parser, ipe_parser
+    for mod in (cad_parser, ipe_parser):
+        assert mod._clean_cnpj is cvm_parser._clean_cnpj
+        assert mod._parse_date is cvm_parser._parse_date
+
+
+def test_open_zip_source_names_path_and_rewinds_buffer(tmp_path):
+    from b3_pipeline.cvm_parser import _open_zip_source
+
+    buf = _make_fake_dfp_zip(BASE_DRE, BASE_BPA, BASE_BPP)
+    buf.read()  # a consumed buffer must be rewound before opening
+    name, zf = _open_zip_source(buf)
+    with zf:
+        assert name == "in-memory"
+        assert "dfp_cia_aberta_DRE_con_2023.csv" in zf.namelist()
+
+    path = tmp_path / "dfp_cia_aberta_2023.zip"
+    path.write_bytes(buf.getvalue())
+    for arg in (path, str(path)):
+        name, zf = _open_zip_source(arg)
+        with zf:
+            assert name == "dfp_cia_aberta_2023.zip"
+            assert len(zf.namelist()) == 3

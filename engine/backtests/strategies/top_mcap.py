@@ -36,18 +36,13 @@ class TopMarketCapStrategy(StrategyBase):
     # Market cap = split-adjusted shares x price; shares come from fundamentals_pit.
     needs_fundamentals: bool = True
 
-    @property
-    def name(self) -> str:
-        return "Top Market Cap"
-
-    @property
-    def description(self) -> str:
-        return (
-            "Holds the N largest B3 companies by point-in-time market cap "
-            "(split-adjusted shares x raw close, most liquid share class per "
-            "company). No earnings filters. Customizable rebalance frequency; "
-            "market-cap or equal weighting. Requires fundamentals_pit."
-        )
+    name = "Top Market Cap"
+    description = (
+        "Holds the N largest B3 companies by point-in-time market cap "
+        "(split-adjusted shares x raw close, most liquid share class per "
+        "company). No earnings filters. Customizable rebalance frequency; "
+        "market-cap or equal weighting. Requires fundamentals_pit."
+    )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [

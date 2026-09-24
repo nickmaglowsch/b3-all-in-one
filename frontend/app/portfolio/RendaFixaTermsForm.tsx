@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "@/lib/api";
+import { api, errorText } from "@/lib/api";
 import type { RendaFixaTerm } from "@/lib/types";
 
 /**
@@ -136,7 +136,7 @@ export function RendaFixaTermsForm({ tickers }: { tickers: string[] }) {
       </ul>
       {save.error && (
         <p className="mt-2 text-xs text-loss" role="alert">
-          {save.error instanceof ApiError ? save.error.message : "Falha ao salvar."}
+          {errorText(save.error, "Falha ao salvar.")}
         </p>
       )}
     </div>

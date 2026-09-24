@@ -142,6 +142,13 @@ COLUMN_MAP = {
     "Valor":                   "amount",
 }
 
+# Internal schemas every trades / cash_events frame is cut to, whichever report
+# or override file it came from, so they concat cleanly downstream.
+TRADE_COLS = ["date", "side", "market", "maturity", "broker", "ticker",
+              "qty", "price", "amount", "signed_qty", "__source_file"]
+EVENT_COLS = ["date", "ticker", "event_type", "event_category", "is_amortization",
+              "qty", "price", "amount", "broker", "__source_file"]
+
 
 # ---------------------------------------------------------------------------
 # Movimentação support
@@ -312,10 +319,7 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     trade_rows["maturity"] = "-"
     trade_rows["signed_qty"] = np.where(
         trade_rows["side"] == "Compra", trade_rows["qty"], -trade_rows["qty"])
-    trades = trade_rows[[
-        "date", "side", "market", "maturity", "broker", "ticker",
-        "qty", "price", "amount", "signed_qty", "__source_file",
-    ]]
+    trades = trade_rows[TRADE_COLS]
 
     # Everything that's not a trade or skip becomes a cash_events row. That
     # bucket includes income, reembolso, amortization, qty_event and "other".
@@ -330,11 +334,10 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     cash_rows = cash_rows.dropna(subset=["date", "ticker"])
     # event_type stays human-readable so users can grep cash_events.csv later.
     cash_rows["event_type"] = cash_rows["mov_type"]
-    # Map internal category -> stable public label written to CSV.
-    _label = {"cash": "income", "reembolso": "reembolso",
-              "amort": "amortization", "qty_event": "qty_event",
-              "other": "other", "frozen": "frozen"}
-    cash_rows["event_category"] = cash_rows["category"].map(_label)
+    # Map internal category -> stable public label written to CSV (the rest
+    # are already their own label).
+    cash_rows["event_category"] = cash_rows["category"].replace(
+        {"cash": "income", "amort": "amortization"})
     # is_amortization stays for backwards compatibility with older code paths.
     cash_rows["is_amortization"] = cash_rows["category"] == "amort"
     # For qty_events, sign the quantity using Entrada/Saída: Credito = +,
@@ -349,10 +352,7 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
         # qty_events have no monetary value; coerce nan/'-' to 0 for clean CSV.
         cash_rows.loc[qty_mask, "amount"] = 0.0
 
-    cash_events = cash_rows[[
-        "date", "ticker", "event_type", "event_category", "is_amortization",
-        "qty", "price", "amount", "broker", "__source_file",
-    ]]
+    cash_events = cash_rows[EVENT_COLS]
 
     return trades, cash_events
 
@@ -513,7 +513,7 @@ def _resolve_exercise_underlying(
     exercises: pd.DataFrame,
     mov_settlements: pd.DataFrame,
     window_days: int = 5,
-) -> tuple[dict, list]:
+) -> dict:
     """Match each Negociação exercise row to its Movimentação settlement row.
 
     Negociação records option exercises under the option-series code
@@ -522,14 +522,13 @@ def _resolve_exercise_underlying(
     qty+price within a small date window and return {exercise_idx: underlying}.
     """
     if exercises.empty or mov_settlements.empty:
-        return {}, list(exercises.index)
+        return {}
 
     s = mov_settlements.copy()
     s["date"] = pd.to_datetime(s["date"])
     s = s.dropna(subset=["date", "ticker", "qty", "price"])
 
     resolved: dict = {}
-    unresolved: list = []
     used: set = set()
     for ex_idx, ex in exercises.iterrows():
         ex_date = pd.to_datetime(ex["date"])
@@ -544,12 +543,19 @@ def _resolve_exercise_underlying(
         )
         candidates = s[mask]
         if candidates.empty:
-            unresolved.append(ex_idx)
             continue
         best = candidates.sort_values("date").iloc[0]
         resolved[ex_idx] = best["ticker"]
         used.add(best.name)
-    return resolved, unresolved
+    return resolved
+
+
+EMPTY_OPT_STATS = {
+    "exercises_resolved": 0,
+    "exercises_unresolved": 0,
+    "option_trades_processed": 0,
+    "net_premium_brl": 0.0,
+}
 
 
 def process_option_activity(
@@ -571,14 +577,8 @@ def process_option_activity(
 
     Returns (clean_trades, premium_events, unresolved_details, stats).
     """
-    empty_stats = {
-        "exercises_resolved": 0,
-        "exercises_unresolved": 0,
-        "option_trades_processed": 0,
-        "net_premium_brl": 0.0,
-    }
     if neg_trades.empty:
-        return neg_trades, pd.DataFrame(), [], empty_stats
+        return neg_trades, pd.DataFrame(), [], dict(EMPTY_OPT_STATS)
 
     market = neg_trades["market"].fillna("").astype(str)
     is_exercise = market.str.startswith("Exercício")
@@ -589,7 +589,7 @@ def process_option_activity(
     premiums = neg_trades[is_premium].copy()
 
     # Resolve each exercise's underlying ticker via the Mov settlement row.
-    resolved, _ = _resolve_exercise_underlying(exercises, mov_settlements)
+    resolved = _resolve_exercise_underlying(exercises, mov_settlements)
     rewritten_rows = []
     unresolved_details: list = []
     for ex_idx, ex in exercises.iterrows():
@@ -637,9 +637,9 @@ def process_option_activity(
                                             premiums["qty"]).values,
             "price":           premiums["price"].values,
             "amount":          signed_amount.values,
-            "broker":          premiums.get("broker", "").values
+            "broker":          premiums["broker"].values
                                if "broker" in premiums else "",
-            "__source_file":   premiums.get("__source_file", "").values
+            "__source_file":   premiums["__source_file"].values
                                if "__source_file" in premiums else "",
         })
 
@@ -670,14 +670,8 @@ def read_overrides(
     the same internal schema as Negociação trades / cash_events so they
     concat cleanly with the rest of the pipeline.
     """
-    empty_trades = pd.DataFrame(columns=[
-        "date", "side", "market", "maturity", "broker", "ticker",
-        "qty", "price", "amount", "signed_qty", "__source_file",
-    ])
-    empty_adjusts = pd.DataFrame(columns=[
-        "date", "ticker", "event_type", "event_category", "is_amortization",
-        "qty", "price", "amount", "broker", "__source_file",
-    ])
+    empty_trades = pd.DataFrame(columns=TRADE_COLS)
+    empty_adjusts = pd.DataFrame(columns=EVENT_COLS)
     if not path.exists():
         return empty_trades, empty_adjusts
 
@@ -702,10 +696,7 @@ def read_overrides(
         trade_rows["__source_file"] = path.name
         trade_rows["signed_qty"] = np.where(
             trade_rows["side"] == "Compra", trade_rows["qty"], -trade_rows["qty"])
-        synthetic_trades = trade_rows[[
-            "date", "side", "market", "maturity", "broker", "ticker",
-            "qty", "price", "amount", "signed_qty", "__source_file",
-        ]]
+        synthetic_trades = trade_rows[TRADE_COLS]
     else:
         synthetic_trades = empty_trades
 
@@ -720,10 +711,7 @@ def read_overrides(
         adjust_rows["price"] = 0.0
         adjust_rows["broker"] = "override"
         adjust_rows["__source_file"] = path.name
-        synthetic_adjusts = adjust_rows[[
-            "date", "ticker", "event_type", "event_category", "is_amortization",
-            "qty", "price", "amount", "broker", "__source_file",
-        ]]
+        synthetic_adjusts = adjust_rows[EVENT_COLS]
     else:
         synthetic_adjusts = empty_adjusts
 
@@ -765,6 +753,61 @@ def consolidate_fractional(positions: pd.DataFrame) -> pd.DataFrame:
         .sort_values("ticker").reset_index(drop=True)
 
 
+def _position_timeline(
+    trades: pd.DataFrame,
+    cash_events: pd.DataFrame | None,
+    consolidate: bool,
+) -> pd.DataFrame:
+    """Trades + qty_events + amortizations as one frame, in walk order.
+
+    Each row carries:
+      kind ∈ {trade, qty_event, amort}
+      sq    = signed quantity change (buys+, sells-, qty_event signed already)
+      price = trade price (only used for kind=trade buys)
+      amount = cash amount (only used for kind=amort, deducted from cost)
+      market = trade rows only; events leave it NaN
+    """
+    def canonical(tickers: pd.Series) -> pd.Series:
+        # Strip *F suffix so fractional and round-lot rows roll up to the
+        # canonical ticker. We retain the most informative market label
+        # ("Mercado à Vista" wins) for display per consolidate_fractional().
+        if not consolidate:
+            return tickers
+        return tickers.astype(str).str.replace(_FRACTIONAL_RE, _ROUND_LOT, regex=True)
+
+    def frame(df: pd.DataFrame, kind: str, **cols) -> pd.DataFrame:
+        return pd.DataFrame({"ticker": canonical(df["ticker"]),
+                             "date": pd.to_datetime(df["date"]), "kind": kind,
+                             "sq": 0.0, "price": 0.0, "amount": 0.0, **cols})
+
+    t = trades.sort_values("date")
+    parts = [frame(t, "trade", sq=t["signed_qty"].astype(float),
+                   price=t["price"].astype(float), market=t["market"])]
+
+    if cash_events is not None and not cash_events.empty:
+        ce = cash_events
+        # qty_event rows: signed qty already populated by read_movimentacao.
+        if "event_category" in ce.columns:
+            qty_evs = ce[ce["event_category"] == "qty_event"]
+            amort_evs = ce[ce["event_category"] == "amortization"]
+        else:
+            # Backwards compat: older cash_events.csv without event_category.
+            qty_evs = ce.iloc[0:0]
+            amort_evs = ce[ce.get("is_amortization", pd.Series(False, index=ce.index)).fillna(False)]
+        parts += [
+            frame(qty_evs, "qty_event", sq=qty_evs["qty"].astype(float).fillna(0.0)),
+            frame(amort_evs, "amort", amount=amort_evs["amount"].astype(float).fillna(0.0)),
+        ]
+
+    timeline = pd.concat([p for p in parts if not p.empty], ignore_index=True)
+    timeline = timeline.dropna(subset=["date", "ticker"])
+    # Within a single date, apply trades first, then qty_events, then amorts
+    # (so a split applies to post-trade qty, and an amort applies after).
+    kind_order = {"trade": 0, "qty_event": 1, "amort": 2}
+    timeline["__order"] = timeline["kind"].map(kind_order)
+    return timeline.sort_values(["ticker", "date", "__order"]).reset_index(drop=True)
+
+
 def derive_positions(
     trades: pd.DataFrame,
     cash_events: pd.DataFrame | None = None,
@@ -794,75 +837,9 @@ def derive_positions(
     cols = ["ticker", "qty", "avg_cost", "total_cost", "market"]
     if trades.empty:
         return pd.DataFrame(columns=cols), []
-
-    t = trades.copy()
-    if consolidate:
-        # Strip *F suffix so fractional and round-lot trades roll up to the
-        # canonical ticker. We retain the most informative market label
-        # ("Mercado à Vista" wins) for display per consolidate_fractional().
-        t["ticker"] = t["ticker"].astype(str).str.replace(
-            _FRACTIONAL_RE, _ROUND_LOT, regex=True)
-
-    # Build a unified event timeline. Each row carries:
-    #   kind ∈ {trade, qty_event, amort}
-    #   sq    = signed quantity change (buys+, sells-, qty_event signed already)
-    #   price = trade price (only used for kind=trade buys)
-    #   amount = cash amount (only used for kind=amort, deducted from cost)
-    rows: list[dict] = []
-    for _, r in t.sort_values("date").iterrows():
-        rows.append({
-            "ticker": r["ticker"],
-            "date":   pd.to_datetime(r["date"]),
-            "kind":   "trade",
-            "sq":     float(r["signed_qty"]),
-            "price":  float(r["price"]),
-            "amount": 0.0,
-            "market": r["market"],
-        })
-
-    if cash_events is not None and not cash_events.empty:
-        ce = cash_events.copy()
-        if consolidate:
-            ce["ticker"] = ce["ticker"].astype(str).str.replace(
-                _FRACTIONAL_RE, _ROUND_LOT, regex=True)
-        # qty_event rows: signed qty already populated by read_movimentacao.
-        cat_col = ce["event_category"] if "event_category" in ce.columns else None
-        if cat_col is not None:
-            qty_evs = ce[cat_col == "qty_event"]
-            amort_evs = ce[cat_col == "amortization"]
-        else:
-            # Backwards compat: older cash_events.csv without event_category.
-            qty_evs = ce.iloc[0:0]
-            amort_evs = ce[ce.get("is_amortization", pd.Series(False, index=ce.index)).fillna(False)]
-        for _, r in qty_evs.iterrows():
-            rows.append({
-                "ticker": r["ticker"],
-                "date":   pd.to_datetime(r["date"]),
-                "kind":   "qty_event",
-                "sq":     float(r["qty"]) if pd.notna(r["qty"]) else 0.0,
-                "price":  0.0,
-                "amount": 0.0,
-                "market": None,
-            })
-        for _, r in amort_evs.iterrows():
-            rows.append({
-                "ticker": r["ticker"],
-                "date":   pd.to_datetime(r["date"]),
-                "kind":   "amort",
-                "sq":     0.0,
-                "price":  0.0,
-                "amount": float(r["amount"]) if pd.notna(r["amount"]) else 0.0,
-                "market": None,
-            })
-
-    timeline = pd.DataFrame(rows).dropna(subset=["date", "ticker"])
+    timeline = _position_timeline(trades, cash_events, consolidate)
     if timeline.empty:
         return pd.DataFrame(columns=cols), []
-    # Within a single date, apply trades first, then qty_events, then amorts
-    # (so a split applies to post-trade qty, and an amort applies after).
-    kind_order = {"trade": 0, "qty_event": 1, "amort": 2}
-    timeline["__order"] = timeline["kind"].map(kind_order)
-    timeline = timeline.sort_values(["ticker", "date", "__order"]).reset_index(drop=True)
 
     out_rows: list[dict] = []
     incomplete: list[str] = []
@@ -970,10 +947,7 @@ def main(argv: list[str]) -> int:
     # would double-count if combined naively, so we only fall back to
     # Movimentação trades when no Negociação file is present.
     used_movimentacao_for_trades = False
-    opt_stats: dict = {
-        "exercises_resolved": 0, "exercises_unresolved": 0,
-        "option_trades_processed": 0, "net_premium_brl": 0.0,
-    }
+    opt_stats: dict = dict(EMPTY_OPT_STATS)
     premium_events = pd.DataFrame()
     unresolved_exercises: list = []
     if neg_dfs:
@@ -1067,10 +1041,8 @@ def main(argv: list[str]) -> int:
 
     # ---- Cash events: combine, dedup, save ----
     cash_events = (
-        pd.concat(cash_dfs, ignore_index=True) if cash_dfs else pd.DataFrame(
-            columns=["date", "ticker", "event_type", "event_category",
-                     "is_amortization", "qty", "price", "amount", "broker",
-                     "__source_file"])
+        pd.concat(cash_dfs, ignore_index=True) if cash_dfs
+        else pd.DataFrame(columns=EVENT_COLS)
     )
     if not premium_events.empty:
         cash_events = pd.concat([cash_events, premium_events], ignore_index=True)

@@ -190,6 +190,11 @@ COMMON_REBALANCE_FREQ = ParameterSpec(
     description="Portfolio rebalancing frequency",
     choices=["ME", "QE", "W-FRI"],
 )
+# The run controls most strategies lead their form with, in this order.
+COMMON_RUN_SPECS = (
+    COMMON_START_DATE, COMMON_END_DATE, COMMON_INITIAL_CAPITAL,
+    COMMON_TAX_RATE, COMMON_SLIPPAGE,
+)
 # There is deliberately no COMMON_CONTRIBUTION. `run_simulation(contribution=)`
 # is real and takes a monthly buy-in (aporte), but no strategy has ever exposed
 # it as a parameter and no spec can reach it, so the ParameterSpec that sat here
@@ -287,18 +292,10 @@ class StrategyBase(ABC):
     # Every hand-written Python strategy inherits B3 with no edit. A spec-driven
     # one overrides it from its `market:` key.
     market: str = markets.DEFAULT
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Short unique name for the strategy (e.g. 'LowVol')."""
-        ...
-
-    @property
-    @abstractmethod
-    def description(self) -> str:
-        """Human-readable description shown in the UI."""
-        ...
+    # Short unique name (e.g. 'LowVol') and the UI description. An empty name
+    # marks an abstract base, which discovery skips.
+    name: str = ""
+    description: str = ""
 
     @abstractmethod
     def get_parameter_specs(self) -> list[ParameterSpec]:

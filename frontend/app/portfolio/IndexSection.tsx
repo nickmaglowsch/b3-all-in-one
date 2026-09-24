@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { IndexMetrics, PortfolioIndex } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, InvestorPlanLink, RetryButton } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
@@ -14,9 +13,9 @@ import { rebaseRows, summarize, yearsBetween } from "@/lib/chartRange";
 import { SERIES } from "@/components/charts/theme";
 import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
+import { useIncome } from "@/lib/hooks";
 import { INCOME_LABEL } from "./IncomeSection";
 import { RendaFixaTermsForm } from "./RendaFixaTermsForm";
-import type { IncomeRow } from "@/lib/types";
 
 const TITLE = "Rentabilidade vs IBOV e CDI";
 
@@ -226,10 +225,7 @@ export function IndexSection() {
   // Same key as IncomeSection and the page gate, so this is a cache read, not a
   // fourth request. Used only to decide whether the "fora do retorno" caveat
   // describes a gap this book actually has.
-  const income = useQuery({
-    queryKey: ["income"],
-    queryFn: () => api<IncomeRow[]>("/portfolio/income"),
-  });
+  const income = useIncome();
 
   // Above every early return, where hooks have to live. The bounds only steer
   // the native picker, so an undefined pair while loading costs nothing.
@@ -280,12 +276,7 @@ export function IndexSection() {
             title="Acompanhar sua carteira contra o IBOV e o CDI faz parte do plano Investidor."
             hint="Rentabilidade diária ponderada pelo tempo, com queda máxima e retorno anualizado — além de IRPF, TLH e simulação."
             action={
-              <Link
-                href="/assinatura"
-                className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
-              >
-                Ver o plano Investidor
-              </Link>
+              <InvestorPlanLink />
             }
           />
         </Card>
@@ -310,15 +301,7 @@ export function IndexSection() {
               : "A base de cotações pode estar indisponível. Tente novamente em instantes."
           }
           action={
-            status === 422 ? undefined : (
-              <button
-                type="button"
-                onClick={() => q.refetch()}
-                className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
-              >
-                Tentar de novo
-              </button>
-            )
+            status === 422 ? undefined : <RetryButton onClick={() => q.refetch()} />
           }
         />
       </Card>,

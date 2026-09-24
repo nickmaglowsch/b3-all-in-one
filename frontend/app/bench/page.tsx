@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import type { Strategy } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
-import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/api";
 import { StrategyGallery } from "./StrategyGallery";
 import { RunPanel } from "./RunPanel";
 import { RunsList } from "./RunsList";
@@ -54,9 +54,7 @@ export default function BenchPage() {
 
       {strategies.error && (
         <p className="mb-4 text-sm text-loss" role="alert">
-          {strategies.error instanceof ApiError
-            ? strategies.error.message
-            : "Falha ao carregar estratégias."}
+          {errorText(strategies.error, "Falha ao carregar estratégias.")}
         </p>
       )}
 

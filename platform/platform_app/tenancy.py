@@ -52,6 +52,21 @@ async def _acting_tenant(
     return portfolio_id
 
 
+async def get_owned(
+    session: AsyncSession, model: type, raw_id: str, tenant_id: uuid.UUID, detail: str
+):
+    """The ``model`` row with id ``raw_id`` if tenant ``tenant_id`` owns it, else a
+    404 with ``detail``. Junk, unknown and foreign ids get the same answer, so no
+    route can be used to learn which ids exist under another tenant."""
+    try:
+        row = await session.get(model, uuid.UUID(raw_id))
+    except ValueError:
+        row = None
+    if row is None or row.tenant_id != tenant_id:
+        raise HTTPException(404, detail)
+    return row
+
+
 async def get_optional_tenant(
     request: Request,
     user: User | None = Depends(current_optional_user),

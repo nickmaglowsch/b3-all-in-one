@@ -145,6 +145,18 @@ class TestShareMultiplier:
         mult = share_multiplier(actions, "GOOD3", pd.Timestamp("2020-06-30"), T)
         assert mult == pytest.approx(0.25 * 1.25)
 
+    def test_mixed_actions_multiply_in_ex_date_order_exactly(self):
+        actions = make_actions([
+            ("GOOD3", "2020-07-10", "BONUS_SHARES", 10.0),
+            ("GOOD3", "2020-07-20", "STOCK_SPLIT", 3.0),
+            ("BADX3", "2020-07-25", "STOCK_SPLIT", 7.0),
+            ("GOOD3", "2020-08-10", "REVERSE_SPLIT", 0.1),
+            ("GOOD3", "2020-08-20", "BONUS_SHARES", 33.0),
+        ])
+        mult = share_multiplier(actions, "GOOD3", pd.Timestamp("2020-06-30"), T)
+        assert type(mult) is float
+        assert mult == 1.0 * (1.0 + 10.0 / 100.0) * 3.0 * 0.1 * (1.0 + 33.0 / 100.0)
+
     def test_other_ticker_actions_ignored(self):
         actions = make_actions([("BADX3", "2020-08-15", "STOCK_SPLIT", 10.0)])
         assert share_multiplier(actions, "GOOD3", pd.Timestamp("2020-06-30"), T) == 1.0

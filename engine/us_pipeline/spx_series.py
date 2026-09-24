@@ -37,6 +37,7 @@ import logging
 import pandas as pd
 
 from b3_pipeline import fx_series, storage
+from b3_pipeline.external_prices import level_rows
 
 from . import us_adjust
 from .alphavantage import Client
@@ -80,18 +81,8 @@ def to_external_rows(bars: pd.DataFrame, rates: pd.Series) -> pd.DataFrame:
     if out.empty:
         logger.warning("PTAX covers none of the benchmark's dates; nothing written")
         return pd.DataFrame()
-    return pd.DataFrame({
-        "ticker": SPX_TICKER,
-        "isin_code": "UNKNOWN",
-        "date": out["date"].to_numpy(),
-        # A benchmark level has no bar and no volume of its own. NaN rather
-        # than faked from the close, and NaN rather than None for the dtype
-        # reason index_series.build documents.
-        "open": float("nan"), "high": float("nan"), "low": float("nan"),
-        "close": out["adj_close_brl"].to_numpy(),
-        "volume": 0.0,
-        "source": SOURCE,
-    })
+    return level_rows(SPX_TICKER, out["date"].to_numpy(),
+                      out["adj_close_brl"].to_numpy(), SOURCE)
 
 
 def build(client: Client, rates: pd.Series) -> pd.DataFrame:

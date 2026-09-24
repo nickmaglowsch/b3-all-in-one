@@ -20,27 +20,19 @@ from __future__ import annotations
 import io
 import zipfile
 
+from functools import partial
+
 import pytest
 
 from platform_app.billing import SELLABLE as ALL_MODULES
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-PASSWORD = "correct-horse-battery-staple"
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-async def _auth(client, email: str, modules: list[str] | None = None) -> dict[str, str]:
-    await client.post("/auth/register", json={"email": email, "password": PASSWORD})
-    r = await client.post(
-        "/auth/jwt/login", data={"username": email, "password": PASSWORD})
-    assert r.status_code == 200, r.text
-    headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
-    assert (await client.post(
-        "/billing/dev-modules",
-        json={"modules": modules if modules is not None else list(ALL_MODULES)},
-        headers=headers)).status_code == 200
-    return headers
+_auth = partial(auth, modules=ALL_MODULES)
 
 
 def _zipped(uncompressed_bytes: int) -> bytes:

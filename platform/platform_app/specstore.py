@@ -52,18 +52,23 @@ def materialize_user_specs(specs: list[tuple[str, dict]], tenant_id: uuid.UUID) 
     return d
 
 
+def specs_env(rows: list, tenant_id: uuid.UUID) -> dict[str, str]:
+    """``{"ENGINE_USER_SPECS_DIR": dir}`` with ``rows`` (UserStrategy) materialized,
+    or ``{}`` when there are none — zero-spec tenants pass no env var (identical
+    to today's engine calls)."""
+    if not rows:
+        return {}
+    d = materialize_user_specs([(str(r.id), r.spec) for r in rows], tenant_id)
+    return {"ENGINE_USER_SPECS_DIR": str(d)}
+
+
 async def user_specs_env(session: AsyncSession, tenant_id: uuid.UUID) -> dict[str, str]:
-    """``{"ENGINE_USER_SPECS_DIR": dir}`` for a tenant with any user specs, else
-    ``{}`` — zero-spec tenants pass no env var (identical to today's engine calls)."""
+    """specs_env over every one of the tenant's user strategies."""
     # ponytail: import models lazily — importing it at module top makes specstore
     # the first importer of fastapi_users.db before platform_app.db initializes it,
     # which trips a fastapi_users circular-import depending on import order.
     from platform_app.models import UserStrategy
 
-    rows = (await session.scalars(
+    return specs_env((await session.scalars(
         select(UserStrategy).where(UserStrategy.tenant_id == tenant_id)
-    )).all()
-    if not rows:
-        return {}
-    d = materialize_user_specs([(str(r.id), r.spec) for r in rows], tenant_id)
-    return {"ENGINE_USER_SPECS_DIR": str(d)}
+    )).all(), tenant_id)

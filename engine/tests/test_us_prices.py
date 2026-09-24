@@ -19,6 +19,7 @@ from us_pipeline.alphavantage import (
     BudgetExhausted,
     PremiumOnly,
 )
+from tests.conftest import sqlite_db
 
 D = datetime.date
 TODAY = D(2026, 9, 1)
@@ -64,12 +65,6 @@ class _Stub:
         return {"data": self.splits if function == "SPLITS" else self.dividends}
 
 
-def _db(tmp_path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(tmp_path / "prices.sqlite"))
-    storage.init_db(conn)
-    return conn
-
-
 def _rates(value=5.5):
     return pd.Series([value], index=pd.to_datetime([D(2020, 1, 1)]))
 
@@ -91,7 +86,7 @@ def _prices(conn, symbol):
 def test_volume_is_stored_as_turnover_in_the_quote_currency(tmp_path):
     """`min_adtv` filters on this column. Fed a share count it keeps a penny
     stock trading a billion shares and drops Berkshire."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_prices.ingest_symbol(conn, _Stub(), "IBM", _rates(),
                             want_prices=True, want_actions=True, today=TODAY)
     row = _prices(conn, "IBM").iloc[-1]
@@ -101,7 +96,7 @@ def test_volume_is_stored_as_turnover_in_the_quote_currency(tmp_path):
 def test_the_vendors_share_count_stays_recoverable(tmp_path):
     """Never destroy a source number to store a derived one: the share count is
     exactly volume / close, because that is exactly how it was made."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_prices.ingest_symbol(conn, _Stub(), "IBM", _rates(),
                             want_prices=True, want_actions=True, today=TODAY)
     row = _prices(conn, "IBM").iloc[-1]
@@ -109,7 +104,7 @@ def test_the_vendors_share_count_stays_recoverable(tmp_path):
 
 
 def test_bars_are_projected_into_brl_with_the_rate_that_made_them(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     us_prices.ingest_symbol(conn, _Stub(), "IBM", _rates(5.5),
                             want_prices=True, want_actions=True, today=TODAY)
     row = _prices(conn, "IBM").iloc[-1]
@@ -120,7 +115,7 @@ def test_bars_are_projected_into_brl_with_the_rate_that_made_them(tmp_path):
 def test_a_day_ptax_cannot_cover_keeps_null_brl_and_a_null_rate(tmp_path):
     """The honest outcome, and visible as `unconverted_brl` in /market/status.
     Pricing a US book in dollars silently is worse than reporting it unpriced."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     late = pd.Series([5.5], index=pd.to_datetime([D(2030, 1, 1)]))
     us_prices.ingest_symbol(conn, _Stub(), "IBM", late,
                             want_prices=True, want_actions=True, today=TODAY)
@@ -131,7 +126,7 @@ def test_a_day_ptax_cannot_cover_keeps_null_brl_and_a_null_rate(tmp_path):
 # ── Adjustment state is a receipt ─────────────────────────────────────────────
 
 def test_a_symbol_whose_actions_answered_is_recorded_as_total_return(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     cursor = us_prices.ingest_symbol(conn, _Stub(), "IBM", _rates(),
                                      want_prices=True, want_actions=True,
                                      today=TODAY)
@@ -141,7 +136,7 @@ def test_a_symbol_whose_actions_answered_is_recorded_as_total_return(tmp_path):
 
 def test_a_premium_dividends_endpoint_downgrades_to_split_only(tmp_path):
     """Not a failure — a fact about coverage, recorded rather than retried."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     cursor = us_prices.ingest_symbol(
         conn, _Stub(premium=("DIVIDENDS",)), "IBM", _rates(),
         want_prices=True, want_actions=True, today=TODAY)
@@ -149,7 +144,7 @@ def test_a_premium_dividends_endpoint_downgrades_to_split_only(tmp_path):
 
 
 def test_both_endpoints_refused_means_unadjusted_and_says_so(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     cursor = us_prices.ingest_symbol(
         conn, _Stub(premium=("SPLITS", "DIVIDENDS")), "IBM", _rates(),
         want_prices=True, want_actions=True, today=TODAY)
@@ -160,7 +155,7 @@ def test_both_endpoints_refused_means_unadjusted_and_says_so(tmp_path):
 def test_a_price_only_refresh_rebuilds_the_same_adjustment(tmp_path):
     """The bug this prevents: a cheap daily refresh rewriting an adjusted series
     as a raw one, because the events were not re-fetched. They are stored."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     stub = _Stub(splits=[{"effective_date": "2026-08-31", "split_factor": "4.0"}])
     first = us_prices.ingest_symbol(conn, stub, "IBM", _rates(),
                                     want_prices=True, want_actions=True,
@@ -175,7 +170,7 @@ def test_a_price_only_refresh_rebuilds_the_same_adjustment(tmp_path):
 
 
 def test_a_price_only_refresh_of_an_unadjusted_symbol_stays_unadjusted(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     cursor = us_prices.ingest_symbol(
         conn, _Stub(premium=("SPLITS", "DIVIDENDS")), "IBM", _rates(),
         want_prices=True, want_actions=True, today=TODAY)
@@ -316,14 +311,14 @@ def test_symbols_with_fundamentals_are_priced_first(tmp_path):
     """A backtest is useless with eight random tickers and useful with the two
     hundred largest; the ones the SEC ingest already covers are the ones a
     fundamental strategy can actually select."""
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _universe(conn, "ZZZZ")
     _universe(conn, "AAPL", cik="0000320193")
     assert us_prices._universe(conn)[0] == "AAPL"
 
 
 def test_placeholders_and_test_issues_are_not_priced(tmp_path):
-    conn = _db(tmp_path)
+    conn = sqlite_db(tmp_path)
     _universe(conn, "REAL")
     market_storage.upsert_instruments(conn, pd.DataFrame([
         {"market": "US", "symbol": "CIK0000806085", "currency": "USD"},

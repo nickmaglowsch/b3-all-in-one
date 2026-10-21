@@ -39,8 +39,11 @@ class CopomEasingStrategy(StrategyBase):
         shift_short = params.get("cdi_shift_short", 1)
         shift_long = params.get("cdi_shift_long", 4)
 
-        # Rebuild easing signal with user-specified shifts
-        is_easing = cdi_monthly.shift(shift_short) < cdi_monthly.shift(shift_long)
+        # Rebuild easing signal with user-specified shifts, aligned to the price
+        # grid by date: CDI's own index need not start where `ret` does, and
+        # reading it by position took the flag from a different month.
+        is_easing = (cdi_monthly.shift(shift_short) < cdi_monthly.shift(shift_long)
+                     ).reindex(ret.index)
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
         tw["CDI_ASSET"] = 0.0
@@ -51,7 +54,7 @@ class CopomEasingStrategy(StrategyBase):
 
         start = max(shift_short, shift_long) + 1
         for i in range(start, len(ret)):
-            val = is_easing.iloc[i] if i < len(is_easing) else False
+            val = is_easing.iloc[i]
             easing = bool(val) if pd.notna(val) else False
             if easing:
                 tw.iloc[i, tw.columns.get_loc("IBOV")] = 1.0

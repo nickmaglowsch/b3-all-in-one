@@ -304,8 +304,8 @@ def _propagate_fre_shares(conn: sqlite3.Connection) -> None:
     """
     Propagate shares_outstanding from FRE filings into DFP/ITR rows.
 
-    For each DFP/ITR row where shares_outstanding is NULL, find the most
-    recent FRE filing for the same company on or before the DFP/ITR filing_date.
+    Every DFP/ITR row (the upsert no longer blanks a stored count, so not only the
+    NULL ones) takes the latest FRE of its company filed on or before its own filing.
     """
     conn.execute("""
         UPDATE fundamentals_pit
@@ -321,7 +321,6 @@ def _propagate_fre_shares(conn: sqlite3.Connection) -> None:
             LIMIT 1
         )
         WHERE fundamentals_pit.doc_type IN ('DFP', 'ITR')
-          AND fundamentals_pit.shares_outstanding IS NULL
     """)
     conn.commit()
 

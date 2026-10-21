@@ -3,7 +3,6 @@
     "engine/b3_pipeline/adjustments.py::compute_dividend_adjustment_factors": 13,
     "engine/b3_pipeline/adjustments.py::detect_splits_from_prices": 24,
     "engine/b3_pipeline/adjustments.py::filter_fatcot_redundant_splits": 16,
-    "engine/b3_pipeline/adjustments.py::validate_split_actions_against_prices": 16,
     "engine/b3_pipeline/b3_corporate_actions.py::_fetch_one_company": 11,
     "engine/b3_pipeline/b3_corporate_actions.py::parse_cash_dividends": 15,
     "engine/b3_pipeline/cvm_main.py::_fetch_ticker_mappings": 18,
@@ -55,9 +54,9 @@
     "taxcore/scripts/tlh_plan.py::walk_history": 17
   },
   "module_lines": {
-    "engine/b3_pipeline/adjustments.py": 909,
+    "engine/b3_pipeline/adjustments.py": 773,
     "engine/b3_pipeline/b3_corporate_actions.py": 681,
-    "engine/b3_pipeline/cvm_main.py": 875,
+    "engine/b3_pipeline/cvm_main.py": 874,
     "engine/b3_pipeline/cvm_parser.py": 647,
     "engine/b3_pipeline/cvm_storage.py": 466,
     "engine/b3_pipeline/main.py": 564,

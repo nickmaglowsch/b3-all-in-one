@@ -380,29 +380,29 @@ export interface DarfPaymentRecord {
   obs: string | null;
 }
 
-/** The three lines the Renda Variável ficha apurates separately. */
-export type DarfClasse = "AÇÃO" | "FII" | "BDR_ETF";
+/** Renda Variável lines taxcore apurates; TOTAL is the one DARF 6015 a month. */
+export type DarfClasse = "AÇÃO" | "FII" | "BDR_ETF" | "DAYTRADE" | "TOTAL";
 
 /**
- * A month's apuração joined to whatever payment was recorded against it. Every
+ * A month's one DARF joined to whatever payment was recorded against it. Every
  * figure but `pagamento` is recomputed from the trade history on each read — the
- * same numbers the IRPF report's monthly tables show.
+ * same numbers the IRPF report's tables show. `classes`: the lines it pays.
  */
 export interface DarfMonth {
   apuracao: string;
   classe: DarfClasse;
   codigo: string;
-  gross: number;
-  pnl: number;
-  compensacao: number;
-  base: number;
-  aliquota: number;
-  ir_devido: number;
+  classes: { classe: DarfClasse; base: number; aliquota: number; ir: number }[];
+  imposto: number;
+  irrf_deduzido: number;
+  /** Under R$ 10, carried in from / out to the next month (Lei 9.430, art. 68). */
+  acumulado_anterior: number; acumulado: number;
   /** Último dia útil do mês seguinte. */
   vencimento: string;
+  ir_devido: number;
   pagamento: DarfPaymentRecord | null;
   /** `atrasado` is the alert: tax due, past the deadline, nothing recorded. */
-  status: "pago" | "pendente" | "atrasado";
+  status: "pago" | "pendente" | "atrasado" | "acumulado" | "compensado";
 }
 
 export interface DarfLedger {

@@ -193,8 +193,11 @@ def test_a_loss_making_sale_needs_no_harvest_and_grows_the_carry():
 
 def test_a_gain_the_carry_already_covers_is_left_alone():
     """Harvesting here would sell a position to offset a gain that is already
-    offset — the carry is spent instead, and no order is emitted."""
-    r = run_tlh(["--json", "--sells", "VALE3:250,SBSP3:100"])
+    offset — the carry is spent instead, and no order is emitted.
+
+    SBSP3:300, not :100, since the October IVVB11 gain started drawing on the
+    same operações comuns carry (R$ 1.723 → R$ 1.008): the sale has to net less."""
+    r = run_tlh(["--json", "--sells", "VALE3:250,SBSP3:300"])
     assert r.returncode == 0, r.stderr
     result = json.loads(r.stdout)
     b, carry = result["buckets"]["AÇÃO"], result["situation"]["AÇÃO"]["carry"]

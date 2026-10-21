@@ -291,8 +291,11 @@ def test_runners_do_not_raise_timeoutexpired(
 
 SHELLED_MODULES = {"load_b3", "irpf_2026", "tlh_plan"}
 # Imported by the three above. b3_rules/b3_options were split out of load_b3 and
-# irpf_proventos out of irpf_2026 when both hit the quality gate's size ratchet.
-IMPORTED_MODULES = {"_common", "apuracao", "b3_rules", "b3_options", "irpf_proventos"}
+# irpf_proventos out of irpf_2026 when both hit the quality gate's size ratchet;
+# ativos_b3 (ticker classes), realizacao (the shared preço médio walk) and
+# relatorio_rv (the Renda Variável section) likewise, for irpf_2026 and tlh_plan.
+IMPORTED_MODULES = {"_common", "apuracao", "b3_rules", "b3_options", "irpf_proventos",
+                    "ativos_b3", "realizacao", "relatorio_rv"}
 
 
 def test_seed_workspace_copies_only_what_the_shelled_modules_import(tmp_path):

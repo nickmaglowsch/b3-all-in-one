@@ -27,86 +27,20 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts import irpf_proventos, load_b3 as _load_b3
-# The apuração rules live in their own module — see scripts/apuracao.py for why.
-# Re-exported here because callers and tests import them from this script.
-from scripts.apuracao import CLASSES_APURACAO, monthly_apuracao
+from scripts import irpf_proventos, load_b3 as _load_b3, relatorio_rv
+# The apuração rules live in their own module — see scripts/apuracao.py for why;
+# ticker classes in ativos_b3, the preço médio walk in realizacao. Re-exported
+# here because callers and tests import them from this script.
+from scripts.apuracao import CLASSES_APURACAO, monthly_apuracao  # noqa: F401
+from scripts.ativos_b3 import (  # noqa: F401
+    RF_PREFIX_RE, UNITS_NOT_FII, asset_class, fii_presumido, irpf_classification,
+)
+from scripts.realizacao import apurar, realized_per_month, snapshot_positions  # noqa: F401
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
 TRADES = DATA / "trades.csv"
 EVENTS = DATA / "cash_events.csv"
-
-# Tickers ending in "11" that are STOCK UNITS (ON+PN bundles), not FIIs.
-# Units are classified for IRPF as ações (group 03 code 01), pay JCP/dividends,
-# and are taxed under the equity rules (R$ 20k/month isenção). Add to this set
-# whenever a new unit ticker appears in the user's history.
-UNITS_NOT_FII: set[str] = {
-    "SAPR11",  # Sanepar
-    "TAEE11",  # Taesa
-    "KLBN11",  # Klabin
-    "BPAC11",  # BTG Pactual
-    "ENGI11",  # Energisa
-    "ALUP11",  # Alupar
-    "SANB11",  # Santander Brasil
-    "AESB11",  # AES Brasil
-    "JPSA11",  # JSL/Simpar
-    "ENMT11",  # Energisa MT
-}
-
-
-# Renda fixa contracts, identified by the prefix B3 puts in front of the
-# contract code ('CDB - CDB24C7HQ2L'). Case-insensitive because B3 caps the bank
-# paper and writes the Tesouro titles mixed-case ('Tesouro Selic 2029'), which a
-# case-sensitive ^TESOURO would miss entirely.
-#
-# Imported from load_b3 rather than copied. Both are `scripts.*` in one venv, so
-# the "different processes" argument that justifies the *platform's* copy does
-# not apply here — and a second copy is what let the round-lot strip diverge
-# between the two files once already.
-RF_PREFIX_RE = _load_b3._RF_PREFIX_RE
-
-
-def asset_class(t: str) -> str:
-    """Map a ticker to its tax asset class (AÇÃO / FII / BDR / ETF_RV / ETF_RF / RF)."""
-    t = t.upper()
-    if t == "IVVB11":
-        return "ETF_RV"
-    if t == "LFTB11":
-        return "ETF_RF"
-    # Renda fixa contracts carry a contract code, not a ticker, so every shape
-    # rule below misses and they would fall through to AÇÃO. That is not a
-    # cosmetic mislabel: a CDB resgate booked as a stock sale inflates the
-    # month's AÇÃO gross, can blow the R$20k isenção for genuine equity sales,
-    # and taxes tributação-exclusiva income as renda variável. tlh_plan imports
-    # this same function, so one branch here covers both callers.
-    if RF_PREFIX_RE.match(t):
-        return "RF"
-    if t in UNITS_NOT_FII:
-        return "AÇÃO"
-    if t.endswith("11"):
-        return "FII"
-    if t.endswith(("31", "32", "34", "35")):
-        return "BDR"
-    return "AÇÃO"
-
-
-# IRPF Bens e Direitos group/código mapping (per RFB Instrução Normativa).
-# Tuple = (group_code, item_code, label_for_discriminação)
-def irpf_classification(ticker: str) -> tuple[str, str, str]:
-    t = ticker.upper()
-    if t == "IVVB11":
-        return ("07", "09", "Cotas de Fundo de Índice (ETF) - IVVB11 (iShares S&P 500)")
-    if t == "LFTB11":
-        return ("04", "02", "Cotas de ETF de Renda Fixa - LFTB11 (Tesouro Selic)")
-    if t in UNITS_NOT_FII:
-        return ("03", "01", "Ações (Unit)")
-    if t.endswith("11"):
-        return ("07", "03", "Cotas de Fundo de Investimento Imobiliário (FII)")
-    if t.endswith("31") or t.endswith("32") or t.endswith("34") or t.endswith("35"):
-        return ("03", "09", "BDR — Brazilian Depositary Receipt")
-    # 3 / 4 / 5 / 6 → ações
-    return ("03", "01", "Ações")
 
 
 # Strip Brazilian corporate suffix variants (S/A, S.A, S.A., SA) so that
@@ -245,39 +179,6 @@ def build_timeline() -> pd.DataFrame:
     rows = [f for f in (trade_rows, event_rows) if not f.empty]
     return pd.concat(rows, ignore_index=True).sort_values(
         ["ticker", "date"]).reset_index(drop=True)
-
-
-def snapshot_positions(tl: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
-    """Walk timeline up to cutoff and return (ticker, qty, total_cost, broker)."""
-    out = []
-    for ticker, group in tl.groupby("ticker"):
-        qty = 0.0
-        cost = 0.0
-        brokers = []
-        for _, r in group.iterrows():
-            if r["date"] > cutoff:
-                break
-            if r["kind"] == "buy":
-                cost += r["amount"]; qty += r["qty"]
-                if isinstance(r["broker"], str) and r["broker"].strip() and r["broker"] != "override":
-                    brokers.append(r["broker"])
-            elif r["kind"] == "sell":
-                if qty > 0:
-                    avg = cost / qty
-                    sq = min(r["qty"], qty)
-                    cost -= sq * avg
-                    qty -= sq
-            elif r["kind"] == "qty_event":
-                qty += r["qty"]; cost += r["amount"]
-            elif r["kind"] == "amort":
-                cost = max(0.0, cost - r["amount"])
-        if qty > 1e-6:
-            # Most-recent non-empty broker for this ticker on or before cutoff.
-            broker = brokers[-1] if brokers else ""
-            out.append({"ticker": ticker, "qty": round(qty, 6),
-                        "total_cost": round(cost, 2),
-                        "broker": broker})
-    return pd.DataFrame(out)
 
 
 # IRPF código (grupo 04) and kind label per renda fixa prefix: 02 for taxed
@@ -494,32 +395,6 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def realized_per_month(tl: pd.DataFrame, year: int) -> pd.DataFrame:
-    """Per-month per-ticker realized P&L for the given calendar year."""
-    rows = []
-    for ticker, group in tl.groupby("ticker"):
-        qty = 0.0; cost = 0.0
-        for _, r in group.iterrows():
-            if r["kind"] == "buy":
-                cost += r["amount"]; qty += r["qty"]
-            elif r["kind"] == "sell":
-                if qty > 0:
-                    avg = cost / qty
-                    sq = min(r["qty"], qty)
-                    sp = r["amount"] / r["qty"] if r["qty"] else 0.0
-                    pnl = sq * (sp - avg)
-                    cost -= sq * avg; qty -= sq
-                    if r["date"].year == year:
-                        rows.append({"date": r["date"], "ticker": ticker,
-                                     "qty": sq, "sell_price": sp, "avg_cost": avg,
-                                     "sell_value": sq * sp, "pnl": pnl})
-            elif r["kind"] == "qty_event":
-                qty += r["qty"]; cost += r["amount"]
-            elif r["kind"] == "amort":
-                cost = max(0.0, cost - r["amount"])
-    return pd.DataFrame(rows)
-
-
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--year", type=int, default=2025,
@@ -532,36 +407,19 @@ def main(argv: list[str]) -> int:
 
     tl = build_timeline()
 
-    # ----- Renda Variável monthly grid -----
+    # ----- Renda Variável -----
     # Built before anything else so --json can return without touching the raw
     # extracts: the apuração needs only trades + cash_events, while Bens e
     # Direitos and the renda fixa sections parse every uploaded Excel file.
-    realized = realized_per_month(tl, Y)
-
-    realized["cls"] = realized["ticker"].map(asset_class)
-    realized["month"] = realized["date"].dt.month
-
-    monthly = []
-    for m in range(1, 13):
-        sub = realized[realized["month"] == m]
-        row = {"month": m}
-        for cls in ("AÇÃO", "FII", "BDR", "ETF_RV", "ETF_RF"):
-            x = sub[sub["cls"] == cls]
-            row[f"{cls}_gross"] = round(x["sell_value"].sum(), 2)
-            row[f"{cls}_pnl"] = round(x["pnl"].sum(), 2)
-        monthly.append(row)
-    monthly_df = pd.DataFrame(monthly)
-
-    apuracao = monthly_apuracao(monthly_df)
+    # Apurated over the whole history — the carry never expires — rendered for Y.
+    rv = apurar(tl, Y, asset_class)
     if args.as_json:
-        json.dump({"year": Y, "apuracao": apuracao}, sys.stdout)
+        json.dump(relatorio_rv.payload_json(Y, rv, tl), sys.stdout)
         return 0
 
-    by_class = {cls: [r for r in apuracao if r["classe"] == cls]
+    by_class = {cls: [r for r in rv["apuracao"] if r["classe"] == cls]
                 for cls in CLASSES_APURACAO}
-
-    months_pt_for_table = ["Jan","Fev","Mar","Abr","Mai","Jun",
-                           "Jul","Ago","Set","Out","Nov","Dez"]
+    months_pt_for_table = relatorio_rv.MESES
 
     # AÇÕES isento gains (vendas mensais ≤ R$ 20k) land in Rendimentos Isentos
     # código 20, which is rendered before the monthly table — hence read off the
@@ -896,102 +754,7 @@ def main(argv: list[str]) -> int:
     else:
         w(f"\nNenhum prêmio de opções registrado em {Y} (todas as opções foram pré-{Y-1}).\n")
 
-    w(f"\n## 3) Renda Variável — Operações Comuns + FII ({Y})\n")
-    w(f"Ficha **Renda Variável → Operações Comuns/Day-Trade**. Preencha por mês:\n")
-    w(f"- **AÇÕES (operações comuns)**: isenção R$ 20.000/mês em vendas brutas. Se "
-      f"o gross do mês for ≤ R$ 20k → isento (não preencha ganho líquido). Se > R$ 20k → "
-      f"15% sobre o resultado líquido positivo, compensando prejuízos acumulados.\n")
-    w(f"- **FIIs**: 20% sobre ganho líquido, sem isenção. Prejuízos de FII só compensam "
-      f"ganhos futuros de FII.\n")
-    w(f"- **BDR / ETF Renda Variável**: 15% sobre ganho líquido, sem isenção, mesma "
-      f"linha de \"operações comuns\".\n")
-
-    months_pt = months_pt_for_table
-    w(f"\n### Tabela mensal {Y} — AÇÕES (operações comuns)")
-    w(f"\n> **Atenção — o melhor dos dois mundos:** em meses com vendas brutas ≤ R$ 20.000, "
-      f"o **ganho é isento** (vai para Rendimentos Isentos código 20, ver seção 2.1) e "
-      f"**não consome o prejuízo acumulado** — o saldo de compensação fica intacto para "
-      f"meses tributáveis futuros. Já o **prejuízo** num mês isento **continua sendo "
-      f"adicionado ao prejuízo acumulado** e pode ser compensado em meses tributáveis "
-      f"futuros normalmente.\n")
-    w(f"\n| Mês | Vendas brutas | Resultado líquido | Compensação | IR a pagar (15%) | Prejuízo acumulado |")
-    w(f"|---|---|---|---|---|---|")
-    acoes_year_tax = 0
-    for r in by_class["AÇÃO"]:
-        m = r["month"]
-        gross = r["gross"]; pnl = r["pnl"]; carry = r["carry"]
-        if not r["ativo"]:
-            w(f"| {months_pt[m-1]} | — | — | — | — | R$ {carry:,.2f} |")
-            continue
-        if r["isento"]:
-            # Gains are tax-free (código 20) and DON'T consume the loss carry;
-            # losses still accumulate and are compensable in future taxable
-            # months (best-of-both-worlds rule — applied in monthly_apuracao).
-            if pnl > 0:
-                note = "**ISENTO** (≤ R$ 20k → código 20)"
-            elif pnl < 0:
-                note = "**ISENTO** (prejuízo somado ao acumulado)"
-            else:
-                note = "**ISENTO** (≤ R$ 20k)"
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | {note} | R$ {carry:,.2f} |")
-            continue
-        if pnl > 0:
-            acoes_year_tax += r["ir"]
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {r['compensacao']:,.2f} | R$ {r['ir']:,.2f} | R$ {carry:,.2f} |")
-        else:
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | R$ 0,00 (prejuízo) | R$ {carry:,.2f} |")
-    acoes_carry = by_class["AÇÃO"][-1]["carry"]
-    w(f"\n**Total IR sobre AÇÕES em {Y}**: R$ {acoes_year_tax:,.2f}")
-    w(f"\n**Saldo prejuízo AÇÕES a compensar p/ {Y+1}**: R$ {acoes_carry:,.2f}")
-    w(f"\n**Ganhos isentos AÇÕES em {Y} (vendas mensais ≤ R$ 20k)**: R$ {acoes_isento_gains_total:,.2f} → declarar em Rendimentos Isentos código 20.")
-
-    w(f"\n### Tabela mensal {Y} — FIIs")
-    w(f"\n| Mês | Vendas brutas | Resultado líquido | Compensação | IR a pagar (20%) | Prejuízo acumulado |")
-    w(f"|---|---|---|---|---|---|")
-    fii_year_tax = 0
-    for r in by_class["FII"]:
-        m = r["month"]
-        gross = r["gross"]; pnl = r["pnl"]; carry = r["carry"]
-        if not r["ativo"]:
-            w(f"| {months_pt[m-1]} | — | — | — | — | R$ {carry:,.2f} |")
-            continue
-        if pnl > 0:
-            fii_year_tax += r["ir"]
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | R$ {r['compensacao']:,.2f} | R$ {r['ir']:,.2f} | R$ {carry:,.2f} |")
-        else:
-            w(f"| {months_pt[m-1]} | R$ {gross:,.2f} | R$ {pnl:+,.2f} | — | R$ 0,00 | R$ {carry:,.2f} |")
-    fii_carry = by_class["FII"][-1]["carry"]
-    w(f"\n**Total IR sobre FIIs em {Y}**: R$ {fii_year_tax:,.2f}")
-    w(f"\n**Saldo prejuízo FIIs a compensar p/ {Y+1}**: R$ {fii_carry:,.2f}")
-
-    has_bdr_etf = monthly_df[["BDR_gross","ETF_RV_gross"]].sum().sum() > 0
-    if has_bdr_etf:
-        w(f"\n### Tabela mensal {Y} — BDRs e ETFs de Renda Variável (15% sem isenção)")
-        w(f"\n| Mês | Vendas brutas | Resultado líquido | IR (15%) |")
-        w(f"|---|---|---|---|")
-        for r in by_class["BDR_ETF"]:
-            m = r["month"]
-            if not r["ativo"]:
-                w(f"| {months_pt[m-1]} | — | — | — |")
-                continue
-            w(f"| {months_pt[m-1]} | R$ {r['gross']:,.2f} | R$ {r['pnl']:+,.2f} | R$ {r['ir']:,.2f} |")
-
-    # ETF_RF (LFTB11) — different treatment
-    has_rf_etf = monthly_df["ETF_RF_gross"].sum() > 0
-    if has_rf_etf:
-        w(f"\n### Tabela mensal {Y} — ETFs de Renda Fixa (LFTB11)")
-        w(f"\n| Mês | Vendas brutas | Resultado líquido |")
-        w(f"|---|---|---|")
-        for _, r in monthly_df.iterrows():
-            m = int(r["month"])
-            if r["ETF_RF_gross"] == 0 and r["ETF_RF_pnl"] == 0:
-                w(f"| {months_pt[m-1]} | — | — |")
-                continue
-            w(f"| {months_pt[m-1]} | R$ {r['ETF_RF_gross']:,.2f} | R$ {r['ETF_RF_pnl']:+,.2f} |")
-        w(f"\n*ETFs de Renda Fixa (LFTB11 etc.) são tributados pela tabela regressiva da "
-          f"renda fixa (22.5% se ≤180d, 20% 181-360d, 17.5% 361-720d, 15% > 720d) — "
-          f"NÃO entram em \"Renda Variável\". Use os dados do Informe do broker para "
-          f"preencher o ficha \"Rendimentos sujeitos a tributação exclusiva\".*")
+    relatorio_rv.render_secao3(w, Y, rv, tl, by_class, acoes_isento_gains_total)
 
     w(f"\n## 4) Checklist antes de submeter\n")
     w(f"- [ ] Conferir cada linha de \"Bens e Direitos\" (ações / FIIs / ETFs) contra o Informe de Posição do broker em 31/12/{Y}.")

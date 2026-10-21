@@ -48,15 +48,40 @@ Funcionalidade: Apuração mensal de IR sobre vendas na B3
     Então o IR devido é R$ 0.00
     E o prejuízo acumulado ao fim do mês é R$ 1000.00
 
-  # LIMITAÇÃO conhecida, documentada aqui para não ser confundida com regra: BDR e
-  # ETF de renda variável não têm bucket de prejuízo neste relatório. O prejuízo de
-  # um mês não abate o lucro do mês seguinte, e não se cruza com o de ações — mesmo
-  # sendo todas operações comuns a 15%, compensáveis entre si na leitura usual. O
-  # relatório portanto recolhe a mais nesses casos. Comportamento antigo, mantido de
-  # propósito: corrigi-lo muda valores que o usuário já pode ter recolhido.
-  Cenário: BDR e ETF não acumulam prejuízo — o mês seguinte paga integral
+  # Ações, BDRs e ETFs de renda variável são todos "operações comuns" (IN RFB
+  # 1.585/2015, art. 64): um só saldo de prejuízo. Só a isenção de R$ 20.000 é
+  # exclusiva das ações (Solução de Consulta Cosit 145/2021 e 39/2022).
+  Cenário: Prejuízo de BDR abate o lucro do mês seguinte em BDR
     Dado um mês com vendas de "BDR" de R$ 10000.00 e lucro de R$ -10000.00
     E o mês seguinte com vendas de "BDR" de R$ 10000.00 e lucro de R$ 10000.00
     Quando eu apuro o mês seguinte
-    Então o IR devido é R$ 1500.00
+    Então o IR devido é R$ 0.00
+    E o prejuízo acumulado ao fim do mês é R$ 0.00
+
+  Cenário: Prejuízo de ETF abate o lucro tributável de ações
+    Dado um mês com vendas de "ETF_RV" de R$ 30000.00 e lucro de R$ -4000.00
+    E o mês seguinte com vendas de "AÇÃO" de R$ 30000.00 e lucro de R$ 10000.00
+    Quando eu apuro o mês seguinte
+    Então o IR devido é R$ 900.00
+    E o prejuízo acumulado ao fim do mês é R$ 0.00
+
+  Cenário: ETF não tem isenção, mesmo com vendas pequenas
+    Dado um mês com vendas de "ETF_RV" de R$ 5000.00 e lucro de R$ 1000.00
+    Quando eu apuro o mês
+    Então o mês não é isento
+    E o IR devido é R$ 150.00
+
+  # Day trade: compra e venda do mesmo ativo no mesmo dia, na mesma corretora
+  # (Lei 9.959/2000, art. 8º). 20%, sem isenção, prejuízo só contra day trade.
+  Cenário: Day trade é tributado a 20% mesmo abaixo de R$ 20.000
+    Dado um mês com vendas de "DT" de R$ 3100.00 e lucro de R$ 100.00
+    Quando eu apuro o mês
+    Então o mês não é isento
+    E o IR devido é R$ 20.00
+
+  Cenário: Prejuízo de ações não abate lucro de day trade
+    Dado um mês com vendas de "AÇÃO" de R$ 30000.00 e lucro de R$ -5000.00
+    E o mês seguinte com vendas de "DT" de R$ 10000.00 e lucro de R$ 1000.00
+    Quando eu apuro o mês seguinte
+    Então o IR devido é R$ 200.00
     E o prejuízo acumulado ao fim do mês é R$ 0.00

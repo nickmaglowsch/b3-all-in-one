@@ -435,7 +435,7 @@ sit on:
 | Cyclomatic complexity | ruff `C901` (Python) + eslint `complexity` (TS), max 10 | `scripts/quality_gates.py` + baseline |
 | Module size | max 400 lines (`.py`, `.ts`, `.tsx`) | `scripts/quality_gates.py` + baseline |
 | Dependency boundaries | AST import contracts | `CONTRACTS` in `scripts/quality_gates.py` |
-| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, max 6 survivors | `ci.yml` |
+| Mutation testing | `mutmut` over `taxcore/scripts/apuracao.py`, no survivors | `ci.yml` |
 
 **The two structural gates are ratchets, not walls.** The repo has 53 functions over
 complexity 10 (37 Python, 16 TSX) and 25 modules over 400 lines today;
@@ -475,8 +475,8 @@ the fine-grained unit suite; the feature file is the readable contract on top of
 
 **Mutation testing is scoped, and it is a real gate on every PR.** Target:
 `taxcore/scripts/apuracao.py`, the isenção / alíquota / compensação rules, against the
-two apuração suites — 128 mutants, **122 killed and 6 surviving**. The whole job is ~20s
-in CI (12s of that mutating); it is on the PR path because it is that cheap, not
+two apuração suites — 271 mutants, **all 271 killed**. The whole job is ~25s
+in CI (~15s of that mutating); it is on the PR path because it is that cheap, not
 despite it.
 
 The gate earned its place on the first run: it found that nothing covered two
@@ -485,33 +485,28 @@ undetected. On the reviewer's example that under-reports the accumulated loss by
 R$ 5.000 and over-collects R$ 750 of IR. Also unlabelled: sub-R$1 gains (`pnl > 0` vs
 `pnl > 1`) and break-even months. Those tests are now in `tests/test_apuracao.py`.
 
-The 6 that remain are all **equivalent mutants** — each flips a comparison in a way
-that only differs at `pnl == 0`, where the two branches do the same arithmetic
-(`carry += -0.0` and `base = 0 - 0` are both no-ops):
+Until the operações comuns bucket (ações + BDR/ETF), the day-trade line and the
+monthly DARF (`darf_mensal`) arrived, 6 mutants survived as **equivalent**: sign
+branches (`pnl > 0` vs `pnl >= 0`) that only differ at `pnl == 0`, where both sides do
+the same arithmetic. The rewrite states each rule as `max(0.0, …)` / `min(…)` instead,
+which has no such boundary, so the count is 271 and **every one is killed** — the
+bucket sharing, the R$ 10 rollover and the per-ficha IRRF each have a test that fails
+when they are mutated. Rules stay plain values (a float rate, a `progressiva` flag, an
+`isencao` that is `None` rather than zero, a `grupo` that is `None` for a bucket of its
+own) precisely so that they *can* be killed: a rate held in a closure and an isenção of
+zero each produced a mutant no test could reach, and an untestable line in a tax rule
+is a line nobody can trust.
 
-```
-17 `pnl > 0`→`pnl >= 0`   21 `pnl < 0`→`pnl <= 0`   22 `pnl < 0`→`pnl < 1`
-26 `pnl > 0`→`pnl >= 0`   38 `pnl < 0`→`pnl <= 0`   39 `pnl < 0`→`pnl < 1`
-```
-
-The count grew from 96 to 128 when `CRIPTO` and `EXTERIOR` joined `REGRAS`, and the six
-survivors are still the same six clauses: the new rules are all plain values (a float
-rate plus a `progressiva` flag, an `isencao` that is `None` rather than zero) precisely
-so that they *can* be killed. A rate held in a closure and an isenção of zero each
-produced a mutant no test could reach, and an untestable line in a tax rule is a line
-nobody can trust.
-
-No test can kill them, so 6 is the bound the job enforces: it reads
-`mutmut export-cicd-stats` and fails at 7. A seventh survivor is a real hole in the
-apuração suite. If `monthly_apuracao` changes, re-check the equivalence argument above
-rather than just raising the bound.
+So the bound the job enforces is zero: it reads `mutmut export-cicd-stats` and fails on
+the first survivor. If one appears and is genuinely equivalent, restate the rule so it
+is not, rather than raising the bound.
 
 The other clauses all guard one failure — the gate going green having tested less than
-it claims — because `survived` alone is easy to hold at 6 while the work disappears:
+it claims — because `survived` alone is easy to hold at zero while the work disappears:
 
 - **`no_tests == 0`** — a mutant no test even *executes*. Those are not survivors, so
   an uncovered new branch in `monthly_apuracao` would otherwise sail through.
-- **`total >= 128`** — a *falling* mutant count needs a human, whatever the cause. One
+- **`total >= 271`** — a *falling* mutant count needs a human, whatever the cause. One
   `# pragma: no mutate` on the `isento` line deletes 6 mutants of the R$20.000
   boundary; measured, every other clause stays green. Raise the floor when
   `apuracao.py` legitimately grows.

@@ -1,0 +1,92 @@
+name: Maintenance
+
+# Recompute derived data for existing users after a fix ships — the README's
+# "Recomputing existing data after a fix" says when and which. Runs
+# platform_app.maintenance inside the running worker container on the VPS: that
+# container has the taxcore and engine venvs, the uploads/artifacts volumes and
+# the procrastinate queue, and nothing is built or restarted.
+#
+# Dry run is the default. Read its counts, then run again with dry_run unticked.
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "reprocess-imports: rebuild every book from its uploaded extracts. rerun-backtests: recompute saved backtests, one at a time."
+        required: true
+        type: choice
+        options:
+          - reprocess-imports
+          - rerun-backtests
+      dry_run:
+        description: "Only report what would be done"
+        required: true
+        type: boolean
+        default: true
+      limit:
+        description: "At most N tenants / runs (digits; empty = all)"
+        required: false
+        type: string
+        default: ""
+
+# Deploy's group, so a maintenance run and a deploy never overlap: a deploy
+# restarts the worker this execs into, and the restart sweep closes whatever
+# backtest it caught as interrupted. Never cancelled midway either — a
+# rerun-backtests session killed between steps is recoverable, but a deploy
+# queued behind it should simply wait.
+concurrency:
+  group: deploy-b3
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    name: Maintenance task on the VPS
+    runs-on: ubuntu-latest
+    environment: production
+    # command_timeout below plus slack for the SSH handshake.
+    timeout-minutes: 320
+    steps:
+      - name: Run over SSH
+        # Same pinned action as deploy.yml, for the same reason: it is handed
+        # VPS_SSH_KEY.
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        # Inputs arrive as env vars and are validated in the script, never
+        # spliced into it with ${{ }}: `limit` is free text.
+        env:
+          TASK: ${{ inputs.task }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          LIMIT: ${{ inputs.limit }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          envs: TASK,DRY_RUN,LIMIT
+          # rerun-backtests is told to start no new run after 240 minutes, and
+          # one run is bounded by the queue and run timeouts (45 min at the
+          # default SUBPROCESS_TIMEOUT_S), so it ends on its own inside this.
+          command_timeout: 300m
+          script: |
+            set -euo pipefail
+            case "$TASK" in
+              reprocess-imports|rerun-backtests) ;;
+              *) echo "unknown task: '$TASK'"; exit 1 ;;
+            esac
+            case "$DRY_RUN" in
+              true|false) ;;
+              *) echo "dry_run must be true or false, got '$DRY_RUN'"; exit 1 ;;
+            esac
+            case "$LIMIT" in
+              "") ;;
+              0*|*[!0-9]*) echo "limit must be a positive whole number or empty, got '$LIMIT'"; exit 1 ;;
+            esac
+            set -- "$TASK"
+            if [ "$DRY_RUN" = "true" ]; then set -- "$@" --dry-run; fi
+            if [ -n "$LIMIT" ]; then set -- "$@" --limit "$LIMIT"; fi
+            if [ "$TASK" = "rerun-backtests" ]; then set -- "$@" --budget-minutes 240; fi
+            cd ${{ secrets.VPS_APP_DIR }}
+            echo "running: platform_app.maintenance $*"
+            docker compose --env-file .env.prod -f docker-compose.prod.yml \
+              exec -T worker python -m platform_app.maintenance "$@"

@@ -221,7 +221,8 @@ jobs:
       - run: docker build -f platform/Dockerfile -t b3-platform:ci .
       - name: What prod runs can be imported from the image
         # The engine modules are what tasks_ingest shells into, plus the strategy
-        # registry every backtest walks; platform_app is both entrypoints. No DB
+        # registry every backtest walks; platform_app is its three entrypoints (api,
+        # worker, and the maintenance CLI .github/workflows/maintenance.yml execs). No DB
         # here, so these only import — which is exactly the failure being caught.
         run: |
           set -euo pipefail
@@ -236,7 +237,7 @@ jobs:
               importlib.import_module(m)"
           run -w /opt/engine b3-platform:ci /opt/engine/.venv/bin/python scripts/list_strategies.py > /dev/null
           run -w /opt/taxcore b3-platform:ci /opt/taxcore/.venv/bin/python -c "import scripts.load_b3"
-          run b3-platform:ci python -c "import platform_app.main, platform_app.worker"
+          run b3-platform:ci python -c "import platform_app.main, platform_app.worker, platform_app.maintenance"
 
   compose-config:
     name: Production compose config

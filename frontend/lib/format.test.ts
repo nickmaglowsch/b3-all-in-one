@@ -6,7 +6,10 @@ import {
   compactBRL,
   formatDate,
   formatDateTime,
+  formatInstantDate,
   formatInt,
+  fractionShown,
+  moneyShown,
   formatMetricPct,
   formatMoney,
   formatPercent,
@@ -30,6 +33,20 @@ test("o sinal explícito só aparece no positivo, e nunca duplica o negativo", (
   assert.equal(plain(formatMoney(-10, true)), "-R$ 10,00");
   assert.equal(plain(formatMoney(0, true)), "R$ 0,00", "zero não é ganho");
   assert.equal(plain(formatMoney(10)), "R$ 10,00", "sem pedir, sem sinal");
+});
+
+// Preço de mercado igual ao custo dá um P&L de −1e-10: poeira de float, que o
+// Intl imprimia como "-R$ 0,00" — e o Money pintava de vermelho.
+test("abaixo do último dígito impresso é zero, sem sinal", () => {
+  assert.equal(plain(formatMoney(-1e-10)), "R$ 0,00");
+  assert.equal(plain(formatMoney(-0.004, true)), "R$ 0,00");
+  assert.equal(plain(formatMoney(0.004, true)), "R$ 0,00", "nem +R$ 0,00");
+  assert.equal(plain(formatMoney(-0)), "R$ 0,00");
+  assert.equal(plain(formatMoney(-0.005)), "-R$ 0,01", "um centavo já é um centavo");
+  assert.equal(moneyShown(-1e-10), 0);
+  assert.equal(plain(formatPercent(-1e-7)), "0,0%");
+  assert.equal(fractionShown(-1e-7), 0);
+  assert.equal(fractionShown(-0.0001), -0.0001);
 });
 
 // A entrada é fração, não percentual. Trocar as duas convenções multiplica por
@@ -77,6 +94,15 @@ test("a data não muda com o fuso da máquina que renderiza", () => {
 test("o horário é o de São Paulo, e pode recuar o dia", () => {
   assert.equal(formatDateTime("2026-03-02T01:00:00Z"), "01/03/2026 às 22:00");
   assert.equal(formatDate("2026-03-02T01:00:00Z"), "02/03/2026", "o contraste");
+});
+
+// Uma rodada criada às 22:30 em São Paulo é gravada 01:30Z do dia seguinte.
+test("o dia de um timestamp é o de São Paulo; uma data pura passa direto", () => {
+  assert.equal(formatInstantDate("2026-03-02T01:30:00+00:00"), "01/03/2026");
+  assert.equal(formatInstantDate("2026-03-02T15:00:00Z"), "02/03/2026");
+  assert.equal(formatInstantDate("2026-03-02"), "02/03/2026");
+  assert.equal(formatInstantDate(null), "—");
+  assert.equal(formatInstantDate("não é data nenhuma"), "não é data nenhuma");
 });
 
 test("o horário também não depende do fuso da máquina", () => {

@@ -11,6 +11,7 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { LineSeries } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { useChartMode } from "@/components/charts/ChartMode";
+import { toTwrRows } from "@/lib/chartMode";
 import { IconClock, IconChart } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import {
@@ -220,18 +221,19 @@ interface TableRow {
 }
 
 function Results({ data }: { data: WhatIfResult }) {
-  const { rows: curveRows, series } = useMemo(
+  const { rows: curveRows, series, flows } = useMemo(
     () => overlayCurves(data.scenarios),
     [data.scenarios],
   );
   // The chart's window only. The "Comparação" table below is the engine's
   // figures over the whole replay and does not follow it — said so in its note.
   const period = useDateRange({ min: curveRows[0]?.date, max: data.as_of });
-  // Every scenario replays the same aportes, so in reais the lines are directly
-  // comparable — but the question being asked is "which veículo did more with
-  // the same money", and that is a percentage. Sliced first, then rebased: 0% is
-  // the left edge of what is on screen.
-  const unit = useChartMode({ format: compactBRL, of: "patrimônio" });
+  // Same aportes everywhere, so the question is "which veículo did more with the
+  // same money": a percentage, sliced then rebased (0% = left edge on screen), and
+  // time-weighted — value/first − 1 called R$10k plus R$90k of aportes "+900%".
+  const unit = useChartMode({
+    format: compactBRL, of: "patrimônio", toReturn: (rows) => toTwrRows(rows, flows),
+  });
   const windowed = unit.apply(period.slice(curveRows));
 
   const tableRows: TableRow[] = [
@@ -344,7 +346,8 @@ function Results({ data }: { data: WhatIfResult }) {
         <DataTable columns={columns} rows={tableRows} getRowKey={(r) => r.label} label="Resultado da simulação" />
         <p className="mt-3 text-xs leading-snug text-muted">
           &quot;Retorno&quot; é o valor final sobre o total aportado (não anualizado).
-          Comparação após impostos; a carteira real usa o valor de mercado das
+          No gráfico em %, o retorno é ponderado pelo tempo: aporte não conta como
+          ganho. Comparação após impostos; a carteira real usa o valor de mercado das
           posições atuais. Aproximação: cada aporte é aplicado no rebalance
           seguinte.
           {isFiltered(period.range) &&

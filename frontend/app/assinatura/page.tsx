@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { useBrowserValue, useSubscription } from "@/lib/hooks";
-import { formatDate } from "@/lib/format";
+import { formatInstantDate } from "@/lib/format";
 import {
   alternaModulo,
   AVULSOS,
@@ -81,7 +81,7 @@ function Renovacao({ sub }: { sub?: Subscription }) {
   if (sub?.status && SUSPENSA.includes(sub.status)) {
     return <>Assinatura suspensa — o acesso volta com o próximo pagamento.</>;
   }
-  if (sub?.renews_at) return <>Renova em {formatDate(sub.renews_at)}</>;
+  if (sub?.renews_at) return <>Renova em {formatInstantDate(sub.renews_at)}</>;
   return <>Sem assinatura ativa.</>;
 }
 

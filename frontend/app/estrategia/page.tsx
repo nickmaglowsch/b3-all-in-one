@@ -8,14 +8,13 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { PctDelta } from "@/components/ui/PctDelta";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, LoadFailure } from "@/components/ui/EmptyState";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { DivergingBars } from "@/components/charts/DivergingBars";
 import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
-import { usePositions } from "@/lib/hooks";
-import { REBALANCE_FREQS, compactBRL, formatDate, formatPercent } from "@/lib/format";
+import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
 import {
   useDeleteUserStrategy,
@@ -25,21 +24,16 @@ import {
 } from "@/lib/strategies";
 import {
   CASH_REF,
-  DEFAULT_REBALANCE,
-  useAssetOverrides,
   useCreateBacktest,
   useRebalancePlan,
-  useRebalanceSettings,
-  useSaveAssetOverrides,
-  useSaveRebalanceSettings,
   useSaveSleeves,
   useSleeves,
   useStrategies,
   useTarget,
   type RebalancePlan,
-  type RebalanceSettings,
   type TradeLine,
 } from "./lib";
+import { SettingsPanel } from "./Settings";
 
 const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
 
@@ -66,12 +60,29 @@ export default function EstrategiaPage() {
       />
 
       <div className="space-y-4">
-        <div id="sleeves" className={ANCHOR}>
-          <SleevesEditor />
-        </div>
-        <div id="configuracoes" className={ANCHOR}>
-          <SettingsPanel />
-        </div>
+        {/* Without the saved sleeves the editor would open empty — and saving an
+            empty-looking editor is how a real target gets overwritten. The
+            settings behind it share the gate, so they go with it. */}
+        {sleeves.isError ? (
+          <Card title="Sleeves">
+            <LoadFailure
+              error={sleeves.error}
+              icon={<IconCompass size={28} />}
+              title="Não foi possível carregar seus sleeves."
+              offerTitle={(nome) => `Sleeves, alvo e rebalanceamento vêm com o módulo ${nome}.`}
+              onRetry={() => sleeves.refetch()}
+            />
+          </Card>
+        ) : (
+          <>
+            <div id="sleeves" className={ANCHOR}>
+              <SleevesEditor />
+            </div>
+            <div id="configuracoes" className={ANCHOR}>
+              <SettingsPanel />
+            </div>
+          </>
+        )}
         {sleeves.isLoading ? (
           <Skeleton className="h-40 w-full" />
         ) : hasSleeves ? (
@@ -123,6 +134,11 @@ function SleevesEditor() {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [editId, setEditId] = useState<string | undefined>();
+  // The live sleeves as they stood when "Editar" borrowed the rows for a saved
+  // carteira. The rows are shared, so without this a cancelled edit left the
+  // carteira's mix sitting in the live editor — dirty, so never reseeded, and
+  // one "Salvar" away from becoming the rebalance target.
+  const [live, setLive] = useState<{ rows: Row[]; dirty: boolean } | null>(null);
 
   // Seed the editor from server data on first load and after each save (when not
   // mid-edit). Adjusting state during render — guarded by reference identity so it
@@ -190,10 +206,15 @@ function SleevesEditor() {
   const hasBlank = rows.some((r) => !r.strategy_ref || r.target_pct.trim() === "");
   const sumOk = Math.abs(sum - 100) < 0.01;
   const sleevesValid = rows.length > 0 && sumOk && !hasDup && !hasBlank;
-  const canSave = sleevesValid && !save.isPending;
+  // While a saved carteira is in the editor its rows are not the live target, so
+  // the live "Salvar" stays off until the edit ends.
+  const canSave = sleevesValid && !save.isPending && !editId;
   const canSaveStrat = sleevesValid && name.trim() !== "" && !saveStrat.isPending;
 
   const loadStrategy = (u: UserStrategy) => {
+    // Only the first "Editar" snapshots: switching between carteiras mid-edit
+    // must still restore the live rows, not the previous carteira's.
+    if (!editId) setLive({ rows, dirty });
     setDirty(true);
     setRows(specToRows(u.spec));
     setName(u.name);
@@ -203,6 +224,23 @@ function SleevesEditor() {
     document
       .getElementById("sleeves")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  // Leave carteira-editing mode and hand the editor back to the live sleeves:
+  // the rows as they were (a pending live edit survives), or — if they were
+  // clean — a reseed from the server, which may have moved since (Ativar).
+  const endEdit = () => {
+    setName("");
+    setDesc("");
+    setEditId(undefined);
+    if (!live) return;
+    if (live.dirty) {
+      setRows(live.rows);
+    } else {
+      setDirty(false);
+      setSyncedFrom(null);
+    }
+    setLive(null);
   };
 
   const onSaveStrat = () =>
@@ -219,13 +257,7 @@ function SleevesEditor() {
           })),
         },
       },
-      {
-        onSuccess: () => {
-          setName("");
-          setDesc("");
-          setEditId(undefined);
-        },
-      },
+      { onSuccess: endEdit },
     );
 
   const edit = (patch: (rs: Row[]) => Row[]) => {
@@ -246,7 +278,7 @@ function SleevesEditor() {
   return (
     <div className="space-y-4">
     <Card
-      title="Sleeves"
+      title={editId ? "Sleeves · editando carteira salva" : "Sleeves"}
       action={
         <span
           className={`font-mono text-[11px] ${sumOk ? "text-muted" : "text-loss"}`}
@@ -329,68 +361,101 @@ function SleevesEditor() {
           )}
           <Warnings warnings={save.data?.warnings} />
 
-          <div className="space-y-2 border-t border-hairline pt-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted">
-              {editId ? "Editar carteira" : "Salvar como estratégia"}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Nome da carteira"
-                className="min-w-[10rem] flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
-              />
-              <input
-                value={desc}
-                onChange={(e) => setDesc(e.target.value)}
-                placeholder="Descrição (opcional)"
-                className="min-w-[10rem] flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
-              />
-              <button
-                type="button"
-                onClick={onSaveStrat}
-                disabled={!canSaveStrat}
-                className="rounded-md bg-navy px-4 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {saveStrat.isPending
-                  ? "Salvando…"
-                  : editId
-                    ? "Atualizar"
-                    : "Salvar como estratégia"}
-              </button>
-              {editId && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditId(undefined);
-                    setName("");
-                    setDesc("");
-                    saveStrat.reset();
-                  }}
-                  className="rounded-md border border-hairline px-3 py-1.5 text-xs text-muted hover:bg-hairline/40"
-                >
-                  Cancelar
-                </button>
-              )}
-            </div>
-            <p className="text-[11px] text-muted">
-              Salva a alocação atual como carteira nomeada — dá para backtestar e
-              ativar em “Minhas carteiras”.
-            </p>
-            {saveStrat.error && (
-              <p className="text-xs text-loss" role="alert">
-                {errorText(saveStrat.error, "Falha ao salvar a estratégia.")}
-              </p>
-            )}
-            {saveStrat.isSuccess && (
-              <p className="text-xs text-gain">Carteira salva.</p>
-            )}
-            <Warnings warnings={saveStrat.data?.warnings} />
-          </div>
+          <StrategySaveForm
+            name={name}
+            setName={setName}
+            desc={desc}
+            setDesc={setDesc}
+            editing={!!editId}
+            saveStrat={saveStrat}
+            canSave={canSaveStrat}
+            onSave={onSaveStrat}
+            onCancel={() => {
+              endEdit();
+              saveStrat.reset();
+            }}
+          />
         </div>
       )}
     </Card>
     <MinhasCarteiras onEdit={loadStrategy} activeEditId={editId} />
+    </div>
+  );
+}
+
+// "Salvar como estratégia" / "Editar carteira": names the editor's rows as a
+// saved fixed_weight carteira. Cancelar and a successful Atualizar both end the
+// edit, which hands the rows back to the live sleeves (SleevesEditor.endEdit).
+function StrategySaveForm({
+  name,
+  setName,
+  desc,
+  setDesc,
+  editing,
+  saveStrat,
+  canSave,
+  onSave,
+  onCancel,
+}: {
+  name: string;
+  setName: (v: string) => void;
+  desc: string;
+  setDesc: (v: string) => void;
+  editing: boolean;
+  saveStrat: ReturnType<typeof useSaveUserStrategy>;
+  canSave: boolean;
+  onSave: () => void;
+  onCancel: () => void;
+}) {
+  const label = editing ? "Atualizar" : "Salvar como estratégia";
+  return (
+    <div className="space-y-2 border-t border-hairline pt-3">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted">
+        {editing ? "Editar carteira" : "Salvar como estratégia"}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Nome da carteira"
+          className="min-w-[10rem] flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
+        />
+        <input
+          value={desc}
+          onChange={(e) => setDesc(e.target.value)}
+          placeholder="Descrição (opcional)"
+          className="min-w-[10rem] flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 text-sm text-ink"
+        />
+        <button
+          type="button"
+          onClick={onSave}
+          disabled={!canSave}
+          className="rounded-md bg-navy px-4 py-1.5 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {saveStrat.isPending ? "Salvando…" : label}
+        </button>
+        {editing && (
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-hairline px-3 py-1.5 text-xs text-muted hover:bg-hairline/40"
+          >
+            Cancelar
+          </button>
+        )}
+      </div>
+      <p className="text-[11px] text-muted">
+        {editing
+          ? "Editando uma carteira salva — os sleeves ativos não mudam. Cancelar ou Atualizar devolve o editor a eles."
+          : "Salva a alocação atual como carteira nomeada — dá para backtestar e ativar em “Minhas carteiras”."}
+      </p>
+      {saveStrat.error && (
+        <p className="text-xs text-loss" role="alert">
+          {errorText(saveStrat.error, "Falha ao salvar a estratégia.")}
+        </p>
+      )}
+      {saveStrat.isSuccess && <p className="text-xs text-gain">Carteira salva.</p>}
+      <Warnings warnings={saveStrat.data?.warnings} />
     </div>
   );
 }
@@ -431,6 +496,13 @@ function MinhasCarteiras({
     <Card id="carteiras" className={ANCHOR} title="Minhas carteiras">
       {userStrats.isLoading ? (
         <Skeleton className="h-20 w-full" />
+      ) : userStrats.isError ? (
+        <LoadFailure
+          error={userStrats.error}
+          title="Não foi possível carregar suas carteiras salvas."
+          offerTitle={(nome) => `Carteiras salvas vêm com o módulo ${nome}.`}
+          onRetry={() => userStrats.refetch()}
+        />
       ) : portfolios.length === 0 ? (
         <p className="text-sm text-muted">
           Nenhuma carteira salva. Monte os sleeves acima e use “Salvar como
@@ -459,7 +531,7 @@ function MinhasCarteiras({
                       {u.name}
                     </p>
                     <p className="font-mono text-[11px] text-muted">
-                      {nSleeves} sleeve(s) · atualizada {formatDate(u.updated_at)}
+                      {nSleeves} sleeve(s) · atualizada {formatInstantDate(u.updated_at)}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -540,184 +612,6 @@ function MinhasCarteiras({
         </ul>
       )}
     </Card>
-  );
-}
-
-// ── portfolio settings (spec/05 Features 3 & 4) ──────────────────────────────
-
-function SettingsPanel() {
-  return (
-    <Card title="Configurações da carteira">
-      <div className="space-y-6">
-        <AssetCdiSection />
-        <div className="border-t border-hairline pt-5">
-          <RebalanceBehaviorSection />
-        </div>
-      </div>
-    </Card>
-  );
-}
-
-// (a) mark a held asset as caixa/CDI-equivalent — folds into cash, not equity.
-function AssetCdiSection() {
-  const positions = usePositions();
-  const overrides = useAssetOverrides();
-  const save = useSaveAssetOverrides();
-
-  const cdi = useMemo(
-    () =>
-      new Set(
-        (overrides.data ?? [])
-          .filter((o) => o.treatment === "cash_cdi")
-          .map((o) => o.ticker),
-      ),
-    [overrides.data],
-  );
-
-  const tickers = useMemo(
-    () => (positions.data ?? []).map((p) => p.ticker).sort(),
-    [positions.data],
-  );
-
-  const toggle = (ticker: string) => {
-    const next = new Set(cdi);
-    if (next.has(ticker)) next.delete(ticker);
-    else next.add(ticker);
-    save.mutate([...next].map((t) => ({ ticker: t, treatment: "cash_cdi" })));
-  };
-
-  return (
-    <div>
-      <p className="text-sm font-semibold text-ink">Ativo como caixa (CDI)</p>
-      <p className="mb-3 mt-0.5 text-xs text-muted">
-        Marque ativos de renda fixa/caixa (ex.: LFTB11) para tratá-los como caixa: eles
-        deixam de aparecer no desvio e não são vendidos como ação — passam a cumprir o
-        alvo de caixa.
-      </p>
-
-      {positions.isLoading ? (
-        <Skeleton className="h-16 w-full" />
-      ) : tickers.length === 0 ? (
-        <p className="text-sm text-muted">Nenhuma posição na carteira.</p>
-      ) : (
-        <div className="flex flex-wrap gap-1.5">
-          {tickers.map((t) => {
-            const on = cdi.has(t);
-            return (
-              <button
-                key={t}
-                type="button"
-                onClick={() => toggle(t)}
-                disabled={save.isPending}
-                aria-pressed={on}
-                title={on ? "Tratado como caixa (CDI)" : "Tratar como caixa (CDI)"}
-                className={`rounded-[4px] border px-1.5 py-0.5 font-mono text-[11px] uppercase tracking-wide disabled:opacity-50 ${
-                  on
-                    ? "border-navy bg-navy text-white"
-                    : "border-hairline bg-paper text-muted hover:bg-hairline/40"
-                }`}
-              >
-                {t}
-              </button>
-            );
-          })}
-        </div>
-      )}
-      {save.error && (
-        <p className="mt-2 text-xs text-loss" role="alert">
-          {errorText(save.error, "Falha ao salvar.")}
-        </p>
-      )}
-    </div>
-  );
-}
-
-// (b) rebalance behavior: buy-only-laggards, sell-only-for-harvest, cadence.
-function RebalanceBehaviorSection() {
-  const settings = useRebalanceSettings();
-  const save = useSaveRebalanceSettings();
-  const cur: RebalanceSettings = settings.data ?? DEFAULT_REBALANCE;
-
-  const patch = (p: Partial<RebalanceSettings>) => save.mutate({ ...cur, ...p });
-
-  return (
-    <div>
-      <p className="text-sm font-semibold text-ink">Comportamento do rebalanceamento</p>
-      <p className="mb-3 mt-0.5 text-xs text-muted">
-        Ajusta como o plano é montado. O planejador abaixo já reflete estas opções.
-      </p>
-
-      {settings.isLoading ? (
-        <Skeleton className="h-24 w-full" />
-      ) : (
-        <div className="space-y-3">
-          <Toggle
-            checked={cur.buy_only_laggards}
-            disabled={save.isPending}
-            onChange={(v) => patch({ buy_only_laggards: v })}
-            label="Apenas aportar nos atrasados"
-            hint="Sem vendas para trimar — só distribui o aporte nos ativos abaixo do alvo."
-          />
-          <Toggle
-            checked={cur.sell_only_for_harvest}
-            disabled={save.isPending}
-            onChange={(v) => patch({ sell_only_for_harvest: v })}
-            label="Vender só para colher prejuízo"
-            hint="Mantém apenas as vendas que realizam prejuízo dedutível (tax-loss harvesting)."
-          />
-          <label className="flex items-center justify-between gap-3">
-            <span className="text-sm text-ink">Cadência de rebalanceamento</span>
-            <select
-              value={cur.cadence}
-              disabled={save.isPending}
-              onChange={(e) => patch({ cadence: e.target.value })}
-              className="rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink disabled:opacity-50"
-            >
-              {REBALANCE_FREQS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      )}
-      {save.error && (
-        <p className="mt-2 text-xs text-loss" role="alert">
-          {errorText(save.error, "Falha ao salvar.")}
-        </p>
-      )}
-    </div>
-  );
-}
-
-function Toggle({
-  checked,
-  onChange,
-  label,
-  hint,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  hint: string;
-  disabled?: boolean;
-}) {
-  return (
-    <label className="flex items-start gap-2.5">
-      <input
-        type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.checked)}
-        className="mt-0.5 h-4 w-4 shrink-0 accent-navy disabled:opacity-50"
-      />
-      <span>
-        <span className="block text-sm text-ink">{label}</span>
-        <span className="block text-xs text-muted">{hint}</span>
-      </span>
-    </label>
   );
 }
 
@@ -962,14 +856,11 @@ function PlanResult({ plan }: { plan: RebalancePlan }) {
                 </div>
                 <dl className="mt-2 space-y-1 text-sm">
                   <Line label="Vendas do mês" value={<Money value={b.gross_after} />} />
-                  <Line
-                    label={`Isenção (${compactBRL(isencao)})`}
-                    value={
-                      <span className={b.gross_after > isencao ? "text-loss" : "text-gain"}>
-                        {b.gross_after > isencao ? "ultrapassada" : "dentro"}
-                      </span>
-                    }
-                  />
+                  {/* Ações only: FIIs pay on every gain, so "dentro" in green
+                      would promise them an isenção they do not have. */}
+                  {cls === "AÇÃO" && (
+                    <IsencaoLine gross={b.gross_after} limit={isencao} />
+                  )}
                   <Line label="Imposto estimado" value={<Money value={b.ir} />} />
                   {b.harvest?.length > 0 && (
                     <Line
@@ -998,5 +889,19 @@ function Line({ label, value }: { label: string; value: React.ReactNode }) {
       <dt className="text-muted">{label}</dt>
       <dd>{value}</dd>
     </div>
+  );
+}
+
+function IsencaoLine({ gross, limit }: { gross: number; limit: number }) {
+  const over = gross > limit;
+  return (
+    <Line
+      label={`Isenção (${compactBRL(limit)})`}
+      value={
+        <span className={over ? "text-loss" : "text-gain"}>
+          {over ? "ultrapassada" : "dentro"}
+        </span>
+      }
+    />
   );
 }

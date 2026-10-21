@@ -197,11 +197,25 @@ test("assinatura vencida solta o livro do cliente em vez de abrir diálogo", asy
 
 test("um livro que não resolve mais é solto, e a aba se recupera", async () => {
   const { mod } = await load();
-  respond(() => json(404, { detail: "Carteira não encontrada" }));
+  // O texto exato de platform_app/tenancy._acting_tenant.
+  respond(() => json(404, { detail: "carteira não encontrada" }));
   mod.setPortfolioId(UUID);
   await rejection(mod.api("/posicoes"));
   assert.equal(mod.getPortfolioId(), null);
   assert.equal(state.reloads, 1);
+});
+
+// Um 404 de recurso dentro de um livro válido — backtest apagado, estratégia de
+// código sem spec — não diz nada sobre o livro. Soltá-lo jogava o assessor para
+// fora da carteira do cliente no meio de um clique.
+test("um 404 de recurso não solta o livro nem recarrega", async () => {
+  const { mod } = await load();
+  respond(() => json(404, { detail: "backtest not found" }));
+  mod.setPortfolioId(UUID);
+  const err = await rejection(mod.api("/backtests/abc"));
+  assert.equal(err.status, 404);
+  assert.equal(mod.getPortfolioId(), UUID);
+  assert.equal(state.reloads, 0);
 });
 
 // O 404 de uma rota de conta não fala do livro — soltá-lo aqui seria apagar a
@@ -224,6 +238,7 @@ test("um 402 de outro módulo abre o diálogo de upgrade, uma vez só", async ()
   assert.equal(state.events[0].type, mod.PAYWALL_EVENT);
   assert.deepEqual((state.events[0] as CustomEvent).detail, detail);
   assert.equal(mod.isModuleRequired(err.detail), true);
+  assert.equal(mod.requiredModuleOf(err), "bench");
 });
 
 // Um modal por cima de uma página que ninguém leu ainda é interrupção, não oferta.

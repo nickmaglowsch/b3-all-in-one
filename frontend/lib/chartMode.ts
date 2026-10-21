@@ -74,6 +74,51 @@ export function toReturnRows<T extends Dated>(rows: T[]): T[] {
   });
 }
 
+/** Per series, per date: the cash that entered that series on that row. */
+export type Flows = Record<string, Record<string, number>>;
+
+/**
+ * Like `toReturnRows`, for curves that take deposits: the time-weighted return
+ * from each series' first positive value in `rows`.
+ *
+ * A replay of real aportes is patrimônio, and patrimônio grows with every
+ * deposit — R$10k followed by R$90k more in a flat market is "+900%" to
+ * `toReturnRows`. Here each row's gain is measured net of the cash that landed
+ * on it, `(V_t − C_t) / V_{t−1}`, and chained: the engine's own
+ * `metrics.value_to_ret`, so the line agrees with its annual-return figure.
+ *
+ * The base is the first *positive* value, not the first one: a replay can open
+ * on rows of zero before its first deposit is deployed, and there is no return
+ * on nothing. A row whose predecessor is not positive carries the level over.
+ */
+export function toTwrRows<T extends Dated>(rows: T[], flows: Flows): T[] {
+  const level = new Map<string, number>();
+  const prev = new Map<string, number>();
+  return rows.map((row) => {
+    const out: Record<string, unknown> = { ...row };
+    for (const key of numericKeys([row])) {
+      const v = row[key as keyof T] as number;
+      const before = prev.get(key);
+      if (before === undefined) {
+        if (v > 0) {
+          level.set(key, 1);
+          prev.set(key, v);
+          out[key] = 0;
+        } else {
+          delete out[key];
+        }
+        continue;
+      }
+      const cash = flows[key]?.[row.date] ?? 0;
+      const lv = before > 0 ? level.get(key)! * ((v - cash) / before) : level.get(key)!;
+      level.set(key, lv);
+      prev.set(key, v);
+      out[key] = round(lv - 1);
+    }
+    return out as T;
+  });
+}
+
 /**
  * Total return of one column over the rows it actually appears in, as a
  * fraction — or null when the column is not on the chart at all.

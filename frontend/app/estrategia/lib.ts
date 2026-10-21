@@ -11,7 +11,9 @@ export const CASH_REF = "CASH_CDI";
 export function useSleeves() {
   return useQuery({
     queryKey: ["sleeves"],
-    queryFn: () => api<Sleeve[]>("/portfolio/sleeves"),
+    // Page-load queries below pass paywallDialog: false — the page renders the
+    // offer inline (LoadFailure) instead of a modal over a page not yet read.
+    queryFn: () => api<Sleeve[]>("/portfolio/sleeves", {}, { paywallDialog: false }),
   });
 }
 
@@ -34,7 +36,7 @@ export function useSaveSleeves() {
 export function useTarget() {
   return useQuery({
     queryKey: ["target"],
-    queryFn: () => api<Target>("/portfolio/target"),
+    queryFn: () => api<Target>("/portfolio/target", {}, { paywallDialog: false }),
     retry: false,
   });
 }
@@ -52,16 +54,11 @@ export interface RebalanceSettings {
   cadence: string; // ME | QE | W-FRI
 }
 
-export const DEFAULT_REBALANCE: RebalanceSettings = {
-  buy_only_laggards: false,
-  sell_only_for_harvest: false,
-  cadence: "ME",
-};
-
 export function useAssetOverrides() {
   return useQuery({
     queryKey: ["asset-overrides"],
-    queryFn: () => api<AssetOverride[]>("/portfolio/settings/asset-overrides"),
+    queryFn: () =>
+      api<AssetOverride[]>("/portfolio/settings/asset-overrides", {}, { paywallDialog: false }),
   });
 }
 
@@ -73,8 +70,12 @@ export function useSaveAssetOverrides() {
         method: "PUT",
         body: JSON.stringify(body),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["asset-overrides"] });
+    // The PUT replaces the whole set and echoes what it stored. Writing that echo
+    // into the cache *before* the mutation settles (and the chips unlock) is what
+    // keeps a quick second click from being built on the pre-save set — an
+    // invalidate alone leaves the old set in place until its refetch lands.
+    onSuccess: (saved) => {
+      qc.setQueryData(["asset-overrides"], saved);
       qc.invalidateQueries({ queryKey: ["target"] }); // drift/cash reflect the change
     },
   });
@@ -83,7 +84,8 @@ export function useSaveAssetOverrides() {
 export function useRebalanceSettings() {
   return useQuery({
     queryKey: ["rebalance-settings"],
-    queryFn: () => api<RebalanceSettings>("/portfolio/settings/rebalance"),
+    queryFn: () =>
+      api<RebalanceSettings>("/portfolio/settings/rebalance", {}, { paywallDialog: false }),
   });
 }
 
@@ -95,7 +97,10 @@ export function useSaveRebalanceSettings() {
         method: "PUT",
         body: JSON.stringify(body),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["rebalance-settings"] }),
+    // Same reason as the overrides: the next toggle is built from this cache.
+    onSuccess: (saved) => {
+      qc.setQueryData(["rebalance-settings"], saved);
+    },
   });
 }
 

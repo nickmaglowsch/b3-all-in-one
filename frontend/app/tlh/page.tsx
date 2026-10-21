@@ -14,62 +14,33 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { IconAlert } from "@/components/icons";
+import {
+  Metric,
+  SituationPanel,
+  type Bucket,
+  type HarvestRow,
+  type TlhPlan,
+} from "./situation";
 
 const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
-
-// ── API shapes (POST /tlh/plans) — mirrors taxcore/scripts/tlh_plan.py --json ──
-interface Situation {
-  gross_mtd: number;
-  pnl_mtd: number;
-  carry: number;
-}
-interface HarvestRow {
-  ticker: string;
-  qty: number;
-  price: number;
-  realized_loss: number;
-  partial: boolean;
-}
-interface Bucket {
-  status: string;
-  rationale: string;
-  gross_after: number;
-  pnl_after: number;
-  carry_used: number;
-  carry_after: number;
-  target_loss: number;
-  final_gross: number;
-  final_pnl: number;
-  ir: number;
-  harvest: HarvestRow[];
-  rebuys: { ticker: string; qty: number }[];
-}
-interface TlhPlan {
-  month: string;
-  isencao_limit: number;
-  rates: Record<string, number>;
-  situation: Record<string, Situation>;
-  buckets: Record<string, Bucket>;
-}
 
 interface SellDraft {
   ticker: string;
   qty: string;
 }
 
-const CLASSES = ["AÇÃO", "FII"] as const;
-
 export default function TlhPage() {
   const positions = usePositions();
   // Situation = month-to-date state; independent of hypothetical sells, so load
-  // it once with an empty plan.
+  // it once with an empty plan. On load, so a 402 is an inline offer, not a modal.
   const situation = useQuery({
     queryKey: ["tlh", "situation"],
     queryFn: () =>
-      api<TlhPlan>("/tlh/plans", {
-        method: "POST",
-        body: JSON.stringify({ sells: [] }),
-      }),
+      api<TlhPlan>(
+        "/tlh/plans",
+        { method: "POST", body: JSON.stringify({ sells: [] }) },
+        { paywallDialog: false },
+      ),
   });
 
   const [sells, setSells] = useState<SellDraft[]>([]);
@@ -102,9 +73,6 @@ export default function TlhPage() {
   }
   const anyInvalid = sells.length === 0 || sells.some((r) => rowError(r));
 
-  const situationData = plan.data?.situation ?? situation.data?.situation;
-  const limit = plan.data?.isencao_limit ?? situation.data?.isencao_limit ?? 20000;
-
   function submit() {
     if (anyInvalid) return;
     plan.mutate({
@@ -132,16 +100,7 @@ export default function TlhPage() {
 
       {/* Situation panel */}
       <div id="situacao" className={`mb-6 grid gap-4 sm:grid-cols-2 ${ANCHOR}`}>
-        {situation.isPending
-          ? CLASSES.map((c) => <Skeleton key={c} className="h-36 w-full" />)
-          : CLASSES.map((c) => (
-              <SituationCard
-                key={c}
-                cls={c}
-                data={situationData?.[c]}
-                limit={c === "AÇÃO" ? limit : undefined}
-              />
-            ))}
+        <SituationPanel situation={situation} plan={plan.data} />
       </div>
 
       {/* Sells builder */}
@@ -193,74 +152,6 @@ export default function TlhPage() {
         ) : null}
       </div>
     </>
-  );
-}
-
-// ── Situation card ────────────────────────────────────────────────────────────
-function SituationCard({
-  cls,
-  data,
-  limit,
-}: {
-  cls: string;
-  data?: Situation;
-  limit?: number;
-}) {
-  const gross = data?.gross_mtd ?? 0;
-  const pct = limit ? Math.min(1, gross / limit) : 0;
-  const over = limit != null && gross > limit;
-  return (
-    <Card title={`${cls} · vendas em ${cls === "FII" ? "cotas" : "ações"}`}>
-      <div className="space-y-3">
-        <div>
-          <div className="flex items-baseline justify-between">
-            <span className="text-xs text-muted">Vendas no mês</span>
-            <span className="font-mono text-sm tnum tabular-nums text-ink">
-              {formatMoney(gross)}
-              {limit != null && (
-                <span className="text-muted"> / {formatMoney(limit)}</span>
-              )}
-            </span>
-          </div>
-          {limit != null && (
-            <>
-              <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-hairline">
-                <div
-                  className={`h-full rounded-full ${over ? "bg-loss" : "bg-navy"}`}
-                  style={{ width: `${Math.max(pct * 100, gross > 0 ? 4 : 0)}%` }}
-                />
-              </div>
-              <p className="mt-1 text-[11px] text-muted">
-                {over
-                  ? "Acima do limite — ganhos do mês são tributáveis."
-                  : "Limite de isenção mensal para ações."}
-              </p>
-            </>
-          )}
-        </div>
-        <Metric label="P&L do mês">
-          <Money value={data?.pnl_mtd ?? 0} sign />
-        </Metric>
-        <Metric label="Prejuízo a compensar">
-          <Money value={data?.carry ?? 0} />
-        </Metric>
-      </div>
-    </Card>
-  );
-}
-
-function Metric({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex items-baseline justify-between">
-      <span className="text-xs text-muted">{label}</span>
-      <span className="text-sm">{children}</span>
-    </div>
   );
 }
 

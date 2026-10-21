@@ -8,7 +8,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
 import { errorText } from "@/lib/api";
-import { formatDate } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { useDeleteBacktest } from "./lib";
 
 // Rows must be clickable → /bench/run?id=. DataTable (frozen) has no onRowClick, so
@@ -260,11 +260,4 @@ function RowActions({
       Excluir
     </button>
   );
-}
-
-function formatDateTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = formatDate(iso);
-  const t = iso.slice(11, 16);
-  return t ? `${d} ${t}` : d;
 }

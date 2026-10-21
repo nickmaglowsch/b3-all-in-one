@@ -1,16 +1,18 @@
 import asyncio
 import datetime
 import json
+import math
 import shutil
+import traceback
 import uuid
 from pathlib import Path
 
 from procrastinate import App, PsycopgConnector
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, insert, select, update
 
 from platform_app import b3run, enginerun, specstore, subprocs
 from platform_app.config import settings
-from platform_app.db import async_session_maker
+from platform_app.db import async_session_maker, xact_lock
 from platform_app.models import (
     BacktestRun, CashEvent, CostBasisOverride, Import, Position,
     RendaFixaMark, TaxSummary, Trade,
@@ -69,10 +71,60 @@ def _position_dict(tid: uuid.UUID, r: dict[str, str]) -> dict:
     )
 
 
+def _finite(obj):
+    """``obj`` with every NaN/Infinity replaced by None.
+
+    The engine's summary is parsed by json, which reads its bare `NaN` tokens
+    (a Sharpe over a flat curve, a drawdown over a zero start) as floats — and
+    Postgres JSONB rejects them, so the commit that stores the metrics would be
+    the thing that fails, after the run itself succeeded.
+    """
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, dict):
+        return {k: _finite(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_finite(v) for v in obj]
+    return obj
+
+
+async def _backtest_outcome(session, run: BacktestRun, run_id: str) -> dict:
+    """Run the engine for ``run``; the columns to store, success or not."""
+    # Absolute: the engine subprocess runs with cwd=engine, so a relative
+    # artifacts_dir would land under engine/, not where the API reads it.
+    out_dir = Path(settings.artifacts_dir).resolve() / run_id
+    # Point the registry at the tenant's user specs (empty for zero-spec tenants,
+    # so this is a no-op identical to today for built-in strategies).
+    extra_env = await specstore.user_specs_env(session, run.tenant_id)
+    # Hand the connection back for the minutes the engine runs.
+    await session.commit()
+    # The config goes on stdin: `params` is the tenant's free-form dict, and as
+    # one argv element anything past 128 KB failed the exec itself.
+    proc = await asyncio.to_thread(
+        enginerun.run_script, "run_backtest_json.py", [run.strategy, str(out_dir), "-"],
+        extra_env, stdin=json.dumps(run.params or {}),
+    )
+    if proc.returncode != 0:
+        return {"status": "error", "error": (proc.stderr or proc.stdout)[-2000:]}
+    try:
+        summary = subprocs.last_json(proc.stdout, strict=True)
+    except ValueError as e:
+        return {"status": "error", "error": f"{e}: {(proc.stderr or proc.stdout)[-1000:]}"}
+    return {"status": "done", "error": None, "metrics": _finite(summary),
+            "artifacts_path": str(out_dir)}
+
+
 @app.task(name="run_backtest")
 async def run_backtest(run_id: str) -> dict:
     """Shell into the engine venv to run one backtest. Writes artifacts under
-    ARTIFACTS_DIR/{run_id}/ and stores the metrics summary on the row."""
+    ARTIFACTS_DIR/{run_id}/ and stores the metrics summary on the row.
+
+    Whatever goes wrong in here ends with the row in `error`. A row left
+    `running` is never finished by anything, the retention routes refuse to
+    delete it, and it counts against BACKTEST_QUOTA forever — three of them and
+    the whole account is locked out of the bench. A dead *process* is the
+    startup sweep's to clean up; every failure this process survives is ours.
+    """
     rid = uuid.UUID(run_id)
     async with async_session_maker() as session:
         run = await session.get(BacktestRun, rid)
@@ -80,38 +132,29 @@ async def run_backtest(run_id: str) -> dict:
             return {"run_id": run_id, "status": "missing"}
         run.status = "running"
         await session.commit()
-
-        # Absolute: the engine subprocess runs with cwd=engine, so a relative
-        # artifacts_dir would land under engine/, not where the API reads it.
-        out_dir = Path(settings.artifacts_dir).resolve() / run_id
-        args = [run.strategy, str(out_dir), json.dumps(run.params or {})]
-        # Point the registry at the tenant's user specs (empty for zero-spec tenants,
-        # so this is a no-op identical to today for built-in strategies).
-        extra_env = await specstore.user_specs_env(session, run.tenant_id)
-        proc = await asyncio.to_thread(
-            enginerun.run_script, "run_backtest_json.py", args, extra_env
-        )
-        run.finished_at = datetime.datetime.now(datetime.timezone.utc)
-        if proc.returncode != 0:
-            run.status = "error"
-            run.error = (proc.stderr or proc.stdout)[-2000:]
-            await session.commit()
-            return {"run_id": run_id, "status": "error", "error": run.error}
-
         try:
-            summary = subprocs.last_json(proc.stdout, strict=True)
-        except ValueError as e:
-            run.status = "error"
-            run.error = f"{e}: {(proc.stderr or proc.stdout)[-1000:]}"
+            outcome = await _backtest_outcome(session, run, run_id)
+            for column, value in outcome.items():
+                setattr(run, column, value)
+            run.finished_at = datetime.datetime.now(datetime.timezone.utc)
             await session.commit()
-            return {"run_id": run_id, "status": "error", "error": run.error}
-
-        run.status = "done"
-        run.error = None
-        run.metrics = summary
-        run.artifacts_path = str(out_dir)
-        await session.commit()
-        return {"run_id": run_id, "status": "done"}
+        except Exception:
+            await session.rollback()
+            # Logged with a ref, not stored: the message of an arbitrary
+            # exception here is SQL and parameters, not anything a tenant reads.
+            outcome = {"status": "error",
+                       "error": subprocs.report("backtest", traceback.format_exc())}
+            # A statement, not the instance: after the rollback `run` is
+            # expired, and reloading it is one more thing that can fail here.
+            await session.execute(
+                update(BacktestRun).where(BacktestRun.id == rid)
+                .values(**outcome, finished_at=datetime.datetime.now(datetime.timezone.utc))
+                .execution_options(synchronize_session=False)
+            )
+            await session.commit()
+    if outcome["status"] == "error":
+        return {"run_id": run_id, "status": "error", "error": outcome["error"]}
+    return {"run_id": run_id, "status": "done"}
 
 
 @app.task(name="process_imports")
@@ -174,6 +217,25 @@ async def process_imports(tenant_id: str) -> dict:
                 )
 
         proc, trades, events, positions, rf_marks = await asyncio.to_thread(_work)
+
+        # Two uploads in quick succession are two jobs over two snapshots, and
+        # the worker's two slots run them in parallel. Unserialised, the older
+        # snapshot could finish last and replace the book without the newer
+        # extract, or the two delete+inserts could interleave and keep both
+        # copies of every trade. So: one writer per tenant at a time, and a
+        # writer whose snapshot is no longer the whole set stands down — the job
+        # the newer upload deferred covers everything this one read, and more.
+        await xact_lock(session, "imports", tid)
+        # load_b3 runs for minutes with the extracts already copied to a temp dir,
+        # so the book can be offboarded underneath it. Writing anyway would restore
+        # a deleted client's trades under a tenant_id nothing references — invisible
+        # to every route, but still their data, after a UI that promised deletion.
+        # DELETE /portfolios takes the imports with it, so their absence is the signal.
+        live = set(await session.scalars(select(Import.id).where(Import.tenant_id == tid)))
+        if not live:
+            return {"tenant_id": tenant_id, "status": "abandoned", "imports": 0}
+        if live - {imp.id for imp in imports}:
+            return {"tenant_id": tenant_id, "status": "superseded"}
         if proc.returncode != 0:
             msg = (proc.stderr or proc.stdout)[-2000:]
             for imp in imports:
@@ -182,45 +244,8 @@ async def process_imports(tenant_id: str) -> dict:
             await session.commit()
             return {"tenant_id": tenant_id, "status": "error", "error": msg}
 
-        # load_b3 runs for minutes with the extracts already copied to a temp dir,
-        # so the book can be offboarded underneath it. Writing anyway would restore
-        # a deleted client's trades under a tenant_id nothing references — invisible
-        # to every route, but still their data, after a UI that promised deletion.
-        # DELETE /portfolios takes the imports with it, so their absence is the signal.
-        still_live = await session.scalar(
-            select(func.count()).select_from(Import).where(Import.tenant_id == tid)
-        )
-        if not still_live:
-            return {"tenant_id": tenant_id, "status": "abandoned", "imports": 0}
-
-        # load_b3 prints one JSON object naming every file it read and the kind it
-        # sniffed. Best-effort: a parse failure must not fail an import whose CSVs
-        # already came back fine, it just leaves the uploaded guess in place.
-        sniffed: dict[str, str] = {}
-        for f in (subprocs.last_json(proc.stdout).get("files_loaded") or []):
-            if isinstance(f, dict) and f.get("name") and f.get("kind"):
-                sniffed[f["name"]] = f["kind"]
-
-        # Full replace per tenant, one transaction. Order preserved via ascending ids.
-        # TaxSummary goes with them: it is derived from exactly these rows, so
-        # leaving it would serve an isenção headroom and an IR devido computed
-        # against a book that no longer exists. Dropping it rather than
-        # recomputing here keeps this task's cost bounded — the next reader sees
-        # "nunca apurado" and asks for it.
-        for model in (Trade, CashEvent, Position, RendaFixaMark, TaxSummary):
-            await session.execute(delete(model).where(model.tenant_id == tid))
-        if trades:
-            await session.execute(insert(Trade), [_trade_dict(tid, r) for r in trades])
-        if events:
-            await session.execute(insert(CashEvent), [_event_dict(tid, r) for r in events])
-        if positions:
-            await session.execute(
-                insert(Position), [_position_dict(tid, r) for r in positions]
-            )
-        if rf_marks:
-            await session.execute(
-                insert(RendaFixaMark), [_rf_mark_dict(tid, r) for r in rf_marks]
-            )
+        sniffed = _sniffed_kinds(proc.stdout)
+        await _replace_book(session, tid, trades, events, positions, rf_marks)
         for imp in imports:
             imp.status = "done"
             imp.error = None
@@ -239,3 +264,34 @@ async def process_imports(tenant_id: str) -> dict:
             "trades": len(trades), "cash_events": len(events), "positions": len(positions),
             "rf_marks": len(rf_marks),
         }
+
+
+def _sniffed_kinds(stdout: str) -> dict[str, str]:
+    """``{filename: kind}`` from the JSON object load_b3 prints, naming every
+    file it read and the kind it sniffed. Best-effort: a parse failure must not
+    fail an import whose CSVs already came back fine, it just leaves the
+    uploaded guess in place."""
+    return {
+        f["name"]: f["kind"]
+        for f in (subprocs.last_json(stdout).get("files_loaded") or [])
+        if isinstance(f, dict) and f.get("name") and f.get("kind")
+    }
+
+
+async def _replace_book(session, tid: uuid.UUID, trades, events, positions, rf_marks) -> None:
+    """Full replace per tenant, in the caller's transaction. Order preserved via
+    ascending ids.
+
+    TaxSummary goes with them: it is derived from exactly these rows, so leaving
+    it would serve an isenção headroom and an IR devido computed against a book
+    that no longer exists. Dropping it rather than recomputing here keeps this
+    task's cost bounded — the next reader sees "nunca apurado" and asks for it.
+    """
+    for model in (Trade, CashEvent, Position, RendaFixaMark, TaxSummary):
+        await session.execute(delete(model).where(model.tenant_id == tid))
+    for model, rows, to_dict in (
+        (Trade, trades, _trade_dict), (CashEvent, events, _event_dict),
+        (Position, positions, _position_dict), (RendaFixaMark, rf_marks, _rf_mark_dict),
+    ):
+        if rows:
+            await session.execute(insert(model), [to_dict(tid, r) for r in rows])

@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 import asyncpg
 from fastapi import Depends
 from fastapi_users.db import SQLAlchemyUserDatabase
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -16,6 +17,24 @@ class Base(DeclarativeBase):
 
 engine = create_async_engine(settings.database_url)
 async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+
+
+async def xact_lock(session: AsyncSession, *key: object) -> None:
+    """Wait for, then hold until commit/rollback, the advisory lock ``key`` names.
+
+    For the delete-and-reinsert writes (sleeves, settings, DARFs, a tenant's
+    imported book). Under READ COMMITTED a second DELETE does not see the rows
+    the first transaction just inserted, so two overlapping replaces either trip
+    a unique constraint (a 500) or keep both sets (sleeves summing to 200%).
+    Taking this first makes them queue; the DELETE that runs second then sees
+    the first one's rows, since every statement takes a fresh snapshot.
+
+    Transaction-scoped, so a crashed holder can never strand it.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+        {"k": ":".join(str(k) for k in key)},
+    )
 
 
 # ── Engine market plane (raw asyncpg, ENGINE_DATABASE_URL) ────────────────────

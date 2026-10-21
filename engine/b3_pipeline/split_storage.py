@@ -86,6 +86,9 @@ def adjust_history_for_split(conn, market: str, symbol: str,
 
     NULL columns stay NULL — `NULL * x` is NULL on both backends — so a bar that
     never carried a BRL price does not acquire one here.
+
+    Does not commit. On its own this is the unguarded half of the operation;
+    `apply_split` is what runs it, inside the transaction that also records it.
     """
     from . import storage
 
@@ -96,29 +99,58 @@ def adjust_history_for_split(conn, market: str, symbol: str,
         "  WHERE market = ? AND symbol = ? AND date < ?",
         tuple([factor] * len(_SPLIT_SCALED_COLUMNS))
         + (market, symbol, str(execution_date)))
-    n = cur.rowcount or 0
-    conn.commit()
-    return n
+    return cur.rowcount or 0
 
 
-def record_applied_split(conn, market: str, split: dict, factor: float,
-                         rows_adjusted: int) -> None:
-    """Mark a split done, so no later run re-applies it.
+def apply_split(conn, market: str, split: dict, factor: float,
+                rescale: bool = True):
+    """Claim, re-scale and record one split as a single transaction.
 
-    Written after the adjustment: a crash between the two costs a repeat of one
-    symbol's UPDATE, which the `split_id` primary key then refuses. The cheap
-    direction.
+    The record and the re-scale commit together or not at all. Committed
+    separately, a process killed between them (OOM, a deploy, a timeout) left a
+    history already scaled with no record of it; the next run, its window still
+    reaching back over the split because no bar had been appended yet, scaled it
+    again — a 4-for-1 became a 16-for-1, with nothing to say so.
+
+    The record is written first, as the claim: `ON CONFLICT DO NOTHING` on the
+    `split_id` key, and only the run whose insert landed goes on to touch the
+    prices. A second process racing for the same split waits on the first one's
+    uncommitted row and then inserts nothing, rather than scaling a second time
+    in the gap between reading `applied_split_ids` and writing.
+
+    `rescale=False` records the split without touching any bar — for a symbol
+    the plane does not hold, which is genuinely done with zero rows.
+
+    Returns the rows re-scaled, or None when the split was already applied.
     """
     from . import storage
 
-    storage.execute(
-        conn,
-        "INSERT INTO applied_splits"
-        " (market, split_id, symbol, execution_date, split_from, split_to,"
-        "  factor, rows_adjusted)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-        " ON CONFLICT (market, split_id) DO NOTHING",
-        (market, split["id"], split["ticker"], str(split["execution_date"]),
-         float(split["split_from"]), float(split["split_to"]), float(factor),
-         int(rows_adjusted)))
-    conn.commit()
+    try:
+        claimed = storage.execute(
+            conn,
+            "INSERT INTO applied_splits"
+            " (market, split_id, symbol, execution_date, split_from, split_to,"
+            "  factor, rows_adjusted)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, NULL)"
+            " ON CONFLICT (market, split_id) DO NOTHING",
+            (market, split["id"], split["ticker"], str(split["execution_date"]),
+             float(split["split_from"]), float(split["split_to"]),
+             float(factor))).rowcount
+        if not claimed:
+            conn.commit()
+            return None
+        n = 0
+        if rescale:
+            n = adjust_history_for_split(
+                conn, market, str(split["ticker"]).upper().strip(),
+                split["execution_date"], factor)
+        storage.execute(
+            conn,
+            "UPDATE applied_splits SET rows_adjusted = ?"
+            " WHERE market = ? AND split_id = ?",
+            (int(n), market, split["id"]))
+        conn.commit()
+        return n
+    except Exception:
+        conn.rollback()
+        raise

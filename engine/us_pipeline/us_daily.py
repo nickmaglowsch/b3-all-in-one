@@ -13,9 +13,10 @@ return at the join. Re-scaling the old rows first makes the two sides
 comparable, and doing it in the other order would leave one session mis-joined
 until the next run, which is exactly long enough for a backtest to read it.
 
-**A split is applied once, ever.** `market_storage.applied_splits` is keyed on
-the vendor's own split id, so a retry, an overlapping window or a re-run cannot
-scale the same history twice. That matters more than it looks: a second
+**A split is applied once, ever.** `split_storage.applied_splits` is keyed on
+the vendor's own split id, and the re-scale commits in the same transaction as
+that record, so a retry, an overlapping window, a re-run or a crash halfway
+cannot scale the same history twice. That matters more than it looks: a second
 application of a 4-for-1 is not a visible failure, it is a history that is
 quietly four times too small, and nothing downstream could tell.
 
@@ -144,14 +145,15 @@ def apply_due_splits(conn, since, until, held: set) -> dict:
             continue
         factor = vendor.split_factor(s)
         symbol = str(s["ticker"]).upper().strip()
-        n = 0
+        n = split_storage.apply_split(
+            conn, MARKET, s, factor, rescale=symbol in held)
+        if n is None:
+            skipped += 1
+            continue
         if symbol in held:
-            n = split_storage.adjust_history_for_split(
-                conn, MARKET, symbol, s["execution_date"], factor)
             logger.info(
                 f"split {symbol} {s['split_from']}->{s['split_to']} on "
                 f"{s['execution_date']}: scaled {n:,} rows by {factor:g}")
-        split_storage.record_applied_split(conn, MARKET, s, factor, n)
         applied, rows = applied + 1, rows + n
     return {"splits_seen": len(splits), "splits_applied": applied,
             "splits_already_done": skipped, "rows_rescaled": rows}

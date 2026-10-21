@@ -350,6 +350,49 @@ there and also fails the procrastinate job; a run that finished but logged an
 ERROR along the way (a benchmark feed that was down, say) is `done` with those
 lines in `error`.
 
+### Recomputing existing data after a fix
+
+Derived rows are only rebuilt by the event that made them: a book by an upload, a
+backtest by a submission. A fix to the B3 parser or to the engine therefore leaves
+every existing tenant on the old numbers until something recomputes them.
+`platform_app/maintenance.py` is that something, run inside the worker container:
+
+- **`reprocess-imports`** — defers `process_imports` once for every tenant with at
+  least one import (priority −1, so a user's own upload or backtest goes first). The
+  task re-runs `load_b3` over all of the tenant's stored extracts, full-replaces
+  trades, cash events, positions and renda fixa marks, drops the cached tax summary
+  and moves each import through `processing` → `done`/`error` — imports stuck in
+  `processing` included. A tenant that already has one queued is skipped, and so is
+  one whose extract is missing on disk (the task would die on it and leave every
+  import `processing`); those are listed. Returns as soon as the jobs are queued; the
+  worker drains them two at a time.
+- **`rerun-backtests`** — every `done` run whose metrics lack `sharpe_risk_free`
+  (computed before #71) is recomputed in place, **one at a time**, so the quota of
+  in-flight runs never 429s anyone. Per run: back up `ARTIFACTS_DIR/{id}` and the
+  result columns to `ARTIFACTS_DIR/_maintenance/backup/{id}`, set the row to
+  `pending`, defer `run_backtest`, poll until it finishes. Success drops the backup;
+  an error, a timeout (running past `SUBPROCESS_TIMEOUT_S` + 5 min) or a job not
+  started within 3 × `SUBPROCESS_TIMEOUT_S` (cancelled) restores the old artifacts
+  and columns, so the user keeps the result they had, and the id goes into
+  `_maintenance/rerun-backtests-failed.txt` so later sessions skip it
+  (`--retry-failed` to try again). It is wall-clock bound — about as long as each
+  run takes, back to back — and restartable: a killed session leaves at most one run
+  mid-flight, which the next session settles from its backup before anything else.
+
+To run one in production: **Actions → Maintenance → Run workflow**, pick the task,
+leave **dry_run** ticked and read the counts in the log (imports per status and
+tenants that would be queued, or qualifying runs per tenant). Then run it again
+unticked — with a `limit` first, if you want to watch a few go through. The
+workflow shares `deploy.yml`'s concurrency group, so a deploy waits for it rather
+than restarting the worker underneath it; `rerun-backtests` starts no new run after
+240 minutes, so for a long backlog just run it again until the summary says
+`remaining=0`. A run that had to be restored turns the workflow red. Locally:
+
+```
+docker compose exec worker python -m platform_app.maintenance rerun-backtests --dry-run
+docker compose exec worker python -m platform_app.maintenance reprocess-imports --tenant <uuid>
+```
+
 ### Env vars (see `.env.example`)
 
 | Var | Default (host) | In-image |

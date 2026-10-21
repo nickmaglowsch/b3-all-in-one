@@ -13,6 +13,8 @@ module nobody imports is a cron that silently never fires.
 
 import asyncio
 import datetime
+import re
+import sys
 
 from platform_app import enginerun
 from platform_app.config import settings
@@ -33,8 +35,32 @@ from platform_app.tasks import app
 # previous one still runs (or while someone ingests by hand) would have two
 # processes writing the same COTAHIST file and the same price rows.
 
+# The pipelines log in two formats ("... - ERROR - ..." in b3_pipeline,
+# "... ERROR ..." in us_pipeline); the level word is what they share.
+_ERROR_LINE = re.compile(r"\b(ERROR|CRITICAL)\b")
+
+
+class IngestFailed(RuntimeError):
+    """The ingestion module exited non-zero. Raised after the ingest_runs row is
+    written, so the job is `failed` in procrastinate_jobs too rather than a
+    success whose only trace is a column nothing reads."""
+
+    def __init__(self, kind: str, run_id, detail: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"ingest {kind} failed (ingest_runs {run_id}):\n{detail}")
+
+
 async def _record_ingest(kind: str, args: list[str]) -> dict:
-    """Run an engine ingestion module, bracketed by an ingest_runs row."""
+    """Run an engine ingestion module, bracketed by an ingest_runs row.
+
+    The module's output is captured, so this is the only place it can surface.
+    A non-zero exit is recorded and then raised. A zero exit can still carry
+    errors: b3_pipeline lets its third-party steps (CDI/IPCA, Ibovespa, Tesouro,
+    external prices) fail alone ("fetch failed, continuing"), and those lines
+    were discarded with the rest of a successful run's output — the series went
+    stale behind a row saying `done`. They are kept in `error` on the done row, and every outcome is
+    printed for `docker compose logs ingest`.
+    """
     async with async_session_maker() as session:
         run = IngestRun(kind=kind, status="running")
         session.add(run)
@@ -43,16 +69,26 @@ async def _record_ingest(kind: str, args: list[str]) -> dict:
 
     proc = await asyncio.to_thread(enginerun.run_module, args)
 
+    if proc.returncode == 0:
+        status = "done"
+        output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        detail = "\n".join(
+            ln for ln in output.splitlines() if _ERROR_LINE.search(ln))[-4000:]
+    else:
+        status = "error"
+        detail = (proc.stderr or proc.stdout)[-4000:]
     async with async_session_maker() as session:
         row = await session.get(IngestRun, run_id)
         row.finished_at = datetime.datetime.now(datetime.timezone.utc)
-        if proc.returncode == 0:
-            row.status = "done"
-        else:
-            row.status = "error"
-            row.error = (proc.stderr or proc.stdout)[-4000:]
+        row.status = status
+        row.error = detail or None
         await session.commit()
-        return {"kind": kind, "status": row.status, "run_id": str(run_id)}
+
+    print(f"[ingest] {kind}: {status} (exit {proc.returncode}, ingest_runs {run_id})"
+          + (f"\n{detail}" if detail else ""), file=sys.stderr, flush=True)
+    if proc.returncode != 0:
+        raise IngestFailed(kind, run_id, detail)
+    return {"kind": kind, "status": status, "run_id": str(run_id)}
 
 
 @app.periodic(cron=settings.ingest_prices_cron)

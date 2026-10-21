@@ -22,6 +22,67 @@ import os
 from platform_app import tasks_ingest  # noqa: F401  (registers the periodics)
 from platform_app.tasks import app
 
+# What a row left `running` by a dead worker is closed with. The backtest one is
+# shown to the tenant, so it is in their language and says what to do; the
+# ingest one is read by whoever operates the box.
+INTERRUPTED_BACKTEST = (
+    "Interrompido: o worker reiniciou (deploy ou queda) enquanto este backtest "
+    "rodava. Envie de novo."
+)
+INTERRUPTED_INGEST = (
+    "interrupted: the ingest worker restarted (a deploy or a crash) while this "
+    "run was in progress; the next scheduled run starts from what had landed"
+)
+
+# Which rows each role may close. Only the worker that runs a kind of job knows
+# that none of it is in flight: the default worker restarting must not touch an
+# ingest the ingest worker is halfway through, and vice versa.
+_ORPHANS = {
+    "default": (
+        ("UPDATE backtest_runs SET status = 'error', error = %(msg)s,"
+         " finished_at = now()"
+         " WHERE status = 'running' AND created_at < now() RETURNING id"),
+        INTERRUPTED_BACKTEST,
+    ),
+    "ingest": (
+        ("UPDATE ingest_runs SET status = 'error', error = %(msg)s,"
+         " finished_at = now()"
+         " WHERE status = 'running' AND started_at < now() RETURNING id"),
+        INTERRUPTED_INGEST,
+    ),
+}
+
+
+async def _close_orphans(queues: list[str]) -> None:
+    """Fail the rows a previous incarnation of this worker left `running`.
+
+    A row only reaches `running` inside a worker, and a worker that dies mid-job
+    (a deploy outlasting stop_grace_period, an OOM kill, a host reboot) never
+    writes `done` or `error`. Nothing else ever would: procrastinate does not
+    retry a job whose worker vanished, so the row stays `running` for good. For
+    a backtest that is not cosmetic — routes.inflight_backtests counts it against
+    the tenant's quota forever and the retention endpoint refuses to delete it,
+    so three unlucky deploys lock a bench account out behind a 429 nobody clears.
+
+    Safe because each compose file runs exactly one container per role (fixed
+    container_name), and this runs before that container takes its first job:
+    anything `running` now belongs to a process that no longer exists. `now()`
+    is the transaction's start, so a row this process writes later never
+    matches. Scaling a role to several replicas would break that premise.
+    """
+    for queue in queues or ["default"]:
+        if queue not in _ORPHANS:
+            continue
+        sql, msg = _ORPHANS[queue]
+        closed = await app.connector.execute_query_all_async(sql, msg=msg)
+        if closed:
+            # print, not logging: nothing configures logging in this process, and
+            # this is the line an operator reading `docker compose logs` after a
+            # deploy is looking for.
+            ids = ", ".join(str(r["id"]) for r in closed)
+            print(f"[worker] closed {len(closed)} interrupted {queue} run(s): {ids}",
+                  flush=True)
+
 
 async def _run() -> None:
     queues = [q for q in os.environ.get("WORKER_QUEUES", "").split(",") if q]
@@ -34,6 +95,7 @@ async def _run() -> None:
         )
         if row["reg"] is None:
             await app.schema_manager.apply_schema_async()
+        await _close_orphans(queues)
         # ponytail: concurrency capped low — worker shares CPU on the single VPS
         # (spec 01). This is a throughput setting, not admission control: it says
         # how fast the queue drains, never how much one account may put in it.

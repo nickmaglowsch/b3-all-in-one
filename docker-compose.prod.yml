@@ -4,6 +4,11 @@
 # No ports are published: Caddy terminates TLS for b3-api.duckdns.org.
 #
 #   docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+#
+# That one-liner is fine for a first boot. To roll out over a running stack,
+# do what .github/workflows/deploy.yml does — build, `up --wait api`, then
+# `stop` and `up --wait` worker + ingest — or the api stays down while the
+# worker drains.
 services:
   api:
     build:
@@ -29,6 +34,18 @@ services:
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
       RUN_MIGRATIONS: "1"   # entrypoint runs `alembic upgrade head` before uvicorn
+      # Only what is listed here reaches the container — there is no env_file —
+      # so a knob the code reads but this file omits is a line in .env.prod that
+      # does nothing. Defaults are the code's own: empty means "unset" to the
+      # engine, and the Settings fields repeat config.py's value (an empty string
+      # would not parse as an int). test_prod_compose_env keeps them in step.
+      SUBPROCESS_TIMEOUT_S: ${SUBPROCESS_TIMEOUT_S:-600}
+      # The engine's memory guard and panel batching (backtests.core.memory,
+      # .panels) — the api runs backtest-shaped subprocesses of its own.
+      ENGINE_BACKTEST_MEM_MB: ${ENGINE_BACKTEST_MEM_MB:-}
+      ENGINE_BACKTEST_MEM_FRACTION: ${ENGINE_BACKTEST_MEM_FRACTION:-}
+      ENGINE_PANEL_BATCH: ${ENGINE_PANEL_BATCH:-}
+      ENGINE_MEM_TRACE: ${ENGINE_MEM_TRACE:-}
     volumes:
       - uploads_data:/data/uploads
       - artifacts_data:/data/artifacts
@@ -61,11 +78,29 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
+      SUBPROCESS_TIMEOUT_S: ${SUBPROCESS_TIMEOUT_S:-600}   # see api
+      ENGINE_BACKTEST_MEM_MB: ${ENGINE_BACKTEST_MEM_MB:-}
+      ENGINE_BACKTEST_MEM_FRACTION: ${ENGINE_BACKTEST_MEM_FRACTION:-}
+      ENGINE_PANEL_BATCH: ${ENGINE_PANEL_BATCH:-}
+      ENGINE_MEM_TRACE: ${ENGINE_MEM_TRACE:-}
     volumes:
       - uploads_data:/data/uploads       # same volumes as api: reads files the api saved,
       - artifacts_data:/data/artifacts   # writes backtest artifacts the api serves back
     networks:
       - shared
+    # New code waits for the new schema: the api runs `alembic upgrade head` before
+    # it reports healthy, and without this compose started the worker alongside
+    # it, so new worker code ran against the old schema until the migration landed
+    # — or for good, if the migration failed.
+    depends_on:
+      api:
+        condition: service_healthy
+    # On SIGTERM procrastinate stops taking jobs and waits for the ones it holds;
+    # Docker's default 10s then SIGKILLed every backtest and import a deploy
+    # caught mid-run. Two slots, each bounded by SUBPROCESS_TIMEOUT_S (10 min),
+    # plus the writes after. Whatever still outlives this is closed as
+    # interrupted when the next worker boots (worker._close_orphans).
+    stop_grace_period: 15m
     # Nothing here had a ceiling, and that is how a backtest took the site down.
     # One engine subprocess peaks at ~1.3 GB building the market plane and burns a
     # core for ~30s; the worker runs two at a time (worker.py concurrency=2). With
@@ -117,12 +152,35 @@ services:
       ALPHAVANTAGE_DAILY_BUDGET: ${ALPHAVANTAGE_DAILY_BUDGET:-}
       UPLOADS_DIR: /data/uploads
       ARTIFACTS_DIR: /data/artifacts
+      # The schedule and its bounds (config.py), with config.py's defaults — see
+      # the note on the api's environment.
+      INGEST_TIMEOUT_S: ${INGEST_TIMEOUT_S:-21600}
+      INGEST_START_YEAR: ${INGEST_START_YEAR:-2005}
+      INGEST_PRICES_CRON: ${INGEST_PRICES_CRON:-0 6 * * *}
+      INGEST_FUNDAMENTALS_CRON: ${INGEST_FUNDAMENTALS_CRON:-0 7 * * 0}
+      INGEST_INSTRUMENTS_CRON: ${INGEST_INSTRUMENTS_CRON:-0 9 * * *}
+      INGEST_CRYPTO_CRON: ${INGEST_CRYPTO_CRON:-0 4 * * *}
+      INGEST_US_FUNDAMENTALS_CRON: ${INGEST_US_FUNDAMENTALS_CRON:-0 8 * * 0}
+      INGEST_US_SYMBOLS_CRON: ${INGEST_US_SYMBOLS_CRON:-0 23 * * 1-5}
+      INGEST_US_LISTING_CRON: ${INGEST_US_LISTING_CRON:-0 22 * * 1-5}
+      INGEST_US_DAILY_CRON: ${INGEST_US_DAILY_CRON:-0 7 * * *}
+      INGEST_US_PRICES_CRON: ${INGEST_US_PRICES_CRON:-0 5 * * *}
+      INGEST_SPX_CRON: ${INGEST_SPX_CRON:-30 5 * * 1-5}
     volumes:
       # COTAHIST/CVM archives land here. Without a volume the scheduled run
       # re-downloads 1994..today on every container restart.
       - engine_data:/opt/engine/data
     networks:
       - shared
+    # Same reasoning as the worker's depends_on.
+    depends_on:
+      api:
+        condition: service_healthy
+    # Docker's default 10s killed whatever refresh a deploy landed on. One job at
+    # a time here, so this is long enough for a routine scheduled refresh to
+    # finish. A first backfill (hours) will not, and the next boot closes its row
+    # as interrupted; the next run fetches what is still missing.
+    stop_grace_period: 30m
     # A COTAHIST parse holds a year of bars in memory and this runs unattended at
     # 06:00, so it gets the same treatment. Roomier than the worker because a
     # first full backfill is a bigger frame than any single backtest, and it runs

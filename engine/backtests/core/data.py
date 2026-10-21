@@ -2,6 +2,7 @@
 Core utilities for backtesting with B3 data.
 """
 
+import bisect
 import glob
 import hashlib
 import os
@@ -343,6 +344,133 @@ def _get_rebalance_dates(db_path, start, end, freq, market="B3") -> pd.DatetimeI
 _PIT_TABLES = {"B3": ("fundamentals_pit", "filing_version"),
                "US": ("fundamentals_pit_us", "accn")}
 
+# Per market, the extra columns the PIT query carries: the document family
+# (see latest_period_rows) and, on B3, the fiscal slot a YTD figure belongs to
+# (see ttm_from_ytd). Constants only — interpolated into the SQL below.
+_PIT_EXTRA_COLUMNS = {
+    "B3": ("CASE WHEN f.doc_type IN ('DFP', 'ITR') THEN 'FS' ELSE f.doc_type END"
+           " AS doc_family, f.doc_type, f.fiscal_year, f.quarter, f.cnpj"),
+    # Every SEC fact is a financial-statement figure; one family.
+    "US": "'FS' AS doc_family",
+}
+
+# The CVM documents whose rows are periodic statements (one per period_end).
+# FRE/IPE rows are a different family: their period_end is the form's reference
+# date, not a fiscal period, so they must not compete with a quarter's.
+_STATEMENT_DOCS = ("DFP", "ITR")
+
+
+def latest_period_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop rows that were already superseded by a newer period when filed.
+
+    Point-in-time means "the newest period known on the date, in its latest
+    version" — not "the most recently filed row". CVM re-apresentações of an
+    earlier quarter are routine: Q1 filed in May, Q2 in August, Q1 v2 in
+    September. Keyed on filing_date alone, the September restatement became the
+    visible value and Q1's balance replaced Q2's until Q3 was filed.
+
+    A row survives when its period_end is at least the latest period_end
+    already filed for that ticker and document family, so a restatement of the
+    *current* period still overrides it and a restatement of an older one is
+    history. Families: DFP/ITR are one ("FS"); FRE, IPE and the like are their
+    own, because their period_end is a form reference date. Without a family
+    column every row is one family. Rows without a period_end are kept.
+
+    Callers drop the NaN rows of the metric first, so "newest period" is per
+    metric — a newer filing that lacks the metric does not hide an older value.
+
+    Returns the rows sorted by (ticker, filing_date, period_end,
+    filing_version): a "last" per (ticker, filing_date) is then the newest
+    period's latest version.
+    """
+    if df.empty or "period_end" not in df.columns:
+        return df
+    pe = pd.to_datetime(df["period_end"])
+    if "doc_family" in df.columns:
+        fam = df["doc_family"]
+    elif "doc_type" in df.columns:
+        fam = df["doc_type"].where(~df["doc_type"].isin(_STATEMENT_DOCS), "FS")
+    else:
+        fam = pd.Series("FS", index=df.index)
+    tmp = df.assign(_pe=pe, _fam=fam.fillna("FS").astype(str))
+    order = ["ticker", "filing_date", "_pe"]
+    if "filing_version" in tmp.columns:
+        order.append("filing_version")
+    tmp = tmp.sort_values(order, kind="stable")
+    running = tmp.groupby(["ticker", "_fam"], sort=False)["_pe"].cummax()
+    keep = tmp["_pe"].isna() | (tmp["_pe"] >= running)
+    return tmp.loc[keep].drop(columns=["_pe", "_fam"])
+
+
+def ttm_from_ytd(df: pd.DataFrame, metric: str) -> pd.Series:
+    """Trailing-twelve-month value of a YTD income metric, for every row of `df`.
+
+    CVM ITR income lines are stored year-to-date (cvm_parser._select_ytd_rows:
+    Q1 = 3 months, Q2 = 6, Q3 = 9), the DFP line is the year. So:
+
+      DFP (fiscal year Y):  TTM = annual(Y)
+      ITR (Y, quarter q):   TTM = YTD(Y, q) + annual(Y-1) - YTD(Y-1, q)
+
+    — the formula `cvm_main.compute_net_income_ttm` applies to net income, for
+    any metric. Prior-year components are taken as of the row's own filing date
+    (latest version filed by then), so a later restatement never leaks into an
+    earlier TTM. Missing components leave NaN; nothing is fabricated. Every
+    version gets its TTM, not only the latest — the original filing is what the
+    market saw until the restatement landed.
+
+    Needs columns doc_type, fiscal_year, quarter, filing_date, filing_version
+    and `metric`; groups by `cnpj` when present, else by `ticker`. Rows of any
+    other document type are NaN.
+    """
+    out = pd.Series(np.nan, index=df.index, dtype=float)
+    need = {"doc_type", "fiscal_year", "quarter", "filing_date", metric}
+    if df.empty or not need.issubset(df.columns):
+        return out
+    key = "cnpj" if "cnpj" in df.columns else "ticker"
+    rows = df[df["doc_type"].isin(_STATEMENT_DOCS) & df[metric].notna()
+              & df["fiscal_year"].notna()]
+    if rows.empty:
+        return out
+    ordered = rows.assign(filing_date=pd.to_datetime(rows["filing_date"])).sort_values(
+        ["filing_date"] + (["filing_version"] if "filing_version" in rows.columns else []),
+        kind="stable")
+
+    annual: dict = {}   # (key, fy) -> ([filing_date...], [value...])
+    ytd: dict = {}      # (key, fy, q) -> same
+    for r in ordered.itertuples():
+        k, fy = getattr(r, key), int(r.fiscal_year)
+        if r.doc_type == "DFP":
+            slot = annual.setdefault((k, fy), ([], []))
+        elif pd.notna(r.quarter):
+            slot = ytd.setdefault((k, fy, int(r.quarter)), ([], []))
+        else:
+            continue
+        slot[0].append(r.filing_date)
+        slot[1].append(float(getattr(r, metric)))
+
+    def _asof(slot, when):
+        if slot is None:
+            return None
+        i = bisect.bisect_right(slot[0], when)
+        return slot[1][i - 1] if i else None
+
+    vals = {}
+    for r in ordered.itertuples():
+        value = float(getattr(r, metric))
+        if r.doc_type == "DFP":
+            vals[r.Index] = value
+            continue
+        if pd.isna(r.quarter):
+            continue
+        k, fy, q = getattr(r, key), int(r.fiscal_year), int(r.quarter)
+        prior_annual = _asof(annual.get((k, fy - 1)), r.filing_date)
+        prior_ytd = _asof(ytd.get((k, fy - 1, q)), r.filing_date)
+        if prior_annual is not None and prior_ytd is not None:
+            vals[r.Index] = value + prior_annual - prior_ytd
+    if vals:
+        out.loc[list(vals)] = list(vals.values())
+    return out
+
 
 def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str,
                             market: str = "B3") -> pd.DataFrame:
@@ -361,12 +489,14 @@ def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str,
         return pd.DataFrame()
     table, version_col = _PIT_TABLES[market]
     cols = ", ".join(f"f.{m}" for m in metrics)
+    extra = _PIT_EXTRA_COLUMNS[market]
     sql = f"""
         SELECT
             f.ticker,
             f.filing_date,
             f.period_end,
             f.{version_col} AS filing_version,
+            {extra},
             {cols}
         FROM {table} f
         WHERE f.ticker IS NOT NULL
@@ -383,20 +513,30 @@ def _pit_frame(
     rebal_dates: pd.DatetimeIndex,
     start: str,
     staleness_days: int,
+    value: str | None = None,
 ) -> pd.DataFrame:
     """Long fundamentals rows -> wide point-in-time frame on the rebalance grid.
 
     Split out of load_fundamentals_pit so the single-metric entry point and the
     batched one share one implementation and cannot drift.
+
+    With `value` (a date column, e.g. ``"period_end"``), the frame holds that
+    column of the very row that supplies each `metric` cell instead of the
+    metric — as float days since 1970-01-01, NaN where the metric is NaN. That
+    is the anchor a share count needs for split adjustment.
     """
     sub = df.dropna(subset=[metric]) if not df.empty else df
     if sub.empty:
         return pd.DataFrame(index=rebal_dates, dtype=float)
+    # Newest period first, then latest version of it (see latest_period_rows).
+    sub = latest_period_rows(sub)
+    if value is not None:
+        days = (pd.to_datetime(sub[value]) - pd.Timestamp("1970-01-01")) / pd.Timedelta(days=1)
+        sub = sub.assign(**{metric: days})
 
-    # Pivot: index = filing_date, columns = ticker.
-    # aggfunc="last" picks the highest version when multiple versions share
-    # the same filing_date (rare, but possible) — the caller sorted by
-    # (ticker, filing_date, filing_version) so "last" is "highest version".
+    # Pivot: index = filing_date, columns = ticker. latest_period_rows sorted
+    # by (ticker, filing_date, period_end, filing_version), so aggfunc="last"
+    # is the newest period's highest version among rows sharing a filing_date.
     wide = sub.pivot_table(
         index="filing_date",
         columns="ticker",
@@ -519,6 +659,8 @@ def load_all_fundamentals(
         {"revenue": df, "net_income": df, "ebitda": df, "total_assets": df,
          "equity": df, "net_debt": df, "shares_outstanding": df}
         Ratio columns (pe_ratio, pb_ratio, ev_ebitda) are excluded — compute dynamically.
+        On B3 there is also "ebitda_ttm", derived from the YTD rows by
+        ttm_from_ytd (no stored column holds it).
     """
     # One scan of fundamentals_pit and one of prices for the whole set. Looping
     # load_fundamentals_pit meant eight of each — sixteen passes over two large
@@ -539,6 +681,16 @@ def load_all_fundamentals(
             import warnings
             warnings.warn(f"Failed to load fundamentals metric '{metric}': {e}")
             result[metric] = pd.DataFrame()
+    if market == "B3":
+        # CVM EBITDA is stored YTD like net income, but no TTM is materialized
+        # for it — so it is derived here, from the same rows (see ttm_from_ytd).
+        try:
+            ttm = df.assign(ebitda_ttm=ttm_from_ytd(df, "ebitda")) if not df.empty else df
+            result["ebitda_ttm"] = _pit_frame(ttm, "ebitda_ttm", rebal_dates, start, 400)
+        except Exception as e:
+            import warnings
+            warnings.warn(f"Failed to derive ebitda_ttm: {e}")
+            result["ebitda_ttm"] = pd.DataFrame()
     if tickers is not None and market == "B3":
         result = {m: _broadcast_roots_to_tickers(df_m, tickers) for m, df_m in result.items()}
     return result
@@ -719,3 +871,71 @@ def compute_ev_ebitda_dynamic(
     result = result.where(shares > 0)
     result = result.where(prices > 0)
     return result
+
+
+# ── Share counts on the price's basis (B3 splits / bonus shares) ──────────────
+
+def load_stock_actions(db_path: str) -> pd.DataFrame:
+    """Load stock_actions (ticker, ex_date, action_type, factor), dates parsed.
+
+    stock_actions is keyed by isin_code; map to tickers via the distinct
+    (isin_code, ticker) pairs observed in prices. An ISIN that traded under
+    multiple tickers yields one row per ticker (the caller filters by ticker).
+    """
+    sql = """
+        SELECT DISTINCT p.ticker, s.ex_date, s.action_type, s.factor
+        FROM stock_actions s
+        JOIN (SELECT DISTINCT isin_code, ticker FROM prices
+              WHERE isin_code != 'UNKNOWN') p
+          ON p.isin_code = s.isin_code
+    """
+    with storage.get_connection(db_path) as conn:
+        df = storage.read_sql(sql, conn)
+    df["ex_date"] = pd.to_datetime(df["ex_date"])
+    return df
+
+
+def action_factors(actions: pd.DataFrame) -> np.ndarray:
+    """New-shares-per-old-share for each stock_actions row.
+
+    STOCK_SPLIT / REVERSE_SPLIT: the factor is directly new/old (2.0, 0.1).
+    BONUS_SHARES: the factor is a percentage, so 1 + F/100.
+    """
+    f = actions["factor"].to_numpy(dtype=float)
+    return np.where(actions["action_type"].to_numpy() == "BONUS_SHARES", 1.0 + f / 100.0, f)
+
+
+def split_multiplier_frame(actions: pd.DataFrame, anchor: pd.DataFrame) -> pd.DataFrame:
+    """Share-count multiplier per cell: the stock actions with ex_date in
+    (anchor, row date], compounded — the frame form of sp500_b3.share_multiplier.
+
+    `anchor` is the period_end behind each share count, as float days since
+    1970-01-01 (what ``_pit_frame(..., value="period_end")`` returns); its index
+    is the rebalance grid and its columns are tickers. A share count filed
+    before a 1:10 desdobramento is a tenth of what trades at the rebalance; the
+    unadjusted close is already on the new basis, so their product was a tenth
+    of the company. Multiplying the count by this frame puts it on the close's
+    basis. Cells without an anchor, and tickers without actions, get 1.0.
+    Non-positive or missing factors are skipped rather than zeroing a count.
+    """
+    out = pd.DataFrame(1.0, index=anchor.index, columns=anchor.columns)
+    if actions is None or actions.empty or anchor.empty:
+        return out
+    a = actions[actions["ticker"].isin(anchor.columns)]
+    if a.empty:
+        return out
+    f = action_factors(a)
+    ok = np.isfinite(f) & (f > 0)
+    a = a.loc[ok].assign(_logf=np.log(f[ok]))
+    epoch, day = pd.Timestamp("1970-01-01"), pd.Timedelta(days=1)
+    t_days = ((pd.DatetimeIndex(anchor.index) - epoch) / day).to_numpy(dtype=float)
+    for tkr, g in a.groupby("ticker", sort=False):
+        g = g.sort_values("ex_date")
+        ex = ((pd.DatetimeIndex(g["ex_date"]) - epoch) / day).to_numpy(dtype=float)
+        logc = np.r_[0.0, np.cumsum(g["_logf"].to_numpy())]
+        anc = anchor[tkr].to_numpy(dtype=float)
+        has = ~np.isnan(anc)
+        it = np.searchsorted(ex, t_days, side="right")
+        ia = np.searchsorted(ex, np.where(has, anc, -np.inf), side="right")
+        out[tkr] = np.where(has & (ia <= it), np.exp(logc[it] - logc[ia]), 1.0)
+    return out

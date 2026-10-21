@@ -128,6 +128,23 @@ Two traps live there, both documented at length in `signals.yaml`:
   the CVM pipeline and is NULL on the US plane. Use instants only (equity,
   shares, price) or a same-slot ratio (a margin), which cancels the period out.
 
+### Fundamentals on B3: what the frames mean
+
+- **Income is year-to-date.** CVM's ITR income lines (`f_net_income`,
+  `f_ebitda` and their `_m` twins) are Q1 = 3 months, Q2 = 6, Q3 = 9; the DFP is
+  the year. Anything set against an annual quantity — a price, equity — must use
+  the trailing-twelve-month frames: `f_net_income_ttm` / `f_net_income_ttm_m`
+  (materialized by the CVM pipeline) and `f_ebitda_ttm` (derived on read by
+  `data.ttm_from_ytd`). `f_pe_ratio_dyn` and `f_ev_ebitda_dyn` are built on TTM.
+- **Newest period, then latest version.** At each date the PIT frames show the
+  newest `period_end` filed so far, in its latest version; a late restatement of
+  an *older* quarter does not replace a newer quarter (`data.latest_period_rows`).
+- **Share counts are on the close's basis.** `f_shares_outstanding` and
+  `f_shares_outstanding_m` are multiplied by the splits / bonus shares with
+  ex-date between the count's `period_end` and the rebalance date, so
+  `raw_close * f_shares_outstanding` is a market cap even across a
+  desdobramento.
+
 ## Two `kind`s of strategy
 
 ### `rank_and_hold` — factor-ranked equity book

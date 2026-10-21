@@ -175,7 +175,8 @@ def test_value_quality_composite_survives_a_missing_leg_and_dedups_roots():
     ni = pd.DataFrame(np.nan, index=idx, columns=cols)
     eq = pd.DataFrame(np.nan, index=idx, columns=cols)
     ni["WEGE3"], eq["WEGE3"] = 100.0, 100.0
-    shared["f_net_income"], shared["f_equity"] = ni, eq
+    # ROE reads TTM income (ITR f_net_income is year-to-date).
+    shared["f_net_income_ttm"], shared["f_equity"] = ni, eq
 
     _, tw = RankAndHold(_spec("value_quality.yaml")).generate_signals(shared, {})
 

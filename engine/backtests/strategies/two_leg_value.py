@@ -50,6 +50,7 @@ from backtests.core.strategy_base import (
     COMMON_START_DATE,
     COMMON_END_DATE,
 )
+from backtests.core.data import latest_period_rows
 from backtests.strategies.sp500_b3 import (
     DEFAULT_STALENESS_DAYS,
     load_stock_actions,
@@ -112,11 +113,12 @@ def pit_metrics_snapshot(
 
     parts = {}
     for m in ("ebitda", "net_debt", "revenue"):
-        sub = visible.dropna(subset=[m]).groupby("ticker", sort=False).tail(1)
+        sub = latest_period_rows(visible.dropna(subset=[m])).groupby("ticker", sort=False).tail(1)
         sub = sub[sub["filing_date"] >= cutoff]
         parts[m] = sub.set_index("ticker")[m]
     # period_end / freshness comes from the earnings (net_income_ttm) vintage
-    sub = visible.dropna(subset=["net_income_ttm"]).groupby("ticker", sort=False).tail(1)
+    sub = latest_period_rows(visible.dropna(subset=["net_income_ttm"])
+                             ).groupby("ticker", sort=False).tail(1)
     sub = sub[sub["filing_date"] >= cutoff]
     parts["period_end"] = sub.set_index("ticker")["period_end"]
     return pd.DataFrame(parts)
@@ -192,7 +194,7 @@ def load_fundamentals_full(db_path: str) -> pd.DataFrame:
     """fundamentals_pit rows with the columns both select_constituents and
     pit_metrics_snapshot need (dates parsed)."""
     sql = """
-        SELECT ticker, period_end, filing_date, filing_version,
+        SELECT ticker, period_end, filing_date, filing_version, doc_type,
                net_income_ttm, equity, shares_outstanding, shares_on, shares_pn,
                ebitda, net_debt, revenue
         FROM fundamentals_pit

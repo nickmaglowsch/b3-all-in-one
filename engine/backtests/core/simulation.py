@@ -61,12 +61,18 @@ def compute_trades(
                      extend a short (never taxed: opening a position realizes no
                      gain).
 
-    Special-casing mirrors _execute_rebalance's original inline loop exactly, so
-    swapping the loop for this call is a no-op:
-      • diff < 0 on a brand-new short (target_w < 0, not currently held) is a
-        negative *buy*, not a sell — you can't sell what you don't own.
-      • diff > 0 while currently short is a *sell*, because covering a short
+    Which side of the ledger a diff lands on depends on the *current* sign of
+    the holding, not on whether the ticker is held:
+      • diff < 0 while flat or already short opens / deepens a short: a
+        negative *buy*. Nothing is sold, so nothing realizes a gain — routing a
+        deeper short through sells used to read it as a full cover, drop the
+        short from the book and book the "proceeds" as NAV.
+      • diff > 0 while short is a *sell* (a cover), because buying back
         realizes P&L that must be taxed.
+      • crossing zero (long -> short or short -> long) is two trades: close
+        the whole current position through sells, then open the other side
+        through buys. The sell loop deletes the fully-closed position and the
+        buy loop re-creates it with the new sign.
     Pure: no mutation of `positions`. Set-iteration order is irrelevant — the
     outputs are per-ticker dict entries, no cross-ticker accumulation here.
     """
@@ -86,23 +92,25 @@ def compute_trades(
         target_val = nav * target_w
         diff = target_val - current_val
 
-        # If diff is negative, we want less exposure than we currently have.
-        # This means either SELLING a long position, or SHORTING MORE (increasing a negative position).
         if diff < -0.01:
-            # If we are initiating a new short, it goes straight to buys/deploy logic
-            # (we don't "sell" an asset we don't own to calculate taxes, we just allocate negative capital)
-            if t not in positions and target_w < 0:
-                buys[t] = diff  # This will be negative capital deployment
+            # Less exposure: sell down a long, or open / deepen a short.
+            if current_val > 0:
+                if target_val < 0:
+                    sells[t] = current_val      # close the long...
+                    buys[t] = target_val        # ...and open the short
+                else:
+                    sells[t] = abs(diff)
             else:
-                sells[t] = abs(diff)
+                buys[t] = diff  # negative capital deployment, never taxed
 
-        # If diff is positive, we want more exposure than we currently have.
-        # This means either BUYING more of a long position, or COVERING a short position.
         elif diff > 0.01:
-            # If we are covering a short back towards 0, that is technically a "sale" (closing an active position)
-            # which needs to be run through the tax engine!
-            if t in positions and positions[t]["current_value"] < 0:
-                sells[t] = diff  # To trigger tax on the covered portion
+            # More exposure: buy a long, or cover a short (a taxed "sale").
+            if current_val < 0:
+                if target_val > 0:
+                    sells[t] = abs(current_val)  # cover the whole short...
+                    buys[t] = target_val         # ...and open the long
+                else:
+                    sells[t] = diff
             else:
                 buys[t] = diff
 
@@ -180,7 +188,10 @@ def _execute_rebalance(
             residual_drag = cash_drag - total_buy_cash
 
     for t, buy_amount in buys.items():
-        actual_deploy = buy_amount * buy_adjustment_factor
+        # Only long buys spend cash, so only they absorb the drag. Scaling a
+        # short down by the same factor handed the drag straight back to NAV
+        # (a smaller short is worth more), and the cost vanished.
+        actual_deploy = buy_amount * buy_adjustment_factor if buy_amount > 0 else buy_amount
         if t not in positions:
             positions[t] = {"cost_basis": actual_deploy, "current_value": actual_deploy}
         else:

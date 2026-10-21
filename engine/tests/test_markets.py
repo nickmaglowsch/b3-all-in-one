@@ -149,7 +149,7 @@ def test_the_rates_match_the_taxcore_rules_they_are_copied_from():
     # and `periodo` were, and MARKETS' own comments used to admit it: exterior
     # settling at every rebalance instead of once a year, and cripto being given
     # a loss carry ganho de capital does not grant.
-    assert '"AÇÃO": Regra(("AÇÃO",), 0.15, 20_000.0, True, "6015", "mensal")' in text, (
+    assert '"AÇÃO": Regra(("AÇÃO",), 0.15, 20_000.0, True, "6015", "mensal", grupo="COMUNS")' in text, (
         "taxcore's ações rule moved — update markets.MARKETS['B3']")
     assert '"CRIPTO": Regra(("CRIPTO",), 0.15, 35_000.0, False, "4600", "mensal",' in text, (
         "taxcore's cripto rule moved — update markets.MARKETS['CRYPTO']")

@@ -14,6 +14,7 @@ import pandas as pd
 from b3_pipeline import storage
 
 from backtests.core import markets
+from backtests.core.pit import PIT_EXTRA_COLUMNS, latest_period_rows
 # The price-panel loading moved to its own module — it is the part of this file
 # that decides how much memory a backtest takes, and it had outgrown living
 # alongside the fundamentals and the benchmark fetchers. The names stay here so
@@ -366,7 +367,7 @@ def _query_fundamentals_pit(db_path: str, metrics: list[str], end: str,
             f.ticker,
             f.filing_date,
             f.period_end,
-            f.{version_col} AS filing_version,
+            f.{version_col} AS filing_version, {PIT_EXTRA_COLUMNS[market]},
             {cols}
         FROM {table} f
         WHERE f.ticker IS NOT NULL
@@ -389,14 +390,12 @@ def _pit_frame(
     Split out of load_fundamentals_pit so the single-metric entry point and the
     batched one share one implementation and cannot drift.
     """
-    sub = df.dropna(subset=[metric]) if not df.empty else df
+    sub = latest_period_rows(df.dropna(subset=[metric])) if not df.empty else df
     if sub.empty:
         return pd.DataFrame(index=rebal_dates, dtype=float)
 
-    # Pivot: index = filing_date, columns = ticker.
-    # aggfunc="last" picks the highest version when multiple versions share
-    # the same filing_date (rare, but possible) — the caller sorted by
-    # (ticker, filing_date, filing_version) so "last" is "highest version".
+    # Pivot filing_date x ticker. latest_period_rows dropped superseded periods
+    # and sorted, so aggfunc="last" is the newest period's highest version.
     wide = sub.pivot_table(
         index="filing_date",
         columns="ticker",

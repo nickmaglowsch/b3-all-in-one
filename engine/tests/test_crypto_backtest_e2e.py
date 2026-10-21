@@ -84,6 +84,8 @@ def test_a_crypto_backtest_runs_and_reports_its_market(crypto_plane, tmp_path):
     assert m["currency"] == "BRL"
     assert m["periods"] > 24
     assert m["final_pretax_nav"] > 0
+    # Sharpe is excess over the CDI (BRL numeraire, every market) and says so.
+    assert m["sharpe_risk_free"] == "CDI"
 
 
 def test_a_spec_authored_for_this_plane_runs_on_it(crypto_plane, tmp_path):

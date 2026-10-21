@@ -13,13 +13,15 @@ signal:
   # nan_add, not `+`: the P/B and ROE frames have different coverage and a plain
   # sum would NaN-out every ticker missing either leg (the bug that made this
   # strategy never invest). NaN only where BOTH legs are missing.
+  # ROE uses TTM income: CVM's ITR f_net_income is year-to-date, so a Q1 filer
+  # would rank against a full-year one on a quarter of its earnings.
   expr: >-
     nan_add(
       pb_weight
       * (1.0 - rank(where(f_pb_ratio_dyn,
                           (f_pb_ratio_dyn <= max_pb) & (f_pb_ratio_dyn > 0)))),
       (1.0 - pb_weight)
-      * rank(f_net_income / where(f_equity, f_equity > 0))
+      * rank(f_net_income_ttm / where(f_equity, f_equity > 0))
     )
   pb_weight: 0.5
   max_pb: 5.0

@@ -98,22 +98,30 @@ def _build_signal(spec: dict, params: dict, shared: dict) -> tuple[pd.DataFrame,
     return sig, int(cfg.get("lookback", 0) or 0)
 
 
-def _eval_regime(regime: dict, shared: dict, i: int):
+def _eval_regime(regime: dict, shared: dict, i: int, index=None):
     """Evaluate the regime rules at rebalance row i. Each input is a boolean read
-    of a shared_data flag at row i-offset (optionally `> gt`). Returns the first
-    matching rule dict (carries `top_pct` or `park`), or None (=> park in cash)."""
+    of a shared_data flag at the date `index[i - offset]` (optionally `> gt`);
+    `index` is the rebalance grid, ``shared["ret"].index`` by default. Returns the
+    first matching rule dict (carries `top_pct` or `park`), or None (=> cash).
+
+    By date, not position: the flags live on the benchmark's / CDI's own index,
+    which can start later than the price grid (SPY via AlphaVantage ~1999-11, a
+    failed first CDI chunk), and `flag.iloc[i-offset]` then read a future flag.
+    A date the flag does not cover reads False, like a NaN.
+    """
+    if index is None:
+        index = shared["ret"].index
     vals = {}
     for nm, ic in regime.get("inputs", {}).items():
         flag = shared[ic["flag"]]
         j = i - int(ic.get("offset", 1))
-        if 0 <= j < len(flag):
-            raw = flag.iloc[j]
-            if "gt" in ic:
-                vals[nm] = bool(pd.notna(raw) and float(raw) > ic["gt"])
-            else:
-                vals[nm] = bool(raw) if pd.notna(raw) else False
-        else:
+        raw = flag.get(index[j]) if 0 <= j < len(index) else None
+        if raw is None or pd.isna(raw):
             vals[nm] = False
+        elif "gt" in ic:
+            vals[nm] = bool(float(raw) > ic["gt"])
+        else:
+            vals[nm] = bool(raw)
     for rule in regime.get("rules", []):
         if rule.get("default"):
             return rule
@@ -237,7 +245,7 @@ class RankAndHold(_SpecStrategy):
         for i in range(start, len(ret)):
             eff_top_pct = top_pct
             if regime:
-                action = _eval_regime(regime, shared_data, i)
+                action = _eval_regime(regime, shared_data, i, ret.index)
                 if action is None or action.get("park"):
                     tw.iloc[i, cash_loc] = 1.0
                     continue

@@ -326,3 +326,49 @@ def test_dedup_roots_is_inert_off_b3(market, tickers):
     # The two highest-momentum names are held, whatever prefix they share.
     assert sorted(row[row > 0].index) == sorted(names[-2:])
     assert row[row > 0].sum() == pytest.approx(1.0)
+
+
+# ── regime flags are read by date, not by row position ─────────────────────────
+
+def test_regime_flag_is_read_at_the_grid_date_not_the_row_position():
+    # Audit repro: price grid from 2000-01, benchmark flag only from 2002-01 and
+    # True from 2003-01. At ret date 2001-02-28 (offset 1 -> 2001-01-31) the
+    # flag does not exist yet: the regime must park, not read the flag sitting at
+    # the same *position* (2003-01-31, True) and go risk-on.
+    from backtests.core.config_strategy import _eval_regime
+    grid = pd.date_range("2000-01-31", periods=48, freq="ME")
+    flag_idx = pd.date_range("2002-01-31", periods=24, freq="ME")
+    flag = pd.Series(False, index=flag_idx)
+    flag[flag_idx >= "2003-01-31"] = True
+    shared = {"bench_above": flag, "ret": pd.DataFrame(index=grid)}
+    regime = {"inputs": {"above": {"flag": "bench_above", "offset": 1}},
+              "rules": [{"above": True, "top_pct": 0.1}, {"default": True, "park": True}]}
+
+    i = grid.get_loc(pd.Timestamp("2001-02-28"))
+    assert _eval_regime(regime, shared, i).get("park")
+    # And where the flag does cover the date it is the same-dated value.
+    i = grid.get_loc(pd.Timestamp("2003-02-28"))
+    assert _eval_regime(regime, shared, i) == {"above": True, "top_pct": 0.1}
+    i = grid.get_loc(pd.Timestamp("2002-12-31"))
+    assert _eval_regime(regime, shared, i).get("park")
+
+
+def test_copom_easing_aligns_the_cdi_flag_by_date():
+    # CDI starting a year after the price grid must not hand the first price
+    # months the easing calls of later ones.
+    from backtests.strategies.copom_easing import CopomEasingStrategy
+    grid = pd.date_range("2010-01-31", periods=36, freq="ME")
+    ret = pd.DataFrame(0.0, index=grid, columns=["A"])
+    cdi_idx = grid[12:]
+    # Falling CDI (easing) through 2011, rising (tightening) from 2012 on.
+    cdi = pd.Series(np.r_[np.linspace(0.012, 0.006, 12), np.linspace(0.006, 0.012, 12)],
+                    index=cdi_idx)
+    shared = {"ret": ret, "cdi_monthly": cdi, "ibov_ret": pd.Series(0.0, index=grid)}
+    _, tw = CopomEasingStrategy().generate_signals(shared, {"cdi_shift_short": 1,
+                                                            "cdi_shift_long": 4})
+    # 2010 has no CDI at all -> no easing call, so never IBOV.
+    assert (tw.loc[grid[:12], "IBOV"] == 0.0).all()
+    # Mid-2011, the CDI has been falling for months -> IBOV, on its own date.
+    assert tw.loc[pd.Timestamp("2011-08-31"), "IBOV"] == 1.0
+    # Late 2012, rising for months -> CDI.
+    assert tw.loc[pd.Timestamp("2012-10-31"), "CDI_ASSET"] == 1.0

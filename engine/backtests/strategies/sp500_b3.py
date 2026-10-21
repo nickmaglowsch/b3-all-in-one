@@ -12,8 +12,9 @@ rebalance date t (last trading day of Mar/Jun/Sep/Dec):
 4. ROE > 0: net_income_ttm / equity > 0 AND equity > 0 (negative/negative
    must NOT pass).
 
-Point-in-time rule: at rebalance date t, use the fundamentals_pit row with the
-max (filing_date, filing_version) among rows with filing_date <= t, ignoring
+Point-in-time rule: at rebalance date t, among rows with filing_date <= t, use
+the newest period_end, in its latest filing (a late restatement of an older
+quarter does not replace a newer quarter — pit.latest_period_rows), ignoring
 rows whose filing_date < t - 400 days (staleness).
 
 Company identity: price tickers grouped by 4-char root; per company the MOST
@@ -38,6 +39,11 @@ import numpy as np
 import pandas as pd
 
 from b3_pipeline import index_series, storage
+# Lives in core now (fundamentals.attach split-adjusts share counts with it);
+# re-exported because top_mcap, two_leg_value and besst_quality import it here.
+from backtests.core.pit import (  # noqa: F401
+    action_factors, latest_period_rows, load_stock_actions,
+)
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -75,7 +81,8 @@ def pit_snapshot(
 
     Returns:
         One row per ticker with the last non-null value PER METRIC across all
-        filings with filing_date <= t (per-metric staleness: a metric whose
+        filings with filing_date <= t, skipping rows that were already
+        superseded by a newer period when filed (per-metric staleness: a metric whose
         source filing is older than t - staleness_days is dropped). This
         matters because filings are sparse by doc_type: an FRE row carries only
         shares_outstanding (earnings NULL), so "latest row wins" would blank
@@ -92,7 +99,10 @@ def pit_snapshot(
 
     parts = {}
     for metric in ["net_income_ttm", "equity", "shares_outstanding"]:
-        sub = visible.dropna(subset=[metric]).groupby("ticker", sort=False).tail(1)
+        # Newest period visible at t, then its latest version: a late
+        # restatement of an older quarter must not replace a newer one.
+        sub = latest_period_rows(visible.dropna(subset=[metric])
+                                 ).groupby("ticker", sort=False).tail(1)
         sub = sub[sub["filing_date"] >= cutoff]
         parts[metric] = sub.set_index("ticker")[metric]
         if metric == "shares_outstanding":
@@ -129,9 +139,7 @@ def share_multiplier(
         & (actions["ex_date"] > pd.Timestamp(period_end))
         & (actions["ex_date"] <= pd.Timestamp(t))
     ]
-    f = a["factor"].to_numpy(dtype=float)
-    # STOCK_SPLIT / REVERSE_SPLIT: factor is directly the new/old count
-    return float(np.prod(np.where(a["action_type"] == "BONUS_SHARES", 1.0 + f / 100.0, f)))
+    return float(np.prod(action_factors(a)))
 
 
 def select_constituents(
@@ -390,7 +398,7 @@ def liquidity_median(fin_vol: pd.DataFrame, window: int = LIQUIDITY_WINDOW) -> p
 def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
     """Load fundamentals_pit rows needed for selection (dates parsed)."""
     sql = """
-        SELECT ticker, period_end, filing_date, filing_version,
+        SELECT ticker, period_end, filing_date, filing_version, doc_type,
                net_income_ttm, equity, shares_outstanding, shares_on, shares_pn
         FROM fundamentals_pit
         WHERE ticker IS NOT NULL
@@ -407,26 +415,6 @@ def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
             df["shares_pn"] = float("nan")
     df["period_end"] = pd.to_datetime(df["period_end"])
     df["filing_date"] = pd.to_datetime(df["filing_date"])
-    return df
-
-
-def load_stock_actions(db_path: str) -> pd.DataFrame:
-    """Load stock_actions (ticker, ex_date, action_type, factor), dates parsed.
-
-    stock_actions is keyed by isin_code; map to tickers via the distinct
-    (isin_code, ticker) pairs observed in prices. An ISIN that traded under
-    multiple tickers yields one row per ticker (the caller filters by ticker).
-    """
-    sql = """
-        SELECT DISTINCT p.ticker, s.ex_date, s.action_type, s.factor
-        FROM stock_actions s
-        JOIN (SELECT DISTINCT isin_code, ticker FROM prices
-              WHERE isin_code != 'UNKNOWN') p
-          ON p.isin_code = s.isin_code
-    """
-    with storage.get_connection(db_path) as conn:
-        df = storage.read_sql(sql, conn)
-    df["ex_date"] = pd.to_datetime(df["ex_date"])
     return df
 
 

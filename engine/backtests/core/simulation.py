@@ -61,12 +61,12 @@ def compute_trades(
                      extend a short (never taxed: opening a position realizes no
                      gain).
 
-    Special-casing mirrors _execute_rebalance's original inline loop exactly, so
-    swapping the loop for this call is a no-op:
-      • diff < 0 on a brand-new short (target_w < 0, not currently held) is a
-        negative *buy*, not a sell — you can't sell what you don't own.
-      • diff > 0 while currently short is a *sell*, because covering a short
-        realizes P&L that must be taxed.
+    Routing follows the *current* sign of the holding, not whether it is held:
+      • diff < 0 while flat or short opens / deepens a short: a negative *buy*,
+        never taxed. (As a sell it read as a full cover and dropped the short.)
+      • diff > 0 while short is a *sell*: covering realizes taxable P&L.
+      • crossing zero is close-then-open: the whole position through sells,
+        the new side through buys.
     Pure: no mutation of `positions`. Set-iteration order is irrelevant — the
     outputs are per-ticker dict entries, no cross-ticker accumulation here.
     """
@@ -86,23 +86,18 @@ def compute_trades(
         target_val = nav * target_w
         diff = target_val - current_val
 
-        # If diff is negative, we want less exposure than we currently have.
-        # This means either SELLING a long position, or SHORTING MORE (increasing a negative position).
-        if diff < -0.01:
-            # If we are initiating a new short, it goes straight to buys/deploy logic
-            # (we don't "sell" an asset we don't own to calculate taxes, we just allocate negative capital)
-            if t not in positions and target_w < 0:
-                buys[t] = diff  # This will be negative capital deployment
+        if diff < -0.01:            # less exposure: sell a long, or open/deepen a short
+            if current_val > 0:
+                sells[t] = current_val if target_val < 0 else abs(diff)
+                if target_val < 0:
+                    buys[t] = target_val    # flip: close the long, open the short
             else:
-                sells[t] = abs(diff)
-
-        # If diff is positive, we want more exposure than we currently have.
-        # This means either BUYING more of a long position, or COVERING a short position.
-        elif diff > 0.01:
-            # If we are covering a short back towards 0, that is technically a "sale" (closing an active position)
-            # which needs to be run through the tax engine!
-            if t in positions and positions[t]["current_value"] < 0:
-                sells[t] = diff  # To trigger tax on the covered portion
+                buys[t] = diff              # negative capital, never taxed
+        elif diff > 0.01:           # more exposure: buy a long, or cover a short
+            if current_val < 0:
+                sells[t] = abs(current_val) if target_val > 0 else diff
+                if target_val > 0:
+                    buys[t] = target_val    # flip: cover the short, open the long
             else:
                 buys[t] = diff
 
@@ -180,7 +175,9 @@ def _execute_rebalance(
             residual_drag = cash_drag - total_buy_cash
 
     for t, buy_amount in buys.items():
-        actual_deploy = buy_amount * buy_adjustment_factor
+        # Only long buys spend cash and absorb the drag; shrinking a short with
+        # them handed the drag back to NAV (a smaller short is worth more).
+        actual_deploy = buy_amount * buy_adjustment_factor if buy_amount > 0 else buy_amount
         if t not in positions:
             positions[t] = {"cost_basis": actual_deploy, "current_value": actual_deploy}
         else:

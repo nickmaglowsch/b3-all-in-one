@@ -23,6 +23,9 @@ what the simulator itself does with the target weights either path produces.
 - `signal_dsl.py` — `ast`-parsed, whitelisted expression interpreter for factor signals.
 - `config_strategy.py` — the `rank_and_hold` / `fixed_weight` YAML engines.
 - `metrics.py` — Sharpe, Calmar, max drawdown, annualised return/vol at any frequency.
+  Sharpe is the excess return over the CDI of each period (every market — the
+  numeraire is BRL), annualised; `metrics.json` says `"sharpe_risk_free": "CDI"`,
+  or `"none"` when the CDI did not cover the run and it fell back to zero.
 
 ## Simulator behaviour
 

@@ -74,7 +74,8 @@ raises — a typo is never a silently Brazilian backtest.
 cash sleeve is CDI whatever the equity sleeve is, so `min_adtv` and `min_price`
 are BRL floors on every plane and a US or crypto book bundles the USD/BRL move
 into its return. That is correct for this product's user and *not* comparable to
-a native-currency Sharpe.
+a native-currency Sharpe. For the same reason Sharpe is measured over the CDI on
+every plane (`metrics.sharpe`), not over zero.
 
 What a spec author has to know per plane:
 
@@ -127,6 +128,23 @@ Two traps live there, both documented at length in `signals.yaml`:
   quarterly for the next; `f_net_income_ttm` would fix it but is computed only by
   the CVM pipeline and is NULL on the US plane. Use instants only (equity,
   shares, price) or a same-slot ratio (a margin), which cancels the period out.
+
+### Fundamentals on B3: what the frames mean
+
+- **Income is year-to-date.** CVM's ITR income lines (`f_net_income`,
+  `f_ebitda` and their `_m` twins) are Q1 = 3 months, Q2 = 6, Q3 = 9; the DFP is
+  the year. Anything set against an annual quantity — a price, equity — must use
+  the trailing-twelve-month frames: `f_net_income_ttm` / `f_net_income_ttm_m`
+  (materialized by the CVM pipeline) and `f_ebitda_ttm` (derived on read by
+  `pit.ttm_from_ytd`). `f_pe_ratio_dyn` and `f_ev_ebitda_dyn` are built on TTM.
+- **Newest period, then latest version.** At each date the PIT frames show the
+  newest `period_end` filed so far, in its latest version; a late restatement of
+  an *older* quarter does not replace a newer quarter (`pit.latest_period_rows`).
+- **Share counts are on the close's basis.** `f_shares_outstanding` and
+  `f_shares_outstanding_m` are multiplied by the splits / bonus shares with
+  ex-date between the count's `period_end` and the rebalance date, so
+  `raw_close * f_shares_outstanding` is a market cap even across a
+  desdobramento.
 
 ## Two `kind`s of strategy
 

@@ -109,13 +109,59 @@ def test_compute_trades_cover_short_is_a_sell():
     assert buys == {}
 
 
-def test_compute_trades_increase_existing_short_is_a_sell():
-    # Deepening an existing short (diff < 0, already held) is NOT a new short, so
-    # it goes to sells (mirrors the original inline special-casing).
+def test_compute_trades_increase_existing_short_is_a_negative_buy():
+    # Deepening an existing short sells nothing: it is more negative capital,
+    # exactly like opening one. It used to land in sells, where the sell loop
+    # read it as a cover of the whole short.
     pos = {"S": {"cost_basis": -100.0, "current_value": -100.0}}
     sells, buys = compute_trades(pos, pd.Series({"S": -1.5}), 100.0)
-    assert sells == pytest.approx({"S": 50.0})   # abs(-150 - (-100))
-    assert buys == {}
+    assert sells == {}
+    assert buys == pytest.approx({"S": -50.0})   # -150 - (-100)
+
+
+def test_rebalance_extending_short_keeps_the_short_and_nav():
+    # Audit repro: NAV 1000 = L 1100 + S -100; target L 1.2 / S -0.2. The short
+    # must grow to -200 and NAV stay 1000 — not vanish and lift NAV to 1200.
+    pos = {"L": {"cost_basis": 1100.0, "current_value": 1100.0},
+           "S": {"cost_basis": -100.0, "current_value": -100.0}}
+    _execute_rebalance(pos, pd.Series({"L": 1.2, "S": -0.2}), 1000.0, 0.0,
+                       tax.free_ledger(), pd.Timestamp("2020-01-31"))
+    assert pos["S"]["current_value"] == pytest.approx(-200.0)
+    assert pos["L"]["current_value"] == pytest.approx(1200.0)
+    assert sum(p["current_value"] for p in pos.values()) == pytest.approx(1000.0)
+
+
+def test_rebalance_drag_is_not_refunded_by_shrinking_a_short():
+    # Same trade with 10% slippage: turnover 200 -> drag 20 must leave NAV.
+    # Scaling the short down with the long buys gave the drag straight back.
+    pos = {"L": {"cost_basis": 1100.0, "current_value": 1100.0},
+           "S": {"cost_basis": -100.0, "current_value": -100.0}}
+    _execute_rebalance(pos, pd.Series({"L": 1.2, "S": -0.2}), 1000.0, 0.1,
+                       tax.free_ledger(), pd.Timestamp("2020-01-31"))
+    assert pos["S"]["current_value"] == pytest.approx(-200.0)
+    assert sum(p["current_value"] for p in pos.values()) == pytest.approx(980.0)
+
+
+def test_compute_trades_flip_long_to_short_is_close_then_open():
+    pos = {"A": {"cost_basis": 50.0, "current_value": 60.0}}
+    sells, buys = compute_trades(pos, pd.Series({"A": -0.3}), 100.0)
+    assert sells == pytest.approx({"A": 60.0})
+    assert buys == pytest.approx({"A": -30.0})
+    p = copy.deepcopy(pos)
+    _execute_rebalance(p, pd.Series({"A": -0.3}), 100.0, 0.0,
+                       tax.free_ledger(), pd.Timestamp("2020-01-31"))
+    assert p["A"]["current_value"] == pytest.approx(-30.0)
+
+
+def test_compute_trades_flip_short_to_long_is_cover_then_open():
+    pos = {"A": {"cost_basis": -50.0, "current_value": -40.0}}
+    sells, buys = compute_trades(pos, pd.Series({"A": 0.5}), 100.0)
+    assert sells == pytest.approx({"A": 40.0})
+    assert buys == pytest.approx({"A": 50.0})
+    p = copy.deepcopy(pos)
+    _execute_rebalance(p, pd.Series({"A": 0.5}), 100.0, 0.0,
+                       tax.free_ledger(), pd.Timestamp("2020-01-31"))
+    assert p["A"]["current_value"] == pytest.approx(50.0)
 
 
 def test_compute_trades_nan_target_and_subcent_threshold():

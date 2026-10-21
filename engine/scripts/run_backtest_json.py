@@ -134,7 +134,7 @@ def main() -> None:
     from backtests.core.simulation import run_simulation
     from backtests.core import markets, universe
     from backtests.core.metrics import (
-        build_metrics, value_to_ret, strategy_daily_values,
+        build_metrics, period_risk_free, value_to_ret, strategy_daily_values,
     )
 
     strat = get_registry().get(name)
@@ -186,8 +186,15 @@ def main() -> None:
         raise SystemExit(f"strategy '{name}' produced no investable periods for {start}..{end}")
 
     contribs = result["contributions"]
-    pt_ret = value_to_ret(result["pretax_values"], contribs)
-    at_ret = value_to_ret(result["aftertax_values"], contribs)
+    # .iloc[1:]: the inception row is the starting mark, not a period of
+    # return; left in, CAGR divided by one period too many and Vol/Sharpe
+    # averaged in a fake 0% month.
+    pt_ret = value_to_ret(result["pretax_values"], contribs).iloc[1:]
+    at_ret = value_to_ret(result["aftertax_values"], contribs).iloc[1:]
+    # Sharpe's risk-free leg: the CDI over each rebalance period, on the same
+    # grid. Loaded for every market — the numeraire is a Brazilian holder's
+    # BRL whatever the venue — and None if it does not cover the whole run.
+    rf = period_risk_free(shared.get("cdi_monthly"), pt_ret.index)
     # Zero is fine here even for a replay: reconstruct_daily_values is scale-free
     # and rebases a zero start to 1.0 itself, so the drawdown ratios hold.
     strat_daily = strategy_daily_values(shared, tw, initial_capital)
@@ -199,8 +206,8 @@ def main() -> None:
     memory.trace("simulation")
     ppy = {"ME": 12, "QE": 4, "W-FRI": 52}.get(freq, 12)
 
-    pre = build_metrics(pt_ret, "Pre-Tax", ppy, daily_values=strat_daily)
-    aft = build_metrics(at_ret, "After-Tax", ppy, daily_values=strat_daily)
+    pre = build_metrics(pt_ret, "Pre-Tax", ppy, daily_values=strat_daily, risk_free=rf)
+    aft = build_metrics(at_ret, "After-Tax", ppy, daily_values=strat_daily, risk_free=rf)
 
     # Drawdown series on the after-tax NAV path (the "truth" curve).
     at_vals = result["aftertax_values"]
@@ -245,6 +252,9 @@ def main() -> None:
         "total_contributions": float(contribs.sum()),
         "pretax": pre,
         "aftertax": aft,
+        # What Sharpe is measured against: "CDI" (excess over the CDI of each
+        # period) or "none" (the CDI did not cover the run; excess over zero).
+        "sharpe_risk_free": "CDI" if rf is not None else "none",
         # What this run cost. A tenant never reads it; whoever is deciding
         # whether the worker's mem_limit is the right number does, and until now
         # the only measurement available was the runs that died.

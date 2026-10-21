@@ -14,7 +14,7 @@ rebalance date t (last trading day of Mar/Jun/Sep/Dec):
 
 Point-in-time rule: at rebalance date t, among rows with filing_date <= t, use
 the newest period_end, in its latest filing (a late restatement of an older
-quarter does not replace a newer quarter — data.latest_period_rows), ignoring
+quarter does not replace a newer quarter — pit.latest_period_rows), ignoring
 rows whose filing_date < t - 400 days (staleness).
 
 Company identity: price tickers grouped by 4-char root; per company the MOST
@@ -41,7 +41,7 @@ import pandas as pd
 from b3_pipeline import index_series, storage
 # Lives in core now (fundamentals.attach split-adjusts share counts with it);
 # re-exported because top_mcap, two_leg_value and besst_quality import it here.
-from backtests.core.data import (  # noqa: F401
+from backtests.core.pit import (  # noqa: F401
     action_factors, latest_period_rows, load_stock_actions,
 )
 from backtests.core.strategy_base import (

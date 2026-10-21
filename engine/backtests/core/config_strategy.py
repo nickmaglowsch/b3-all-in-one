@@ -100,18 +100,14 @@ def _build_signal(spec: dict, params: dict, shared: dict) -> tuple[pd.DataFrame,
 
 def _eval_regime(regime: dict, shared: dict, i: int, index=None):
     """Evaluate the regime rules at rebalance row i. Each input is a boolean read
-    of a shared_data flag at the grid date of row i-offset (optionally `> gt`).
-    Returns the first matching rule dict (carries `top_pct` or `park`), or None
-    (=> park in cash).
+    of a shared_data flag at the date `index[i - offset]` (optionally `> gt`);
+    `index` is the rebalance grid, ``shared["ret"].index`` by default. Returns the
+    first matching rule dict (carries `top_pct` or `park`), or None (=> cash).
 
-    The flag is looked up by that **date**, not by position. The flags live on
-    the benchmark's / CDI's own resample index, which need not start where the
-    price grid does (SPY via AlphaVantage begins ~1999-11; a failed first CDI
-    chunk starts the series late). Reading `flag.iloc[i-offset]` shifted every
-    read forward by the gap — a regime decided on a flag from the future. A
-    grid date the flag does not cover reads as False, like a NaN.
-
-    `index` is the rebalance grid; it defaults to ``shared["ret"].index``.
+    By date, not position: the flags live on the benchmark's / CDI's own index,
+    which can start later than the price grid (SPY via AlphaVantage ~1999-11, a
+    failed first CDI chunk), and `flag.iloc[i-offset]` then read a future flag.
+    A date the flag does not cover reads False, like a NaN.
     """
     if index is None:
         index = shared["ret"].index

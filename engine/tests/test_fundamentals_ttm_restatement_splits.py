@@ -18,9 +18,10 @@ import pandas as pd
 import pytest
 
 from b3_pipeline import storage
-from backtests.core.data import (
-    _pit_frame,
+from backtests.core.data import _pit_frame
+from backtests.core.pit import (
     latest_period_rows,
+    period_end_days,
     split_multiplier_frame,
     ttm_from_ytd,
 )
@@ -137,6 +138,21 @@ def test_split_multiplier_frame_counts_actions_between_anchor_and_date():
     assert m["PETR4"].tolist() == pytest.approx([1, 1, 10, 10, 10])
     assert (m["VALE3"] == 1.0).all()
     assert m["ITUB4"].tolist() == pytest.approx([1, 1, 1, 1.1, 1.1])
+
+
+def test_the_anchor_is_the_period_end_of_the_row_behind_each_cell():
+    df = pd.DataFrame([
+        dict(ticker="ABCD", filing_date="2023-05-10", period_end="2023-03-31",
+             filing_version=1, shares_outstanding=1000.0),
+        dict(ticker="ABCD", filing_date="2023-08-10", period_end="2023-06-30",
+             filing_version=1, shares_outstanding=np.nan),   # no count: keeps Q1's
+    ])
+    df["filing_date"] = pd.to_datetime(df["filing_date"])
+    grid = pd.date_range("2023-05-31", "2023-09-30", freq="ME")
+    anchor = _pit_frame(period_end_days(df, "shares_outstanding"), "shares_outstanding",
+                        grid, "2023-01-01", 400)["ABCD"]
+    q1 = (pd.Timestamp("2023-03-31") - pd.Timestamp("1970-01-01")) / pd.Timedelta(days=1)
+    assert (anchor == q1).all()
 
 
 # ── Through fundamentals.attach, on a real (SQLite) plane ─────────────────────

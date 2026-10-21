@@ -61,18 +61,12 @@ def compute_trades(
                      extend a short (never taxed: opening a position realizes no
                      gain).
 
-    Which side of the ledger a diff lands on depends on the *current* sign of
-    the holding, not on whether the ticker is held:
-      • diff < 0 while flat or already short opens / deepens a short: a
-        negative *buy*. Nothing is sold, so nothing realizes a gain — routing a
-        deeper short through sells used to read it as a full cover, drop the
-        short from the book and book the "proceeds" as NAV.
-      • diff > 0 while short is a *sell* (a cover), because buying back
-        realizes P&L that must be taxed.
-      • crossing zero (long -> short or short -> long) is two trades: close
-        the whole current position through sells, then open the other side
-        through buys. The sell loop deletes the fully-closed position and the
-        buy loop re-creates it with the new sign.
+    Routing follows the *current* sign of the holding, not whether it is held:
+      • diff < 0 while flat or short opens / deepens a short: a negative *buy*,
+        never taxed. (As a sell it read as a full cover and dropped the short.)
+      • diff > 0 while short is a *sell*: covering realizes taxable P&L.
+      • crossing zero is close-then-open: the whole position through sells,
+        the new side through buys.
     Pure: no mutation of `positions`. Set-iteration order is irrelevant — the
     outputs are per-ticker dict entries, no cross-ticker accumulation here.
     """
@@ -92,25 +86,18 @@ def compute_trades(
         target_val = nav * target_w
         diff = target_val - current_val
 
-        if diff < -0.01:
-            # Less exposure: sell down a long, or open / deepen a short.
+        if diff < -0.01:            # less exposure: sell a long, or open/deepen a short
             if current_val > 0:
+                sells[t] = current_val if target_val < 0 else abs(diff)
                 if target_val < 0:
-                    sells[t] = current_val      # close the long...
-                    buys[t] = target_val        # ...and open the short
-                else:
-                    sells[t] = abs(diff)
+                    buys[t] = target_val    # flip: close the long, open the short
             else:
-                buys[t] = diff  # negative capital deployment, never taxed
-
-        elif diff > 0.01:
-            # More exposure: buy a long, or cover a short (a taxed "sale").
+                buys[t] = diff              # negative capital, never taxed
+        elif diff > 0.01:           # more exposure: buy a long, or cover a short
             if current_val < 0:
+                sells[t] = abs(current_val) if target_val > 0 else diff
                 if target_val > 0:
-                    sells[t] = abs(current_val)  # cover the whole short...
-                    buys[t] = target_val         # ...and open the long
-                else:
-                    sells[t] = diff
+                    buys[t] = target_val    # flip: cover the short, open the long
             else:
                 buys[t] = diff
 
@@ -188,9 +175,8 @@ def _execute_rebalance(
             residual_drag = cash_drag - total_buy_cash
 
     for t, buy_amount in buys.items():
-        # Only long buys spend cash, so only they absorb the drag. Scaling a
-        # short down by the same factor handed the drag straight back to NAV
-        # (a smaller short is worth more), and the cost vanished.
+        # Only long buys spend cash and absorb the drag; shrinking a short with
+        # them handed the drag back to NAV (a smaller short is worth more).
         actual_deploy = buy_amount * buy_adjustment_factor if buy_amount > 0 else buy_amount
         if t not in positions:
             positions[t] = {"cost_basis": actual_deploy, "current_value": actual_deploy}

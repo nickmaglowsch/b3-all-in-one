@@ -50,7 +50,7 @@ from backtests.core.strategy_base import (
     COMMON_START_DATE,
     COMMON_END_DATE,
 )
-from backtests.core.data import latest_period_rows
+from backtests.core.pit import latest_period_rows
 from backtests.strategies.sp500_b3 import (
     DEFAULT_STALENESS_DAYS,
     load_stock_actions,

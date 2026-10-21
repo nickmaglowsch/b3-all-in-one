@@ -138,6 +138,15 @@ export function isModuleRequired(detail: unknown): detail is ModuleRequired {
   );
 }
 
+/** The module a failed request is gated on, or null when it failed for any
+ *  other reason. What an inline offer names and links to — the gate already
+ *  says which module it wants, so no screen has to guess. */
+export function requiredModuleOf(err: unknown): string | null {
+  return err instanceof ApiError && err.status === 402 && isModuleRequired(err.detail)
+    ? err.detail.required_module
+    : null;
+}
+
 // tenancy._acting_tenant's answer when X-Portfolio-Id names no book this login
 // owns. It is the one 404 about the header rather than the resource, and the
 // detail string is the only thing that tells it apart from every other 404.

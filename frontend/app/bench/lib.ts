@@ -28,7 +28,8 @@ const busy = (s: string) => s === "pending" || s === "running";
 export function useBacktests() {
   return useQuery({
     queryKey: ["backtests"],
-    queryFn: () => api<BacktestRun[]>("/backtests"),
+    // On load, so a 402 renders the inline offer instead of a modal.
+    queryFn: () => api<BacktestRun[]>("/backtests", {}, { paywallDialog: false }),
     // Poll while any run is in flight, otherwise rest.
     refetchInterval: (q) =>
       (q.state.data ?? []).some((r) => busy(r.status)) ? 2500 : false,
@@ -38,7 +39,7 @@ export function useBacktests() {
 export function useBacktest(id: string) {
   return useQuery({
     queryKey: ["backtest", id],
-    queryFn: () => api<BacktestRun>(`/backtests/${id}`),
+    queryFn: () => api<BacktestRun>(`/backtests/${id}`, {}, { paywallDialog: false }),
     refetchInterval: (q) => (q.state.data && busy(q.state.data.status) ? 2000 : false),
   });
 }
@@ -46,7 +47,8 @@ export function useBacktest(id: string) {
 export function useCurves(id: string, enabled: boolean) {
   return useQuery({
     queryKey: ["curves", id],
-    queryFn: () => api<BacktestCurves>(`/backtests/${id}/curves`),
+    queryFn: () =>
+      api<BacktestCurves>(`/backtests/${id}/curves`, {}, { paywallDialog: false }),
     enabled,
     staleTime: 60 * 60_000, // a finished run's curves never change
   });
@@ -58,7 +60,8 @@ export function useCurvesMany(ids: string[]) {
   return useQueries({
     queries: ids.map((id) => ({
       queryKey: ["curves", id],
-      queryFn: () => api<BacktestCurves>(`/backtests/${id}/curves`),
+      queryFn: () =>
+      api<BacktestCurves>(`/backtests/${id}/curves`, {}, { paywallDialog: false }),
       staleTime: 60 * 60_000,
     })),
   });
@@ -87,7 +90,7 @@ export interface BenchmarkSeries {
 export function useBenchmarks() {
   return useQuery({
     queryKey: ["benchmarks"],
-    queryFn: () => api<Benchmark[]>("/benchmarks"),
+    queryFn: () => api<Benchmark[]>("/benchmarks", {}, { paywallDialog: false }),
     staleTime: 60 * 60_000, // a catalogue in code, not data
   });
 }

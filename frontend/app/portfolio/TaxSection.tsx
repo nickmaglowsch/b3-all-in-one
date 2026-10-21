@@ -6,7 +6,7 @@ import { api, ApiError } from "@/lib/api";
 import type { TaxPlan, TaxSummary } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Money } from "@/components/ui/Money";
-import { EmptyState, InvestorPlanLink, RetryButton } from "@/components/ui/EmptyState";
+import { EmptyState, LoadFailure } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { IconReceipt } from "@/components/icons";
@@ -197,32 +197,15 @@ export function TaxSection() {
   }
 
   if (q.isError) {
-    const httpStatus = q.error instanceof ApiError ? q.error.status : 0;
-    if (httpStatus === 402) {
-      return shell(
-        <Card title={TITLE}>
-          <EmptyState
-            icon={<IconReceipt size={28} />}
-            variant="offer"
-            title="A apuração do mês faz parte do plano Investidor."
-            hint="Isenção de R$ 20 mil usada e disponível, prejuízo a compensar, IR devido e os candidatos a colheita — apurados pelo mesmo motor que gera seu IRPF."
-            action={
-              <InvestorPlanLink />
-            }
-          />
-        </Card>
-      );
-    }
     return shell(
       <Card title={TITLE}>
-        <EmptyState
+        <LoadFailure
+          error={q.error}
           icon={<IconReceipt size={28} />}
-          variant="error"
           title="Não foi possível carregar a situação fiscal."
-          hint="A conexão com a API falhou. Nada foi perdido."
-          action={
-            <RetryButton onClick={() => q.refetch()} />
-          }
+          offerTitle={(nome) => `A apuração do mês vem com o módulo ${nome}.`}
+          offerHint="Isenção de R$ 20 mil usada e disponível, prejuízo a compensar, IR devido e os candidatos a colheita — apurados pelo mesmo motor que gera seu IRPF."
+          onRetry={() => q.refetch()}
         />
       </Card>
     );

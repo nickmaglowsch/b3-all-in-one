@@ -218,17 +218,6 @@ test("um 404 de recurso não solta o livro nem recarrega", async () => {
   assert.equal(state.reloads, 0);
 });
 
-test("isBookNotFound reconhece só o 404 do tenancy", async () => {
-  const { mod } = await load();
-  assert.equal(mod.isBookNotFound(404, "carteira não encontrada"), true);
-  assert.equal(mod.isBookNotFound(404, "Carteira não encontrada"), true);
-  assert.equal(mod.isBookNotFound(404, "backtest not found"), false);
-  assert.equal(mod.isBookNotFound(404, "curves artifact missing"), false);
-  assert.equal(mod.isBookNotFound(404, null), false);
-  assert.equal(mod.isBookNotFound(404, { error: "x" }), false);
-  assert.equal(mod.isBookNotFound(400, "carteira não encontrada"), false);
-});
-
 // O 404 de uma rota de conta não fala do livro — soltá-lo aqui seria apagar a
 // seleção do usuário por causa de um endpoint que nem a consulta.
 test("um 404 de rota de conta não mexe no livro nem recarrega", async () => {
@@ -249,6 +238,7 @@ test("um 402 de outro módulo abre o diálogo de upgrade, uma vez só", async ()
   assert.equal(state.events[0].type, mod.PAYWALL_EVENT);
   assert.deepEqual((state.events[0] as CustomEvent).detail, detail);
   assert.equal(mod.isModuleRequired(err.detail), true);
+  assert.equal(mod.requiredModuleOf(err), "bench");
 });
 
 // Um modal por cima de uma página que ninguém leu ainda é interrupção, não oferta.

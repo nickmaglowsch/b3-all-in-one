@@ -28,7 +28,8 @@ const INDEXERS: { value: Indexer; label: string; unit: string }[] = [
 function useTerms() {
   return useQuery({
     queryKey: ["renda-fixa-terms"],
-    queryFn: () => api<RendaFixaTerm[]>("/portfolio/settings/renda-fixa"),
+    queryFn: () =>
+      api<RendaFixaTerm[]>("/portfolio/settings/renda-fixa", {}, { paywallDialog: false }),
     placeholderData: keepPreviousData,
   });
 }

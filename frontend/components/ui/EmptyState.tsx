@@ -6,6 +6,8 @@
 // sentences insisting the data is not gone, inside a frame that says it is, and
 // a dashed box around a working feature you can buy is stranger still.
 import Link from "next/link";
+import { errorText, requiredModuleOf } from "@/lib/api";
+import { ligarHref, moduloDe, nomeDe } from "@/lib/modules";
 
 type Variant = "empty" | "error" | "offer";
 
@@ -59,14 +61,63 @@ export function RetryButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** The `action` of an offer EmptyState (a 402): where the plan is sold. */
-export function InvestorPlanLink() {
+/** The `action` of an offer EmptyState (a 402): the subscription page with the
+ *  module the gate asked for already in the cart, named on the button. There is
+ *  no "plano" to send anyone to — the catalogue is one module per route group. */
+export function ModuleOfferLink({ id }: { id: string }) {
   return (
     <Link
-      href="/assinatura"
+      href={ligarHref(id)}
       className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90"
     >
-      Ver o plano Investidor
+      Ligar {nomeDe(id)}
     </Link>
+  );
+}
+
+/**
+ * What a section shows when its on-load query failed: the inline offer for a
+ * 402, otherwise an error with a retry. The pair every gated screen needs —
+ * those queries pass `paywallDialog: false`, so this is the only place the
+ * user learns which module the panel belongs to.
+ */
+export function LoadFailure({
+  error,
+  title,
+  offerTitle = (nome) => `Isto vem com o módulo ${nome}.`,
+  offerHint,
+  icon,
+  onRetry,
+}: {
+  error: unknown;
+  /** The error sentence: what could not be loaded. */
+  title: string;
+  /** The offer sentence, given the module's name — the gate decides which. */
+  offerTitle?: (moduleName: string) => string;
+  /** What the panel does, when the screen can say it better than the catalogue. */
+  offerHint?: string;
+  icon?: React.ReactNode;
+  onRetry?: () => void;
+}) {
+  const gate = requiredModuleOf(error);
+  if (gate) {
+    return (
+      <EmptyState
+        variant="offer"
+        icon={icon}
+        title={offerTitle(nomeDe(gate))}
+        hint={offerHint ?? moduloDe(gate)?.carga}
+        action={<ModuleOfferLink id={gate} />}
+      />
+    );
+  }
+  return (
+    <EmptyState
+      variant="error"
+      icon={icon}
+      title={title}
+      hint={errorText(error, "A conexão com a API falhou. Tente de novo em instantes.")}
+      action={onRetry ? <RetryButton onClick={onRetry} /> : undefined}
+    />
   );
 }

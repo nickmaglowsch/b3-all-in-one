@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { Strategy } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
+import { LoadFailure } from "@/components/ui/EmptyState";
 import { errorText } from "@/lib/api";
 import { StrategyGallery } from "./StrategyGallery";
 import { RunPanel } from "./RunPanel";
@@ -102,13 +103,24 @@ export default function BenchPage() {
             </div>
           }
         >
-          <RunsList
-            runs={backtests.data ?? []}
-            loading={backtests.isLoading}
-            selected={compareIds}
-            onToggle={toggleCompare}
-            onDeleted={dropCompare}
-          />
+          {/* A failed list is not an empty one: "Nenhum backtest ainda" over a
+              402 or an outage tells the user their runs are gone. */}
+          {backtests.isError ? (
+            <LoadFailure
+              error={backtests.error}
+              title="Não foi possível carregar suas rodadas."
+              offerTitle={(nome) => `Backtests vêm com o módulo ${nome}.`}
+              onRetry={() => backtests.refetch()}
+            />
+          ) : (
+            <RunsList
+              runs={backtests.data ?? []}
+              loading={backtests.isLoading}
+              selected={compareIds}
+              onToggle={toggleCompare}
+              onDeleted={dropCompare}
+            />
+          )}
         </Card>
       </div>
 

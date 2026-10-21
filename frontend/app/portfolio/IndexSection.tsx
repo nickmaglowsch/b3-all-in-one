@@ -5,7 +5,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { IndexMetrics, PortfolioIndex } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
-import { EmptyState, InvestorPlanLink, RetryButton } from "@/components/ui/EmptyState";
+import { EmptyState, LoadFailure, RetryButton } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
@@ -270,14 +270,14 @@ export function IndexSection() {
     if (status === 402) {
       return (
         <Card title={TITLE}>
-          <EmptyState
+          <LoadFailure
+            error={q.error}
             icon={<IconChart size={28} />}
-            variant="offer"
-            title="Acompanhar sua carteira contra o IBOV e o CDI faz parte do plano Investidor."
-            hint="Rentabilidade diária ponderada pelo tempo, com queda máxima e retorno anualizado — além de IRPF, TLH e simulação."
-            action={
-              <InvestorPlanLink />
+            title="Não foi possível calcular a rentabilidade agora."
+            offerTitle={(nome) =>
+              `Acompanhar sua carteira contra o IBOV e o CDI vem com o módulo ${nome}.`
             }
+            offerHint="Rentabilidade diária ponderada pelo tempo, com queda máxima e retorno anualizado."
           />
         </Card>
       );

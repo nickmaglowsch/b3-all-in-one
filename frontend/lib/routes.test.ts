@@ -9,9 +9,18 @@ import {
   PUBLIC_ROUTES,
 } from "./routes.ts";
 
-test("as rotas públicas são exatamente as três da lista", () => {
-  assert.deepEqual(PUBLIC_ROUTES, ["/", "/login", "/privacidade"]);
+test("as rotas públicas são exatamente as quatro da lista", () => {
+  assert.deepEqual(PUBLIC_ROUTES, ["/", "/login", "/auth/callback", "/privacidade"]);
   for (const r of PUBLIC_ROUTES) assert.equal(isPublicRoute(r), true, r);
+});
+
+// O callback é onde o token *chega*. Dentro do shell, as queries da barra lateral
+// saíam antes de ele ser guardado, voltavam 401, e o 401 apagava o token recém-
+// -entregue pelo Google: o login que "às vezes" só passava limpando cookies.
+test("o callback do OAuth renderiza sem o shell, e só ele", () => {
+  assert.equal(isPublicRoute("/auth/callback"), true);
+  assert.equal(isPublicRoute("/auth"), false);
+  assert.equal(isPublicRoute("/auth/callback/outra-coisa"), false);
 });
 
 // AppShell devolve a página crua para rota pública — sem chrome e sem guarda de
@@ -80,7 +89,7 @@ test("nenhum `next` de fora do site sobrevive", () => {
 // Um `next` público é o laço (`/login` de volta para `/login`) ou a própria porta
 // que a pessoa estava tentando atravessar (`/`).
 test("um `next` público não é destino de login", () => {
-  for (const next of ["/", "/login", "/login?next=%2Firpf", "/privacidade"]) {
+  for (const next of ["/", "/login", "/login?next=%2Firpf", "/privacidade", "/auth/callback"]) {
     assert.equal(postLoginTarget(next), APP_HOME, next);
   }
 });

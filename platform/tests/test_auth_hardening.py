@@ -11,7 +11,24 @@ import sys
 import textwrap
 
 import pytest
-from starlette.requests import Request
+from httpx import AsyncClient
+
+
+def _refused_with(r, code: str) -> None:
+    """A refused callback is a trip back to the login page with a reason — never
+    raw JSON on the API host, and never a token."""
+    from platform_app.config import settings
+
+    assert r.status_code == 302, r.text
+    assert r.headers["location"] == f"{settings.frontend_url}/login?erro={code}"
+
+
+async def _issued_state(client) -> str:
+    """Run the authorize step; the client's jar now holds the binding cookie."""
+    from urllib.parse import parse_qs, urlparse
+
+    r = await client.get("/auth/google/login")
+    return parse_qs(urlparse(r.headers["location"]).query)["state"][0]
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -23,12 +40,12 @@ async def test_oauth_callback_rejects_state_from_another_browser(client):
     attacker cannot set on our origin — the callback must refuse, or the victim
     gets logged into the attacker's tenant and imports their extracts into it.
     """
+    async with AsyncClient(transport=client._transport, base_url="http://test") as attacker:
+        state = await _issued_state(attacker)  # genuinely signed by us
     r = await client.get(
-        "/auth/google/callback",
-        params={"code": "attacker-code", "state": "a-validly-signed-state"},
+        "/auth/google/callback", params={"code": "attacker-code", "state": state},
     )
-    assert r.status_code == 400
-    assert r.json()["detail"] == "INVALID_STATE_TOKEN"
+    _refused_with(r, "estado")
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -37,27 +54,22 @@ async def test_oauth_callback_rejects_mismatched_cookie(client):
     r = await client.get(
         "/auth/google/callback",
         params={"code": "c", "state": "state-B"},
-        cookies={"oauth_state": hashlib.sha256(b"state-A").hexdigest()},
+        headers={"cookie": f"oauth_state={hashlib.sha256(b'state-A').hexdigest()}"},
     )
-    assert r.status_code == 400
+    _refused_with(r, "estado")
 
 
-def test_state_cookie_is_storable_from_a_cross_site_fetch():
-    """The SPA is on another site (pages.dev → duckdns.org), so /authorize is a
-    cross-site fetch and a SameSite=Lax Set-Cookie is discarded on arrival — the
-    callback then 400s on every single login. Production must issue the cookie
-    as SameSite=None; Secure, or the flow is broken for everyone."""
-    out = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent("""
-            from platform_app.main import _COOKIE_SITE
-            print(_COOKIE_SITE)
-        """)],
-        env={**os.environ, "ENVIRONMENT": "production", "SECRET_KEY": "x" * 64},
-        capture_output=True, text=True, timeout=120,
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_bound_but_unsigned_state_is_still_refused(client):
+    """The digest only says "this browser saw this string". The string itself must
+    also be a state we signed, and one that has not expired."""
+    forged = "not-a-jwt"
+    r = await client.get(
+        "/auth/google/callback",
+        params={"code": "c", "state": forged},
+        headers={"cookie": f"oauth_state={hashlib.sha256(forged.encode()).hexdigest()}"},
     )
-    assert out.returncode == 0, out.stderr
-    assert "'samesite': 'none'" in out.stdout
-    assert "'secure': True" in out.stdout  # None without Secure is rejected too
+    _refused_with(r, "estado")
 
 
 def test_password_and_dev_routes_are_not_mounted_in_production():
@@ -84,7 +96,11 @@ def test_password_and_dev_routes_are_not_mounted_in_production():
     for route in ("/auth/register", "/auth/jwt/login", "/auth/dev-login",
                   "/billing/dev-modules"):
         assert route not in paths, f"{route} is mounted in production"
-    assert "/auth/google/authorize" in paths  # ...and Google login still is
+    assert "/auth/google/login" in paths  # ...and Google login still is
+    assert "/auth/google/callback" in paths
+    # The cross-site-fetch door is gone: it is where the third-party state cookie
+    # came from, and a state minted there could no longer be completed anyway.
+    assert "/auth/google/authorize" not in paths
     # Renewal is not a dev convenience. Without it in production the session is
     # again exactly as long as one token, which is the "every deploy logs me
     # out" report — see tests/test_session_lifetime.py.
@@ -109,15 +125,16 @@ def test_production_refuses_an_unsafe_secret_key(monkeypatch, secret):
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_the_authorize_response_commits_this_browser_to_that_state(client):
+async def test_the_login_redirect_commits_this_browser_to_that_state(client):
     """The other half of the CSRF binding: the cookie has to be issued, and it has
     to be issued over the state actually inside the URL the browser is sent to.
-    A digest of anything else 400s every real login instead of only the forged one.
+    A digest of anything else refuses every real login instead of only the forged one.
     """
     from urllib.parse import parse_qs, urlparse
 
-    r = await client.get("/auth/google/authorize")
-    state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
+    r = await client.get("/auth/google/login")
+    assert r.status_code == 302
+    state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
     cookie = r.headers["set-cookie"]
 
     assert f"oauth_state={hashlib.sha256(state.encode()).hexdigest()}" in cookie
@@ -133,8 +150,6 @@ async def test_a_matching_state_is_let_through_and_the_cookie_is_spent(
     """A callback URL is not a secret — it lands in history, in a referrer, in a
     screenshot. Clearing the cookie on the way out is what stops a second use of
     the same one from logging anyone in."""
-    from urllib.parse import parse_qs, urlparse
-
     from httpx_oauth.clients.google import GoogleOAuth2
     from httpx_oauth.oauth2 import GetAccessTokenError
 
@@ -143,46 +158,18 @@ async def test_a_matching_state_is_let_through_and_the_cookie_is_spent(
 
     monkeypatch.setattr(GoogleOAuth2, "get_access_token", refuse)
 
-    r = await client.get("/auth/google/authorize")
-    state = parse_qs(urlparse(r.json()["authorization_url"]).query)["state"][0]
-
+    state = await _issued_state(client)
     first = await client.get(
         "/auth/google/callback", params={"code": "c", "state": state}
     )
     # It reached the real handler — which is where the (stubbed) exchange failed.
-    assert first.json().get("detail") != "INVALID_STATE_TOKEN"
+    _refused_with(first, "google")
+    assert "Max-Age=0" in first.headers["set-cookie"]
 
     replay = await client.get(
         "/auth/google/callback", params={"code": "c", "state": state}
     )
-    assert replay.status_code == 400
-    assert replay.json()["detail"] == "INVALID_STATE_TOKEN"
-
-
-@pytest.mark.asyncio(loop_scope="session")
-async def test_an_authorize_body_without_a_state_still_reaches_the_browser():
-    """The state is read back out of a response this middleware does not own. If
-    that shape ever changes, login must degrade to "no cookie" — not to a 500 on
-    the only way into the product."""
-    from starlette.responses import StreamingResponse
-
-    from platform_app import main
-
-    async def body():
-        yield b'{"nothing_we_recognise": true}'
-
-    async def call_next(_request):
-        return StreamingResponse(body(), status_code=200, media_type="application/json")
-
-    request = Request({
-        "type": "http", "method": "GET", "path": main._AUTHORIZE_PATH,
-        "query_string": b"", "headers": [], "scheme": "http", "server": ("test", 80),
-    })
-    out = await main.bind_oauth_state(request, call_next)
-
-    assert out.status_code == 200
-    assert out.body == b'{"nothing_we_recognise": true}'
-    assert "oauth_state" not in out.headers.get("set-cookie", "")
+    _refused_with(replay, "estado")
 
 
 @pytest.mark.asyncio(loop_scope="session")

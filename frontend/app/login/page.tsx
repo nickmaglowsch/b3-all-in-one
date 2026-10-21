@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { API_URL, devLogin, getToken, googleLogin } from "@/lib/api";
+import { useBrowserValue } from "@/lib/hooks";
+import { loginErrorMessage } from "@/lib/loginErrors";
 import { postLoginTarget } from "@/lib/routes";
 import { Brand } from "@/components/Brand";
 
@@ -15,10 +17,19 @@ const IS_LOCAL = API_URL.includes("localhost") || API_URL.includes("127.0.0.1");
 // postLoginTarget in lib/routes.ts, where the rule is tested.
 const nextParam = () => new URLSearchParams(window.location.search).get("next");
 
+// A failed Google sign-in comes back as /login?erro=<code> (the API's
+// platform_app/oauth_login.py) instead of raw JSON on the API's host.
+const oauthError = () =>
+  loginErrorMessage(new URLSearchParams(window.location.search).get("erro"));
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The ?erro= sentence stands until the next attempt, which speaks for itself.
+  const fromCallback = useBrowserValue(oauthError, null);
+  const [retried, setRetried] = useState(false);
+  const shownError = error ?? (retried ? null : fromCallback);
 
   // A session that already exists does not sign in again. This page is public, so
   // AppShell's guard never runs here, and every entrance to it — the landing's
@@ -31,20 +42,29 @@ export default function LoginPage() {
     if (getToken()) router.replace(postLoginTarget(nextParam()));
   }, [router]);
 
-  async function handleGoogle() {
+  // Back from Google's consent screen restores this page from the bfcache with its
+  // state frozen mid-redirect: the button disabled on "Redirecionando…" and
+  // nothing left running to undo it, so only a manual reload got out. A restore
+  // fires `pageshow` with `persisted`; a fresh load starts unlocked anyway.
+  useEffect(() => {
+    const onShow = (e: PageTransitionEvent) => {
+      if (e.persisted) setLoading(false);
+    };
+    window.addEventListener("pageshow", onShow);
+    return () => window.removeEventListener("pageshow", onShow);
+  }, []);
+
+  function handleGoogle() {
     setLoading(true);
     setError(null);
-    try {
-      await googleLogin(); // redirects the browser away on success
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Falha ao entrar com Google.");
-      setLoading(false);
-    }
+    setRetried(true);
+    googleLogin(); // a navigation: the API binds the flow, then on to Google
   }
 
   async function handleDevLogin() {
     setLoading(true);
     setError(null);
+    setRetried(true);
     try {
       await devLogin();
       router.replace(postLoginTarget(nextParam()));
@@ -91,9 +111,9 @@ export default function LoginPage() {
             </button>
           )}
 
-          {error && (
+          {shownError && (
             <p className="mt-3 text-sm text-loss" role="alert">
-              {error}
+              {shownError}
             </p>
           )}
         </div>

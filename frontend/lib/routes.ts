@@ -4,7 +4,16 @@
 
 // The privacy policy is legally required to be readable *before* signing up, so
 // it belongs here alongside the landing and the login page itself.
-export const PUBLIC_ROUTES = ["/", "/login", "/privacidade"];
+//
+// /auth/callback is here because it is where the token *arrives*, so storage has
+// none yet when it renders. Inside the shell, the sidebar's own queries
+// (/portfolios, /me) ran before the page's effect could store the token — React
+// runs an earlier sibling's effects first — went out without a credential, came
+// back 401, and the 401 handler wiped the token Google had just delivered and
+// sent the browser to /login. Whichever response won that race decided whether
+// the login worked: "sometimes I have to clear cookies to log in". Rendered bare,
+// the page runs nothing but its own effect.
+export const PUBLIC_ROUTES = ["/", "/login", "/auth/callback", "/privacidade"];
 
 // Exact match, never a prefix: a prefix rule opens every route someone later adds
 // under it. `/variantes/*` was one, and it outlived the landing bake-off it existed for.

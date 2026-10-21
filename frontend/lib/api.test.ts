@@ -5,77 +5,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
-const UUID = "11111111-2222-3333-4444-555555555555";
-
-function memStorage() {
-  const m = new Map<string, string>();
-  return {
-    getItem: (k: string) => m.get(k) ?? null,
-    setItem: (k: string, v: string) => void m.set(k, v),
-    removeItem: (k: string) => void m.delete(k),
-  };
-}
-
-const state = { reloads: 0, events: [] as Event[] };
-let instance = 0;
-
-/** Instala um `window` falso e importa o módulo do zero — o seed da URL roda no
- *  escopo do módulo, então só um import novo o exercita. */
-async function load(search = "", pathname = "/carteira") {
-  state.reloads = 0;
-  state.events = [];
-  const win = {
-    localStorage: memStorage(),
-    sessionStorage: memStorage(),
-    location: {
-      search,
-      pathname,
-      href: "",
-      reload: () => {
-        state.reloads += 1;
-      },
-    },
-    dispatchEvent: (e: Event) => {
-      state.events.push(e);
-      return true;
-    },
-  };
-  Object.defineProperty(globalThis, "window", { value: win, configurable: true });
-  const mod = await import(`./api.ts?n=${(instance += 1)}`);
-  return { mod, win };
-}
-
-type Reply = (url: string, init: RequestInit) => Response;
-
-function respond(reply: Reply) {
-  const calls: { url: string; headers: Headers; init: RequestInit }[] = [];
-  Object.defineProperty(globalThis, "fetch", {
-    value: async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      calls.push({ url: String(input), headers: new Headers(init.headers), init });
-      return reply(String(input), init);
-    },
-    configurable: true,
-    writable: true,
-  });
-  return calls;
-}
-
-const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-
-const ok = () => json(200, { ok: true });
-
-async function rejection(p: Promise<unknown>) {
-  try {
-    await p;
-  } catch (e) {
-    return e as Error & { status: number; detail?: unknown };
-  }
-  throw new Error("a chamada devia ter falhado");
-}
+import { UUID, json, load, ok, rejection, respond, state } from "./apiHarness.ts";
 
 // --------------------------------------------------------------------------
 // Cabeçalhos
@@ -124,25 +54,8 @@ test("um corpo de texto é JSON, um FormData é deixado em paz", async () => {
 });
 
 // --------------------------------------------------------------------------
-// Sessão
+// Sessão e livro selecionado
 // --------------------------------------------------------------------------
-
-test("um 401 limpa o token e devolve o usuário ao login", async () => {
-  const { mod, win } = await load();
-  respond(() => json(401, { detail: "expirado" }));
-  mod.setToken("jwt-velho");
-  const err = await rejection(mod.api("/dados"));
-  assert.equal(err.status, 401);
-  assert.equal(mod.getToken(), null);
-  assert.equal(win.location.href, "/login");
-});
-
-test("já estando no login, o 401 não redireciona para o próprio login", async () => {
-  const { mod, win } = await load("", "/login");
-  respond(() => json(401, { detail: "expirado" }));
-  await rejection(mod.api("/auth/me"));
-  assert.equal(win.location.href, "", "um redirect aqui é um laço");
-});
 
 test("um login novo não herda o livro do login anterior", async () => {
   const { mod } = await load();
@@ -287,90 +200,6 @@ test("o dev-login guarda o token que devolve", async () => {
   respond(() => json(200, { access_token: "jwt-dev", token_type: "bearer" }));
   assert.equal(await mod.devLogin(), "jwt-dev");
   assert.equal(mod.getToken(), "jwt-dev");
-});
-
-test("o Google login manda o browser para a URL de consentimento", async () => {
-  const { mod, win } = await load();
-  const calls = respond(() => json(200, { authorization_url: "https://accounts.google/x" }));
-  await mod.googleLogin();
-  // Sem `credentials: include` o cookie oauth_state não volta e o callback 400a.
-  assert.equal(calls[0].init.credentials, "include");
-  assert.equal(win.location.href, "https://accounts.google/x");
-});
-
-// --------------------------------------------------------------------------
-// Renovação da sessão
-// --------------------------------------------------------------------------
-// O token tem um prazo, e antes de /auth/refresh esse prazo era a sessão
-// inteira: a aba parava de funcionar sozinha e o clique seguinte caía no
-// /login. Todo mundo leu isso como "o deploy me deslogou".
-
-const renewed = (t: string) => json(200, { access_token: t, token_type: "bearer" });
-
-test("a renovação troca o token sem largar o livro selecionado", async () => {
-  const { mod } = await load();
-  const calls = respond(() => renewed("jwt-novo"));
-  mod.setToken("jwt-velho");
-  mod.setPortfolioId(UUID);
-  await mod.refreshSession();
-  assert.equal(calls[0].url, `${mod.API_URL}/auth/refresh`);
-  assert.equal(calls[0].init.method, "POST");
-  assert.equal(mod.getToken(), "jwt-novo");
-  // Renovar não é entrar com outra conta: soltar o livro aqui tiraria o assessor
-  // da carteira do cliente que ele está lendo, de hora em hora, sem motivo.
-  assert.equal(mod.getPortfolioId(), UUID);
-});
-
-test("sem token não há o que renovar", async () => {
-  const { mod } = await load();
-  const calls = respond(() => renewed("jwt-novo"));
-  await mod.refreshSession();
-  assert.equal(calls.length, 0);
-});
-
-// Montagem, foco da janela e o intervalo caem juntos; sem o estrangulamento
-// isso vira uma rajada de POSTs a cada troca de aba.
-test("uma renovação recente não é repetida, mas `force` passa por cima", async () => {
-  const { mod } = await load();
-  const calls = respond(() => renewed("jwt-2"));
-  mod.setToken("jwt-1");
-  await mod.refreshSession();
-  await mod.refreshSession();
-  assert.equal(calls.length, 1);
-  await mod.refreshSession(true);
-  assert.equal(calls.length, 2);
-});
-
-// A API reiniciando no meio de um deploy é exatamente quando isto roda. Encerrar
-// a sessão por causa disso seria o bug, não a correção.
-test("uma falha que não é 401 deixa a sessão de pé", async () => {
-  const { mod, win } = await load();
-  respond(() => new Response("<html>502</html>", { status: 502, statusText: "Bad Gateway" }));
-  mod.setToken("jwt-valido");
-  await mod.refreshSession();
-  assert.equal(mod.getToken(), "jwt-valido");
-  assert.equal(win.location.href, "");
-});
-
-// O cap de idade da sessão no backend responde 401: aí sim acabou.
-test("um 401 na renovação encerra a sessão e volta ao login", async () => {
-  const { mod, win } = await load();
-  respond(() => json(401, { detail: "Sessão expirada — entre novamente." }));
-  mod.setToken("jwt-de-um-mes-atras");
-  await mod.refreshSession();
-  assert.equal(mod.getToken(), null);
-  assert.equal(win.location.href, "/login");
-});
-
-// A API reiniciando é justamente quando o foco volta para a aba. Sem marcar a
-// tentativa, cada troca de janela vira mais um POST contra um serviço fora do ar.
-test("uma tentativa que falhou também segura a próxima", async () => {
-  const { mod } = await load();
-  const calls = respond(() => new Response("", { status: 502 }));
-  mod.setToken("jwt-valido");
-  await mod.refreshSession();
-  await mod.refreshSession();
-  assert.equal(calls.length, 1);
 });
 
 // A mensagem de um ApiError é a do servidor, escrita para o usuário; qualquer

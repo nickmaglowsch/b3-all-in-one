@@ -49,7 +49,7 @@
     "taxcore/scripts/irpf_2026.py::renda_fixa_year_end": 26,
     "taxcore/scripts/irpf_2026.py::snapshot_positions": 11,
     "taxcore/scripts/load_b3.py::derive_positions": 16,
-    "taxcore/scripts/load_b3.py::main": 21,
+    "taxcore/scripts/load_b3.py::main": 14,
     "taxcore/scripts/tlh_plan.py::main": 20,
     "taxcore/scripts/tlh_plan.py::render_report": 13,
     "taxcore/scripts/tlh_plan.py::walk_history": 17
@@ -78,7 +78,7 @@
     "platform/platform_app/routes.py": 1984,
     "platform/platform_app/routes_portfolio_index.py": 566,
     "taxcore/scripts/irpf_2026.py": 1015,
-    "taxcore/scripts/load_b3.py": 1140,
+    "taxcore/scripts/load_b3.py": 1041,
     "taxcore/scripts/tlh_plan.py": 628
   }
 }

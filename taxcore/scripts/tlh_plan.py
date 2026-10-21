@@ -97,7 +97,7 @@ def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
             bump_monthly(period, cls, sq * sp, pnl)
             cost -= sq * avg; qty -= sq
         elif r["kind"] == "qty_event":
-            qty += r["qty"]
+            qty += r["qty"]; cost += r["amount"]
         elif r["kind"] == "amort":
             cost = max(0.0, cost - r["amount"])
         state[0], state[1] = qty, cost

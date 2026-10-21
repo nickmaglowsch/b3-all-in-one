@@ -104,3 +104,34 @@ async def test_no_modelled_tenant_table_is_missing_from_the_migrations(
         f"models declare tenant tables the migration chain never creates: "
         f"{sorted(missing)}. Add the migration."
     )
+
+
+DRIFT_DB = "platform_alembic_drift_check"
+
+
+def _alembic(dsn: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *args],
+        cwd=PLATFORM_DIR, env={**os.environ, "DATABASE_URL": dsn},
+        capture_output=True, text=True, timeout=180,
+    )
+
+
+async def test_alembic_check_is_clean_on_a_migrated_database():
+    """The tests above compare table *names*. A constraint can drift too, and
+    did: b4d2f81c93ae gave renda_fixa_marks a tenant_id -> user.id FK the model
+    never declared, so every posição report imported into a client book died on
+    the insert in production while the create_all-built suite stayed green.
+    `alembic check` diffs the whole migrated schema against the models."""
+    await _admin(f"DROP DATABASE IF EXISTS {DRIFT_DB} WITH (FORCE)")
+    await _admin(f"CREATE DATABASE {DRIFT_DB}")
+    dsn = ADMIN_DSN.rsplit("/", 1)[0] + f"/{DRIFT_DB}"
+    try:
+        up = _alembic(dsn, "upgrade", "head")
+        assert up.returncode == 0, f"alembic upgrade head failed:\n{up.stderr[-3000:]}"
+        check = _alembic(dsn, "check")
+        assert check.returncode == 0, (
+            "the migrated schema and the models disagree — add a migration:\n"
+            f"{(check.stdout + check.stderr)[-3000:]}")
+    finally:
+        await _admin(f"DROP DATABASE IF EXISTS {DRIFT_DB} WITH (FORCE)")

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from backtests.core.simulation import run_simulation
-from scripts.run_backtest_json import _build_flows, _capital_and_flows
+from scripts.run_backtest_json import _build_flows, _capital_and_flows, _load_config
 
 IDX = pd.date_range("2020-01-31", periods=5, freq="ME")
 COLS = ["A", "B"]
@@ -108,3 +108,22 @@ def test_scalar_zero_contribution_unchanged():
                initial_capital=100.0, contribution=0.0)
     assert res["contributions"].tolist() == [0.0, 0.0, 0.0]
     assert np.allclose(res["aftertax_values"].to_numpy(), 100.0 * 1.1 ** np.arange(3))
+
+
+# ── The config argument ───────────────────────────────────────────────────────
+
+def test_config_dash_reads_stdin_so_a_long_history_fits(monkeypatch):
+    """The platform passes "-" and writes the config to stdin: a replay's flows,
+    one per distinct day, outgrow the 128 KB the kernel allows one argv element
+    (E2BIG at exec), which made what-if permanently fail for long books."""
+    import io
+    import json
+
+    flows = [{"date": f"2010-01-{d:02d}", "amount": 1.0} for d in range(1, 29)] * 200
+    payload = json.dumps({"flows": flows})
+    assert len(payload) > 128 * 1024
+    monkeypatch.setattr("sys.stdin", io.StringIO(payload))
+    assert _load_config("-") == {"flows": flows}
+    # The argv form keeps working for direct callers, and empty is no config.
+    assert _load_config('{"freq": "QE"}') == {"freq": "QE"}
+    assert _load_config("") == {}

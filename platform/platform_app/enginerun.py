@@ -57,13 +57,14 @@ def _env(extra_env: dict | None = None) -> dict:
 
 
 def run_script(
-    script: str, args: list[str], extra_env: dict | None = None
+    script: str, args: list[str], extra_env: dict | None = None, stdin: str | None = None
 ) -> subprocess.CompletedProcess:
     """``python scripts/<script> [args...]`` with the engine interpreter.
 
     A timeout returns exit code 124 rather than raising, so every existing
     ``if proc.returncode != 0`` caller reports it as an engine failure with no
     new error handling — and no request or job can pin a thread forever.
+    ``stdin`` carries a payload too big for argv (see subprocs.run).
     """
     return subprocs.run(
         [*_engine_python(), str(ENGINE / "scripts" / script), *args],
@@ -71,6 +72,7 @@ def run_script(
         env=_env(extra_env),
         timeout_s=settings.subprocess_timeout_s,
         label=script,
+        stdin=stdin,
     )
 
 
@@ -100,11 +102,13 @@ def _json_or_raise(proc: subprocess.CompletedProcess) -> dict:
     return subprocs.last_json(proc.stdout, strict=True)
 
 
-def run_json(script: str, args: list[str], extra_env: dict | None = None) -> dict:
+def run_json(
+    script: str, args: list[str], extra_env: dict | None = None, stdin: str | None = None
+) -> dict:
     """run_script, answered with the JSON object the script printed. Raises
     RuntimeError carrying the tail of its output on a non-zero exit (callers map
     it to HTTP or swallow it). Blocking — call via to_thread."""
-    return _json_or_raise(run_script(script, args, extra_env))
+    return _json_or_raise(run_script(script, args, extra_env, stdin=stdin))
 
 
 def advise_weights(

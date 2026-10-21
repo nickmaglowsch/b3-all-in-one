@@ -8,11 +8,12 @@ Owned by the settings agent. Registered in main.py as `portfolio_settings_router
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import delete, select
+from pydantic import BaseModel, Field
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app.db import get_async_session
+from platform_app.db import get_async_session, xact_lock
 from platform_app.models import (AssetClassOverride, RebalanceSettings,
                                  RendaFixaTerms)
 from platform_app.portfolio_index import RF_INDEXERS
@@ -67,6 +68,9 @@ async def put_asset_overrides(
             raise HTTPException(422, f"duplicate ticker: {tk}")
         seen[tk] = treat
 
+    # Serialised per tenant: two overlapping replaces otherwise both DELETE
+    # before either INSERTs, and the second trips the unique key (see xact_lock).
+    await xact_lock(session, "asset-overrides", tid)
     await session.execute(
         delete(AssetClassOverride).where(AssetClassOverride.tenant_id == tid))
     for tk, treat in seen.items():
@@ -80,7 +84,8 @@ async def put_asset_overrides(
 class RendaFixaTermsIn(BaseModel):
     ticker: str
     indexer: str
-    rate_pct: float
+    # NaN would be stored and then fed into accrue_rf by the free /positions.
+    rate_pct: float = Field(allow_inf_nan=False)
 
 
 @portfolio_settings_router.get("/renda-fixa")
@@ -127,6 +132,7 @@ async def put_renda_fixa_terms(
             raise HTTPException(422, f"negative rate for {tk}")
         seen[tk] = (indexer, float(t.rate_pct))
 
+    await xact_lock(session, "renda-fixa", tid)
     await session.execute(
         delete(RendaFixaTerms).where(RendaFixaTerms.tenant_id == tid))
     for tk, (indexer, rate) in seen.items():
@@ -173,12 +179,13 @@ async def put_rebalance_settings(
     _user, tid = tenant
     if body.cadence not in VALID_CADENCES:
         raise HTTPException(422, f"cadence must be one of {sorted(VALID_CADENCES)}")
-    row = await session.get(RebalanceSettings, tid)
-    if row is None:
-        row = RebalanceSettings(tenant_id=tid)
-        session.add(row)
-    row.buy_only_laggards = body.buy_only_laggards
-    row.sell_only_for_harvest = body.sell_only_for_harvest
-    row.cadence = body.cadence
+    # Upsert: two first-time PUTs racing on get-then-add both INSERT the same
+    # primary key, and the loser is a 500.
+    values = body.model_dump()
+    await session.execute(
+        pg_insert(RebalanceSettings).values(tenant_id=tid, **values)
+        .on_conflict_do_update(index_elements=[RebalanceSettings.tenant_id],
+                               set_={**values, "updated_at": func.now()})
+    )
     await session.commit()
-    return _settings_dict(row)
+    return _settings_dict(RebalanceSettings(tenant_id=tid, **values))

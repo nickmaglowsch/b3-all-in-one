@@ -40,7 +40,11 @@ export function useBacktests() {
 export function useBacktest(id: string) {
   return useQuery({
     queryKey: ["backtest", id],
-    queryFn: () => api<BacktestRun>(`/backtests/${id}`, {}, { paywallDialog: false }),
+    queryFn: () =>
+      api<BacktestRun>(`/backtests/${encodeURIComponent(id)}`, {}, { paywallDialog: false }),
+    // No id, no request: "/backtests/" is the *list*, which answers 200 with an
+    // array — a run with no status, rendered as "Rodando a simulação…" forever.
+    enabled: id !== "",
     refetchInterval: (q) => (q.state.data && busy(q.state.data.status) ? 2000 : false),
   });
 }
@@ -49,7 +53,11 @@ export function useCurves(id: string, enabled: boolean) {
   return useQuery({
     queryKey: ["curves", id],
     queryFn: () =>
-      api<BacktestCurves>(`/backtests/${id}/curves`, {}, { paywallDialog: false }),
+      api<BacktestCurves>(
+        `/backtests/${encodeURIComponent(id)}/curves`,
+        {},
+        { paywallDialog: false },
+      ),
     enabled,
     staleTime: 60 * 60_000, // a finished run's curves never change
   });

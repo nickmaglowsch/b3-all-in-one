@@ -9,6 +9,7 @@ import {
   BUNDLE,
   CARTEIRA,
   EMPRESARIAL,
+  ligarHref,
   mesmoConjunto,
   MODULOS,
   nadaAMudar,
@@ -104,4 +105,12 @@ test("nadaAMudar exige assinatura viva, não só o mesmo conjunto", () => {
 test("mesmoConjunto compara conjunto, não ordem", () => {
   assert.ok(mesmoConjunto(["irpf", "bench"], ["bench", "irpf"]));
   assert.ok(!mesmoConjunto(["irpf"], ["irpf", "bench"]));
+});
+
+// A oferta inline de um 402 tem de chegar à assinatura com o módulo certo já no
+// carrinho — é o mesmo `ligar` que cartInicial lê.
+test("ligarHref leva o módulo pedido para o carrinho", () => {
+  assert.equal(ligarHref("indice"), "/assinatura?ligar=indice");
+  const ligar = new URL(ligarHref("mercado"), "https://x").searchParams.get("ligar");
+  assert.deepEqual(cartInicial([], ligar), ["mercado"]);
 });

@@ -32,10 +32,10 @@ scripts under test alive:
 | Fixture content | Code path it keeps covered |
 |---|---|
 | Buys/sells in `Mercado à Vista` + `Mercado Fracionário` (`CMIG4F`, `GOAU4F`, `ABEV3F`) | `consolidate_fractional`, the `*F` strip in `derive_positions` |
-| Re-exported (overlapping) Negociação/Movimentação periods | trade dedup + `cash_events` dedup |
+| Re-exported (overlapping) Negociação/Movimentação periods | trade dedup + `cash_events` dedup (`b3_rules.drop_reexported`: collapses copies across files, never repeats within one) |
 | `Dividendo`, `Juros Sobre Capital Próprio`, `Rendimento`, `Amortização`, `Reembolso`, `Leilão de Fração` | `MOV_CATEGORY` income / reembolso / amort / other |
-| `Desdobro` (WEGE3), `Bonificação em Ativos` + `Fração em Ativos` (GOAU4) | `qty_event` handling in `derive_positions` |
-| `Empréstimo` (BTC lending) rows | the skip branch |
+| `Desdobro` (WEGE3), `Bonificação em Ativos` + `Fração em Ativos` + `Leilão de Fração` (GOAU4) | `qty_event` handling in `derive_positions`; the bonificação's custo atribuído (75 × R$ 8,90) in the cost and in código 18; the fraction + auction pair booked as a R$ 9,87 sale (`b3_rules.fraction_auction_sales`) |
+| `Empréstimo` (BTC lending), `Transferência`, unexercised subscription rights, the XPBR31 `Atualização` | the skip branch: `b3_rules.MOV_NOOP` labels skip silently; `Atualização` would land in `movimentacao_review` but its `cost_basis_overrides.csv` line answers it, so the review stays empty |
 | TRPL4 trades **and** a TRPL4 dividend | `TICKER_RENAMES` → ISAE4 on trades *and* events |
 | Option premiums (`PETRF460`…) + 2 exercises with their Movimentação settlements | `process_option_activity`, `_resolve_exercise_underlying` |
 | `Futuro` rows (`WINJ25`) | `--all-markets` genuinely widens `positions.csv` |

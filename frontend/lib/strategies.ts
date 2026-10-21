@@ -20,7 +20,8 @@ export function useSignals() {
 export function useUserStrategies() {
   return useQuery({
     queryKey: ["user-strategies"],
-    queryFn: () => api<UserStrategy[]>("/strategies/user"),
+    // On load in both builders: a 402 must not open a modal nobody asked for.
+    queryFn: () => api<UserStrategy[]>("/strategies/user", {}, { paywallDialog: false }),
   });
 }
 

@@ -59,3 +59,57 @@ def test_non_b3_and_dividend_rows_untouched():
     detected = _action("BRTESTACNOR1", ex, "STOCK_SPLIT", 2.0, source="DETECTED")
     out = validate_split_actions_against_prices(detected, px)
     assert len(out) == 1 and out.iloc[0]["source"] == "DETECTED"
+
+
+def test_restored_b3_row_does_not_duplicate_a_stored_correction():
+    # The stored correction plus the original B3 row the next fetch re-inserts
+    # under a different action_type: one 2:1 event, not two.
+    px = _prices("BRVIVTACNOR0", [51, 51, 50, 51, 51, 25.5, 25.7, 26.4])
+    ex = px.iloc[5]["date"]
+    actions = pd.concat([
+        _action("BRVIVTACNOR0", ex, "STOCK_SPLIT", 2.0, source="B3_CORRECTED"),
+        _action("BRVIVTACNOR0", ex, "REVERSE_SPLIT", 0.025),
+    ], ignore_index=True)
+    out = validate_split_actions_against_prices(actions, px)
+    assert len(out) == 1
+    assert out.iloc[0]["action_type"] == "STOCK_SPLIT"
+    assert out.iloc[0]["factor"] == pytest.approx(2.0)
+    assert out.iloc[0]["source"] == "B3_CORRECTED"
+
+
+def test_stored_correction_survives_a_run_without_its_b3_origin():
+    # Fetch skipped or failed: the correction is all there is, keep it.
+    px = _prices("BRVIVTACNOR0", [51, 51, 50, 51, 51, 25.5, 25.7, 26.4])
+    ex = px.iloc[5]["date"]
+    actions = _action("BRVIVTACNOR0", ex, "STOCK_SPLIT", 2.0, source="B3_CORRECTED")
+    out = validate_split_actions_against_prices(actions, px)
+    assert len(out) == 1 and out.iloc[0]["source"] == "B3_CORRECTED"
+
+
+def test_two_rows_corrected_into_one_key_are_applied_once():
+    # Bonus and split on one date, price fell 4x: each is checked against the
+    # whole move and both become STOCK_SPLIT 4. The table can hold one of them;
+    # applying both would scale the history by 16.
+    px = _prices("BRTESTACNOR1", [100, 100, 100, 100, 100, 25, 25, 25])
+    ex = px.iloc[5]["date"]
+    actions = pd.concat([
+        _action("BRTESTACNOR1", ex, "BONUS_SHARES", 100.0),
+        _action("BRTESTACNOR1", ex, "STOCK_SPLIT", 2.0),
+    ], ignore_index=True)
+    out = validate_split_actions_against_prices(actions, px)
+    assert len(out) == 1
+    assert (out.iloc[0]["action_type"], out.iloc[0]["factor"]) == ("STOCK_SPLIT", 4.0)
+
+
+def test_stored_correction_of_another_event_is_kept():
+    # A correction on another date of the same ISIN is a different event.
+    px = _prices("BRVIVTACNOR0", [51, 51, 50, 51, 51, 25.5, 25.7, 26.4, 13.2, 13.1])
+    ex_old = px.iloc[8]["date"]
+    ex_new = px.iloc[5]["date"]
+    actions = pd.concat([
+        _action("BRVIVTACNOR0", ex_old, "STOCK_SPLIT", 2.0, source="B3_CORRECTED"),
+        _action("BRVIVTACNOR0", ex_new, "REVERSE_SPLIT", 0.025),
+    ], ignore_index=True)
+    out = validate_split_actions_against_prices(actions, px)
+    assert len(out) == 2
+    assert set(out["source"]) == {"B3_CORRECTED"}

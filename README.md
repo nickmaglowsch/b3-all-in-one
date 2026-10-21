@@ -342,11 +342,13 @@ things only it has: the symbols the free vendor does not carry (the delisted
 tail is still `us_listing`'s job) and the dividends that upgrade a symbol from
 `split_only` back to `total_return`, about ten symbols a day.
 
-A run in progress is visible three ways: `docker compose logs -f ingest` for
-live progress, `plane_status.py` for what has landed so far (the counts move
-while the job runs), and the `ingest_runs` table — which is where a *failed* run
-leaves its error, since the scheduled jobs record status there rather than only
-in the worker's log.
+A run is visible three ways: `plane_status.py` for what has landed so far (the
+counts move while the job runs), `docker compose logs ingest` for each run's
+outcome once it ends — the pipeline's own output is captured, so it is not a
+live progress feed — and the `ingest_runs` table. A failed run leaves its error
+there and also fails the procrastinate job; a run that finished but logged an
+ERROR along the way (a benchmark feed that was down, say) is `done` with those
+lines in `error`.
 
 ### Env vars (see `.env.example`)
 

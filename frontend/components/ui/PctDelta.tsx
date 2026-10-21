@@ -1,4 +1,4 @@
-import { formatPercent } from "@/lib/format";
+import { formatPercent, fractionShown } from "@/lib/format";
 
 // `value` is a fraction: 0.012 → ▲ 1,2%. The glyph carries direction for sighted
 // users; the printed sign carries it for everyone else. Do not wrap the number in
@@ -11,8 +11,9 @@ export function PctDelta({
   value: number;
   className?: string;
 }) {
-  const up = value > 0;
-  const down = value < 0;
+  const shown = fractionShown(value); // the glyph follows the printed digits
+  const up = shown > 0;
+  const down = shown < 0;
   const color = up ? "text-gain" : down ? "text-loss" : "text-muted";
   const glyph = up ? "▲" : down ? "▼" : "–";
   return (

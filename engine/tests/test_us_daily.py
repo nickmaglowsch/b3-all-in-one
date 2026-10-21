@@ -133,6 +133,54 @@ def test_a_split_for_a_symbol_the_plane_does_not_hold_is_still_recorded(tmp_path
     assert "E-zzz" in split_storage.applied_split_ids(conn, "US")
 
 
+def _committed_close(path, date="2026-08-25"):
+    """What another process would read: a fresh connection sees commits only."""
+    other = sqlite3.connect(path)
+    try:
+        return other.execute(
+            "SELECT close FROM market_prices WHERE date = ?", (date,)).fetchone()[0]
+    finally:
+        other.close()
+
+
+def test_a_crash_between_rescale_and_record_leaves_neither(tmp_path, monkeypatch):
+    """Killed after the UPDATE and before the record: the next run's window
+    still reaches the split, so a committed UPDATE with no record would be
+    scaled again (4-for-1 becoming 16-for-1). Both or neither."""
+    path, conn = _plane(tmp_path)
+    monkeypatch.setattr(vendor, "fetch_splits", lambda *a, **k: [SPLIT_4FOR1])
+
+    real_execute = storage.execute
+
+    def dies_recording_rows(c, sql, params=None):
+        if sql.startswith("UPDATE applied_splits"):
+            raise RuntimeError("killed")
+        return real_execute(c, sql, params)
+
+    monkeypatch.setattr(storage, "execute", dies_recording_rows)
+    with pytest.raises(RuntimeError, match="killed"):
+        us_daily.apply_due_splits(conn, D(2026, 8, 1), D(2026, 9, 1), {"AAPL"})
+    assert _committed_close(path) == 100.0
+    assert split_storage.applied_split_ids(conn, "US") == set()
+
+    monkeypatch.setattr(storage, "execute", real_execute)
+    summary = us_daily.apply_due_splits(conn, D(2026, 8, 1), D(2026, 9, 1), {"AAPL"})
+    assert summary["splits_applied"] == 1 and summary["rows_rescaled"] == 2
+    assert _committed_close(path) == 25.0
+    assert conn.execute(
+        "SELECT rows_adjusted FROM applied_splits WHERE split_id = ?",
+        (SPLIT_4FOR1["id"],)).fetchone() == (2,)
+
+
+def test_a_split_already_recorded_is_not_rescaled_even_past_the_id_check(tmp_path):
+    """The record is the claim: a run that read `applied_split_ids` before
+    another one committed the same split must still not scale it again."""
+    path, conn = _plane(tmp_path)
+    assert split_storage.apply_split(conn, "US", SPLIT_4FOR1, 0.25) == 2
+    assert split_storage.apply_split(conn, "US", SPLIT_4FOR1, 0.25) is None
+    assert _committed_close(path) == 25.0
+
+
 # --- the grouped reader ---------------------------------------------------
 
 def test_a_full_session_parses_by_key_name(tmp_path):

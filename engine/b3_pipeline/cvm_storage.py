@@ -216,10 +216,10 @@ def upsert_cvm_filing(
 
 
 def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Batch upsert fundamentals_pit rows from a DataFrame.
+    """Batch upsert fundamentals_pit rows keyed on filing_id; returns the row count.
 
-    Uses INSERT OR REPLACE keyed on filing_id (primary key).
-    Returns the number of rows processed.
+    Share counts and net_income_ttm are derived later in the run (FRE propagation,
+    compute_net_income_ttm), so the parser's NULL for them never blanks a stored value.
     """
     if df.empty:
         logger.warning("upsert_fundamentals_pit: empty DataFrame, nothing to insert")
@@ -252,10 +252,10 @@ def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
             total_assets = excluded.total_assets,
             equity = excluded.equity,
             net_debt = excluded.net_debt,
-            shares_outstanding = excluded.shares_outstanding,
-            shares_on = excluded.shares_on,
-            shares_pn = excluded.shares_pn,
-            net_income_ttm = excluded.net_income_ttm
+            shares_outstanding = COALESCE(excluded.shares_outstanding, fundamentals_pit.shares_outstanding),
+            shares_on = COALESCE(excluded.shares_on, fundamentals_pit.shares_on),
+            shares_pn = COALESCE(excluded.shares_pn, fundamentals_pit.shares_pn),
+            net_income_ttm = COALESCE(excluded.net_income_ttm, fundamentals_pit.net_income_ttm)
     """
 
     optional_cols = [

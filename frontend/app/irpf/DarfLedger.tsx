@@ -3,10 +3,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { DarfLedger as Ledger, DarfMonth } from "@/lib/types";
+import type { DarfLedger as LedgerData, DarfMonth } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
 import { Money } from "@/components/ui/Money";
-import { EmptyState } from "@/components/ui/EmptyState";
+import { EmptyState, LoadFailure } from "@/components/ui/EmptyState";
+import { useYearChoice, YearSelect } from "./YearSelect";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconAlert, IconCheck, IconClock, IconReceipt } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
@@ -51,26 +52,60 @@ function keyOf(m: { apuracao: string; classe: string }) {
   return `${m.apuracao}·${m.classe}`;
 }
 
-export function DarfLedger({ year }: { year: number }) {
+const TITLE = "DARF — apuração mensal";
+
+// Its own year, not the report's ano-base: the report's natural year is the one
+// being declared (last year), the ledger's is the one whose DARFs are coming due.
+export function DarfLedger() {
+  const [year, setChosen] = useYearChoice((atual) => atual);
+  return (
+    <Card
+      title={TITLE}
+      action={
+        <YearSelect
+          id="darf-year"
+          label="Ano da apuração"
+          optionLabel={(y) => `Apuração ${y}`}
+          value={year}
+          onChange={setChosen}
+        />
+      }
+    >
+      {/* keyed: an open payment form belongs to the year it was opened in */}
+      {year === null ? <Skeleton className="h-32 w-full" /> : <Ledger key={year} year={year} />}
+    </Card>
+  );
+}
+
+function Ledger({ year }: { year: number }) {
   const qc = useQueryClient();
   const [editing, setEditing] = useState<string | null>(null);
 
   const ledger = useQuery({
     queryKey: ["darf", year],
-    queryFn: () => api<Ledger>(`/irpf/darf?year=${year}`),
+    // On load: a 402 is rendered inline below, not thrown up as a modal.
+    queryFn: () => api<LedgerData>(`/irpf/darf?year=${year}`, {}, { paywallDialog: false }),
   });
 
   // The API replaces the whole year, so every write sends the surviving rows
   // plus (or minus) the one being edited. A year holds a handful of DARFs, so
   // this is cheaper than tracking row ids client-side.
+  //
+  // Which makes ledger.data the base of the *next* write, so it must not be
+  // stale when that write is built. The invalidate is returned, which keeps the
+  // mutation pending until the refetched ledger has landed (the apuração is a
+  // taxcore run, seconds long); before that, a second "Remover" would rebuild
+  // the year from the old snapshot and bring the first payment back.
   const save = useMutation({
     mutationFn: (rows: object[]) =>
       api(`/irpf/darf?year=${year}`, { method: "PUT", body: JSON.stringify(rows) }),
     onSuccess: () => {
       setEditing(null);
-      qc.invalidateQueries({ queryKey: ["darf", year] });
+      return qc.invalidateQueries({ queryKey: ["darf", year] });
     },
   });
+  // A background refetch is just as stale a base as an unfinished save.
+  const busy = save.isPending || ledger.isFetching;
 
   function others(exclude: string) {
     return (ledger.data?.meses ?? [])
@@ -84,23 +119,17 @@ export function DarfLedger({ year }: { year: number }) {
       }));
   }
 
-  if (ledger.isPending) {
-    return (
-      <Card title="DARF — apuração mensal">
-        <Skeleton className="h-32 w-full" />
-      </Card>
-    );
-  }
+  if (ledger.isPending) return <Skeleton className="h-32 w-full" />;
 
   if (ledger.isError) {
     return (
-      <Card title="DARF — apuração mensal">
-        <EmptyState
-          variant="error"
-          title="Não foi possível apurar os DARFs deste ano."
-          hint={ledger.error instanceof Error ? ledger.error.message : undefined}
-        />
-      </Card>
+      <LoadFailure
+        error={ledger.error}
+        icon={<IconReceipt size={28} />}
+        title="Não foi possível apurar os DARFs deste ano."
+        offerTitle={(nome) => `O controle de DARF vem com o módulo ${nome}.`}
+        onRetry={() => ledger.refetch()}
+      />
     );
   }
 
@@ -108,27 +137,21 @@ export function DarfLedger({ year }: { year: number }) {
 
   if (meses.length === 0) {
     return (
-      <Card title="DARF — apuração mensal">
-        <EmptyState
-          icon={<IconReceipt size={28} />}
-          title={`Nenhum DARF apurado em ${year}.`}
-          hint="Meses sem imposto a pagar não geram DARF — vendas de ações até R$ 20.000 no mês são isentas, e um mês no prejuízo não é tributado."
-        />
-      </Card>
+      <EmptyState
+        icon={<IconReceipt size={28} />}
+        title={`Nenhum DARF apurado em ${year}.`}
+        hint="Meses sem imposto a pagar não geram DARF — vendas de ações até R$ 20.000 no mês são isentas, e um mês no prejuízo não é tributado."
+      />
     );
   }
 
   return (
-    <Card
-      title="DARF — apuração mensal"
-      action={
-        <span className="text-xs text-muted">
-          Código {ledger.data.codigo} · devido{" "}
-          <Money value={total_devido} className="text-xs" /> · pago{" "}
-          <Money value={total_pago} className="text-xs" />
-        </span>
-      }
-    >
+    <>
+      <p className="mb-3 text-xs text-muted">
+        Código {ledger.data.codigo} · devido{" "}
+        <Money value={total_devido} className="text-xs" /> · pago{" "}
+        <Money value={total_pago} className="text-xs" />
+      </p>
       {atrasados > 0 && (
         <p className="mb-4 flex items-start gap-2 rounded-md border border-loss/30 bg-loss/[0.04] p-3 text-sm text-loss" role="alert">
           <IconAlert size={16} />
@@ -194,8 +217,9 @@ export function DarfLedger({ year }: { year: number }) {
                     {m.pagamento ? (
                       <button
                         type="button"
-                        disabled={save.isPending}
+                        disabled={busy}
                         onClick={() => save.mutate(others(key))}
+                        aria-label={`Remover pagamento de ${formatApuracao(m.apuracao)}, ${CLASSE_LABEL[m.classe] ?? m.classe}`}
                         className="text-xs text-muted underline underline-offset-2 hover:text-ink disabled:opacity-60"
                       >
                         Remover
@@ -226,7 +250,7 @@ export function DarfLedger({ year }: { year: number }) {
           <PaymentForm
             key={key}
             mes={m}
-            pending={save.isPending}
+            pending={busy}
             onCancel={() => setEditing(null)}
             onSave={(row) => save.mutate([...others(key), row])}
           />
@@ -245,7 +269,7 @@ export function DarfLedger({ year }: { year: number }) {
         fica guardado. Emissão do DARF com código de barras continua sendo no
         e-CAC/Sicalc.
       </p>
-    </Card>
+    </>
   );
 }
 

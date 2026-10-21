@@ -135,12 +135,25 @@ async def _actual_value(session: AsyncSession, tid) -> float:
 
 
 def _read_curve(path: Path) -> list[dict]:
-    """curves.csv → [{date, aftertax}], the after-tax equity path for the overlay."""
+    """curves.csv → [{date, aftertax, contribution}], the after-tax equity path
+    for the overlay.
+
+    `contribution` is the cash the engine deployed on that row — the replayed
+    aportes. The path itself is patrimônio, so it grows with every deposit; the
+    SPA needs the deposits to read it as a return (time-weighted, the same
+    (V_t − C_t) / V_{t−1} chain the engine's own metrics use) instead of
+    calling R$90k of aportes "+900%". Omitted when the artifact has no such
+    column."""
     if not path.exists():
         return []
     with path.open(newline="") as fh:
-        return [{"date": r["date"], "aftertax": float(r["aftertax"])}
-                for r in csv.DictReader(fh)]
+        rows = []
+        for r in csv.DictReader(fh):
+            point = {"date": r["date"], "aftertax": float(r["aftertax"])}
+            if r.get("contribution"):
+                point["contribution"] = float(r["contribution"])
+            rows.append(point)
+        return rows
 
 
 def _run_whatif(

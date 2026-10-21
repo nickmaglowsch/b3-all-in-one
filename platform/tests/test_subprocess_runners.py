@@ -290,15 +290,18 @@ def test_runners_do_not_raise_timeoutexpired(
 # silent per-run copy.
 
 SHELLED_MODULES = {"load_b3", "irpf_2026", "tlh_plan"}
+# Imported by the three above. b3_rules/b3_options were split out of load_b3 and
+# irpf_proventos out of irpf_2026 when both hit the quality gate's size ratchet.
+IMPORTED_MODULES = {"_common", "apuracao", "b3_rules", "b3_options", "irpf_proventos"}
 
 
 def test_seed_workspace_copies_only_what_the_shelled_modules_import(tmp_path):
     b3run.seed_workspace(tmp_path)
     modules = {p.stem for p in (tmp_path / "scripts").glob("*.py")} - {"__init__"}
-    # _common and apuracao are imported by the three above; nothing else may ride along.
-    assert modules == SHELLED_MODULES | {"_common", "apuracao"}, (
+    # Nothing the shelled modules do not import may ride along.
+    assert modules == SHELLED_MODULES | IMPORTED_MODULES, (
         f"unshelled taxcore scripts copied into every tenant workspace: "
-        f"{sorted(modules - SHELLED_MODULES - {'_common', 'apuracao'})}"
+        f"{sorted(modules - SHELLED_MODULES - IMPORTED_MODULES)}"
     )
 
 

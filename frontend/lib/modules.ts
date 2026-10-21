@@ -84,6 +84,11 @@ export const vendavel = (id: string) => id === EMPRESARIAL || AVULSOS.some((m) =
 export const moduloDe = (id: string) => MODULOS.find((m) => m.id === id);
 export const nomeDe = (id: string) => moduloDe(id)?.name ?? id;
 
+/** Onde uma oferta manda o usuário: a tela de assinatura com `id` já no carrinho
+ *  (`cartInicial` lê o `ligar`). Sem ele a pessoa chega a um carrinho vazio e
+ *  tem de adivinhar qual dos módulos destrava o painel que ela estava vendo. */
+export const ligarHref = (id: string) => `/assinatura?ligar=${encodeURIComponent(id)}`;
+
 export const somaModulos = (ids: string[]) =>
   AVULSOS.filter((m) => ids.includes(m.id)).reduce((s, m) => s + m.price, 0);
 

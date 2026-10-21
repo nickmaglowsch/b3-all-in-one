@@ -138,6 +138,30 @@ export function isModuleRequired(detail: unknown): detail is ModuleRequired {
   );
 }
 
+/** The module a failed request is gated on, or null when it failed for any
+ *  other reason. What an inline offer names and links to — the gate already
+ *  says which module it wants, so no screen has to guess. */
+export function requiredModuleOf(err: unknown): string | null {
+  return err instanceof ApiError && err.status === 402 && isModuleRequired(err.detail)
+    ? err.detail.required_module
+    : null;
+}
+
+// tenancy._acting_tenant's answer when X-Portfolio-Id names no book this login
+// owns. It is the one 404 about the header rather than the resource, and the
+// detail string is the only thing that tells it apart from every other 404.
+export const BOOK_NOT_FOUND = "carteira não encontrada";
+
+/** Whether a failed response says the *selected book* does not resolve — as
+ *  opposed to the thing the request asked for not existing inside it. */
+export function isBookNotFound(status: number, detail: unknown): boolean {
+  return (
+    status === 404 &&
+    typeof detail === "string" &&
+    detail.trim().toLowerCase() === BOOK_NOT_FOUND
+  );
+}
+
 /** Fired on any 402 so one dialog in AppShell can answer every gated call —
  *  no page needs its own upgrade UI. */
 export const PAYWALL_EVENT = "b3:paywall";
@@ -198,8 +222,13 @@ export async function api<T>(
     // 404. Without this the header rides on every later request and the tab is
     // permanently dead — and the switcher cannot rescue it, because it hides
     // itself for accounts with only one book.
+    //
+    // Only *that* 404, though. A deleted backtest, a code strategy with no spec
+    // or a swept curves artifact are 404s too, inside a book that is perfectly
+    // fine — and reading them as "the book is gone" reloaded an advisor out of
+    // the client they were working on, mid-click.
     if (
-      res.status === 404 &&
+      isBookNotFound(res.status, detail) &&
       typeof window !== "undefined" &&
       getPortfolioId() &&
       !ACCOUNT_SCOPED.some((p) => path.startsWith(p))

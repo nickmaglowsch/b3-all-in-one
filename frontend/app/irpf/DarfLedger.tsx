@@ -10,12 +10,13 @@ import { EmptyState, LoadFailure } from "@/components/ui/EmptyState";
 import { useYearChoice, YearSelect } from "./YearSelect";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconAlert, IconCheck, IconClock, IconReceipt } from "@/components/icons";
-import { formatDate, formatPercent } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 
 const CLASSE_LABEL: Record<string, string> = {
   "AÇÃO": "Ações",
   FII: "FIIs",
   BDR_ETF: "BDRs e ETFs",
+  DAYTRADE: "Day trade",
 };
 
 const MESES_PT = ["jan", "fev", "mar", "abr", "mai", "jun",
@@ -34,6 +35,8 @@ const STATUS = {
   pago: { label: "Pago", text: "text-status-done", bg: "bg-status-done/10", Icon: IconCheck },
   pendente: { label: "A vencer", text: "text-status-pending", bg: "bg-status-pending/10", Icon: IconClock },
   atrasado: { label: "Vencido", text: "text-loss", bg: "bg-loss/10", Icon: IconAlert },
+  acumulado: { label: "Abaixo de R$ 10 — vai para o mês seguinte", text: "text-muted", bg: "bg-hairline/40", Icon: IconClock },
+  compensado: { label: "Coberto pelo IRRF", text: "text-status-done", bg: "bg-status-done/10", Icon: IconCheck },
 } as const;
 
 function StatusChip({ status }: { status: DarfMonth["status"] }) {
@@ -47,9 +50,14 @@ function StatusChip({ status }: { status: DarfMonth["status"] }) {
   );
 }
 
-/** The row's identity in the ledger: one DARF per apuração month per class. */
-function keyOf(m: { apuracao: string; classe: string }) {
-  return `${m.apuracao}·${m.classe}`;
+/** The row's identity in the ledger: one DARF 6015 per apuração month. */
+function keyOf(m: { apuracao: string }) {
+  return m.apuracao;
+}
+
+/** "Ações + FIIs" — the lines this month's one DARF pays. */
+function classesOf(m: DarfMonth) {
+  return m.classes.map((c) => CLASSE_LABEL[c.classe] ?? c.classe).join(" + ") || "—";
 }
 
 const TITLE = "DARF — apuração mensal";
@@ -172,10 +180,10 @@ function Ledger({ year }: { year: number }) {
           <thead>
             <tr className="border-b border-hairline text-left text-xs text-muted">
               <th className="py-2 pr-3 font-medium">Apuração</th>
-              <th className="py-2 pr-3 font-medium">Classe</th>
-              <th className="py-2 pr-3 text-right font-medium">Base</th>
-              <th className="py-2 pr-3 text-right font-medium">Alíquota</th>
-              <th className="py-2 pr-3 text-right font-medium">IR devido</th>
+              <th className="py-2 pr-3 font-medium">Classes</th>
+              <th className="py-2 pr-3 text-right font-medium">IR apurado</th>
+              <th className="py-2 pr-3 text-right font-medium">IRRF / acumulado</th>
+              <th className="py-2 pr-3 text-right font-medium">DARF</th>
               <th className="py-2 pr-3 font-medium">Vencimento</th>
               <th className="py-2 pr-3 font-medium">Situação</th>
               <th className="py-2 font-medium" />
@@ -190,19 +198,21 @@ function Ledger({ year }: { year: number }) {
                     {formatApuracao(m.apuracao)}
                   </td>
                   <td className="py-2 pr-3 whitespace-nowrap text-muted">
-                    <span className="rt-label">Classe</span>
-                    <span className="rt-value">{CLASSE_LABEL[m.classe] ?? m.classe}</span>
+                    <span className="rt-label">Classes</span>
+                    <span className="rt-value">{classesOf(m)}</span>
                   </td>
                   <td className="py-2 pr-3 text-right">
-                    <span className="rt-label">Base</span>
-                    <span className="rt-value"><Money value={m.base} /></span>
+                    <span className="rt-label">IR apurado</span>
+                    <span className="rt-value"><Money value={m.imposto} /></span>
                   </td>
-                  <td className="py-2 pr-3 text-right font-mono tnum tabular-nums text-muted">
-                    <span className="rt-label">Alíquota</span>
-                    <span className="rt-value">{formatPercent(m.aliquota)}</span>
+                  <td className="py-2 pr-3 text-right text-muted">
+                    <span className="rt-label">IRRF / acumulado</span>
+                    <span className="rt-value">
+                      <Money value={m.acumulado_anterior - m.irrf_deduzido} />
+                    </span>
                   </td>
                   <td className="py-2 pr-3 text-right">
-                    <span className="rt-label">IR devido</span>
+                    <span className="rt-label">DARF</span>
                     <span className="rt-value"><Money value={m.ir_devido} /></span>
                   </td>
                   <td className="py-2 pr-3 whitespace-nowrap text-muted">
@@ -219,7 +229,7 @@ function Ledger({ year }: { year: number }) {
                         type="button"
                         disabled={busy}
                         onClick={() => save.mutate(others(key))}
-                        aria-label={`Remover pagamento de ${formatApuracao(m.apuracao)}, ${CLASSE_LABEL[m.classe] ?? m.classe}`}
+                        aria-label={`Remover pagamento do DARF de ${formatApuracao(m.apuracao)}`}
                         className="text-xs text-muted underline underline-offset-2 hover:text-ink disabled:opacity-60"
                       >
                         Remover
@@ -265,6 +275,11 @@ function Ledger({ year }: { year: number }) {
       )}
 
       <p className="mt-4 text-xs text-muted">
+        Um DARF (código 6015) por mês soma todas as classes. Abaixo de R$ 10,00 não
+        se emite DARF: o valor passa para o mês seguinte. O IRRF (0,005% das vendas,
+        1% do ganho em day trade) é estimado a partir das vendas.
+      </p>
+      <p className="mt-2 text-xs text-muted">
         A apuração é recalculada do seu histórico a cada consulta — só o pagamento
         fica guardado. Emissão do DARF com código de barras continua sendo no
         e-CAC/Sicalc.
@@ -298,7 +313,7 @@ function PaymentForm({
         e.preventDefault();
         onSave({
           apuracao: mes.apuracao,
-          classe: mes.classe,
+          classe: "TOTAL",
           valor_principal: Number(valor),
           data_pagamento: data || null,
           obs: obs.trim() || null,

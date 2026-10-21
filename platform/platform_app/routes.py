@@ -6,7 +6,6 @@ request. Routers + task functions only (no service/repository layers).
 from __future__ import annotations
 
 import asyncio
-import calendar
 import datetime
 import io
 import json
@@ -24,7 +23,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, market_planes, specstore, subprocs, tasks
+from platform_app import b3run, darf, enginerun, market_planes, specstore, subprocs, tasks
 from platform_app.billing import (
     EMPRESARIAL, entitled, gate_detail, needs_bench, needs_mercado,
 )
@@ -903,31 +902,8 @@ async def irpf_report(
 # show. Only the payment is a row here: what the tenant knows and the engine
 # cannot.
 
-# Mirrors taxcore's irpf_2026.CLASSES_APURACAO. Not imported — taxcore runs in
-# its own interpreter as a subprocess, which is the whole point of b3run — so the
-# guard here is the test that reads a real apuração back and finds these names.
-DARF_CLASSES = ("AÇÃO", "FII", "BDR_ETF")
-# Ganhos líquidos em renda variável, pessoa física. One code for every class:
-# the rate differs, the DARF's código does not.
-DARF_CODIGO = "6015"
-
-
-def _darf_vencimento(apuracao: datetime.date) -> datetime.date:
-    """Último dia útil do mês seguinte — when that month's DARF is due.
-
-    ponytail: weekdays only, no feriado calendar. A national holiday landing on
-    the last business day pulls the real deadline one day earlier, so this can
-    only ever call something "atrasado" later than the Receita would — never
-    earlier, which is the direction that would cry wolf.
-    """
-    if apuracao.month == 12:
-        year, month = apuracao.year + 1, 1
-    else:
-        year, month = apuracao.year, apuracao.month + 1
-    due = datetime.date(year, month, calendar.monthrange(year, month)[1])
-    while due.weekday() >= 5:  # Saturday, Sunday
-        due -= datetime.timedelta(days=1)
-    return due
+# The arithmetic — one DARF 6015 a month, its due date — lives in darf.py.
+DARF_CLASSES, DARF_CODIGO, _darf_vencimento = darf.DARF_CLASSES, darf.DARF_CODIGO, darf.vencimento
 
 
 async def _darf_payments(
@@ -958,7 +934,12 @@ def _payment_dict(p: DarfPayment | None) -> dict | None:
 async def _run_apuracao(
     session: AsyncSession, tid: uuid.UUID, year: int
 ) -> list[dict]:
-    """taxcore's per-month Renda Variável apuração for the year, as data.
+    """The year's per-class apuração rows (see _run_irpf_json)."""
+    return (await _run_irpf_json(session, tid, year)).get("apuracao") or []
+
+
+async def _run_irpf_json(session: AsyncSession, tid: uuid.UUID, year: int) -> dict:
+    """taxcore's Renda Variável apuração and monthly DARFs for the year, as data.
 
     Far cheaper than POST /irpf/reports even though it is the same script:
     ``--json`` returns before Bens e Direitos and the renda fixa sections, which
@@ -969,7 +950,7 @@ async def _run_apuracao(
     if not trade_rows:
         # build_timeline over an empty book has no columns to sort. An empty
         # ledger is the honest answer anyway — nothing was sold, nothing is due.
-        return []
+        return {}
 
     await session.commit()  # no connection held across the run
 
@@ -982,7 +963,7 @@ async def _run_apuracao(
     proc = await subprocs.offload(_work)
     if proc.returncode != 0:
         raise HTTPException(500, subprocs.report("irpf_2026 --json", proc))
-    return subprocs.last_json(proc.stdout).get("apuracao") or []
+    return subprocs.last_json(proc.stdout)
 
 
 @irpf_router.get("/darf")
@@ -993,59 +974,27 @@ async def darf_ledger(
 ) -> dict:
     """The year's DARFs: what the engine says is owed, what the tenant recorded.
 
-    Only months that owe something — or that already carry a recorded payment —
-    are listed. The full twelve-month grid, including the quiet months, is the
+    One row per month — every class goes on the one DARF 6015 — listed when the
+    month owes something, carries an amount below R$ 10 forward, or already has
+    a recorded payment. The full twelve-month grid, including the quiet months, is the
     IRPF report's job; here a zero row would be one nobody can act on and one
     that reads like an unpaid one.
     """
     _user, tid = tenant
     year = year or date.today().year
-    payments = {(p.apuracao, p.classe): p for p in await _darf_payments(session, tid, year)}
+    pagamentos: dict[datetime.date, list[dict]] = {}
+    for p in await _darf_payments(session, tid, year):
+        pagamentos.setdefault(p.apuracao, []).append(_payment_dict(p))
     # Brasília's day, not the container's UTC one: from 21h on the due date UTC
     # is already tomorrow, and a DARF still payable read "atrasado". Fixed -03:00
     # is exact — Brazil has had no daylight saving since 2019.
     today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-3))).date()
-
-    meses = []
-    for r in await _run_apuracao(session, tid, year):
-        apuracao = datetime.date(year, r["month"], 1)
-        pago = payments.get((apuracao, r["classe"]))
-        ir = round(r["ir"], 2)
-        if ir <= 0 and pago is None:
-            continue
-        vencimento = _darf_vencimento(apuracao)
-        meses.append({
-            "apuracao": apuracao.strftime("%Y-%m"),
-            "classe": r["classe"],
-            "codigo": DARF_CODIGO,
-            "gross": r["gross"],
-            "pnl": r["pnl"],
-            "compensacao": r["compensacao"],
-            "base": r["base"],
-            "aliquota": r["aliquota"],
-            "ir_devido": ir,
-            "vencimento": vencimento.isoformat(),
-            "pagamento": _payment_dict(pago),
-            # "atrasado" is the alert: computed tax, past its due date, and
-            # nothing recorded against it.
-            "status": "pago" if pago else ("atrasado" if today > vencimento else "pendente"),
-        })
-    meses.sort(key=lambda m: (m["apuracao"], m["classe"]))
-
-    return {
-        "year": year,
-        "codigo": DARF_CODIGO,
-        "meses": meses,
-        "total_devido": round(sum(m["ir_devido"] for m in meses), 2),
-        "total_pago": round(sum(m["pagamento"]["valor_principal"]
-                                for m in meses if m["pagamento"]), 2),
-        "atrasados": sum(1 for m in meses if m["status"] == "atrasado"),
-    }
+    return darf.livro(year, await _run_irpf_json(session, tid, year), pagamentos, today)
 
 
 class DarfPaymentIn(BaseModel):
     apuracao: str  # "AAAA-MM"
-    classe: str
+    classe: str = "TOTAL"  # one DARF a month; a per-class name is legacy
     valor_principal: float = Field(allow_inf_nan=False)
     data_pagamento: datetime.date | None = None
     obs: str | None = None

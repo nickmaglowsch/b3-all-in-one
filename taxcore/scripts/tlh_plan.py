@@ -39,8 +39,9 @@ from pathlib import Path
 import pandas as pd
 
 from scripts._common import price_lookup as latest_prices
-from scripts.apuracao import ALIQUOTA, ISENCAO_LIMIT  # one copy of the rules
+from scripts.apuracao import ALIQUOTA, ISENCAO_LIMIT, monthly_apuracao  # one copy of the rules
 from scripts.irpf_2026 import asset_class, build_timeline
+from scripts.realizacao import linha_grade, grade_mensal, realizar
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -60,84 +61,24 @@ def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
     Current per-ticker PM is read separately from positions.csv (canonical;
     `build_timeline` filters by market and misses some in-kind transfers
     and corporate actions that load_b3 handles).
+
+    The carry is the IRPF report's own: the same walk (realizacao) and the same
+    apuração, so the "AÇÃO" bucket is the whole operações comuns bucket — BDR and
+    ETF losses included — and day trades never touch it. A future-dated sale is
+    a data anomaly and is ignored rather than taxed early.
     """
-    today = pd.Timestamp.today().normalize()
-    month_start = today.replace(day=1)
-
-    pm: dict[str, list[float]] = {}  # ticker -> [qty, cost]
-    acoes_carry = 0.0
-    fii_carry = 0.0
-    mtd = {"AÇÃO": {"gross": 0.0, "pnl": 0.0},
-           "FII":  {"gross": 0.0, "pnl": 0.0}}
-    # Per-month aggregator: only used to apply isenção/carry rules
-    # correctly month by month before reaching the current month.
-    monthly: dict[pd.Period, dict] = {}
-
-    def bump_monthly(period, cls, gross, pnl):
-        m = monthly.setdefault(period, {
-            "AÇÃO_gross": 0.0, "AÇÃO_pnl": 0.0,
-            "FII_gross": 0.0, "FII_pnl": 0.0})
-        if cls in ("AÇÃO", "FII"):
-            m[f"{cls}_gross"] += gross
-            m[f"{cls}_pnl"] += pnl
-
-    for _, r in tl.iterrows():
-        t = r["ticker"]
-        state = pm.setdefault(t, [0.0, 0.0])
-        qty, cost = state
-        if r["kind"] == "buy":
-            qty += r["qty"]; cost += r["amount"]
-        elif r["kind"] == "sell" and qty > 0:
-            avg = cost / qty
-            sq = min(r["qty"], qty)
-            sp = r["amount"] / r["qty"] if r["qty"] else 0
-            pnl = sq * (sp - avg)
-            cls = asset_class(t)
-            period = r["date"].to_period("M")
-            bump_monthly(period, cls, sq * sp, pnl)
-            cost -= sq * avg; qty -= sq
-        elif r["kind"] == "qty_event":
-            qty += r["qty"]; cost += r["amount"]
-        elif r["kind"] == "amort":
-            cost = max(0.0, cost - r["amount"])
-        state[0], state[1] = qty, cost
-
-    # Replay monthly aggregates in chronological order, applying isenção
-    # and carry rules per bucket. Stop *before* the current month so we
-    # can report mtd separately.
-    cur_period = month_start.to_period("M")
-    for period in sorted(monthly.keys()):
-        m = monthly[period]
-        if period == cur_period:
-            mtd["AÇÃO"]["gross"] = m["AÇÃO_gross"]
-            mtd["AÇÃO"]["pnl"] = m["AÇÃO_pnl"]
-            mtd["FII"]["gross"] = m["FII_gross"]
-            mtd["FII"]["pnl"] = m["FII_pnl"]
-            continue
-        if period > cur_period:
-            continue  # future-dated row (data anomaly); ignore
-        ag, ap = m["AÇÃO_gross"], m["AÇÃO_pnl"]
-        if ag > 0:
-            if ag <= ISENCAO_LIMIT:
-                # isento month: profits tax-free (não consome carry);
-                # losses still accumulate into carry.
-                if ap < 0:
-                    acoes_carry += -ap
-            else:
-                if ap > 0:
-                    offset = min(acoes_carry, ap)
-                    acoes_carry -= offset
-                else:
-                    acoes_carry += -ap
-        fg, fp = m["FII_gross"], m["FII_pnl"]
-        if fg > 0:
-            if fp > 0:
-                offset = min(fii_carry, fp)
-                fii_carry -= offset
-            else:
-                fii_carry += -fp
-
-    return ({"AÇÃO": acoes_carry, "FII": fii_carry}, mtd)
+    cur = pd.Timestamp.today().normalize().to_period("M")
+    realized = realizar(tl)
+    periodo = realized["date"].dt.to_period("M")
+    historico = monthly_apuracao(grade_mensal(realized[periodo < cur], asset_class, cur.year),
+                                 ("AÇÃO", "FII", "BDR_ETF"))
+    carry = {cls: next(r["carry"] for r in reversed(historico) if r["classe"] == cls)
+             for cls in ("AÇÃO", "FII")}
+    linha = linha_grade(realized, asset_class)
+    mtd = {cls: {"gross": float(realized.loc[(periodo == cur) & (linha == cls), "sell_value"].sum()),
+                 "pnl": float(realized.loc[(periodo == cur) & (linha == cls), "pnl"].sum())}
+           for cls in ("AÇÃO", "FII")}
+    return carry, mtd
 
 
 def load_positions() -> dict[str, tuple[float, float]]:

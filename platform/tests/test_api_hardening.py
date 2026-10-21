@@ -223,12 +223,15 @@ async def test_a_darf_is_late_only_once_its_due_date_is_over_in_brasilia(
                                      if not n.startswith("__")})
     clock.datetime = _Clock
 
-    async def apuracao(session, tid, year):
-        return [{"month": 4, "classe": "AÇÃO", "ir": 755.19, "gross": 25970.0,
-                 "pnl": 5034.57, "compensacao": 0.0, "base": 5034.57, "aliquota": 0.15}]
+    async def irpf_json(session, tid, year):
+        return {"apuracao": [{"month": 4, "classe": "AÇÃO", "ir": 755.19, "gross": 25970.0,
+                              "pnl": 5034.57, "compensacao": 0.0, "base": 5034.57,
+                              "aliquota": 0.15}],
+                "darf": [{"month": 4, "imposto": 755.19, "irrf_deduzido": 0.0,
+                          "acumulado_anterior": 0.0, "darf": 755.19, "acumulado": 0.0}]}
 
     monkeypatch.setattr(routes, "datetime", clock)
-    monkeypatch.setattr(routes, "_run_apuracao", apuracao)
+    monkeypatch.setattr(routes, "_run_irpf_json", irpf_json)
     async with async_session_maker() as s:
         out = await routes.darf_ledger(year=2025, tenant=(None, uuid.uuid4()), session=s)
     (mes,) = out["meses"]

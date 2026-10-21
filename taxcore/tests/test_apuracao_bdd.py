@@ -28,8 +28,9 @@ scenarios("features/apuracao_mensal.feature")
 MES, SEGUINTE = 1, 2
 
 
-# BDR and ETF_RV are two input columns that the apuração sums into one line.
-APURACAO_LINE = {"BDR": "BDR_ETF", "ETF_RV": "BDR_ETF"}
+# BDR and ETF_RV are two input columns that the apuração sums into one line; DT
+# (the day-trade column) is apurated on the DAYTRADE line.
+APURACAO_LINE = {"BDR": "BDR_ETF", "ETF_RV": "BDR_ETF", "DT": "DAYTRADE"}
 
 
 @pytest.fixture

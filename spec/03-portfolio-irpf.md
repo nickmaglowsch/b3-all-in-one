@@ -101,8 +101,11 @@ Port of `irpf_2026.py` (804 LOC), generalized:
   (anonymized) — this is non-negotiable for a product whose value is tax correctness.
 
 ## Out of scope (v1)
-- Day-trade taxation (deliberately excluded upstream; enforce with a visible warning if
-  day trades are detected in an import).
+- ~~Day-trade taxation~~ — now apurado (taxcore `realizacao`: same ticker, same day,
+  same broker → 20%, own loss bucket), because leaving it out did not leave it
+  untaxed: it billed day trades as isento swing sales and corrupted the swing PM.
 - Automatic DARF emission/payment, e-CAC integration.
-- IRRF "dedo-duro" auto-deduction (keep as the manual note it is today, surfaced in UI).
+- ~~IRRF "dedo-duro" auto-deduction~~ — now estimated from the sales (0,005% /
+  1% day trade, Lei 11.033 art. 2º) and deducted in the monthly DARF, labelled as an
+  estimate to confirm against the notas de corretagem.
 - Fundamentus-scrape-dependent features at scale without ToS review.

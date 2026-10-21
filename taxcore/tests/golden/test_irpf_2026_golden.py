@@ -38,7 +38,13 @@ def test_json_apuracao_agrees_with_the_markdown_it_renders(tmp_path):
 
     payload = json.loads(js.stdout)
     assert payload["year"] == 2025
-    assert len(payload["apuracao"]) == 36  # 3 classes × 12 months
+    assert len(payload["apuracao"]) == 48  # 4 lines (AÇÃO, FII, BDR_ETF, DAYTRADE) × 12
+    assert {r["year"] for r in payload["apuracao"]} == {2025}
+    # One DARF 6015 a month, summing every line: what the ledger bills.
+    assert [d["month"] for d in payload["darf"]] == list(range(1, 13))
+    assert sum(d["imposto"] for d in payload["darf"]) == pytest.approx(
+        sum(r["ir"] for r in payload["apuracao"]))
+    assert set(payload["avisos"]) == {"descoberto", "fii_presumido", "carry_inicial"}
 
     def total(classe):
         return sum(r["ir"] for r in payload["apuracao"] if r["classe"] == classe)

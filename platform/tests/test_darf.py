@@ -24,9 +24,10 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 DATA = Path(__file__).resolve().parents[2] / "taxcore" / "data"
 
 # The golden book's one taxable ação month: R$ 25.970 gross (over the isenção),
-# R$ 5.034,57 realised, no carry → 15% = R$ 755,19. Same figures as the row that
-# seeded taxcore/data/darf_payments.csv.
-ABRIL = {"apuracao": "2025-04", "classe": "AÇÃO", "ir": 755.19}
+# R$ 5.034,57 realised, no carry → 15% = R$ 755,19 of IR. The DARF is that less
+# the 0,005% IRRF the broker withheld on the R$ 25.970 sold (R$ 1,30): R$ 753,89.
+# One DARF 6015 per month, whatever the classes in it — hence "TOTAL".
+ABRIL = {"apuracao": "2025-04", "classe": "TOTAL", "ir": 753.89, "imposto": 755.19}
 # 31/05/2025 is a Saturday, so the último dia útil is Friday the 30th.
 ABRIL_VENCIMENTO = "2025-05-30"
 
@@ -78,9 +79,13 @@ async def _seed(client) -> dict:
     return headers
 
 
+def _mes(payload: dict, apuracao: str) -> dict:
+    [m] = [m for m in payload["meses"] if m["apuracao"] == apuracao]
+    return m
+
+
 def _abril(payload: dict) -> dict:
-    return next(m for m in payload["meses"]
-                if m["apuracao"] == ABRIL["apuracao"] and m["classe"] == ABRIL["classe"])
+    return _mes(payload, ABRIL["apuracao"])
 
 
 # ── vencimento (pure) ────────────────────────────────────────────────────────
@@ -115,8 +120,12 @@ async def test_a_taxable_month_is_listed_with_its_computed_ir_and_due_date(clien
     assert payload["year"] == 2025
     assert payload["codigo"] == "6015"
     abril = _abril(payload)
+    assert abril["classe"] == "TOTAL"
     assert abril["ir_devido"] == pytest.approx(ABRIL["ir"], abs=0.01)
-    assert abril["aliquota"] == 0.15
+    assert abril["imposto"] == pytest.approx(ABRIL["imposto"], abs=0.01)
+    assert abril["irrf_deduzido"] == pytest.approx(1.30, abs=0.01)
+    [acao] = abril["classes"]
+    assert acao["classe"] == "AÇÃO" and acao["aliquota"] == 0.15
     assert abril["vencimento"] == ABRIL_VENCIMENTO
     assert abril["pagamento"] is None
 
@@ -130,7 +139,9 @@ async def test_months_that_owe_nothing_are_not_in_the_ledger(client):
 
     assert payload["meses"], "expected at least the April ação DARF"
     assert all(m["ir_devido"] > 0 for m in payload["meses"])
-    assert ("2025-01", "AÇÃO") not in {(m["apuracao"], m["classe"]) for m in payload["meses"]}
+    assert "2025-01" not in {m["apuracao"] for m in payload["meses"]}
+    # One row per month: a month never appears twice, whatever its classes.
+    assert len({m["apuracao"] for m in payload["meses"]}) == len(payload["meses"])
 
 
 async def test_an_unpaid_month_past_its_due_date_raises_the_alert(client):
@@ -148,7 +159,7 @@ async def test_an_unpaid_month_past_its_due_date_raises_the_alert(client):
 async def test_recording_the_payment_clears_the_alert(client):
     headers = await _seed(client)
     saved = await client.put("/irpf/darf?year=2025", json=[{
-        "apuracao": ABRIL["apuracao"], "classe": ABRIL["classe"],
+        "apuracao": ABRIL["apuracao"],
         "valor_principal": ABRIL["ir"], "data_pagamento": ABRIL_VENCIMENTO,
         "obs": "pago no vencimento",
     }], headers=headers)
@@ -174,10 +185,71 @@ async def test_a_recorded_payment_for_a_month_that_owes_nothing_is_still_shown(c
     }], headers=headers)
 
     payload = (await client.get("/irpf/darf?year=2025", headers=headers)).json()
-    jan = next(m for m in payload["meses"]
-               if m["apuracao"] == "2025-01" and m["classe"] == "AÇÃO")
+    jan = _mes(payload, "2025-01")
     assert jan["ir_devido"] == 0.0
     assert jan["status"] == "pago"
+
+
+async def test_payments_recorded_per_class_are_summed_into_their_month(client):
+    """Before the ledger was one DARF a month, a payment was recorded per class.
+    Those rows still count — summed into the month's one DARF."""
+    headers = await _seed(client)
+    await client.put("/irpf/darf?year=2025", json=[
+        {"apuracao": "2025-04", "classe": "AÇÃO", "valor_principal": 700.0,
+         "data_pagamento": "2025-05-29", "obs": "parte 1"},
+        {"apuracao": "2025-04", "classe": "FII", "valor_principal": 53.89,
+         "data_pagamento": "2025-05-30", "obs": "parte 2"},
+    ], headers=headers)
+    abril = _abril((await client.get("/irpf/darf?year=2025", headers=headers)).json())
+    assert abril["status"] == "pago"
+    assert abril["pagamento"]["valor_principal"] == pytest.approx(753.89)
+    assert abril["pagamento"]["data_pagamento"] == "2025-05-30"
+    assert abril["pagamento"]["obs"] == "parte 1; parte 2"
+    assert abril["pagamento"]["classe"] == "TOTAL"
+
+
+# ── darf.livro (pure): the month's one DARF ──────────────────────────────────
+
+def _payload(*darfs, apuracao=()):
+    keys = ("month", "imposto", "irrf_deduzido", "acumulado_anterior", "darf", "acumulado")
+    return {"apuracao": list(apuracao), "darf": [dict(zip(keys, d)) for d in darfs]}
+
+
+async def test_classes_of_one_month_are_one_darf():
+    """AÇÃO R$ 6 and FII R$ 6 are one DARF of R$ 12 — not two of R$ 6 that the
+    Receita would refuse (no DARF under R$ 10)."""
+    from platform_app.darf import livro
+
+    linhas = [{"month": 3, "classe": c, "ir": 6.0, "gross": 1.0, "pnl": 1.0,
+               "compensacao": 0.0, "base": 1.0, "aliquota": 0.15} for c in ("AÇÃO", "FII")]
+    out = livro(2025, _payload((3, 12.0, 0.0, 0.0, 12.0, 0.0), apuracao=linhas), {},
+                datetime.date(2025, 3, 15))
+    [m] = out["meses"]
+    assert m["ir_devido"] == 12.0 and m["status"] == "pendente"
+    assert [c["classe"] for c in m["classes"]] == ["AÇÃO", "FII"]
+
+
+async def test_under_ten_reais_is_carried_not_overdue():
+    """Lei 9.430/96, art. 68: R$ 4 in January is not a late DARF — it is added to
+    February's, which is the one that falls due."""
+    from platform_app.darf import livro
+
+    out = livro(2025, _payload((1, 4.0, 0.0, 0.0, 0.0, 4.0), (2, 8.0, 0.0, 4.0, 12.0, 0.0),
+                               (3, 0.0, 0.0, 0.0, 0.0, 0.0)),
+                {}, datetime.date(2026, 6, 1))
+    jan, fev = out["meses"]
+    assert jan["status"] == "acumulado" and jan["ir_devido"] == 0.0 and jan["acumulado"] == 4.0
+    assert fev["status"] == "atrasado" and fev["ir_devido"] == 12.0
+    assert fev["acumulado_anterior"] == 4.0
+    assert out["atrasados"] == 1 and out["total_devido"] == 12.0
+
+
+async def test_a_month_the_irrf_covers_owes_no_darf():
+    from platform_app.darf import livro
+
+    [m] = livro(2025, _payload((5, 0.8, 0.8, 0.0, 0.0, 0.0)), {},
+                datetime.date(2026, 1, 1))["meses"]
+    assert m["status"] == "compensado" and m["ir_devido"] == 0.0
 
 
 # ── CRUD ─────────────────────────────────────────────────────────────────────

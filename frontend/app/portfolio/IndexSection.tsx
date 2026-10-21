@@ -2,16 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { api, ApiError } from "@/lib/api";
+import { api } from "@/lib/api";
+import { withQuery } from "@/lib/url";
 import type { IndexMetrics, PortfolioIndex } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
-import { EmptyState, LoadFailure, RetryButton } from "@/components/ui/EmptyState";
+import { IndexError } from "./IndexError";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { LineSeries, type Series } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { rebaseRows, summarize, yearsBetween } from "@/lib/chartRange";
 import { SERIES } from "@/components/charts/theme";
-import { IconChart } from "@/components/icons";
 import { formatDate, formatPercent } from "@/lib/format";
 import { useIncome } from "@/lib/hooks";
 import { INCOME_LABEL } from "./IncomeSection";
@@ -210,8 +210,10 @@ export function IndexSection() {
     queryFn: () =>
       // This fires on page load, so a 402 must not throw a dialog over a page the
       // user has not read yet. The offer is rendered inline below instead.
+      // Encoded: renda fixa names are free text, and a raw "+" ("TESOURO
+      // IPCA+ 2029") reaches the server as a space and drops the holding.
       api<PortfolioIndex>(
-        `/portfolio/index${selected ? `?tickers=${selected.join(",")}` : ""}`,
+        withQuery("/portfolio/index", { tickers: selected?.join(",") }),
         {},
         { paywallDialog: false },
       ),
@@ -262,47 +264,12 @@ export function IndexSection() {
   }
 
   if (q.isError || !q.data) {
-    const status = q.error instanceof ApiError ? q.error.status : 0;
-
-    // A paywall is not an outage. Blaming the quote base for a plan boundary
-    // tells the user something false about the product and leaves them with
-    // nothing to do about it.
-    if (status === 402) {
-      return (
-        <Card title={TITLE}>
-          <LoadFailure
-            error={q.error}
-            icon={<IconChart size={28} />}
-            title="Não foi possível calcular a rentabilidade agora."
-            offerTitle={(nome) =>
-              `Acompanhar sua carteira contra o IBOV e o CDI vem com o módulo ${nome}.`
-            }
-            offerHint="Rentabilidade diária ponderada pelo tempo, com queda máxima e retorno anualizado."
-          />
-        </Card>
-      );
-    }
-
-    // 422 is the honest "nothing to chart yet" state; anything else is a fault
-    // the user can retry.
     return shell(
       <Card title={TITLE}>
-        <EmptyState
-          variant={status === 422 ? "empty" : "error"}
-          icon={<IconChart size={28} />}
-          title={
-            status === 422
-              ? "Ainda não há histórico para calcular a rentabilidade."
-              : "Não foi possível calcular a rentabilidade agora."
-          }
-          hint={
-            status === 422
-              ? "Importe seus extratos de negociação para acompanhar sua carteira contra o IBOV e o CDI."
-              : "A base de cotações pode estar indisponível. Tente novamente em instantes."
-          }
-          action={
-            status === 422 ? undefined : <RetryButton onClick={() => q.refetch()} />
-          }
+        <IndexError
+          error={q.error}
+          onRetry={() => q.refetch()}
+          onReset={selected === null ? undefined : () => setSelected(null)}
         />
       </Card>,
     );

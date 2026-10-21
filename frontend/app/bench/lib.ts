@@ -11,6 +11,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { withQuery } from "@/lib/url";
 import type { Dated } from "@/lib/chartRange";
 import type { Levels } from "@/lib/benchmarks";
 import type { BacktestCurves, BacktestRun, Strategy } from "@/lib/types";
@@ -61,7 +62,7 @@ export function useCurvesMany(ids: string[]) {
     queries: ids.map((id) => ({
       queryKey: ["curves", id],
       queryFn: () =>
-      api<BacktestCurves>(`/backtests/${id}/curves`, {}, { paywallDialog: false }),
+        api<BacktestCurves>(`/backtests/${id}/curves`, {}, { paywallDialog: false }),
       staleTime: 60 * 60_000,
     })),
   });
@@ -109,7 +110,7 @@ export function useBenchmarkSeries(keys: string[], start?: string, end?: string)
     queryKey: ["benchmark-series", sorted.join(","), start, end],
     queryFn: () =>
       api<BenchmarkSeries>(
-        `/benchmarks/series?start=${start}&end=${end}&keys=${sorted.join(",")}`,
+        withQuery("/benchmarks/series", { start, end, keys: sorted.join(",") }),
       ),
     enabled: sorted.length > 0 && Boolean(start && end),
     staleTime: 60 * 60_000, // the plane moves once a day

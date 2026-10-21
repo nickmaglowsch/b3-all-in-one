@@ -59,6 +59,38 @@ def test_a_riskless_line_reports_a_sharpe_of_zero_and_not_infinity():
     assert m.sharpe(monthly(*[0.01] * 12)) == 0.0
 
 
+def test_sharpe_over_a_per_period_risk_free_series_uses_the_excess_return():
+    ret = monthly(0.05, -0.03, 0.02, -0.01, 0.04, 0.0)
+    cdi = monthly(0.010, 0.011, 0.009, 0.010, 0.012, 0.008)
+    ex = ret - cdi
+    assert m.sharpe(ret, risk_free=cdi) == pytest.approx(ex.mean() / ex.std() * np.sqrt(12))
+
+
+def test_a_book_parked_in_cdi_has_no_sharpe_over_the_cdi():
+    """Audit M6: a book sitting in CDI_ASSET earns ~0.9%/month +- a few bp,
+    which over zero is a Sharpe in the tens. Over the CDI it is ~nothing."""
+    cdi = monthly(0.0090, 0.0092, 0.0091, 0.0089, 0.0093, 0.0090)
+    parked = cdi + monthly(0.0, 1e-5, -1e-5, 0.0, 1e-5, -1e-5)
+    assert m.sharpe(parked) > 10
+    assert abs(m.sharpe(parked, risk_free=cdi)) < 1
+
+
+def test_period_risk_free_is_all_or_nothing():
+    idx = monthly(0, 0, 0).index
+    assert m.period_risk_free(None, idx) is None
+    full = monthly(0.01, 0.01, 0.01)
+    assert m.period_risk_free(full, idx).tolist() == [0.01] * 3
+    assert m.period_risk_free(full.iloc[1:], idx) is None   # a gap: no CDI at all
+
+
+def test_build_metrics_reports_sharpe_over_the_risk_free_series():
+    ret = monthly(0.05, -0.03, 0.02, -0.01)
+    cdi = monthly(0.01, 0.01, 0.01, 0.01)
+    out = m.build_metrics(ret, "x", risk_free=cdi)
+    assert out["Sharpe"] == round(m.sharpe(ret, risk_free=cdi), 2)
+    assert out["Sharpe"] < m.build_metrics(ret, "x")["Sharpe"]
+
+
 # --------------------------------------------------------------------------
 # Drawdown
 # --------------------------------------------------------------------------
@@ -70,6 +102,20 @@ def test_max_drawdown_measures_from_the_running_peak():
 
 def test_a_line_that_only_goes_up_has_no_drawdown():
     assert m.max_dd(monthly(0.01, 0.02, 0.03)) == pytest.approx(0.0)
+
+
+def test_a_first_period_loss_is_a_drawdown_from_the_starting_capital():
+    # Without an inception row the first mark is already below the capital.
+    assert m.max_dd(monthly(-0.30, 0.10)) == pytest.approx(-0.30)
+
+
+def test_cagr_counts_return_periods_not_navs():
+    """Audit L3: a NAV path of N+1 marks is N periods. value_to_ret's inception
+    zero, left in, annualized 12 months of +1% over 13."""
+    nav = monthly(*(100 * 1.01 ** np.arange(13)))
+    ret = m.value_to_ret(nav)
+    assert m.ann_return(ret) < 1.01 ** 12 - 1 - 1e-4           # the old bias
+    assert m.ann_return(ret.iloc[1:]) == pytest.approx(1.01 ** 12 - 1)
 
 
 # --------------------------------------------------------------------------

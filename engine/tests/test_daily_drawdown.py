@@ -52,3 +52,27 @@ def test_two_asset_drift_matches_buy_and_hold():
     nav = reconstruct_daily_values(tw, daily_ret, initial_capital=100.0)
     # 0.5*100 flat + 0.5*100*1.10 = 105 at the end.
     assert nav.iloc[-1] == __import__("pytest").approx(105.0, abs=0.05)
+
+
+def test_a_crash_during_hold_rows_reaches_the_daily_path():
+    """Audit M2: an all-zero row after inception means "hold" to run_simulation,
+    but the reconstruction read it as a reset to all cash — so a crash while
+    holding never reached Max Drawdown / Calmar."""
+    import pytest
+    from backtests.core import simulation
+
+    days = pd.bdate_range("2020-01-01", "2020-04-30")
+    px = pd.Series(100.0, index=days)
+    px[days >= "2020-03-10"] = 50.0
+    daily_ret = pd.DataFrame({"A": px.pct_change()})
+    grid = pd.DatetimeIndex(["2020-01-31", "2020-02-29", "2020-03-31", "2020-04-30"])
+    tw = pd.DataFrame({"A": [1.0, 0.0, 0.0, 0.0]}, index=grid)   # invest, then hold
+    mret = pd.DataFrame({"A": px.resample("ME").last().pct_change().fillna(0).values},
+                        index=grid)
+
+    sim = simulation.run_simulation(mret, tw, slippage=0, tax_rate=0)
+    assert sim["pretax_values"].iloc[-1] == pytest.approx(50_000.0)
+
+    nav = reconstruct_daily_values(tw, daily_ret)
+    assert nav.iloc[-1] == pytest.approx(50_000.0)
+    assert max_dd(value_to_ret(nav)) == pytest.approx(-0.5)

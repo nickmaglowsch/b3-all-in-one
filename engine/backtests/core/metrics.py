@@ -29,6 +29,12 @@ def value_to_ret(values: pd.Series, contributions: pd.Series | None = None) -> p
 
 
 def ann_return(ret: pd.Series, periods_per_year: int = 12) -> float:
+    """Compound annual growth of `ret`, every element one period of return.
+
+    Pass returns only. `value_to_ret` puts a 0.0 on the inception row (a mark,
+    not a period); counted here it stretched a 10-year monthly run to 121
+    periods and shaved ~0.1pp off the CAGR. run_backtest_json drops it.
+    """
     n = len(ret) / periods_per_year
     return (1 + ret).prod() ** (1 / n) - 1 if n > 0 else 0.0
 
@@ -37,18 +43,48 @@ def ann_vol(ret: pd.Series, periods_per_year: int = 12) -> float:
     return ret.std() * np.sqrt(periods_per_year)
 
 
-def sharpe(ret: pd.Series, risk_free: float = 0.0, periods_per_year: int = 12) -> float:
+def sharpe(ret: pd.Series, risk_free: "float | pd.Series" = 0.0,
+           periods_per_year: int = 12) -> float:
+    """Annualized Sharpe: mean excess return over its deviation, x sqrt(ppy).
+
+    `risk_free` is either an annual rate (a float; a `periods_per_year`-th of it
+    comes off every period) or a per-period return Series — the CDI earned over
+    each rebalance period — subtracted date by date. The backtest passes the
+    CDI (see `period_risk_free`): every result is in BRL for a Brazilian
+    holder, and against a 10-14% CDI a Sharpe over zero mostly measures how
+    much of the book sat in CDI. A book parked in CDI_ASSET has ~zero excess
+    return and now scores ~0, not tens.
+    """
+    if isinstance(risk_free, pd.Series):
+        excess = ret - risk_free.reindex(ret.index)
+    else:
+        excess = ret - risk_free / periods_per_year
     # `!= 0` only caught a std of *exactly* zero. A constant non-zero series —
     # a flat CDI sleeve, a park row repeated — lands on ~5e-19 instead, and the
     # division printed a Sharpe of 1.9e16 that sorts first in any gallery.
-    sd = ret.std()
-    mean_ret = ret.mean() - (risk_free / periods_per_year)
-    return (mean_ret / sd) * np.sqrt(periods_per_year) if sd > 1e-12 else 0.0
+    sd = excess.std()
+    return (excess.mean() / sd) * np.sqrt(periods_per_year) if sd > 1e-12 else 0.0
+
+
+def period_risk_free(rf: "pd.Series | None", index: pd.Index) -> "pd.Series | None":
+    """`rf` (per-period risk-free returns, e.g. shared["cdi_monthly"]) on
+    `index`, or None when it does not cover every date.
+
+    All or nothing: subtracting the CDI from some periods and zero from others
+    would rank a run by where the CDI download happened to fail. None means
+    the Sharpe falls back to a zero risk-free rate, and the caller says so.
+    """
+    if rf is None or len(index) == 0:
+        return None
+    aligned = rf.reindex(index)
+    return None if aligned.isna().any() else aligned
 
 
 def max_dd(ret: pd.Series) -> float:
+    """Deepest fall from a running peak, the starting capital (1.0) included —
+    a first period that loses is a drawdown even with no inception row."""
     cum = cumret(ret)
-    return (cum / cum.cummax() - 1).min()
+    return (cum / cum.cummax().clip(lower=1.0) - 1).min()
 
 
 def reconstruct_daily_values(
@@ -91,8 +127,13 @@ def _investable_weights(target_weights: pd.DataFrame, available, days):
     if missing and float(target_weights[missing].abs().sum(axis=1).max()) > 1e-4:
         return None
     tw = target_weights[cols].fillna(0.0)
+    # Only live rows reset the book. run_simulation reads an all-zero row after
+    # inception as "hold current positions", so the previous segment must run
+    # straight through it. Kept as a segment of its own it had zero weights and
+    # resid 1.0 — all cash — and a crash during a hold period never reached
+    # Max Drawdown or Calmar.
     live = tw.index[tw.abs().sum(axis=1) > 0]
-    return None if len(live) == 0 else tw.loc[live[0]:]
+    return None if len(live) == 0 else tw.loc[live]
 
 
 def _segments(reb: pd.Index, days: pd.DatetimeIndex) -> list:
@@ -245,6 +286,7 @@ def build_metrics(
     label: str,
     periods_per_year: int = 12,
     daily_values: pd.Series | None = None,
+    risk_free: "pd.Series | None" = None,
 ) -> dict:
     """Standardized performance dictionary.
 
@@ -253,7 +295,10 @@ def build_metrics(
     computed on it so they reflect intra-rebalance lows; otherwise they fall
     back to the rebalance-cadence ``ret`` (which understates drawdown). Return,
     volatility and Sharpe always use ``ret`` (annualized-from-periodic is the
-    standard convention).
+    standard convention). ``ret`` holds return periods only — no inception row.
+
+    Sharpe is over ``risk_free`` (per-period returns on ``ret``'s dates, the
+    CDI in a backtest) when given, else over zero. See :func:`sharpe`.
     """
     if daily_values is not None and daily_values.dropna().shape[0] > 1:
         mdd = max_dd(value_to_ret(daily_values.dropna()))
@@ -265,7 +310,8 @@ def build_metrics(
         "Strategy": label,
         "Ann. Return (%)": round(ar * 100, 2),
         "Ann. Volatility (%)": round(ann_vol(ret, periods_per_year) * 100, 2),
-        "Sharpe": round(sharpe(ret, periods_per_year=periods_per_year), 2),
+        "Sharpe": round(sharpe(ret, 0.0 if risk_free is None else risk_free,
+                               periods_per_year=periods_per_year), 2),
         "Max Drawdown (%)": round(mdd * 100, 2),
         "Calmar": round(cal, 2),
     }

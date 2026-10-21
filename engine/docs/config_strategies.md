@@ -74,7 +74,8 @@ raises — a typo is never a silently Brazilian backtest.
 cash sleeve is CDI whatever the equity sleeve is, so `min_adtv` and `min_price`
 are BRL floors on every plane and a US or crypto book bundles the USD/BRL move
 into its return. That is correct for this product's user and *not* comparable to
-a native-currency Sharpe.
+a native-currency Sharpe. For the same reason Sharpe is measured over the CDI on
+every plane (`metrics.sharpe`), not over zero.
 
 What a spec author has to know per plane:
 

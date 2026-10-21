@@ -1,7 +1,15 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import {
+  dependsOnImports,
+  importsSettledSince,
+  isBusyImport,
+  snapshotImports,
+  type ImportSnapshot,
+} from "@/lib/importDeps";
 import type { ImportRow } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -20,8 +28,22 @@ const KIND_LABEL: Record<string, string> = {
   unknown: "Desconhecido",
 };
 
-const isBusy = (r: ImportRow) =>
-  r.status === "pending" || r.status === "processing" || r.status === "running";
+const isBusy = (r: ImportRow) => isBusyImport(r.status);
+
+/** When an import finishes, everything built from the extracts is stale —
+ *  positions, trades, income, tax, index. Mark it so; the screens that are
+ *  mounted refetch now, the rest on their next visit. */
+function useRefreshBookOnImport(rows: ImportRow[] | undefined) {
+  const qc = useQueryClient();
+  const seen = useRef<ImportSnapshot | null>(null);
+  useEffect(() => {
+    if (!rows) return;
+    if (importsSettledSince(seen.current, rows)) {
+      qc.invalidateQueries({ predicate: (query) => dependsOnImports(query.queryKey) });
+    }
+    seen.current = snapshotImports(rows);
+  }, [rows, qc]);
+}
 
 const columns: Column<ImportRow>[] = [
   {
@@ -67,6 +89,7 @@ export default function ImportsPage() {
     refetchInterval: (query) =>
       (query.state.data ?? []).some(isBusy) ? 2000 : false,
   });
+  useRefreshBookOnImport(q.data);
 
   const rows = q.data ?? []; // already newest-first: GET /imports orders desc
 

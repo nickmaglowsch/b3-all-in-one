@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 from . import config
+from .split_validation import validate_split_actions_against_prices
 
 logger = logging.getLogger(__name__)
 
@@ -642,8 +643,8 @@ def filter_fatcot_redundant_splits(
 
     # Group once. This used to re-filter and re-sort the entire price frame for
     # every B3 action — O(actions x rows), the pipeline's worst scaling. The
-    # sibling check below (validate_split_actions_against_prices) already builds
-    # exactly this dict; the two are now consistent.
+    # sibling check (split_validation.validate_split_actions_against_prices)
+    # already builds exactly this dict; the two are now consistent.
     prices_by_isin = {
         isin: grp.sort_values("date")
         for isin, grp in slim.groupby("isin_code", sort=False)
@@ -716,143 +717,6 @@ def filter_fatcot_redundant_splits(
         return stock_actions.drop(index=redundant_indices).reset_index(drop=True)
 
     return stock_actions
-
-
-def validate_split_actions_against_prices(
-    stock_actions: pd.DataFrame,
-    prices: pd.DataFrame,
-    tolerance: float = 0.35,
-    date_window: int = 7,
-) -> pd.DataFrame:
-    """
-    Validate B3 API split-type actions against observed raw price ratios.
-
-    B3's corporate-actions API occasionally reports factors that contradict the
-    COTAHIST price series (e.g. a "1-for-100 reverse split" on a date where the
-    quoted price did not move, or a 1:2 split labeled as a 1-for-40 reverse
-    split). Applying such factors corrupts adj_close with fake ±99% jumps.
-
-    COTAHIST prices are treated as the source of truth. For each B3-source
-    SPLIT/REVERSE_SPLIT/BONUS action, compare the expected before/after close
-    ratio implied by the factor with the observed ratio around the ex_date:
-
-    - match within tolerance      -> keep as-is
-    - observed ratio ~= 1         -> drop (phantom action; prices never moved)
-    - observed matches a different
-      ratio                       -> replace factor with the observed ratio
-                                     (snapped to the nearest simple ratio when
-                                     within 5%), source='B3_CORRECTED'
-
-    Args:
-        stock_actions: stock actions (isin_code, ex_date, action_type, factor, source).
-        prices: per-share price data (isin_code, date, close).
-        tolerance: relative tolerance between observed and expected ratio.
-        date_window: max calendar days to search for closes around the ex_date.
-
-    Returns:
-        stock_actions with phantom rows dropped and wrong factors corrected.
-    """
-    if stock_actions.empty or prices.empty:
-        return stock_actions
-
-    split_types = {
-        config.EVENT_TYPE_STOCK_SPLIT,
-        config.EVENT_TYPE_REVERSE_SPLIT,
-        config.EVENT_TYPE_BONUS_SHARES,
-    }
-    check_mask = (stock_actions["source"] == "B3") & stock_actions[
-        "action_type"
-    ].isin(split_types)
-    if not check_mask.any():
-        return stock_actions
-
-    prices_by_isin = {
-        isin: grp.sort_values("date")
-        for isin, grp in prices[["isin_code", "date", "close"]]
-        .assign(date=lambda d: pd.to_datetime(d["date"]))
-        .groupby("isin_code")
-    }
-
-    def _snap(ratio: float) -> float:
-        """Snap a ratio to the nearest n or 1/n (n integer) when within 5%."""
-        if ratio >= 1.5:
-            n = round(ratio)
-            return float(n) if n > 0 and abs(n - ratio) / ratio < 0.05 else ratio
-        if 0 < ratio <= 1 / 1.5:
-            n = round(1.0 / ratio)
-            snapped = 1.0 / n if n > 0 else ratio
-            return snapped if abs(snapped - ratio) / ratio < 0.05 else ratio
-        return ratio
-
-    result = stock_actions.copy()
-    drop_idx = []
-    n_corrected = 0
-
-    for idx, row in stock_actions[check_mask].iterrows():
-        grp = prices_by_isin.get(row["isin_code"])
-        if grp is None or len(grp) < 2:
-            continue
-        ex_date = pd.to_datetime(row["ex_date"])
-        before = grp[
-            (grp["date"] < ex_date)
-            & (grp["date"] >= ex_date - pd.Timedelta(days=date_window))
-        ]
-        after = grp[
-            (grp["date"] >= ex_date)
-            & (grp["date"] <= ex_date + pd.Timedelta(days=date_window))
-        ]
-        if before.empty or after.empty:
-            continue
-        close_before = before.iloc[-1]["close"]
-        close_after = after.iloc[0]["close"]
-        if close_before <= 0 or close_after <= 0:
-            continue
-        observed = close_before / close_after
-
-        factor = row["factor"]
-        if row["action_type"] == config.EVENT_TYPE_BONUS_SHARES:
-            expected = 1.0 + factor / 100.0
-        else:
-            expected = factor  # SPLIT: N>1; REVERSE_SPLIT: f<1 — both before/after
-        if expected <= 0:
-            continue
-
-        log_tol = np.log(1.0 + tolerance)
-        if abs(np.log(observed / expected)) <= log_tol:
-            continue  # factor matches reality
-        if abs(np.log(observed)) <= log_tol:
-            # Price never jumped: the action is phantom for COTAHIST prices
-            drop_idx.append(idx)
-            logger.warning(
-                f"Dropping phantom {row['action_type']} for {row['isin_code']} on "
-                f"{row['ex_date']}: B3 factor={factor} but observed price ratio="
-                f"{observed:.3f} (no jump)"
-            )
-            continue
-        # Something happened, but not what B3 says — trust the prices
-        corrected = _snap(observed)
-        result.loc[idx, "factor"] = corrected
-        result.loc[idx, "action_type"] = (
-            config.EVENT_TYPE_STOCK_SPLIT
-            if corrected > 1
-            else config.EVENT_TYPE_REVERSE_SPLIT
-        )
-        result.loc[idx, "source"] = "B3_CORRECTED"
-        n_corrected += 1
-        logger.warning(
-            f"Correcting {row['action_type']} for {row['isin_code']} on "
-            f"{row['ex_date']}: B3 factor={factor} (expected ratio {expected:.3f}) "
-            f"but observed price ratio={observed:.3f} -> factor={corrected:.4f}"
-        )
-
-    if drop_idx:
-        result = result.drop(index=drop_idx).reset_index(drop=True)
-    if drop_idx or n_corrected:
-        logger.info(
-            f"Split validation: dropped {len(drop_idx)} phantom, corrected "
-            f"{n_corrected} mismatched actions against observed prices"
-        )
-    return result
 
 
 def compute_all_adjustments(

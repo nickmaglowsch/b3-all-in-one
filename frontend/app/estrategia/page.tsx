@@ -14,7 +14,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { DivergingBars } from "@/components/charts/DivergingBars";
 import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
-import { compactBRL, formatDate, formatPercent } from "@/lib/format";
+import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
 import {
   useDeleteUserStrategy,
@@ -531,7 +531,7 @@ function MinhasCarteiras({
                       {u.name}
                     </p>
                     <p className="font-mono text-[11px] text-muted">
-                      {nSleeves} sleeve(s) · atualizada {formatDate(u.updated_at)}
+                      {nSleeves} sleeve(s) · atualizada {formatInstantDate(u.updated_at)}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -856,14 +856,11 @@ function PlanResult({ plan }: { plan: RebalancePlan }) {
                 </div>
                 <dl className="mt-2 space-y-1 text-sm">
                   <Line label="Vendas do mês" value={<Money value={b.gross_after} />} />
-                  <Line
-                    label={`Isenção (${compactBRL(isencao)})`}
-                    value={
-                      <span className={b.gross_after > isencao ? "text-loss" : "text-gain"}>
-                        {b.gross_after > isencao ? "ultrapassada" : "dentro"}
-                      </span>
-                    }
-                  />
+                  {/* Ações only: FIIs pay on every gain, so "dentro" in green
+                      would promise them an isenção they do not have. */}
+                  {cls === "AÇÃO" && (
+                    <IsencaoLine gross={b.gross_after} limit={isencao} />
+                  )}
                   <Line label="Imposto estimado" value={<Money value={b.ir} />} />
                   {b.harvest?.length > 0 && (
                     <Line
@@ -892,5 +889,19 @@ function Line({ label, value }: { label: string; value: React.ReactNode }) {
       <dt className="text-muted">{label}</dt>
       <dd>{value}</dd>
     </div>
+  );
+}
+
+function IsencaoLine({ gross, limit }: { gross: number; limit: number }) {
+  const over = gross > limit;
+  return (
+    <Line
+      label={`Isenção (${compactBRL(limit)})`}
+      value={
+        <span className={over ? "text-loss" : "text-gain"}>
+          {over ? "ultrapassada" : "dentro"}
+        </span>
+      }
+    />
   );
 }

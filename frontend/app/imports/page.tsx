@@ -18,7 +18,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconUpload } from "@/components/icons";
-import { formatDate } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
 import { UploadZone } from "./UploadZone";
 
 const KIND_LABEL: Record<string, string> = {
@@ -77,7 +77,7 @@ const columns: Column<ImportRow>[] = [
     key: "created_at",
     header: "Enviado em",
     align: "right",
-    render: (r) => <span className="text-muted">{formatDate(r.created_at)}</span>,
+    render: (r) => <span className="text-muted">{formatDateTime(r.created_at)}</span>,
   },
 ];
 

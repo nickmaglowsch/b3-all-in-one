@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from scripts import load_b3 as _load_b3
+from scripts import irpf_proventos, load_b3 as _load_b3
 # The apuração rules live in their own module — see scripts/apuracao.py for why.
 # Re-exported here because callers and tests import them from this script.
 from scripts.apuracao import CLASSES_APURACAO, monthly_apuracao
@@ -239,7 +239,7 @@ def build_timeline() -> pd.DataFrame:
     event_rows = pd.DataFrame({
         "ticker": events["ticker"].map(str), "date": events["date"], "kind": kind,
         "qty": events["qty"].astype(float).fillna(0.0).where(is_qty, 0.0),
-        "amount": events["amount"].astype(float).fillna(0.0).where(~is_qty, 0.0),
+        "amount": events["amount"].astype(float).where(~is_qty, events["qty"] * events["price"]).fillna(0.0),
         "broker": events.get("broker", ""),
     })
     rows = [f for f in (trade_rows, event_rows) if not f.empty]
@@ -268,7 +268,7 @@ def snapshot_positions(tl: pd.DataFrame, cutoff: pd.Timestamp) -> pd.DataFrame:
                     cost -= sq * avg
                     qty -= sq
             elif r["kind"] == "qty_event":
-                qty += r["qty"]
+                qty += r["qty"]; cost += r["amount"]
             elif r["kind"] == "amort":
                 cost = max(0.0, cost - r["amount"])
         if qty > 1e-6:
@@ -514,7 +514,7 @@ def realized_per_month(tl: pd.DataFrame, year: int) -> pd.DataFrame:
                                      "qty": sq, "sell_price": sp, "avg_cost": avg,
                                      "sell_value": sq * sp, "pnl": pnl})
             elif r["kind"] == "qty_event":
-                qty += r["qty"]
+                qty += r["qty"]; cost += r["amount"]
             elif r["kind"] == "amort":
                 cost = max(0.0, cost - r["amount"])
     return pd.DataFrame(rows)
@@ -596,8 +596,7 @@ def main(argv: list[str]) -> int:
     def by_type(et_keyword):
         return yr[yr["event_type"].astype(str).str.contains(et_keyword, case=False, na=False)]
 
-    dividendos = by_type("Dividendo")
-    dividendos = dividendos[dividendos["event_category"] == "income"]
+    dividendos, bdr_div = irpf_proventos.split_bdr_dividends(by_type("Dividendo"), asset_class)
     jcp = by_type("Juros Sobre")
     jcp = jcp[jcp["event_category"] == "income"]
     rendimentos = by_type("Rendimento")
@@ -731,6 +730,7 @@ def main(argv: list[str]) -> int:
         w(f"| **Total código 09** | **{div_total:,.2f}** | |")
     else:
         w(f"Nenhum dividendo de ações registrado em {Y}.")
+    out += irpf_proventos.lines(bdr_div, yr, Y)
 
     w(f"\n**Código 20 — Ganhos líquidos em alienações de ações ≤ R$ 20.000/mês**\n")
     w(f"Soma dos resultados positivos em meses cujo total de vendas de ações ficou "

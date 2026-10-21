@@ -11,7 +11,6 @@ from platform_app import enginerun, tasks, tasks_ingest
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import IngestRun
-from sqlalchemy import select
 
 
 def test_the_claimed_listing_interval_is_captured_before_the_observed_one():
@@ -146,17 +145,42 @@ async def test_a_failed_run_is_recorded_not_swallowed(monkeypatch):
 
     monkeypatch.setattr(enginerun, "run_module", failing)
 
-    result = await tasks_ingest.ingest_prices.func(timestamp=0)
-    assert result["status"] == "error"
+    # Raised, not returned: a task that returns is `succeeded` in
+    # procrastinate_jobs, so the failure lived only in a column nothing reads.
+    with pytest.raises(tasks_ingest.IngestFailed, match="503") as failed:
+        await tasks_ingest.ingest_prices.func(timestamp=0)
 
     async with async_session_maker() as session:
-        row = (await session.scalars(
-            select(IngestRun).where(IngestRun.id == __import__("uuid").UUID(result["run_id"]))
-        )).one()
+        row = await session.get(IngestRun, failed.value.run_id)
         assert row.kind == "prices"
         assert row.status == "error"
         assert "503" in row.error
         assert row.finished_at is not None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_run_that_survived_a_failed_step_says_which(monkeypatch, capsys):
+    """b3_pipeline lets the benchmark and Tesouro steps fail alone and exits 0.
+    Those lines were thrown away with the rest of a successful run's output, so
+    the benchmarks went stale behind a row reading `done`."""
+    out = ("2026-10-21 06:00:01 - INFO - Step 5c2/9: Fetching Ibovespa index series...\n"
+           "2026-10-21 06:00:02 - ERROR - Ibovespa series fetch failed, continuing: 503\n"
+           "2026-10-21 06:00:03 - INFO - Step 6/9: ...\n")
+
+    def partial(args, timeout_s=None):
+        import subprocess
+        return subprocess.CompletedProcess(args, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(enginerun, "run_module", partial)
+
+    result = await tasks_ingest.ingest_prices.func(timestamp=0)
+
+    assert result["status"] == "done"
+    async with async_session_maker() as session:
+        row = await session.get(IngestRun, __import__("uuid").UUID(result["run_id"]))
+    assert row.error == ("2026-10-21 06:00:02 - ERROR - Ibovespa series fetch "
+                         "failed, continuing: 503")
+    assert "Ibovespa series fetch failed" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio(loop_scope="session")

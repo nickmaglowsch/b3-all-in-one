@@ -18,8 +18,9 @@ import {
   formatPercent,
   formatRatio,
 } from "@/lib/format";
-import { errorText } from "@/lib/api";
-import type { BacktestRun } from "@/lib/types";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { EmptyState, LoadFailure, RetryButton } from "@/components/ui/EmptyState";
+import type { BacktestCurves, BacktestRun } from "@/lib/types";
 import { CurveChart } from "../CurveChart";
 import { curveRows, useBacktest, useCurves } from "../lib";
 
@@ -52,25 +53,85 @@ function TearSheetView() {
         </Link>
       </PageHeader>
 
-      {run.isLoading ? (
-        <LoadingSkeleton />
-      ) : run.error ? (
-        <ErrorCard
-          text={errorText(run.error, "Falha ao carregar o backtest.")}
-        />
-      ) : run.data?.status === "error" ? (
-        <ErrorCard text={run.data.error ?? "O backtest falhou sem mensagem."} />
-      ) : !done ? (
-        <PendingCard status={run.data?.status ?? "pending"} />
+      {id ? (
+        <RunBody run={run} curves={curves} />
       ) : (
-        <TearSheet
-          run={run.data!}
-          curves={curves.data?.series ?? null}
-          curvesLoading={curves.isLoading}
+        <EmptyState
+          title="Nenhuma rodada indicada."
+          hint="Abra um backtest pela lista de rodadas do bench."
+          action={
+            <Link
+              href="/bench"
+              className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40"
+            >
+              Ir para o bench
+            </Link>
+          }
         />
       )}
     </>
   );
+}
+
+function RunBody({
+  run,
+  curves,
+}: {
+  run: UseQueryResult<BacktestRun>;
+  curves: UseQueryResult<BacktestCurves>;
+}) {
+  if (run.isLoading) return <LoadingSkeleton />;
+  // Not ErrorCard: a request that failed (a 402, a swept run) is not a run that
+  // failed, and "Backtest falhou" would say it was.
+  if (run.error) {
+    return (
+      <LoadFailure
+        error={run.error}
+        title="Não foi possível carregar este backtest."
+        offerTitle={(nome) => `Backtests vêm com o módulo ${nome}.`}
+        onRetry={() => run.refetch()}
+      />
+    );
+  }
+  if (run.data?.status === "error") {
+    return <ErrorCard text={run.data.error ?? "O backtest falhou sem mensagem."} />;
+  }
+  if (run.data?.status !== "done") {
+    return <PendingCard status={run.data?.status ?? "pending"} />;
+  }
+  return <TearSheet run={run.data} curves={curves} />;
+}
+
+/**
+ * A chart's slot: the chart once its curves are here, a skeleton while they
+ * load, and — when they will not come (the artifact was swept, or lost on a
+ * redeploy) — a sentence saying so, instead of a skeleton pulsing forever.
+ */
+function CurvesSlot({
+  curves,
+  height,
+  render,
+}: {
+  curves: UseQueryResult<BacktestCurves>;
+  height: string;
+  render: (series: BacktestCurves["series"]) => React.ReactNode;
+}) {
+  if (curves.data) return render(curves.data.series);
+  if (curves.isError) {
+    return (
+      <div
+        role="alert"
+        className={`flex ${height} flex-col items-center justify-center gap-3 rounded-md border border-status-error/40 px-4 text-center`}
+      >
+        <p className="text-sm text-muted">
+          As curvas desta rodada não estão disponíveis — os números acima
+          continuam valendo. Rode o backtest de novo para redesenhar os gráficos.
+        </p>
+        <RetryButton onClick={() => curves.refetch()} />
+      </div>
+    );
+  }
+  return <Skeleton className={`${height} w-full`} />;
 }
 
 // ── numbers ───────────────────────────────────────────────────────────────────
@@ -90,13 +151,12 @@ type Metrics = {
 
 function TearSheet({
   run,
-  curves,
-  curvesLoading,
+  curves: curvesQuery,
 }: {
   run: BacktestRun;
-  curves: Record<string, (string | number)[]> | null;
-  curvesLoading: boolean;
+  curves: UseQueryResult<BacktestCurves>;
 }) {
+  const curves = curvesQuery.data?.series ?? null;
   const m = (run.metrics ?? {}) as Metrics;
   const pre = m.pretax ?? {};
   const aft = m.aftertax ?? {};
@@ -186,38 +246,42 @@ function TearSheet({
           </span>
         }
       >
-        {curvesLoading || !curves ? (
-          <Skeleton className="h-[300px] w-full" />
-        ) : (
-          <CurveChart
-            rows={curveRows(curves, ["pretax", "aftertax"])}
-            period={equity}
-            of="patrimônio"
-            series={[
-              { key: "pretax", label: "Pré-imposto", color: "var(--series-1)" },
-              { key: "aftertax", label: "Pós-imposto", color: "var(--series-2)" },
-            ]}
-          />
-        )}
+        <CurvesSlot
+          curves={curvesQuery}
+          height="h-[300px]"
+          render={(series) => (
+            <CurveChart
+              rows={curveRows(series, ["pretax", "aftertax"])}
+              period={equity}
+              of="patrimônio"
+              series={[
+                { key: "pretax", label: "Pré-imposto", color: "var(--series-1)" },
+                { key: "aftertax", label: "Pós-imposto", color: "var(--series-2)" },
+              ]}
+            />
+          )}
+        />
       </Card>
 
       {/* Drawdown + secondary tiles */}
       <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <Card title="Drawdown" action={drawdown.control}>
-          {curvesLoading || !curves ? (
-            <Skeleton className="h-[200px] w-full" />
-          ) : (
-            <AreaSeries
-              data={drawdown.slice(curveRows(curves, ["drawdown"]))}
-              xKey="date"
-              yKey="drawdown"
-              label="Drawdown"
-              color="var(--loss)"
-              height={220}
-              valueFormat={(v) => formatPercent(v)}
-              labelFormat={formatDate}
-            />
-          )}
+          <CurvesSlot
+            curves={curvesQuery}
+            height="h-[200px]"
+            render={(series) => (
+              <AreaSeries
+                data={drawdown.slice(curveRows(series, ["drawdown"]))}
+                xKey="date"
+                yKey="drawdown"
+                label="Drawdown"
+                color="var(--loss)"
+                height={220}
+                valueFormat={(v) => formatPercent(v)}
+                labelFormat={formatDate}
+              />
+            )}
+          />
         </Card>
 
         <div className="grid content-start gap-3">

@@ -91,6 +91,26 @@ async def test_whatif_replays_real_flows(client):
     assert all("date" in p and "aftertax" in p for p in curve)
     assert curve[-1]["aftertax"] == pytest.approx(sc["final_value"])
     assert any(p["aftertax"] > 0 for p in curve)   # the flows actually got deployed
+    # The deployed aportes ride along, so the SPA can chart a return, not growth.
+    assert all("contribution" in p for p in curve)
+    assert any(p["contribution"] > 0 for p in curve)
+
+
+async def test_read_curve_carries_the_deployed_contribution(tmp_path):  # async: file-wide pytestmark
+    """`contribution` is what turns the patrimônio path into a return series in
+    the SPA; an artifact without the column still reads, just without it."""
+    from platform_app.routes_whatif import _read_curve
+
+    p = tmp_path / "curves.csv"
+    p.write_text("date,aftertax,contribution\n"
+                 "2024-01-31,10000.0,10000.0\n2024-02-29,100000.0,90000.0\n")
+    assert _read_curve(p) == [
+        {"date": "2024-01-31", "aftertax": 10000.0, "contribution": 10000.0},
+        {"date": "2024-02-29", "aftertax": 100000.0, "contribution": 90000.0},
+    ]
+    p.write_text("date,aftertax\n2024-01-31,1.0\n")
+    assert _read_curve(p) == [{"date": "2024-01-31", "aftertax": 1.0}]
+    assert _read_curve(tmp_path / "missing.csv") == []
 
 
 async def test_fund_from_first_positive_folds_leading_negatives():  # async: file-wide pytestmark

@@ -5,10 +5,18 @@ const brl = new Intl.NumberFormat("pt-BR", {
   currency: "BRL",
 });
 
+// The value as the screen prints it. Below the last digit shown it is float dust
+// — a P&L of mark − cost with mark == cost computes as −1e-10 — and dust is zero:
+// not "-R$ 0,00" in red, nor "▼ -0,0%". Colour and glyph decisions go through
+// these too, so they always agree with the digits next to them.
+export const moneyShown = (v: number) => (Math.abs(v) < 0.005 ? 0 : v);
+export const fractionShown = (f: number) => (Math.abs(f) < 0.00005 ? 0 : f);
+
 export function formatMoney(value: number, withSign = false): string {
-  const s = brl.format(value);
+  const v = moneyShown(value);
+  const s = brl.format(v);
   // Intl already prefixes "-" for negatives; add explicit "+" when asked.
-  return withSign && value > 0 ? `+${s}` : s;
+  return withSign && v > 0 ? `+${s}` : s;
 }
 
 const pct = new Intl.NumberFormat("pt-BR", {
@@ -19,7 +27,7 @@ const pct = new Intl.NumberFormat("pt-BR", {
 
 // Input is a fraction: 0.0123 → "1,23%".
 export function formatPercent(fraction: number): string {
-  return pct.format(fraction);
+  return pct.format(fractionShown(fraction));
 }
 
 const num = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 8 });
@@ -60,6 +68,23 @@ export function formatDateTime(iso: string | null | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return dateTime.format(d).replace(", ", " às ");
+}
+
+// The São Paulo calendar day of a *timestamp* — formatDate's counterpart for an
+// instant. A row saved at 22:30 BRT is stored as 01:30Z the next day, and
+// slicing that string files it under tomorrow. A bare date passes through
+// formatDate untouched: it has no instant to convert.
+const dateSP = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo",
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+});
+export function formatInstantDate(iso: string | null | undefined): string {
+  if (!iso || iso.length <= 10) return formatDate(iso);
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return dateSP.format(d);
 }
 
 // Engine metric %-number (8.9 → "8,9%"), not a fraction. Signed prefixes an

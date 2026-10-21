@@ -7,7 +7,8 @@ values, dtypes, column order, row order, index — is the contract. Each test ru
 the production builder against a row-by-row reference (the original iterrows
 construction, kept here as the oracle) on the vendored fixtures and on a small
 book of edge cases: same-day ties, NaN quantities and amounts, *F tickers, a
-cash_events file old enough to lack `event_category`.
+cash_events file old enough to lack `event_category`, a bonificação whose
+custo atribuído (qty × price) is the one cost a qty_event carries.
 """
 from pathlib import Path
 
@@ -22,6 +23,12 @@ DATA = Path(__file__).resolve().parents[1] / "data"
 
 
 # --- oracles: the original row-by-row construction --------------------------
+
+def _custo(r):
+    """Cost a qty_event brings in: qty × price, 0 where either is missing."""
+    qty, price = r.get("qty"), r.get("price")
+    return float(qty) * float(price) if pd.notna(qty) and pd.notna(price) else 0.0
+
 
 def reference_position_timeline(trades, cash_events, consolidate):
     t = trades.copy()
@@ -50,7 +57,7 @@ def reference_position_timeline(trades, cash_events, consolidate):
             rows.append({"ticker": r["ticker"], "date": pd.to_datetime(r["date"]),
                          "kind": "qty_event",
                          "sq": float(r["qty"]) if pd.notna(r["qty"]) else 0.0,
-                         "price": 0.0, "amount": 0.0, "market": None})
+                         "price": 0.0, "amount": _custo(r), "market": None})
         for _, r in amort_evs.iterrows():
             rows.append({"ticker": r["ticker"], "date": pd.to_datetime(r["date"]),
                          "kind": "amort", "sq": 0.0, "price": 0.0,
@@ -87,7 +94,7 @@ def reference_build_timeline():
         if cat == "qty_event":
             rows.append({"ticker": str(e["ticker"]), "date": e["date"], "kind": "qty_event",
                          "qty": float(e["qty"]) if pd.notna(e["qty"]) else 0.0,
-                         "amount": 0.0, "broker": e.get("broker", "")})
+                         "amount": _custo(e), "broker": e.get("broker", "")})
         elif cat == "amortization":
             rows.append({"ticker": str(e["ticker"]), "date": e["date"], "kind": "amort",
                          "qty": 0.0,
@@ -121,17 +128,17 @@ EDGE_TRADES = pd.DataFrame({
 })
 
 EDGE_EVENTS = pd.DataFrame({
-    "date": [D1, D1, D2, D1, D2, D2, D1],
+    "date": [D1, D1, D2, D1, D2, D2, D1, D2],
     "ticker": ["PETR4", "PETR4F", "PETR4", "PETR4", "LCI - LCI24H9RKF", "VALE3",
-               np.nan],
+               np.nan, "PETR4"],
     "event_type": ["Desdobro", "Amortização", "Fração em Ativos", "Dividendo",
-                   "Amortização", "Desdobro", "Amortização"],
+                   "Amortização", "Desdobro", "Amortização", "Bonificação em Ativos"],
     "event_category": ["qty_event", "amortization", "qty_event", "income",
-                       "amortization", "qty_event", "amortization"],
-    "is_amortization": [False, True, False, False, True, np.nan, True],
-    "qty": [100.0, 0.0, np.nan, 0.0, 0.0, -1.0, 0.0],
-    "price": 0.0,
-    "amount": [0.0, 12.5, 0.0, 40.0, np.nan, 0.0, 3.0],
+                       "amortization", "qty_event", "amortization", "qty_event"],
+    "is_amortization": [False, True, False, False, True, np.nan, True, False],
+    "qty": [100.0, 0.0, np.nan, 0.0, 0.0, -1.0, 0.0, 20.0],
+    "price": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 8.9],
+    "amount": [0.0, 12.5, 0.0, 40.0, np.nan, 0.0, 3.0, 0.0],
     "broker": "XP",
     "__source_file": "edge.xlsx",
 })

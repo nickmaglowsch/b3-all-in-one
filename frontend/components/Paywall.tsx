@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { isModuleRequired, type ModuleRequired, PAYWALL_EVENT } from "@/lib/api";
-import { moduloDe } from "@/lib/modules";
+import { ligarHref, moduloDe } from "@/lib/modules";
 
 /** Global answer to any 402: whatever the user clicked, they land here.
  *  Native <dialog> so focus trapping, Esc and the backdrop come from the platform. */
@@ -55,7 +55,7 @@ export function Paywall() {
 
         <div className="mt-6 flex gap-2">
           <Link
-            href={`/assinatura?ligar=${modulo.id}`}
+            href={ligarHref(modulo.id)}
             onClick={() => ref.current?.close()}
             className="flex-1 rounded-md bg-navy px-4 py-2.5 text-center text-sm font-semibold text-white transition-colors hover:bg-navy/90"
           >

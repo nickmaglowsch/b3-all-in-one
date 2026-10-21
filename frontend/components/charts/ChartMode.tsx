@@ -25,11 +25,16 @@ export type { ChartMode } from "@/lib/chartMode";
 export function useChartMode({
   format,
   of,
+  toReturn = toReturnRows,
 }: {
   format: (v: number) => string;
   /** Names the chart, appended to the group's accessible name. Required
    *  wherever a page carries two of these — the same rule as useDateRange. */
   of?: string;
+  /** How money rows become return rows. The default reads value/first − 1,
+   *  which is only a return when no cash enters the curve; a curve fed by
+   *  deposits passes a time-weighted one (lib/chartMode.toTwrRows). */
+  toReturn?: <T extends Dated>(rows: T[]) => T[];
 }) {
   const [mode, setMode] = useState<ChartMode>("value");
   const isReturn = mode === "return";
@@ -37,7 +42,7 @@ export function useChartMode({
     mode,
     isReturn,
     /** Money rows → return rows, or through unchanged. */
-    apply: <T extends Dated>(rows: T[]) => (isReturn ? toReturnRows(rows) : rows),
+    apply: <T extends Dated>(rows: T[]) => (isReturn ? toReturn(rows) : rows),
     valueFormat: isReturn ? formatPercent : format,
     control: <ChartModeToggle mode={mode} onChange={setMode} of={of} />,
   };

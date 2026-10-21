@@ -22,8 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     # Deliberately no `environment: production` — this job holds no secrets, so it
     # is safe to run for any triggering event and decide afterwards.
+    permissions:
+      contents: read
     outputs:
       deploy: ${{ steps.decide.outputs.deploy }}
+      # The one commit both deploy jobs ship. On workflow_run it is the commit CI
+      # just passed — not whatever main is by the time this runs. Merge A then B
+      # a minute later, and CI(A) going green used to deploy B, whose CI was
+      # still running and might yet fail (a broken migration, say).
+      sha: ${{ steps.decide.outputs.sha }}
     steps:
       - id: decide
         # Every payload-derived value arrives as an env var rather than a `${{ }}`
@@ -35,16 +42,22 @@ jobs:
           # head_repository guard: `branches: [main]` matches the workflow_run's
           # *head* branch, so a fork PR from a branch literally named `main` that
           # passes CI would otherwise reach the jobs holding VPS_SSH_KEY and
-          # CLOUDFLARE_API_TOKEN. The deploy script only ever ships origin/main, so
-          # the blast radius is a spurious redeploy rather than fork code — but a
-          # deploy job that any outsider can trigger is a lever nobody should be
-          # handed.
+          # CLOUDFLARE_API_TOKEN. This matters more now that the jobs ship the
+          # run's head_sha: past this guard, that sha would be the fork's code.
+          # (The VPS also refuses a sha that is not on origin/main, but Pages
+          # builds whatever it checks out.)
           HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           THIS_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            echo "Manual dispatch — deploying origin/main."
+            # Resolved once, here, so the VPS and Pages ship the same commit even
+            # if main moves while the two jobs run.
+            sha=$(gh api "repos/$THIS_REPO/commits/main" --jq .sha)
+            echo "Manual dispatch — deploying origin/main ($sha)."
+            echo "sha=$sha" >> "$GITHUB_OUTPUT"
             echo "deploy=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -57,7 +70,9 @@ jobs:
             echo "::error::CI on main concluded '$CI_CONCLUSION' — NOTHING WAS DEPLOYED. The VPS still runs the previous commit. Fix main (or re-run the failed CI job) and the next green run deploys."
             exit 1
           fi
-          echo "CI on main is green — deploying."
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::workflow_run carried no usable head_sha ('$HEAD_SHA')"; exit 1; }
+          echo "CI on main is green for $HEAD_SHA — deploying that commit."
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
           echo "deploy=true" >> "$GITHUB_OUTPUT"
 
   backend:
@@ -66,24 +81,60 @@ jobs:
     environment: production
     needs: guard
     if: needs.guard.outputs.deploy == 'true'
+    # Room for the worker and ingest to drain (stop_grace_period 15m / 30m in
+    # docker-compose.prod.yml) on top of the build.
+    timeout-minutes: 75
     steps:
       - name: Deploy over SSH
         # Pinned to a SHA, not the mutable v1 tag: this step is handed VPS_SSH_KEY,
         # VPS_HOST and VPS_USER, so whoever can move the tag can exfiltrate them.
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
+        env:
+          DEPLOY_SHA: ${{ needs.guard.outputs.sha }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          # The api container runs `alembic upgrade head` on boot (RUN_MIGRATIONS=1).
+          envs: DEPLOY_SHA
+          # The action's default is 10m, which a drain alone can exceed.
+          command_timeout: 60m
+          # In three steps, and each one fails the job:
+          #
+          #  1. Build while the old stack keeps serving.
+          #  2. The api alone. It runs `alembic upgrade head` on boot
+          #     (RUN_MIGRATIONS=1) and --wait holds until its healthcheck passes,
+          #     so a failed migration or an import-time crash is a red deploy, not
+          #     a green one over a container looping on 502s. Alone, because a
+          #     single `up` stops every old container before starting any new one:
+          #     the api would sit down for as long as the worker took to drain.
+          #  3. worker + ingest. `stop` lets each drain its in-flight jobs (up to
+          #     stop_grace_period) as a step of its own, so --wait-timeout times
+          #     only the boot; then the new code starts against the new schema.
+          #
+          # The prune comes last. Before, it ran right after `up` and deleted the
+          # previous image — now dangling — whether or not the new one booted, so
+          # there was nothing to roll back to. `images` prints what was running.
           script: |
             set -euo pipefail
             cd ${{ secrets.VPS_APP_DIR }}
+            compose() { docker compose --env-file .env.prod -f docker-compose.prod.yml "$@"; }
+            failed() {
+              echo "DEPLOY FAILED: $* did not come up — previous images are kept (see 'images' above)."
+              compose ps -a
+              compose logs --tail 100 "$@"
+              exit 1
+            }
             git fetch --prune origin main
-            git reset --hard origin/main
-            docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
+            git merge-base --is-ancestor "$DEPLOY_SHA" origin/main \
+              || { echo "$DEPLOY_SHA is not on origin/main — refusing to deploy it."; exit 1; }
+            git reset --hard "$DEPLOY_SHA"
+            compose images
+            compose build
+            compose up -d --wait --wait-timeout 300 api || failed api
+            compose stop worker ingest
+            compose up -d --wait --wait-timeout 300 worker ingest || failed worker ingest
             docker image prune -f
-            docker compose --env-file .env.prod -f docker-compose.prod.yml ps
+            compose ps
 
   frontend:
     name: Static site to Cloudflare Pages
@@ -91,32 +142,48 @@ jobs:
     environment: production
     needs: guard
     if: needs.guard.outputs.deploy == 'true'
-    env:
-      # Secrets can't be read in a job-level `if`, so gate the steps on this instead:
-      # until CLOUDFLARE_API_TOKEN is set the job is a green no-op (backend still ships).
-      CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - name: Skip until Cloudflare is configured
-        if: env.CF_TOKEN == ''
-        run: echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping frontend deploy"
+      # Secrets can't be read in a job-level `if`, so gate the steps on this
+      # instead: until CLOUDFLARE_API_TOKEN is set the job is a green no-op
+      # (backend still ships). The token is in this step's env and the Deploy
+      # step's, nowhere else. It used to sit in the job's env, readable by every
+      # step — `npm ci` running dependency install scripts and `next build`
+      # included — so one compromised transitive package could take the Pages
+      # project with it.
+      - name: Is Cloudflare configured?
+        id: cf
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          if [ -n "$CF_TOKEN" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::CLOUDFLARE_API_TOKEN not set — skipping frontend deploy"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
 
+      # The commit the guard chose, so the site and the API ship the same one.
       - uses: actions/checkout@v4
-        if: env.CF_TOKEN != ''
-      - uses: actions/setup-node@v4
-        if: env.CF_TOKEN != ''
+        if: steps.cf.outputs.configured == 'true'
         with:
-          node-version: "20"
+          ref: ${{ needs.guard.outputs.sha }}
+      - uses: actions/setup-node@v4
+        if: steps.cf.outputs.configured == 'true'
+        with:
+          # The major CI builds and tests on (ci.yml) — otherwise the bundle that
+          # ships is one no CI run ever produced.
+          node-version: "24"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      - if: env.CF_TOKEN != ''
+      - if: steps.cf.outputs.configured == 'true'
         run: npm ci
         working-directory: frontend
 
       # NEXT_PUBLIC_* are inlined at build time, so a missing one ships a site that
       # silently calls localhost:8000. Fail here instead.
       - name: Build
-        if: env.CF_TOKEN != ''
+        if: steps.cf.outputs.configured == 'true'
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL }}
@@ -126,7 +193,7 @@ jobs:
           npm run build
 
       - name: Deploy
-        if: env.CF_TOKEN != ''
+        if: steps.cf.outputs.configured == 'true'
         working-directory: frontend
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -1,7 +1,7 @@
 // Run: npm test (node --test, native TS — no runner dependency).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { columnReturn, toReturnRows } from "./chartMode.ts";
+import { columnReturn, toReturnRows, toTwrRows } from "./chartMode.ts";
 
 const nav = [
   { date: "2023-01-02", a: 100_000, b: 100_000 },
@@ -71,6 +71,45 @@ test("columnReturn is the return of one line over the rows it appears in", () =>
   // A line that is not on the chart has no return to report — not 0%.
   assert.equal(columnReturn(nav, "missing"), null);
   assert.equal(columnReturn([], "a"), null);
+});
+
+// The Simulação bug: R$10k, then R$90k more in a flat market, read as +900%.
+test("toTwrRows does not count aportes as return", () => {
+  const rows = [
+    { date: "d1", s: 10_000 },
+    { date: "d2", s: 100_000 },
+  ];
+  assert.deepEqual(toReturnRows(rows).map((r) => r.s), [0, 9]); // the old reading
+  const twr = toTwrRows(rows, { s: { d1: 10_000, d2: 90_000 } });
+  assert.deepEqual(twr.map((r) => r.s), [0, 0]);
+});
+
+test("toTwrRows chains each period's return net of that period's deposit", () => {
+  const rows = [
+    { date: "d1", s: 100 },
+    { date: "d2", s: 110 }, // +10%, no cash
+    { date: "d3", s: 220 }, // 100 deposited: (220 − 100) / 110 = +9,09%
+  ];
+  const twr = toTwrRows(rows, { s: { d3: 100 } });
+  assert.deepEqual(twr.map((r) => r.s), [0, 0.1, 0.2]);
+  // A withdrawal is cash too: 50 out, 60 left → (60 + 50) / 110 = flat.
+  const out = toTwrRows(
+    [{ date: "d1", s: 110 }, { date: "d2", s: 60 }],
+    { s: { d2: -50 } },
+  );
+  assert.deepEqual(out.map((r) => r.s), [0, 0]);
+});
+
+test("toTwrRows starts each series at its first positive value", () => {
+  const rows = [
+    { date: "d1", s: 0, t: 50 },
+    { date: "d2", s: 100, t: 55 },
+    { date: "d3", s: 105, t: 55 },
+  ];
+  const twr = toTwrRows(rows, { s: { d2: 100 } });
+  assert.equal("s" in twr[0], false, "no return on nothing");
+  assert.deepEqual(twr.map((r) => r.t), [0, 0.1, 0.1]);
+  assert.deepEqual(twr.slice(1).map((r) => r.s), [0, 0.05]);
 });
 
 test("columnReturn ignores the gap in front of a late series", () => {

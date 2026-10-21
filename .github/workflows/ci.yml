@@ -212,6 +212,36 @@ jobs:
       # still prerenderable.
       - run: cd frontend && npm run build
 
+  docker-image:
+    name: Production image
+    # Every other job runs from the source tree, so none of them sees what the
+    # image leaves out. The Dockerfile COPYs an explicit list of engine packages
+    # and the dockerignore is a whitelist: a new package or runtime file that
+    # misses either passes all of CI and fails only in the prod container — and
+    # for an ingest module, silently, at 06:00. Built here, not pushed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f platform/Dockerfile -t b3-platform:ci .
+      - name: What prod runs can be imported from the image
+        # The engine modules are what tasks_ingest shells into, plus the strategy
+        # registry every backtest walks; platform_app is both entrypoints. No DB
+        # here, so these only import — which is exactly the failure being caught.
+        run: |
+          set -euo pipefail
+          run() { docker run --rm -e ENVIRONMENT=ci -e SECRET_KEY=ci-only-not-a-secret "$@"; }
+          run -w /opt/engine b3-platform:ci /opt/engine/.venv/bin/python -c "
+          import importlib
+          for m in '''b3_pipeline.main b3_pipeline.cvm_main b3_pipeline.instruments_backfill
+                      crypto_pipeline.crypto_main us_pipeline.symbol_directory
+                      us_pipeline.us_main us_pipeline.us_listing us_pipeline.us_daily
+                      us_pipeline.wiki_backfill us_pipeline.us_prices
+                      us_pipeline.spx_series'''.split():
+              importlib.import_module(m)"
+          run -w /opt/engine b3-platform:ci /opt/engine/.venv/bin/python scripts/list_strategies.py > /dev/null
+          run -w /opt/taxcore b3-platform:ci /opt/taxcore/.venv/bin/python -c "import scripts.load_b3"
+          run b3-platform:ci python -c "import platform_app.main, platform_app.worker"
+
   compose-config:
     name: Production compose config
     runs-on: ubuntu-latest

@@ -5,12 +5,15 @@
 import { useMutation } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { Dated } from "@/lib/chartRange";
+import type { Flows } from "@/lib/chartMode";
 // Same queryKey as the bench gallery, so the fetch is shared.
 export { useStrategies } from "../bench/lib";
 
 export interface CurvePoint {
   date: string;
   aftertax: number;
+  /** Aporte the engine deployed on this row (routes_whatif._read_curve). */
+  contribution?: number;
 }
 
 export interface WhatIfScenario {
@@ -50,18 +53,29 @@ export const totalReturn = (finalValue: number, invested: number) =>
 // Overlay several scenario curves into one row set keyed by date, with one
 // column per strategy. Curves share the same rebalance grid (same flows/freq),
 // so rows align; a later-warming strategy just leaves earlier cells undefined.
+//
+// `flows` is each column's deployed aportes by date — what the "%" reading needs
+// to tell a deposit from a gain (lib/chartMode.toTwrRows).
 export function overlayCurves(scenarios: WhatIfScenario[]): {
   rows: (Dated & Record<string, string | number>)[];
   series: { key: string; label: string }[];
+  flows: Flows;
 } {
   const byDate = new Map<string, Dated & Record<string, string | number>>();
+  const flows: Flows = {};
   for (const sc of scenarios) {
+    const mine: Record<string, number> = (flows[sc.strategy] = {});
     for (const p of sc.curve) {
       const row = byDate.get(p.date) ?? { date: p.date };
       row[sc.strategy] = p.aftertax;
       byDate.set(p.date, row);
+      if (p.contribution) mine[p.date] = p.contribution;
     }
   }
   const rows = [...byDate.values()].sort((a, b) => (a.date < b.date ? -1 : 1));
-  return { rows, series: scenarios.map((sc) => ({ key: sc.strategy, label: sc.strategy })) };
+  return {
+    rows,
+    series: scenarios.map((sc) => ({ key: sc.strategy, label: sc.strategy })),
+    flows,
+  };
 }

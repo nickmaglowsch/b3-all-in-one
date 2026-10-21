@@ -11,6 +11,7 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { LineSeries } from "@/components/charts/LineSeries";
 import { isFiltered, useDateRange } from "@/components/charts/DateRange";
 import { useChartMode } from "@/components/charts/ChartMode";
+import { toTwrRows } from "@/lib/chartMode";
 import { IconClock, IconChart } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import {
@@ -220,7 +221,7 @@ interface TableRow {
 }
 
 function Results({ data }: { data: WhatIfResult }) {
-  const { rows: curveRows, series } = useMemo(
+  const { rows: curveRows, series, flows } = useMemo(
     () => overlayCurves(data.scenarios),
     [data.scenarios],
   );
@@ -231,7 +232,14 @@ function Results({ data }: { data: WhatIfResult }) {
   // comparable — but the question being asked is "which veículo did more with
   // the same money", and that is a percentage. Sliced first, then rebased: 0% is
   // the left edge of what is on screen.
-  const unit = useChartMode({ format: compactBRL, of: "patrimônio" });
+  //
+  // Time-weighted, not value/first − 1: these curves take every real aporte, and
+  // the plain ratio called R$10k followed by R$90k of deposits "+900%".
+  const unit = useChartMode({
+    format: compactBRL,
+    of: "patrimônio",
+    toReturn: (rows) => toTwrRows(rows, flows),
+  });
   const windowed = unit.apply(period.slice(curveRows));
 
   const tableRows: TableRow[] = [
@@ -344,6 +352,8 @@ function Results({ data }: { data: WhatIfResult }) {
         <DataTable columns={columns} rows={tableRows} getRowKey={(r) => r.label} label="Resultado da simulação" />
         <p className="mt-3 text-xs leading-snug text-muted">
           &quot;Retorno&quot; é o valor final sobre o total aportado (não anualizado).
+          No gráfico, em %, o retorno é ponderado pelo tempo: cada aporte entra
+          como dinheiro novo, não como ganho.
           Comparação após impostos; a carteira real usa o valor de mercado das
           posições atuais. Aproximação: cada aporte é aplicado no rebalance
           seguinte.

@@ -4,7 +4,8 @@ Usage:
     python scripts/run_backtest_json.py <strategy_name> <out_dir> <config_json>
 
 <config_json> is a JSON string: {"params": {...}, "start": ..., "end": ...,
-"freq": ..., "flows": [...]} — all keys optional. Reads the market plane from
+"freq": ..., "flows": [...]} — all keys optional — or "-" to read that JSON
+from stdin, which is how the platform sends it. Reads the market plane from
 Postgres via ENGINE_DATABASE_URL (falls back to the local sqlite DB when unset),
 runs the registry strategy through run_simulation, writes metrics.json +
 curves.csv into <out_dir>, and prints a one-line JSON summary to stdout.
@@ -111,9 +112,18 @@ def _capital_and_flows(cfg: dict, params: dict) -> tuple[str, float, object]:
     )
 
 
+def _load_config(raw: str) -> dict:
+    """The config argument, or stdin when it is "-". The platform sends stdin:
+    a what-if's dated flows, one per distinct day of a long history, outgrow
+    the 128 KB the kernel allows a single argv element."""
+    if raw == "-":
+        raw = sys.stdin.read()
+    return json.loads(raw) if raw else {}
+
+
 def main() -> None:
-    name, out_dir, config_json = sys.argv[1], sys.argv[2], sys.argv[3]
-    cfg = json.loads(config_json) if config_json else {}
+    name, out_dir = sys.argv[1], sys.argv[2]
+    cfg = _load_config(sys.argv[3])
     req_params = cfg.get("params") or {}
 
     from backtests.core import memory

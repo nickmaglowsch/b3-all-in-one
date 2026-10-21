@@ -174,8 +174,8 @@ async def test_run_whatif_reads_summary_and_curve_then_cleans_up(monkeypatch, tm
     monkeypatch.setattr(b3run.settings, "uploads_dir", str(tmp_path))
     seen = {}
 
-    def fake(script, args, extra_env=None):
-        seen.update(script=script, args=args, env=extra_env, out=Path(args[1]))
+    def fake(script, args, extra_env=None, stdin=None):
+        seen.update(script=script, args=args, env=extra_env, out=Path(args[1]), stdin=stdin)
         (Path(args[1]) / "curves.csv").write_text(
             "date,aftertax,pretax\n2024-01-02,100.0,101.0\n")
         return subprocess.CompletedProcess(args, 0, stdout='log\n{"cagr": 0.1}\n', stderr="")
@@ -185,12 +185,14 @@ async def test_run_whatif_reads_summary_and_curve_then_cleans_up(monkeypatch, tm
     assert out == {"summary": {"cagr": 0.1},
                    "curve": [{"date": "2024-01-02", "aftertax": 100.0}]}
     assert seen["script"] == "run_backtest_json.py"
-    assert seen["args"] == ["S", str(seen["out"]), '{"flows": []}']
+    # The config rides stdin: a long history's flows outgrow one argv element.
+    assert seen["args"] == ["S", str(seen["out"]), "-"]
+    assert seen["stdin"] == '{"flows": []}'
     assert seen["env"] == {"E": "1"}
     assert seen["out"].parent == b3run.workspace_root("t1")
     assert not seen["out"].exists()
 
-    monkeypatch.setattr(enginerun, "run_script", lambda s, a, e=None:
+    monkeypatch.setattr(enginerun, "run_script", lambda s, a, e=None, stdin=None:
                         subprocess.CompletedProcess(a, 1, stdout="", stderr="boom"))
     with pytest.raises(RuntimeError, match="^boom$"):
         routes_whatif._run_whatif("S", {}, "t1")

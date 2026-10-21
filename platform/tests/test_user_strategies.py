@@ -220,7 +220,10 @@ async def test_a_failed_listing_is_a_500_naming_the_script(monkeypatch, call, sc
     fn = routes._builtins if call == "builtins" else routes.list_signals
     with pytest.raises(HTTPException) as exc:
         await fn()
-    assert (exc.value.status_code, exc.value.detail) == (500, f"{script} failed: err")
+    assert exc.value.status_code == 500
+    # Named, with a ref into the log — the stderr itself never reaches the client.
+    assert exc.value.detail.startswith(f"{script} falhou (ref ")
+    assert "err" not in exc.value.detail
 
 
 async def test_listings_are_parsed_tagged_and_cached(monkeypatch):
@@ -268,7 +271,7 @@ async def test_tenant_gallery_points_the_engine_at_the_users_specs(monkeypatch):
     async with async_session_maker() as s:
         with pytest.raises(HTTPException) as exc:
             await routes._gallery(s, tid)
-    assert exc.value.detail == "list_strategies failed: bad spec"
+    assert exc.value.detail.startswith("list_strategies falhou (ref ")
 
 
 async def test_foreign_junk_and_unknown_strategy_ids_are_the_same_404(client):

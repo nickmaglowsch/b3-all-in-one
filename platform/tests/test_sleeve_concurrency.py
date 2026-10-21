@@ -9,6 +9,7 @@ They are independent by construction — each sleeve's weights depend only on it
 own strategy — so the wall clock should be the slowest sleeve, not their sum.
 """
 import asyncio
+import re
 import time
 import uuid
 
@@ -177,9 +178,10 @@ async def test_advise_strategy_threads_the_cadence_as_params(monkeypatch, freq, 
 
 @pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.parametrize("freq", ["ME", "W-FRI"])
-async def test_advise_strategy_failures(monkeypatch, freq):
+async def test_advise_strategy_failures(monkeypatch, caplog, freq):
     """Exit 3 is the needs-fundamentals signal (a clean 422 upstream); any other
-    non-zero exit is a 500 carrying the tail of the engine's output."""
+    non-zero exit is a 500 naming the script and a ref, while the tail of the
+    engine's output — server paths and all — goes to the log under that ref."""
     from fastapi import HTTPException
 
     from platform_app import enginerun
@@ -196,4 +198,8 @@ async def test_advise_strategy_failures(monkeypatch, freq):
     with pytest.raises(HTTPException) as exc:
         await routes._advise_strategy("S", freq)
     assert exc.value.status_code == 500
-    assert exc.value.detail == "advise_weights failed: Traceback: boom"
+    assert re.fullmatch(r"advise_weights falhou \(ref ([0-9a-f]{8})\)", exc.value.detail)
+    ref = exc.value.detail[-9:-1]
+    assert "boom" not in exc.value.detail
+    assert any(ref in r.getMessage() and "Traceback: boom" in r.getMessage()
+               for r in caplog.records)

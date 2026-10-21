@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import calendar
-import csv
 import datetime
 import io
 import json
@@ -17,19 +16,20 @@ import uuid
 import zipfile
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import b3run, enginerun, market_planes, specstore, subprocs, tasks
-from platform_app.billing import EMPRESARIAL, entitled, needs_bench, needs_mercado
+from platform_app.billing import (
+    EMPRESARIAL, entitled, gate_detail, needs_bench, needs_mercado,
+)
 from platform_app.config import settings
-from platform_app.db import get_async_session, get_engine_pool
+from platform_app.db import get_async_session, get_engine_pool, xact_lock
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, DarfPayment,
     Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
@@ -37,6 +37,9 @@ from platform_app.models import (
 )
 from platform_app.routes_portfolio_index import bounded, current_rf_marks
 from platform_app.routes_portfolio_settings import _settings_dict
+from platform_app.strategy_specs import (
+    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank,
+)
 from platform_app.tenancy import get_current_tenant, get_optional_tenant, get_owned
 
 imports_router = APIRouter(prefix="/imports", tags=["imports"])
@@ -188,7 +191,7 @@ async def list_imports(
     return [
         {
             "id": str(i.id), "filename": i.filename, "kind": i.kind, "status": i.status,
-            "error": i.error, "parser_version": i.parser_version,
+            "error": subprocs.redact(i.error), "parser_version": i.parser_version,
             "created_at": i.created_at.isoformat() if i.created_at else None,
         }
         for i in rows
@@ -395,7 +398,9 @@ async def get_income(
 
 class SleeveIn(BaseModel):
     strategy_ref: str
-    target_pct: float
+    # NaN passed the sum-to-100 check (every comparison with it is False) and
+    # was stored; a negative sleeve is a short position nobody can hold.
+    target_pct: float = Field(ge=0, le=100, allow_inf_nan=False)
 
 
 @portfolio_router.get("/sleeves")
@@ -436,6 +441,7 @@ async def put_sleeves(
         if ref not in known:
             raise HTTPException(422, f"unknown strategy_ref: {ref}")
 
+    await xact_lock(session, "sleeves", tid)
     await session.execute(delete(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid))
     for s in body:
         session.add(PortfolioSleeve(
@@ -491,11 +497,11 @@ async def _fundamentals_available() -> bool:
 
 async def _advise(**kwargs) -> dict:
     try:
-        return await asyncio.to_thread(enginerun.advise_weights, **kwargs)
+        return await subprocs.offload(enginerun.advise_weights, **kwargs)
     except enginerun.EngineNeedsFundamentals:
         raise  # callers turn this into a clean 422 (never a 500)
     except RuntimeError as e:
-        raise HTTPException(500, f"advise_weights failed: {e}")
+        raise HTTPException(500, subprocs.report("advise_weights", str(e)))
 
 
 async def _advise_strategy(strategy: str, freq: str, extra_env: dict | None = None) -> dict:
@@ -567,9 +573,14 @@ async def _combined_target(
     # own strategy. Awaiting them in a loop made a cold three-sleeve portfolio
     # pay three full plane builds end to end. Gathered, the wall clock is the
     # slowest sleeve. Cache hits are resolved before dispatch so a warm sleeve
-    # costs nothing.
-    todo = [(ref, key) for ref, _pct, key in equity if key not in _SLEEVE_WEIGHTS_CACHE]
+    # costs nothing — and copied out, not re-read after the await: any other
+    # request's bounded() can empty the shared dict meanwhile, and a hit gone
+    # missing read as "needs fundamentals" (a 422 for a strategy that needs none).
+    advised = {key: hit for _ref, _pct, key in equity
+               if (hit := _SLEEVE_WEIGHTS_CACHE.get(key)) is not None}
+    todo = [(ref, key) for ref, _pct, key in equity if key not in advised]
     if todo:
+        await session.commit()  # no connection held across the subprocesses
         results = await asyncio.gather(
             *(_advise_strategy(ref, freq, extra_env or None) for ref, _key_ in todo),
             return_exceptions=True,
@@ -577,7 +588,7 @@ async def _combined_target(
         for (ref, key), res in zip(todo, results):
             if isinstance(res, BaseException):
                 continue          # classified below, so one failure is not fatal here
-            bounded(_SLEEVE_WEIGHTS_CACHE, _CACHE_MAX)[key] = res
+            advised[key] = bounded(_SLEEVE_WEIGHTS_CACHE, _CACHE_MAX)[key] = res
         # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
         # others mid-flight; anything that is not that is still a real failure.
         failures = {ref: res for (ref, _k), res in zip(todo, results)
@@ -590,7 +601,7 @@ async def _combined_target(
 
     missing: list[str] = []   # strategies that need fundamentals not yet ingested
     for ref, pct, key in equity:
-        adv = _SLEEVE_WEIGHTS_CACHE.get(key)
+        adv = advised.get(key)
         if adv is None:
             exc = failures.get(ref)
             missing.append(getattr(exc, "strategy", None) or ref)
@@ -655,7 +666,7 @@ async def get_target(
 
 
 class RebalanceRequest(BaseModel):
-    new_cash: float = 0.0
+    new_cash: float = Field(0.0, allow_inf_nan=False)
     exclude: list[str] = []
     pins: list[str] = []
 
@@ -857,6 +868,7 @@ async def irpf_report(
 
     override_rows = tasks._override_rows(overrides)
     extracts = [(imp.stored_path, imp.filename) for imp in movs]
+    await session.commit()  # everything is read; no connection held across the run
 
     def _work():
         """Workspace build + subprocess + teardown, off the event loop.
@@ -874,9 +886,9 @@ async def irpf_report(
                     shutil.copy(stored_path, ws / "b3_imports" / filename)
             return b3run.run_module(ws, ["scripts.irpf_2026", "--year", str(body.year)])
 
-    proc = await asyncio.to_thread(_work)
+    proc = await subprocs.offload(_work)
     if proc.returncode != 0:
-        raise HTTPException(500, f"irpf_2026 failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        raise HTTPException(500, subprocs.report("irpf_2026", proc))
     return {"year": body.year, "markdown": proc.stdout}
 
 
@@ -959,16 +971,17 @@ async def _run_apuracao(
         # ledger is the honest answer anyway — nothing was sold, nothing is due.
         return []
 
+    await session.commit()  # no connection held across the run
+
     def _work():
         with b3run.workspace(tid, "b3darf-") as ws:
             _write_book(ws, trade_rows, event_rows)
             return b3run.run_module(
                 ws, ["scripts.irpf_2026", "--year", str(year), "--json"])
 
-    proc = await asyncio.to_thread(_work)
+    proc = await subprocs.offload(_work)
     if proc.returncode != 0:
-        raise HTTPException(
-            500, f"irpf_2026 --json failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        raise HTTPException(500, subprocs.report("irpf_2026 --json", proc))
     return subprocs.last_json(proc.stdout).get("apuracao") or []
 
 
@@ -988,7 +1001,10 @@ async def darf_ledger(
     _user, tid = tenant
     year = year or date.today().year
     payments = {(p.apuracao, p.classe): p for p in await _darf_payments(session, tid, year)}
-    today = date.today()
+    # Brasília's day, not the container's UTC one: from 21h on the due date UTC
+    # is already tomorrow, and a DARF still payable read "atrasado". Fixed -03:00
+    # is exact — Brazil has had no daylight saving since 2019.
+    today = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-3))).date()
 
     meses = []
     for r in await _run_apuracao(session, tid, year):
@@ -1030,7 +1046,7 @@ async def darf_ledger(
 class DarfPaymentIn(BaseModel):
     apuracao: str  # "AAAA-MM"
     classe: str
-    valor_principal: float
+    valor_principal: float = Field(allow_inf_nan=False)
     data_pagamento: datetime.date | None = None
     obs: str | None = None
 
@@ -1069,6 +1085,7 @@ async def put_darf_payments(
             raise HTTPException(422, f"apuração {p.apuracao} {classe} repetida")
         seen[(apuracao, classe)] = p
 
+    await xact_lock(session, "darf", tid)
     await session.execute(delete(DarfPayment).where(
         DarfPayment.tenant_id == tid,
         DarfPayment.apuracao >= datetime.date(year, 1, 1),
@@ -1088,13 +1105,14 @@ async def put_darf_payments(
 # ── Tax-loss harvesting ───────────────────────────────────────────────────────
 
 class TlhSell(BaseModel):
-    ticker: str
-    qty: float
+    ticker: str = Field(max_length=32)
+    qty: float = Field(allow_inf_nan=False)
 
 
 class TlhRequest(BaseModel):
-    sells: list[TlhSell] = []
-    exclude: list[str] | None = None
+    # Both reach tlh_plan as single argv elements; bounded far inside 128 KB.
+    sells: list[TlhSell] = Field([], max_length=500)
+    exclude: list[str] | None = Field(None, max_length=500)
 
 
 async def _latest_engine_prices(tickers: list[str]) -> list[list]:
@@ -1130,6 +1148,7 @@ async def _run_tlh_plan(
         [p.ticker, p.qty, p.avg_cost, p.total_cost, p.market] for p in positions]
     # asyncpg, so it has to run on the loop rather than inside the thread.
     price_rows = await _latest_engine_prices([p.ticker for p in positions])
+    await session.commit()  # no connection held across the run
 
     args = ["scripts.tlh_plan", "--json"]
     sells_spec = ",".join(f"{t}:{q}" for t, q in sells)
@@ -1165,11 +1184,11 @@ async def _run_tlh_plan(
             )
             return b3run.run_module(ws, args)
 
-    proc = await asyncio.to_thread(_work)
+    proc = await subprocs.offload(_work)
     if proc.returncode == 2:  # validation error (bad/oversized sell)
         raise HTTPException(422, (proc.stderr or proc.stdout).strip()[-2000:])
     if proc.returncode != 0:
-        raise HTTPException(500, f"tlh_plan failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        raise HTTPException(500, subprocs.report("tlh_plan", proc))
     return _parse_tlh_stdout(proc.stdout)
 
 
@@ -1340,13 +1359,14 @@ async def tlh_plan(
 _STRATEGIES_CACHE: list | None = None                    # built-ins, global
 _TENANT_GALLERY: dict[uuid.UUID, tuple[tuple, list]] = {}  # tid -> (fingerprint, merged)
 _SIGNALS_CACHE: list | None = None                       # named-signal catalog, global
+_SPEC_CACHE: dict[str, dict | None] = {}                 # built-in name -> spec (None: none)
 
 
 async def _list_json(script: str, extra_env: dict | None = None) -> list:
     """Shell an engine list_*.py script and parse the JSON array it prints."""
-    proc = await asyncio.to_thread(enginerun.run_script, f"{script}.py", [], extra_env)
+    proc = await subprocs.offload(enginerun.run_script, f"{script}.py", [], extra_env)
     if proc.returncode != 0:
-        raise HTTPException(500, f"{script} failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        raise HTTPException(500, subprocs.report(script, proc))
     return json.loads(proc.stdout)
 
 
@@ -1416,13 +1436,28 @@ async def get_strategy_spec(
     """Raw spec of a config (spec-kind) strategy — for cloning a built-in into user
     space (the gallery only exposes params, which loses factor/universe/selection).
     404 if the strategy is code-kind (no data spec) or unknown. Built-ins are global;
-    an authed tenant's own spec-kind strategies resolve too (env-var, like _gallery)."""
-    extra_env = await specstore.user_specs_env(session, tenant[1]) if tenant else {}
-    proc = await asyncio.to_thread(
-        enginerun.run_script, "get_strategy_spec.py", ["--name", name], extra_env)
-    if proc.returncode != 0:
+    an authed tenant's own spec-kind strategies resolve too (env-var, like _gallery).
+
+    Public, and every miss is a whole engine interpreter. A built-in's spec only
+    changes with the image, so it is answered once per process; a name that is
+    no built-in can only be the caller's own strategy, so anonymous callers get
+    their 404 without a subprocess. User names never shadow a built-in
+    (_compile_and_validate refuses the collision), so the cache is global."""
+    builtin = name in {s["name"] for s in await _builtins()}
+    if builtin and name in _SPEC_CACHE:
+        spec = _SPEC_CACHE[name]
+    elif builtin or tenant:
+        extra_env = {} if builtin else await specstore.user_specs_env(session, tenant[1])
+        proc = await subprocs.offload(
+            enginerun.run_script, "get_strategy_spec.py", ["--name", name], extra_env)
+        spec = json.loads(proc.stdout) if proc.returncode == 0 else None
+        if builtin and proc.returncode in (0, 1):  # 1 is "no data spec"; not a timeout
+            _SPEC_CACHE[name] = spec
+    else:
+        spec = None
+    if spec is None:
         raise HTTPException(404, f"strategy {name!r} has no cloneable spec")
-    return json.loads(proc.stdout)
+    return spec
 
 
 # ── User-created strategies (spec/06) ─────────────────────────────────────────
@@ -1430,115 +1465,15 @@ async def get_strategy_spec(
 # ranges, rebalance enum, portfolio weights). The engine's validate_spec.py does the
 # deep signal/factor validation; the gallery resolves sleeve refs + the cycle guard.
 
-_REBALANCE = Literal["ME", "QE", "W-FRI"]
-
-
-class _RankUniverse(BaseModel):
-    min_adtv: float = Field(default=1_000_000.0, ge=0)
-    min_price: float = Field(default=1.0, ge=0)
-    smallcap_below_median: bool = False
-
-
-class _RankSignal(BaseModel):
-    factor: str | None = None
-    expr: str | None = None
-    lookback: int | None = Field(default=None, ge=1, le=36)
-    shift: int | None = Field(default=None, ge=0)
-    range: list[float] | None = None
-    apply_glitch: bool | None = None
-
-    @model_validator(mode="after")
-    def _one_source(self):
-        if bool(self.factor) == bool(self.expr):
-            raise ValueError("signal needs exactly one of factor / expr")
-        return self
-
-
-class _RankSelection(BaseModel):
-    top_pct: float | None = Field(default=None, gt=0, le=1)
-    top_n: int | None = Field(default=None, ge=1)
-    min_names: int = Field(default=1, ge=1)
-    dedup_roots: bool = False
-
-    @model_validator(mode="after")
-    def _one_cut(self):
-        if (self.top_pct is None) == (self.top_n is None):
-            raise ValueError("selection needs exactly one of top_pct / top_n")
-        return self
-
-
-class RankStrategyIn(BaseModel):
-    kind: Literal["rank_and_hold"]
-    name: str = Field(min_length=1)
-    description: str = ""
-    rebalance: _REBALANCE = "ME"
-    needs_fundamentals: bool = False
-    warmup_pad: int | None = Field(default=None, ge=0)
-    weighting: Literal["equal", "market_cap"] = "equal"
-    universe: _RankUniverse = Field(default_factory=_RankUniverse)
-    signal: _RankSignal
-    selection: _RankSelection
-
-
-class PortfolioSleeveIn(BaseModel):
-    strategy_ref: str = Field(min_length=1)
-    target_pct: float = Field(gt=0, le=100)
-
-
-class PortfolioStrategyIn(BaseModel):
-    kind: Literal["fixed_weight"]
-    name: str = Field(min_length=1)
-    description: str = ""
-    rebalance: _REBALANCE = "QE"
-    sleeves: list[PortfolioSleeveIn] = Field(min_length=1)
-
-    @model_validator(mode="after")
-    def _weights_sum(self):
-        total = sum(s.target_pct for s in self.sleeves)
-        if abs(total - 100.0) > 1e-2:  # == weights sum to 1 ± 1e-4
-            raise ValueError(f"portfolio percentages must sum to 100 (got {total:g})")
-        return self
-
-
-StrategyIn = Annotated[RankStrategyIn | PortfolioStrategyIn, Field(discriminator="kind")]
-
-
-def _compile_rank(m: RankStrategyIn) -> dict:
-    spec: dict = {
-        "name": m.name.strip(), "kind": "rank_and_hold", "description": m.description,
-        "rebalance": m.rebalance, "weighting": m.weighting,
-        "universe": m.universe.model_dump(exclude_none=True),
-        "signal": m.signal.model_dump(exclude_none=True),
-        "selection": m.selection.model_dump(exclude_none=True),
-    }
-    if m.needs_fundamentals:
-        spec["needs_fundamentals"] = True
-    if m.warmup_pad is not None:
-        spec["warmup_pad"] = m.warmup_pad
-    return spec
-
-
-def _compile_portfolio(m: PortfolioStrategyIn) -> dict:
-    sleeves = [
-        {"asset": "CDI", "weight": s.target_pct / 100.0} if s.strategy_ref == "CASH_CDI"
-        else {"strategy": s.strategy_ref, "weight": s.target_pct / 100.0}
-        for s in m.sleeves
-    ]
-    return {
-        "name": m.name.strip(), "kind": "fixed_weight", "description": m.description,
-        "rebalance": m.rebalance, "sleeves": sleeves,
-    }
-
-
 async def _validate_spec_engine(spec: dict) -> bool:
     """Shell validate_spec.py; raise 422 on structured errors, return
     needs_fundamentals (inferred from f_* refs)."""
-    proc = await asyncio.to_thread(
+    proc = await subprocs.offload(
         enginerun.run_script, "validate_spec.py", ["--spec-json", json.dumps(spec)])
     try:
         report = json.loads((proc.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
-        raise HTTPException(500, f"validate_spec failed: {(proc.stderr or proc.stdout)[-2000:]}")
+        raise HTTPException(500, subprocs.report("validate_spec", proc))
     if not report.get("ok"):
         raise HTTPException(422, "; ".join(report.get("errors") or ["invalid spec"]))
     return bool(report.get("needs_fundamentals"))
@@ -1716,8 +1651,12 @@ async def promote_user_strategy(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Compile a portfolio strategy's sleeves into the live target (reuses the
-    existing PUT /portfolio/sleeves logic — same validation + atomic replace)."""
-    _user, tid = tenant
+    existing PUT /portfolio/sleeves logic — same validation + atomic replace).
+    That route is gated on `mercado`, so this one is too: bench alone composes
+    portfolios, it does not get to set the live target."""
+    user, tid = tenant
+    if "mercado" not in (have := entitled(user)):
+        raise HTTPException(402, detail=gate_detail("mercado", have))
     row = await _get_user_strategy(sid, tid, session)
     if row.kind != "fixed_weight":
         raise HTTPException(422, "only portfolio (fixed_weight) strategies can be promoted")
@@ -1746,6 +1685,18 @@ class BacktestRequest(BaseModel):
     end: date | None = None
     freq: _REBALANCE | None = None
 
+    @field_validator("params")
+    @classmethod
+    def _bounded_params(cls, v: dict | None) -> dict | None:
+        """`freq` omitted, the engine falls back to params["rebalance_freq"] —
+        the same .resample() the enum above guards, reached around it. And the
+        dict is stored as JSONB, which refuses NaN, then sent to the engine."""
+        if v and v.get("rebalance_freq", "ME") not in _REBALANCE.__args__:
+            raise ValueError(f"rebalance_freq must be one of {_REBALANCE.__args__}")
+        if v and len(json.dumps(v, allow_nan=False)) > 64 * 1024:  # ValueError on NaN
+            raise ValueError("params too large")
+        return v
+
 
 # Backtests one ACCOUNT may have queued or running at once. The worker runs two
 # jobs at a time on a shared VPS (spec/01) and `queueing_lock` only stops one
@@ -1765,11 +1716,16 @@ BACKTEST_QUOTA = {EMPRESARIAL: 10, "bench": 3}
 
 
 async def inflight_backtests(session: AsyncSession, user) -> int:
-    """Runs not yet finished across every book the account owns."""
+    """Runs not yet finished across every book the account owns.
+
+    Bounded to the last day: a run times out after subprocess_timeout_s, so one
+    still "running" a day later is a row whose worker died with it, and letting
+    it count would lock the account out of the bench for good."""
     managed = select(Portfolio.id).where(Portfolio.owner_id == user.id)
     return await session.scalar(
         select(func.count()).select_from(BacktestRun).where(
             BacktestRun.status.in_(("pending", "running")),
+            BacktestRun.created_at > func.now() - datetime.timedelta(days=1),
             (BacktestRun.tenant_id == user.id) | BacktestRun.tenant_id.in_(managed),
         )
     )
@@ -1778,7 +1734,7 @@ async def inflight_backtests(session: AsyncSession, user) -> int:
 def _run_dict(r: BacktestRun) -> dict:
     return {
         "id": str(r.id), "strategy": r.strategy, "status": r.status,
-        "error": r.error, "params": r.params, "metrics": r.metrics,
+        "error": subprocs.redact(r.error), "params": r.params, "metrics": r.metrics,
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "finished_at": r.finished_at.isoformat() if r.finished_at else None,
     }
@@ -1794,6 +1750,8 @@ async def create_backtest(
     # Before the gallery: that call shells into the engine venv, and a queue
     # already full has no reason to spend an interpreter on name validation.
     limit = max((n for m, n in BACKTEST_QUOTA.items() if m in entitled(user)), default=0)
+    # Held to the commit below, so N parallel POSTs cannot all count `limit - 1`.
+    await xact_lock(session, "backtests", user.id)
     running = await inflight_backtests(session, user)
     if running >= limit:
         raise HTTPException(429, detail={
@@ -1872,16 +1830,24 @@ async def get_backtest_curves(
     path = Path(run.artifacts_path) / "curves.csv"
     if not path.exists():
         raise HTTPException(404, "curves artifact missing")
-    with path.open(newline="") as fh:
-        rows = list(csv.DictReader(fh))
+    rows = await asyncio.to_thread(b3run.read_csv_rows, path)
     # Column-oriented series: {"date": [...], "aftertax": [...], ...}. dates stay
-    # strings; the rest parse to float.
+    # strings; the rest parse to float, or null where pandas wrote NaN as "" (a
+    # drawdown over a zero start is 0/0) or the value is not JSON (inf).
     cols = rows[0].keys() if rows else []
     series: dict[str, list] = {c: [] for c in cols}
     for r in rows:
         for c in cols:
-            series[c].append(r[c] if c == "date" else float(r[c]))
+            series[c].append(r[c] if c == "date" else _finite_or_none(r[c]))
     return {"id": run_id, "series": series}
+
+
+def _finite_or_none(cell: str | None) -> float | None:
+    try:
+        v = float(cell)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 
 # ── Market status ─────────────────────────────────────────────────────────────

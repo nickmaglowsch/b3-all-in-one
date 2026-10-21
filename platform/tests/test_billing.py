@@ -311,6 +311,34 @@ async def test_a_second_subscription_cannot_overwrite_the_live_one(client):
         assert got == ["bench", "irpf"], f"{kind} da intrusa mexeu no entitlement: {got}"
 
 
+async def test_a_same_second_incomplete_never_overwrites_active(client):
+    """`created` do Stripe tem resolução de um segundo, e uma assinatura com SCA
+    manda created(incomplete) e updated(active) no mesmo segundo. Entregues fora
+    de ordem, o `incomplete` atrasado era aplicado por cima do `active` e o
+    cliente cobrado ficava só com a carteira até a renovação. Empate vai para o
+    estágio posterior do ciclo de vida; na ordem certa nada muda."""
+    headers = await _auth(client, "billing-empate@example.com")
+    tenant_id = (await client.get("/me", headers=headers)).json()["id"]
+    now = int(time.time()) + 600
+
+    def _event(kind, status):
+        return _signed(_sub_event(
+            kind, prices=[PRICES["bench"]], created=now, status=status,
+            sub_id="sub_empate", customer="cus_empate", metadata={"tenant_id": tenant_id}))
+
+    for kind, status in (("updated", "active"), ("created", "incomplete")):
+        body, sig = _event(kind, status)
+        assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+    sub = (await client.get("/billing", headers=headers)).json()
+    assert sub["status"] == "active"
+    assert "bench" in sub["modules"]
+
+    # Same second, later stage: a cancellation still lands.
+    body, sig = _event("deleted", "canceled")
+    assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
+    assert (await client.get("/billing", headers=headers)).json()["modules"] == [CARTEIRA]
+
+
 # ── checkout ──────────────────────────────────────────────────────────────────
 
 

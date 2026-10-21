@@ -71,8 +71,9 @@ async def test_alembic_head_matches_the_user_model():
         assert "modules" in migrated and migrated["modules"] is False
         assert "plan" not in migrated, "a escada de planos deveria ter saído do schema"
 
-        # E sabe voltar: -1 desfaz a migração de módulos sem estourar.
-        _alembic("downgrade", "-1", url=url)
+        # E sabe voltar: descer até a revisão anterior à de módulos (c1e58a37b9d0)
+        # desfaz ela sem estourar — por nome, porque o head já andou além dela.
+        _alembic("downgrade", "f2a6c0d84b19", url=url)
         rolled_back = await _columns(url, "user")
         assert "plan" in rolled_back and "modules" not in rolled_back
     finally:

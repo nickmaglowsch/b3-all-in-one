@@ -147,7 +147,7 @@ date,ticker,event_type,event_category,is_amortization,qty,price,amount,broker,__
 2025-05-16,PETRF460,Opção de Compra sobre Ações,premium,False,-300.0,1.28,384.0,ORAMA DTVM S.A.,negociacao-2026-05-10-22-50-41.xlsx
 2025-05-30,B3SA3,Juros Sobre Capital Próprio,income,False,700.0,,142.41,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
 2025-06-10,GOAU4,Bonificação em Ativos,qty_event,False,75.0,8.9,0.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
-2025-06-11,GOAU4,Fração em Ativos,qty_event,False,-1.0,,0.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
+2025-06-11,GOAU4,Fração em Ativos,other,False,-1.0,,0.0,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
 2025-06-12,GOAU4,Leilão de Fração,other,False,1.0,9.87,9.87,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
 2025-06-13,BBAS3,Juros Sobre Capital Próprio,income,False,1100.0,,230.7,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx
 2025-06-14,MXRF11,Rendimento,income,False,1500.0,,161.57,ITAU CV S/A,movimentacao-2026-05-08-18-48-43.xlsx

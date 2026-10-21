@@ -32,12 +32,18 @@ Outputs:
     - stdout JSON summary
 
 Notes on event handling:
-    - Desdobro / Bonificação em Ativos / Fração em Ativos are qty-only events
-      (stock split, bonus shares, fractional adjustment). They change the
-      position's quantity without altering total cost basis — avg_cost falls
-      (split/bonus) or rises (fração debit) accordingly. They are recorded in
-      cash_events.csv with event_category == "qty_event" and applied
-      chronologically alongside trades inside derive_positions().
+    - Desdobro / Grupamento / Bonificação em Ativos / Fração em Ativos are
+      qty_events (split, reverse split, bonus shares, fraction), recorded in
+      cash_events.csv with event_category == "qty_event", signed by
+      Entrada/Saída and applied chronologically inside derive_positions().
+      Split, reverse split and fraction keep total cost. A bonificação adds
+      the cost the company capitalised (Lei 9.249/95 art. 10 parágrafo único),
+      which B3 prints as Preço unitário: kept in `price`, with amount 0
+      because no cash moved. A fraction debit paired with its Leilão de
+      Fração becomes a Venda (b3_rules.fraction_auction_sales).
+    - Movimentação labels with no rule are not booked, but every one is named
+      in the summary's `movimentacao_review` (b3_rules.review_rows) — a
+      subscription exercised, a transfer in without a price.
     - Option activity ("Opção de Compra/Venda sobre Ações" and "Exercício de
       Opção de *" in Negociação) is handled by process_option_activity():
         • Premium trades (open/close of options without assignment) become
@@ -81,6 +87,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from scripts import b3_rules
+from scripts.b3_options import EMPTY_OPT_STATS, process_option_activity
 
 ROOT = Path(__file__).resolve().parent.parent
 IMPORTS_DIR = ROOT / "b3_imports"
@@ -160,13 +169,13 @@ EVENT_COLS = ["date", "ticker", "event_type", "event_category", "is_amortization
 #   - "cash"      : produces a cash_events row (dividend / JCP / rendimento)
 #   - "reembolso" : cash event but NOT investment income (broker refunds, etc.)
 #   - "amort"     : cash event AND reduces cost basis at the security level
-#   - "qty_event" : changes position quantity without changing total cost
-#                   (Desdobro = stock split, Bonificação em Ativos = bonus
-#                    shares, Fração em Ativos = fractional adjustment)
+#   - "qty_event" : changes position quantity (Desdobro, Grupamento, Fração em
+#                   Ativos keep total cost; Bonificação em Ativos adds its
+#                   custo atribuído — see the module docstring)
 #   - "other"     : recorded in cash_events for visibility but not summed as
 #                   income (Leilão de Fração, PAGAMENTO DE JUROS).
-#   - "skip"      : ignore (BTC lending, custody admin, cancelled events, etc.)
-# Anything not listed defaults to "skip" so we never silently miscategorize.
+# Anything not listed is skipped, never guessed at, and — unless b3_rules.MOV_NOOP
+# says it rightly moves nothing — named in the summary's movimentacao_review.
 MOV_CATEGORY = {
     # --- Trades (settlement of an exchange order) ---
     "Transferência - Liquidação": "trade",
@@ -187,8 +196,9 @@ MOV_CATEGORY = {
     # --- Amortizations: principal returned to holder, reduces cost basis ---
     "Amortização": "amort",
     "AMORTIZAÇÃO": "amort",
-    # --- Quantity-only corporate actions (no cash, no cost-basis change) ---
+    # --- Quantity corporate actions (no cash) ---
     "Desdobro":              "qty_event",
+    "Grupamento":            "qty_event",   # reverse split, signed like Desdobro
     "Bonificação em Ativos": "qty_event",
     "Fração em Ativos":      "qty_event",
     # --- Renda fixa contract lifecycle (CDB, LCI, LCA, CRI, CRA, debêntures,
@@ -257,12 +267,19 @@ def _extract_ticker(produto: str) -> str | None:
 
 
 def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Parse a Movimentação .xlsx into (trades, cash_events) DataFrames.
+    """Parse a Movimentação .xlsx into (trades, cash_events) DataFrames."""
+    trades, cash_events, _review = parse_movimentacao(path)
+    return trades, cash_events
+
+
+def parse_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[dict]]:
+    """Parse a Movimentação .xlsx into (trades, cash_events, review).
 
     The trade DataFrame uses the same internal schema as `read_negociacao`
     so it can be concatenated downstream. cash_events keeps a richer event
     type and is consumed both for amortization-adjusted cost basis and for
-    future dividend/total-return analysis.
+    future dividend/total-return analysis. `review` names the rows nothing
+    booked (b3_rules.review_rows).
     """
     raw = pd.read_excel(path, sheet_name=0, engine="openpyxl")
     raw["__source_file"] = path.name
@@ -312,6 +329,11 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     trade_rows = trade_rows.dropna(subset=["date", "ticker", "qty", "price"])
     trade_rows = trade_rows[(trade_rows["qty"] > 0) & (trade_rows["price"] > 0)]
+    # A Liquidação row is dated when the trade settled, D+2 — a sale made on
+    # 30/01 lands in February. Walked back to the trade date over the B3
+    # calendar. Renda fixa rows are dated by the event itself and stay put.
+    liq = (trade_rows["mov_type"] == "Transferência - Liquidação") & ~trade_rows["is_rf"]
+    trade_rows.loc[liq, "date"] = b3_rules.settlement_to_trade_date(trade_rows.loc[liq, "date"])
     # Movimentação doesn't expose the market, so it is inferred: renda fixa from
     # the Produto shape, everything else spot.
     trade_rows["market"] = np.where(
@@ -349,12 +371,16 @@ def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             lambda d: 1.0 if d.startswith("credito") else -1.0)
         cash_rows.loc[qty_mask, "qty"] = (
             cash_rows.loc[qty_mask, "qty"].astype(float) * sign)
-        # qty_events have no monetary value; coerce nan/'-' to 0 for clean CSV.
+        # No cash moves on a qty_event, so amount is 0. `price` is the cost each
+        # share brings in: B3's custo atribuído on a bonificação, nothing on the
+        # rest — a split, grupamento or fraction never changes total cost, and a
+        # price B3 happened to print there must not be read as one.
         cash_rows.loc[qty_mask, "amount"] = 0.0
+        bonus = cash_rows["mov_type"].str.startswith("Bonificação")
+        cash_rows.loc[qty_mask & ~bonus, "price"] = np.nan
 
-    cash_events = cash_rows[EVENT_COLS]
-
-    return trades, cash_events
+    review = b3_rules.review_rows(raw, set(MOV_CATEGORY))
+    return trades, cash_rows[EVENT_COLS], review
 
 
 def detect_file_type(path: Path) -> str:
@@ -509,153 +535,8 @@ def normalize(df: pd.DataFrame) -> pd.DataFrame:
     return out.dropna(subset=["date", "ticker", "qty", "price"])
 
 
-def _resolve_exercise_underlying(
-    exercises: pd.DataFrame,
-    mov_settlements: pd.DataFrame,
-    window_days: int = 5,
-) -> dict:
-    """Match each Negociação exercise row to its Movimentação settlement row.
-
-    Negociação records option exercises under the option-series code
-    (e.g. 'B3SAW130E'); the underlying ticker only appears in the matching
-    Movimentação 'Transferência - Liquidação' row, dated T+2-ish. We join by
-    qty+price within a small date window and return {exercise_idx: underlying}.
-    """
-    if exercises.empty or mov_settlements.empty:
-        return {}
-
-    s = mov_settlements.copy()
-    s["date"] = pd.to_datetime(s["date"])
-    s = s.dropna(subset=["date", "ticker", "qty", "price"])
-
-    resolved: dict = {}
-    used: set = set()
-    for ex_idx, ex in exercises.iterrows():
-        ex_date = pd.to_datetime(ex["date"])
-        ex_qty = float(ex["qty"])
-        ex_price = float(ex["price"])
-        day_delta = (s["date"] - ex_date).dt.days
-        mask = (
-            (~s.index.isin(used))
-            & day_delta.between(0, window_days)
-            & ((s["qty"] - ex_qty).abs() < 1e-3)
-            & ((s["price"] - ex_price).abs() < 1e-4)
-        )
-        candidates = s[mask]
-        if candidates.empty:
-            continue
-        best = candidates.sort_values("date").iloc[0]
-        resolved[ex_idx] = best["ticker"]
-        used.add(best.name)
-    return resolved
-
-
-EMPTY_OPT_STATS = {
-    "exercises_resolved": 0,
-    "exercises_unresolved": 0,
-    "option_trades_processed": 0,
-    "net_premium_brl": 0.0,
-}
-
-
-def process_option_activity(
-    neg_trades: pd.DataFrame,
-    mov_settlements: pd.DataFrame,
-) -> tuple[pd.DataFrame, pd.DataFrame, list, dict]:
-    """Split Negociação trades into equity-only trades + premium cash events.
-
-    Three input row classes are handled:
-      • Mercado contains 'Opção' AND not 'Exercício'  → option premium trades.
-        Each becomes a cash_events row with event_category='premium', ticker
-        set to the 4-letter underlying root. Sells (+cash), buys (-cash).
-      • Mercado starts with 'Exercício'  → assignment/exercise of an option.
-        The row is rewritten as a trade on the resolved underlying ticker
-        (Mercado à Vista), so it flows into derive_positions like a normal buy
-        or sell. Unresolved exercises (no Movimentação match found) are
-        dropped and reported back to the caller.
-      • everything else → returned unchanged.
-
-    Returns (clean_trades, premium_events, unresolved_details, stats).
-    """
-    if neg_trades.empty:
-        return neg_trades, pd.DataFrame(), [], dict(EMPTY_OPT_STATS)
-
-    market = neg_trades["market"].fillna("").astype(str)
-    is_exercise = market.str.startswith("Exercício")
-    is_premium = market.str.contains("Opção") & ~is_exercise
-
-    non_opt = neg_trades[~(is_exercise | is_premium)].copy()
-    exercises = neg_trades[is_exercise].copy()
-    premiums = neg_trades[is_premium].copy()
-
-    # Resolve each exercise's underlying ticker via the Mov settlement row.
-    resolved = _resolve_exercise_underlying(exercises, mov_settlements)
-    rewritten_rows = []
-    unresolved_details: list = []
-    for ex_idx, ex in exercises.iterrows():
-        underlying = resolved.get(ex_idx)
-        if underlying is None:
-            unresolved_details.append({
-                "date": str(pd.to_datetime(ex["date"]).date()),
-                "code": ex["ticker"],
-                "side": ex["side"],
-                "qty": float(ex["qty"]),
-                "price": float(ex["price"]),
-                "market": ex["market"],
-            })
-            continue
-        new = ex.copy()
-        new["ticker"] = underlying
-        new["market"] = "Mercado à Vista"
-        new["maturity"] = "-"
-        rewritten_rows.append(new)
-    rewritten = (
-        pd.DataFrame(rewritten_rows) if rewritten_rows else exercises.iloc[0:0]
-    )
-    clean_trades = (
-        pd.concat([non_opt, rewritten], ignore_index=True)
-        if not rewritten.empty else non_opt
-    )
-
-    # Build premium cash_events: one row per option open/close trade.
-    # Ticker is the option-series code (e.g. 'CMIGI18'), not the underlying
-    # root: distinct contracts on the same underlying often share date+qty+
-    # amount and would collide under cash_events' dedup key. The series code
-    # is unique per contract so true duplicates still collapse and real
-    # distinct trades survive. Grep by 'startswith(\"CMIG\")' to roll up.
-    premium_events = pd.DataFrame()
-    if not premiums.empty:
-        signed_amount = premiums["amount"].astype(float) * np.where(
-            premiums["side"].astype(str).str.lower().str.startswith("venda"), 1.0, -1.0)
-        premium_events = pd.DataFrame({
-            "date":            premiums["date"].values,
-            "ticker":          premiums["ticker"].astype(str).values,
-            "event_type":      premiums["market"].values,
-            "event_category":  "premium",
-            "is_amortization": False,
-            "qty":             premiums.get("signed_qty",
-                                            premiums["qty"]).values,
-            "price":           premiums["price"].values,
-            "amount":          signed_amount.values,
-            "broker":          premiums["broker"].values
-                               if "broker" in premiums else "",
-            "__source_file":   premiums["__source_file"].values
-                               if "__source_file" in premiums else "",
-        })
-
-    stats = {
-        "exercises_resolved": len(resolved),
-        "exercises_unresolved": len(unresolved_details),
-        "option_trades_processed": int(len(premiums)),
-        "net_premium_brl": round(
-            float(premium_events["amount"].sum())
-            if not premium_events.empty else 0.0, 2),
-    }
-    return clean_trades, premium_events, unresolved_details, stats
-
-
 def read_overrides(
-    path: Path = OVERRIDES_CSV,
+    path: Path | None = None,  # OVERRIDES_CSV, read at call time so a test can repoint it
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Read user-maintained cost-basis overrides.
 
@@ -670,6 +551,7 @@ def read_overrides(
     the same internal schema as Negociação trades / cash_events so they
     concat cleanly with the rest of the pipeline.
     """
+    path = path or OVERRIDES_CSV
     empty_trades = pd.DataFrame(columns=TRADE_COLS)
     empty_adjusts = pd.DataFrame(columns=EVENT_COLS)
     if not path.exists():
@@ -764,7 +646,8 @@ def _position_timeline(
       kind ∈ {trade, qty_event, amort}
       sq    = signed quantity change (buys+, sells-, qty_event signed already)
       price = trade price (only used for kind=trade buys)
-      amount = cash amount (only used for kind=amort, deducted from cost)
+      amount = cost moved: deducted on kind=amort, added on kind=qty_event
+               (a bonificação's custo atribuído, qty × price; 0 otherwise)
       market = trade rows only; events leave it NaN
     """
     def canonical(tickers: pd.Series) -> pd.Series:
@@ -794,8 +677,10 @@ def _position_timeline(
             # Backwards compat: older cash_events.csv without event_category.
             qty_evs = ce.iloc[0:0]
             amort_evs = ce[ce.get("is_amortization", pd.Series(False, index=ce.index)).fillna(False)]
+        sq = qty_evs["qty"].astype(float).fillna(0.0)
+        unit = pd.to_numeric(qty_evs.get("price", 0.0), errors="coerce")
         parts += [
-            frame(qty_evs, "qty_event", sq=qty_evs["qty"].astype(float).fillna(0.0)),
+            frame(qty_evs, "qty_event", sq=sq, amount=(sq * unit).fillna(0.0)),
             frame(amort_evs, "amort", amount=amort_evs["amount"].astype(float).fillna(0.0)),
         ]
 
@@ -821,8 +706,8 @@ def derive_positions(
         the running avg. Brazilian Receita uses this same convention for IR.
       - Amortizations (Amortização / FII or CRI principal returns) reduce
         cost basis by the amount received; qty is unchanged.
-      - qty_events (Desdobro split, Bonificação bonus, Fração adjustment)
-        change qty without changing cost; avg_cost = cost / new_qty.
+      - qty_events change qty; cost moves only by a bonificação's custo
+        atribuído. avg_cost = cost / new_qty.
 
     When `consolidate=True`, fractional-market tickers (*F suffix) are merged
     with their round-lot parent before the chronological walk — they are the
@@ -861,21 +746,26 @@ def derive_positions(
                 if sq > 0:
                     cost += sq * price
                     qty += sq
+                elif qty > 0:
+                    # A sale larger than the holding: the excess has no cost
+                    # basis in this data. Clamped and flagged, as irpf_2026
+                    # clamps it — a negative position would carry a negative
+                    # cost into the next buy's preço médio.
+                    had_orphan_sell = had_orphan_sell or -sq > qty + 1e-9
+                    sq = max(sq, -qty)
+                    cost += sq * cost / qty  # sq < 0
+                    qty += sq
                 else:
-                    if qty > 0:
-                        avg = cost / qty
-                        cost += sq * avg  # sq < 0
-                        qty += sq
-                    else:
-                        had_orphan_sell = True
+                    had_orphan_sell = True
             elif kind == "qty_event":
-                # Quantity-only corporate action. Cost basis is preserved;
-                # avg_cost shifts implicitly via cost / new_qty. If we have
+                # Corporate action: qty moves, cost only by a bonificação's
+                # custo atribuído (amount); avg_cost = cost / new_qty. If we have
                 # no inventory at the time of the event, the event came in
                 # for a position that was opened/closed outside this data —
                 # treat as orphan and skip rather than going negative.
                 if qty + ev["sq"] > 1e-9:
                     qty += ev["sq"]
+                    cost += ev["amount"]
                 elif qty == 0 and ev["sq"] > 0:
                     # Bonus/split arriving without prior inventory: ignore
                     # (no cost basis to attribute it to).
@@ -904,6 +794,35 @@ def derive_positions(
     return df, incomplete
 
 
+def _concat(frames: list[pd.DataFrame], columns: list[str] | None = None) -> pd.DataFrame:
+    """pd.concat over the non-empty frames; an empty frame (with `columns`) if none."""
+    frames = [f for f in frames if not f.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=columns)
+
+
+def _warn(summary: dict) -> None:
+    """The summary's problems, on stderr, in words."""
+    warn = []
+    if summary["incomplete_history"]:
+        warn.append(f"Incomplete history for: {', '.join(summary['incomplete_history'])}. "
+                    "These tickers have sells with no matching prior buys in the loaded "
+                    "data — download an earlier-dated report to fix the cost basis.")
+    if summary["unresolved_exercises"]:
+        warn.append(f"{len(summary['unresolved_exercises'])} option exercise(s) could not "
+                    "be matched to a Movimentação settlement row — the underlying ticker "
+                    "is unknown so the shares are missing from positions. Re-download "
+                    "Movimentação covering the settlement date and re-run.")
+    if summary["trade_dates_from_settlement"]:
+        warn.append("No Negociação report: trades come from Movimentação settlements, "
+                    "dated D-2 business days back. B3 nets a day's buys and sells of a "
+                    "ticker in settlement, so day trades are invisible — upload the "
+                    "Negociação extract for the apuração.")
+    for r in summary["movimentacao_review"]:
+        warn.append(f"{r['date']} {r['ticker']} '{r['label']}' (qtd {r['qty']}): {r['reason']}")
+    for w in warn:
+        print(f"\n⚠️  {w}", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--since", type=str, help="ignore trades before YYYY-MM-DD")
@@ -927,6 +846,7 @@ def main(argv: list[str]) -> int:
     mov_trade_dfs: list[pd.DataFrame] = []
     cash_dfs: list[pd.DataFrame] = []
     posicao_dfs: list[pd.DataFrame] = []
+    review: list[dict] = []
     file_kinds: dict[str, str] = {}
     for f in files:
         kind = detect_file_type(f)
@@ -936,16 +856,18 @@ def main(argv: list[str]) -> int:
         elif kind == "posicao":
             posicao_dfs.append(read_posicao(f))
         else:
-            mt, ce = read_movimentacao(f)
+            mt, ce, rv = parse_movimentacao(f)
             mov_trade_dfs.append(mt)
             cash_dfs.append(ce)
+            review += rv
 
     # ---- Trades: prefer Negociação when available ----
     # Negociação stores trades on the trade date (the actual order execution).
     # Movimentação's "Transferência - Liquidação" rows are SETTLEMENT entries
-    # for the same trades, recorded on T+2 with rolled-up quantities. They
-    # would double-count if combined naively, so we only fall back to
-    # Movimentação trades when no Negociação file is present.
+    # for the same trades, with rolled-up quantities. They would double-count
+    # if combined naively, so we only fall back to Movimentação trades when no
+    # Negociação file is present — dated back from settlement by
+    # read_movimentacao, and blind to day trades B3 netted in settlement.
     used_movimentacao_for_trades = False
     opt_stats: dict = dict(EMPTY_OPT_STATS)
     premium_events = pd.DataFrame()
@@ -985,14 +907,10 @@ def main(argv: list[str]) -> int:
     else:
         trades = pd.DataFrame()
 
-    # Dedup within the chosen source (overlapping report ranges still produce
-    # exact duplicates that should collapse). Broker excluded so identical
-    # trades with different broker formatting still match.
+    # Overlapping report ranges deliver the same trade once per copy; one
+    # report listing two identical fills is two trades (b3_rules.drop_reexported).
     before = len(trades)
-    if not trades.empty:
-        trades = trades.drop_duplicates(
-            subset=["date", "side", "ticker", "qty", "price"]
-        )
+    trades = b3_rules.drop_reexported(trades, ["date", "side", "ticker", "qty", "price"])
     deduped = before - len(trades)
 
     # ---- User-maintained cost-basis overrides ----
@@ -1000,8 +918,16 @@ def main(argv: list[str]) -> int:
     # prices, spin-off allocations, transfers from another broker). They are
     # added AFTER dedup so they cannot collapse against any genuine trade.
     override_trades, override_adjusts = read_overrides()
-    if not override_trades.empty:
-        trades = pd.concat([trades, override_trades], ignore_index=True)
+    review = b3_rules.drop_overridden(review, _concat([override_trades, override_adjusts]))
+
+    # ---- Cash events: combine, dedup ----
+    cash_events = _concat([*cash_dfs, premium_events, override_adjusts], EVENT_COLS)
+    cash_events = b3_rules.drop_reexported(
+        cash_events, ["date", "ticker", "event_type", "amount", "qty"]).sort_values("date")
+    # Auctioned fractions become sales — derived from the deduped events, so
+    # like the overrides they join the trades after the trade dedup.
+    fraction_sales, cash_events = b3_rules.fraction_auction_sales(cash_events)
+    trades = _concat([trades, fraction_sales, override_trades])
 
     # Canonicalize renamed tickers (e.g. TRPL4 -> ISAE4) before splitting into
     # trades_for_positions and before deriving positions, so old- and new-coded
@@ -1039,19 +965,6 @@ def main(argv: list[str]) -> int:
     else:
         trades_for_positions = trades
 
-    # ---- Cash events: combine, dedup, save ----
-    cash_events = (
-        pd.concat(cash_dfs, ignore_index=True) if cash_dfs
-        else pd.DataFrame(columns=EVENT_COLS)
-    )
-    if not premium_events.empty:
-        cash_events = pd.concat([cash_events, premium_events], ignore_index=True)
-    if not override_adjusts.empty:
-        cash_events = pd.concat([cash_events, override_adjusts], ignore_index=True)
-    if not cash_events.empty:
-        cash_events = cash_events.drop_duplicates(
-            subset=["date", "ticker", "event_type", "amount", "qty"]
-        ).sort_values("date")
     cash_events = apply_ticker_renames(cash_events)
 
     # Marks from the posição reports. Kept out of trades and cash_events on
@@ -1097,6 +1010,7 @@ def main(argv: list[str]) -> int:
             {"name": f.name, "kind": file_kinds[f.name]} for f in files
         ],
         "trade_source": "movimentacao" if used_movimentacao_for_trades else "negociacao",
+        "trade_dates_from_settlement": used_movimentacao_for_trades,
         "trades_total": len(trades),
         "trades_used_for_positions": len(trades_for_positions),
         "duplicates_removed": deduped,
@@ -1108,25 +1022,12 @@ def main(argv: list[str]) -> int:
         "incomplete_history": incomplete,
         "option_activity": opt_stats,
         "unresolved_exercises": unresolved_exercises,
+        "fraction_auction_sales": len(fraction_sales),
+        "movimentacao_review": review,
         "positions": positions.to_dict(orient="records"),
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False, default=str))
-    if incomplete:
-        print(
-            f"\n⚠️  Incomplete history for: {', '.join(incomplete)}. "
-            f"These tickers have sells with no matching prior buys in the loaded data — "
-            f"download an earlier-dated report to fix the cost basis.",
-            file=sys.stderr,
-        )
-    if unresolved_exercises:
-        print(
-            f"\n⚠️  {len(unresolved_exercises)} option exercise(s) could not be "
-            f"matched to a Movimentação settlement row — the underlying ticker "
-            f"is unknown so the shares are missing from positions. "
-            f"Re-download Movimentação covering the settlement date "
-            f"(T+2 from the exercise date) and re-run.",
-            file=sys.stderr,
-        )
+    _warn(summary)
     print(
         f"\n→ Wrote {TRADES_CSV.relative_to(ROOT)} ({len(trades)} trades), "
         f"{CASH_EVENTS_CSV.relative_to(ROOT)} ({len(cash_events)} events), "

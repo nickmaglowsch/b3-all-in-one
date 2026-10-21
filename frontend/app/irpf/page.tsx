@@ -9,18 +9,22 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { IconReceipt } from "@/components/icons";
 import { IrpfReport } from "./IrpfReport";
 import { DarfLedger } from "./DarfLedger";
+import { useYearChoice, YearSelect } from "./YearSelect";
+import { anoBasePadrao } from "@/lib/years";
 
 interface IrpfResponse {
   year: number;
   markdown: string;
 }
 
-const DEFAULT_YEAR = 2025; // ano-base
-const YEARS = [2025, 2024, 2023, 2022, 2021];
-
 export default function IrpfPage() {
-  const [year, setYear] = useState(DEFAULT_YEAR);
-  const [report, setReport] = useState<IrpfResponse | null>(null);
+  // The ano-base being declared right now is last year's; the DARF ledger below
+  // has its own picker, because its natural year is the current one.
+  const [year, setChosen] = useYearChoice(anoBasePadrao);
+  const [generated, setGenerated] = useState<IrpfResponse | null>(null);
+  // A report is only shown under the year it was generated for — otherwise the
+  // picker says 2024 while the 2025 report sits below it (and gets printed).
+  const report = generated?.year === year ? generated : null;
 
   const gen = useMutation({
     mutationFn: (y: number) =>
@@ -28,32 +32,24 @@ export default function IrpfPage() {
         method: "POST",
         body: JSON.stringify({ year: y }),
       }),
-    onSuccess: (data) => setReport(data),
+    onSuccess: (data) => setGenerated(data),
   });
 
   return (
     <>
       <PageHeader eyebrow="Imposto de renda" title="IRPF">
-        <label className="sr-only" htmlFor="irpf-year">
-          Ano-base
-        </label>
-        <select
+        <YearSelect
           id="irpf-year"
+          label="Ano-base"
+          optionLabel={(y) => `Ano-base ${y}`}
           value={year}
-          onChange={(e) => setYear(Number(e.target.value))}
+          onChange={setChosen}
           disabled={gen.isPending}
-          className="rounded-md border border-hairline bg-panel px-3 py-2 text-sm font-medium text-ink disabled:opacity-60 print:hidden"
-        >
-          {YEARS.map((y) => (
-            <option key={y} value={y}>
-              Ano-base {y}
-            </option>
-          ))}
-        </select>
+        />
         <button
           type="button"
-          onClick={() => gen.mutate(year)}
-          disabled={gen.isPending}
+          onClick={() => year !== null && gen.mutate(year)}
+          disabled={gen.isPending || year === null}
           className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90 disabled:opacity-60 print:hidden"
         >
           {gen.isPending ? "Gerando…" : "Gerar relatório"}
@@ -71,7 +67,7 @@ export default function IrpfPage() {
       </p>
 
       <div className="mb-8 print:hidden">
-        <DarfLedger year={year} />
+        <DarfLedger />
       </div>
 
       {gen.isPending ? (
@@ -117,7 +113,9 @@ function ExportButtons({ report }: { report: IrpfResponse }) {
     a.href = url;
     a.download = `irpf-ano-base-${report.year}.md`;
     a.click();
-    URL.revokeObjectURL(url);
+    // Not synchronously: Safari and older Firefox start the download after
+    // click() returns, and a revoked URL cancels it (same as app/conta).
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   const cls =

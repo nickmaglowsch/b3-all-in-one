@@ -12,7 +12,6 @@ Owned by the what-if agent. Registered in main.py as `whatif_router`.
 """
 from __future__ import annotations
 
-import asyncio
 import csv
 import json
 import shutil
@@ -27,7 +26,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, specstore
+from platform_app import b3run, enginerun, specstore, subprocs
 from platform_app.db import get_async_session
 from platform_app.models import CashEvent, Position, Trade
 from platform_app.routes import (
@@ -155,8 +154,11 @@ def _run_whatif(
     b3run.workspace_root). Blocking — call via to_thread."""
     out = Path(tempfile.mkdtemp(prefix="b3whatif-", dir=b3run.workspace_root(tid)))
     try:
+        # stdin, not argv: `flows` has an entry per distinct day of the tenant's
+        # history, and a long one outgrew the 128 KB one argv element may hold.
         summary = enginerun.run_json(
-            "run_backtest_json.py", [strategy, str(out), json.dumps(config)], extra_env)
+            "run_backtest_json.py", [strategy, str(out), "-"], extra_env,
+            stdin=json.dumps(config))
         return {"summary": summary, "curve": _read_curve(out / "curves.csv")}
     finally:
         shutil.rmtree(out, ignore_errors=True)
@@ -193,13 +195,14 @@ async def create_whatif(
     start = flows_list[0]["date"]  # the date the book is first net-funded
 
     extra_env = await specstore.user_specs_env(session, tid) or None
+    await session.commit()  # no connection held across up to four engine runs
     scenarios = []
     for sid in body.strategy_ids:
         config = {"flows": flows_list, "start": start, "freq": body.freq}
         try:
-            out = await asyncio.to_thread(_run_whatif, sid, config, tid, extra_env)
+            out = await subprocs.offload(_run_whatif, sid, config, tid, extra_env)
         except RuntimeError as e:
-            raise HTTPException(500, f"whatif ({sid}) failed: {e}")
+            raise HTTPException(500, subprocs.report(f"whatif ({sid})", str(e)))
         m = out["summary"]
         aft = m.get("aftertax") or {}
         scenarios.append({

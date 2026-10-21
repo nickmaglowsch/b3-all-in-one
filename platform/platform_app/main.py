@@ -1,10 +1,13 @@
 import hashlib
 import hmac
 import json
+import math
 import time
 from urllib.parse import parse_qs, urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi_users import exceptions
@@ -62,6 +65,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(_request: Request, exc: RequestValidationError) -> JSONResponse:
+    """FastAPI's own 422, except a non-finite input is echoed back as text.
+
+    json.loads accepts NaN and Infinity, and the default 422 echoes the rejected
+    input — through a JSONResponse that refuses to encode them. So rejecting a
+    NaN (allow_inf_nan=False on every money and percentage field) was a 500.
+    """
+    def _finite(f: float) -> float | str:
+        return f if math.isfinite(f) else str(f)
+
+    return JSONResponse(status_code=422, content={
+        "detail": jsonable_encoder(exc.errors(), custom_encoder={float: _finite})})
+
 
 # ── OAuth state ↔ browser binding (login CSRF) ────────────────────────────────
 # fastapi-users signs the `state` token over an EMPTY payload, so it proves only

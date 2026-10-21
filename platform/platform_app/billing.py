@@ -53,6 +53,10 @@ SELLABLE = tuple(m for m in MODULES if m != CARTEIRA)  # carteira é o piso grá
 # Dunning: Stripe keeps a subscription usable while it retries a failed charge, and
 # cutting access on the first decline churns customers over an expired card.
 ENTITLED = {"active", "trialing", "past_due"}
+# Lifecycle order. Stripe's `created` is whole seconds, and an SCA checkout sends
+# created(incomplete) and updated(active) in the same one: a tie goes to the later stage.
+_STAGE = {s: i for i, s in enumerate(("incomplete", "incomplete_expired", "trialing",
+                                      "active", "past_due", "unpaid", "canceled"))}
 
 stripe.api_key = settings.stripe_secret_key
 
@@ -67,9 +71,7 @@ def module_for_price(price_id: str | None) -> str | None:
     """Reverse the price→module map. An unknown price (an old one, or another
     product on the same Stripe account) is worth no entitlement — None, not the
     free floor, so a cart of several items keeps the ones it does recognise."""
-    if not price_id:
-        return None
-    return next((m for m in SELLABLE if price_id == price_for(m)), None)
+    return next((m for m in SELLABLE if price_id == price_for(m)), None) if price_id else None
 
 
 def entitled(user: User) -> frozenset[str]:
@@ -137,8 +139,7 @@ async def _ensure_customer(user: User, session: AsyncSession) -> str:
     if user.stripe_customer_id:
         return user.stripe_customer_id
     customer = await stripe.Customer.create_async(
-        email=user.email, metadata={"tenant_id": str(user.id)}
-    )
+        email=user.email, metadata={"tenant_id": str(user.id)})
     user.stripe_customer_id = customer.id
     session.add(user)
     await session.commit()
@@ -178,8 +179,7 @@ def _validate_cart(modules: list[str]) -> list[str]:
     if EMPRESARIAL in modules and len(set(modules)) > 1:
         # The bundle already contains every module; billing both is billing twice.
         raise HTTPException(
-            400, f"o plano {EMPRESARIAL} já inclui todos os módulos — assine só ele."
-        )
+            400, f"o plano {EMPRESARIAL} já inclui todos os módulos — assine só ele.")
     prices = []
     for module in dict.fromkeys(modules):  # dedupe, keep the caller's order
         price = price_for(module)
@@ -294,7 +294,9 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
     if user is None:
         return  # another product on the same Stripe account — not ours to act on
     fired_at = datetime.datetime.fromtimestamp(event["created"], datetime.UTC)
-    if user.plan_event_at and fired_at < user.plan_event_at:
+    status = "canceled" if (canceled := event["type"].endswith(".deleted")) else sub.get("status")
+    if user.plan_event_at and (fired_at, _STAGE.get(status, -1)) < (
+            user.plan_event_at, _STAGE.get(user.plan_status, -1)):
         return  # out-of-order delivery: a stale event must not resurrect a dead plan
 
     sub_id = sub.get("id")
@@ -308,7 +310,6 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
         return
 
     items = sub.get("items", {}).get("data") or []
-    canceled = event["type"].endswith(".deleted")
     # `current_period_end` sits on the subscription in older API versions and on the
     # item in newer ones (2025-03+); read whichever this account's version sends.
     period_end = sub.get("current_period_end") or (
@@ -332,9 +333,8 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
         # nothing, silently. Keep the set and make noise.
         log.error(
             "assinatura %s: nenhum item bate com um STRIPE_PRICE_* conhecido; "
-            "entitlement mantido em %s", sub_id, user.modules
-        )
-    user.plan_status = "canceled" if canceled else sub.get("status")
+            "entitlement mantido em %s", sub_id, user.modules)
+    user.plan_status = status
     # Renovação só de quem tem acesso: um `updated` com status morto traz
     # `current_period_end` no futuro, e a tela leria "Renova em <data>".
     user.plan_renews_at = (

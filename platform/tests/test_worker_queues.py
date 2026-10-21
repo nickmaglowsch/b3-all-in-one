@@ -33,6 +33,9 @@ class FakeApp:
         assert "procrastinate_jobs" in sql
         return {"reg": "procrastinate_jobs" if self._schema_exists else None}
 
+    async def execute_query_all_async(self, sql: str, **_args) -> list:
+        return []  # the orphan sweep; covered against a real DB in test_worker_orphans
+
     async def apply_schema_async(self) -> None:
         self.applied += 1
 

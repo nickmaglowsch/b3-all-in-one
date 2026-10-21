@@ -137,6 +137,34 @@ test("um 401 limpa o token e devolve o usuário ao login", async () => {
   assert.equal(win.location.href, "/login");
 });
 
+// A corrida do /auth/callback: /me e /portfolios saíam sem token antes de a página
+// guardar o do Google, e o 401 deles apagava o token novo.
+test("um 401 de requisição sem token não apaga o token guardado depois", async () => {
+  const { mod, win } = await load("", "/auth/callback");
+  respond(() => {
+    mod.setToken("jwt-recem-chegado"); // o callback guarda enquanto a resposta viaja
+    return json(401, { detail: "Unauthorized" });
+  });
+  const err = await rejection(mod.api("/me"));
+  assert.equal(err.status, 401);
+  assert.equal(mod.getToken(), "jwt-recem-chegado");
+  assert.equal(win.location.href, "", "a navegação para o app não pode ser cancelada");
+});
+
+// Outra aba, aberta antes deste login, com uma requisição no ar levando o token
+// velho: o 401 dela fala do token velho, não do que acabou de ser emitido.
+test("um 401 de um token anterior não derruba a sessão nova", async () => {
+  const { mod, win } = await load();
+  mod.setToken("jwt-velho");
+  respond(() => {
+    mod.setToken("jwt-novo");
+    return json(401, { detail: "expirado" });
+  });
+  await rejection(mod.api("/dados"));
+  assert.equal(mod.getToken(), "jwt-novo");
+  assert.equal(win.location.href, "");
+});
+
 test("já estando no login, o 401 não redireciona para o próprio login", async () => {
   const { mod, win } = await load("", "/login");
   respond(() => json(401, { detail: "expirado" }));
@@ -274,13 +302,14 @@ test("o dev-login guarda o token que devolve", async () => {
   assert.equal(mod.getToken(), "jwt-dev");
 });
 
-test("o Google login manda o browser para a URL de consentimento", async () => {
+// Navegação, não fetch: o cookie posto na resposta de um fetch cross-site é de
+// terceiros, e Safari, iOS, Firefox, Brave e janela anônima o recusam.
+test("o Google login é uma navegação para a API, sem fetch nenhum", async () => {
   const { mod, win } = await load();
-  const calls = respond(() => json(200, { authorization_url: "https://accounts.google/x" }));
-  await mod.googleLogin();
-  // Sem `credentials: include` o cookie oauth_state não volta e o callback 400a.
-  assert.equal(calls[0].init.credentials, "include");
-  assert.equal(win.location.href, "https://accounts.google/x");
+  const calls = respond(ok);
+  mod.googleLogin();
+  assert.equal(calls.length, 0);
+  assert.equal(win.location.href, `${mod.API_URL}/auth/google/login`);
 });
 
 // --------------------------------------------------------------------------

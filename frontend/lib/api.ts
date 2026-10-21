@@ -173,10 +173,7 @@ export async function api<T>(
   const res = await fetch(`${API_URL}${path}`, { ...init, headers });
 
   if (res.status === 401) {
-    clearToken();
-    if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-      window.location.href = "/login";
-    }
+    onUnauthorized(token);
     throw new ApiError(401, "Sessão expirada — entre novamente.");
   }
   if (!res.ok) {
@@ -222,6 +219,22 @@ export async function api<T>(
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
+}
+
+/** A 401 speaks for the credential its request *carried*, not for whatever is in
+ *  storage by the time it arrives. Only when the two are the same token has the
+ *  session actually ended.
+ *
+ *  Without that check, a request that went out with no token (one fired while
+ *  /auth/callback was still storing the token Google had just delivered) or with
+ *  an older one (another tab, opened before this login) came back 401 and wiped
+ *  the fresh token — the login that only worked "sometimes". */
+export function onUnauthorized(sent: string | null): void {
+  if (typeof window === "undefined") return;
+  if (sent !== null && getToken() === sent) clearToken();
+  if (!getToken() && window.location.pathname !== "/login") {
+    window.location.href = "/login";
+  }
 }
 
 async function errorDetail(res: Response): Promise<unknown> {
@@ -284,24 +297,21 @@ export function refreshSession(force = false): Promise<void> {
   return refreshing;
 }
 
-// Google OAuth: ask the API for Google's consent URL, then hand the browser to
-// it. Google → API /auth/google/callback → 302 to /auth/callback?token=… (the
-// API's RedirectTransport), where the SPA stores the token.
-export async function googleLogin(): Promise<void> {
-  const res = await fetch(
-    `${API_URL}/auth/google/authorize?scopes=openid%20email%20profile`,
-    // credentials: the API answers with the oauth_state cookie that binds this
-    // browser to the state it just issued. Without this the default
-    // "same-origin" drops it (pages.dev → duckdns.org is cross-site) and the
-    // callback always 400s with INVALID_STATE_TOKEN.
-    { credentials: "include" },
-  );
-  if (!res.ok) {
-    const detail = await errorDetail(res);
-    throw new ApiError(res.status, errorMessage(detail, res), detail);
-  }
-  const { authorization_url } = (await res.json()) as { authorization_url: string };
-  window.location.href = authorization_url;
+// Google OAuth: a top-level navigation to the API, which binds the flow to this
+// browser with a cookie and 302s on to Google. Google → API
+// /auth/google/callback → 302 to /auth/callback#token=… (the API's
+// RedirectTransport), where the SPA stores the token; a failure comes back to
+// /login?erro=<code> instead (lib/loginErrors.ts).
+//
+// Never a fetch. The binding cookie set on the response to a cross-site fetch
+// (pages.dev → duckdns.org) is a third-party cookie, which Safari, every iOS
+// browser, Firefox, Brave and any Incognito window refuse to send back — so every
+// Google login in them ended on INVALID_STATE_TOKEN. Set on a navigation to the
+// API's own host, it is first-party everywhere.
+export const GOOGLE_LOGIN_URL = `${API_URL}/auth/google/login`;
+
+export function googleLogin(): void {
+  window.location.href = GOOGLE_LOGIN_URL;
 }
 
 // dev-login is public (POST, no body) and returns a JWT in development mode.

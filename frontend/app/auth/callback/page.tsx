@@ -22,10 +22,11 @@ export default function AuthCallbackPage() {
   const shown = useBrowserValue(readHashToken, undefined);
 
   // The effect reads the hash itself rather than depending on `shown`, and runs
-  // once. Storing the credential has to happen on the FIRST effect pass: the
-  // shell above this page redirects to /login whenever storage has no token, and
-  // child effects are the only thing that run before it. Waiting for a second
-  // render to observe the value would hand that race to the redirect.
+  // once, on the first effect pass. This page is a public route (lib/routes.ts)
+  // precisely so that nothing else runs first: inside the shell, the sidebar's
+  // queries fired before this effect, went out with no token, and their 401s
+  // wiped the one being stored here. Keep it that way — nothing on this page may
+  // call the API before setToken.
   useEffect(() => {
     const token = readHashToken();
     if (!token) return;

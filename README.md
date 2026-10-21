@@ -397,6 +397,18 @@ claim — when the session started — and the API refuses once that is older th
 `SESSION_MAX_AGE_S` (30 days), which is what keeps a sliding token from becoming a
 permanent one. Both halves are pinned by `platform/tests/test_session_lifetime.py`.
 
+**Google sign-in.** "Entrar com Google" is a top-level navigation to
+`GET /auth/google/login` on the API, which sets the `oauth_state` cookie *first-party*
+(`SameSite=Lax`, scoped to `/auth/google/callback`, as long-lived as the state it
+binds) and 302s to Google. It must never become a `fetch` again: a cookie set on the
+response to a cross-site fetch is third-party, and Safari, iOS, Firefox, Brave and
+Incognito refuse it, so every login there fails the state check. Every failed callback
+lands on `/login?erro=<code>` (`platform_app/oauth_login.py`, `frontend/lib/loginErrors.ts`).
+`/auth/callback` is a public route on purpose: inside the app shell, the sidebar's
+queries would go out without a token and their 401s would wipe the one being stored.
+Logout clears the browser only; a copied token stays valid until it expires (no
+server-side revocation — see `users.py`).
+
 **Deploys and the browser cache.** `frontend/public/_headers` makes every HTML document
 revalidate (`max-age=0, must-revalidate`) and lets the content-hashed `/_next/static/*`
 assets be cached forever. This is load-bearing, not tidiness: a browser reusing an HTML

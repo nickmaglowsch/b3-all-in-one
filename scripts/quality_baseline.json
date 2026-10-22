@@ -65,7 +65,6 @@
     "frontend/app/page.tsx": 977,
     "frontend/app/portfolio/IndexSection.tsx": 432,
     "frontend/app/portfolio/page.tsx": 445,
-    "frontend/app/tlh/page.tsx": 461,
     "frontend/lib/types.ts": 415,
     "platform/platform_app/models.py": 458,
     "platform/platform_app/portfolio_index.py": 547,

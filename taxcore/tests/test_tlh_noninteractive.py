@@ -138,6 +138,41 @@ def test_json_reports_why_and_the_carry_left_over():
     assert b["carry_after"] == pytest.approx(carry - b["carry_used"])
 
 
+def test_json_no_sells_harvests_against_a_gain_already_realised_this_month(tmp_path):
+    """The after-the-fact plan (the frontend's "Reduzir IR do mês"): nothing is
+    proposed, but a sale already made this month left a taxable gain — the plan
+    has to harvest against the month as it stands, not report "nothing to do"."""
+    ws = tmp_path / "ws"
+    shutil.copytree(TAXCORE / "scripts", ws / "scripts")
+    shutil.copytree(TAXCORE / "data", ws / "data")
+    # 459 PETR4 at R$ 60: ~R$ 27,5k gross (past the isenção) at roughly double
+    # the PM — a gain far beyond the AÇÃO carry this book holds.
+    with (ws / "data" / "trades.csv").open("a") as f:
+        f.write(f"{date.today().isoformat()},Venda,Mercado à Vista,-,ITAU CV S/A,"
+                "PETR4,459.0,60.0,27540.0,test.xlsx,-459.0\n")
+
+    r = run_tlh(["--json"], cwd=ws)
+    assert r.returncode == 0, r.stderr
+    result = json.loads(r.stdout)
+    assert result["sells"] == []
+
+    sit, b = result["situation"]["AÇÃO"], result["buckets"]["AÇÃO"]
+    assert sit["gross_mtd"] == pytest.approx(27_540.0)
+    assert sit["pnl_mtd"] > sit["carry"]
+    # With nothing proposed, "after" is the month as it stands.
+    assert b["gross_after"] == pytest.approx(sit["gross_mtd"])
+    assert b["pnl_after"] == pytest.approx(sit["pnl_mtd"])
+    assert b["status"] == "TLH recomendado"
+    assert b["target_loss"] == pytest.approx(-(sit["pnl_mtd"] - sit["carry"]))
+    assert b["harvest"], "expected loss-harvesting sells"
+    harvested = sum(h["realized_loss"] for h in b["harvest"])
+    assert b["final_pnl"] == pytest.approx(b["pnl_after"] + harvested)
+    assert b["final_pnl"] < b["pnl_after"]
+    assert [h["ticker"] for h in b["rebuys"]] == [h["ticker"] for h in b["harvest"]]
+    # No FII sale this month and none proposed: that bucket has nothing to plan.
+    assert "FII" not in result["buckets"]
+
+
 @pytest.mark.parametrize("spec,needle", [
     ("FAKE3:100", "positions.csv"),      # ticker not held
     ("PETR4:999999", "cotas"),            # qty > held

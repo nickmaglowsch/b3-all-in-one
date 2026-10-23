@@ -188,6 +188,71 @@ def test_fixed_weight_parks_nested_strategy_warmup_residual(monkeypatch):
     assert np.allclose(tw["CDI_ASSET"].iloc[:6], 1.0)
 
 
+def _registry_with(monkeypatch, *strategies):
+    from backtests.core import strategy_registry as sr
+    reg = sr.StrategyRegistry()
+    for s in strategies:
+        reg.register(s)
+    monkeypatch.setattr(sr, "get_registry", lambda: reg)
+
+
+@pytest.mark.parametrize("ticker_first", [False, True])
+def test_a_ticker_sleeve_adds_to_a_nested_book_holding_the_same_name(monkeypatch,
+                                                                      ticker_first):
+    # A strategy that holds IVVB11 next to an IVVB11 ticker sleeve — which is
+    # what "MomSharpe / IVVB11 / CDI" is whenever MomSharpe's liquid universe
+    # picks the ETF. The ticker's weight used to be *assigned* over the column:
+    # with the strategy listed first, its share of IVVB11 was dropped and
+    # pushed to CDI by the residual parking. Now the two add, in either order.
+    from backtests.core.strategy_base import StrategyBase
+
+    idx, shared = _blend_shared()
+    shared["ret"]["IVVB11"] = 0.0
+
+    class _HoldsIvvb(StrategyBase):
+        name, description = "_HoldsIvvb", "stub"
+        def get_parameter_specs(self): return []
+        def generate_signals(self, shared_data, params):
+            tw = pd.DataFrame(0.0, index=idx, columns=shared_data["ret"].columns)
+            tw["IVVB11"] = 0.5
+            tw["A"] = 0.5
+            return shared_data["ret"], tw
+
+    _registry_with(monkeypatch, _HoldsIvvb())
+    ivvb = pd.Series(np.linspace(100.0, 150.0, len(idx)), index=idx)
+    monkeypatch.setattr(core_data, "download_benchmark", lambda t, s, e: ivvb)
+    sleeves = [{"strategy": "_HoldsIvvb", "weight": 0.6},
+               {"ticker": "IVVB11.SA", "weight": 0.4}]
+    spec = {"name": "mix", "kind": "fixed_weight", "rebalance": "QE",
+            "sleeves": sleeves[::-1] if ticker_first else sleeves}
+    r, tw = FixedWeight(spec).generate_signals(shared, {})
+    assert np.allclose(tw["IVVB11"], 0.6 * 0.5 + 0.4)
+    assert np.allclose(r["IVVB11"].iloc[1:], ivvb.pct_change().iloc[1:])
+    assert np.allclose(tw["A"], 0.3)
+    assert np.allclose(tw.sum(axis=1), 1.0)
+
+
+def test_a_nested_portfolio_brings_its_etf_returns_with_it(monkeypatch):
+    # A user portfolio may name a built-in portfolio as a sleeve. That book's ETF
+    # columns are not in the outer return matrix; they used to be filled with a
+    # flat 0.0 — an ETF that never moved — instead of the nested run's returns.
+    idx, shared = _blend_shared()
+    divo = pd.Series(np.linspace(20.0, 60.0, len(idx)), index=idx)
+    ivvb = pd.Series(np.linspace(100.0, 150.0, len(idx)), index=idx)
+    prices = {"DIVO11.SA": divo, "IVVB11.SA": ivvb}
+    monkeypatch.setattr(core_data, "download_benchmark", lambda t, s, e: prices[t])
+    _registry_with(monkeypatch, FixedWeight({**_spec("divo_cdi_ivvb.yaml"),
+                                             "name": "inner thirds"}))
+
+    spec = {"name": "outer", "kind": "fixed_weight", "rebalance": "QE",
+            "sleeves": [{"strategy": "inner thirds", "weight": 0.5},
+                        {"asset": "CDI", "weight": 0.5}]}
+    r, tw = FixedWeight(spec).generate_signals(shared, {})
+    assert np.allclose(r["DIVO11"].iloc[1:], divo.pct_change().iloc[1:])
+    assert np.allclose(tw["DIVO11"], 0.5 / 3)
+    assert np.allclose(tw["CDI_ASSET"], 0.5 + 0.5 / 3)
+
+
 def test_fixed_weight_all_or_nothing_holds_cdi_until_all_live(monkeypatch):
     idx, shared = _blend_shared()
     bova = pd.Series(np.linspace(50.0, 80.0, len(idx)), index=idx)

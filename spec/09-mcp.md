@@ -61,6 +61,11 @@ AI client ──POST /mcp (JSON-RPC, Bearer qtx_mcp_…)──▶ mcp_server
 - `engine/scripts/validate_spec.py` now rejects unknown DSL functions and
   malformed regime overlays (inputs without `flag`, rules naming undeclared
   inputs) at save time instead of at run time.
+- Portfolio sleeves take `{ticker, target_pct}` beside `{strategy_ref,
+  target_pct}` (spec/06): asked for by an AI using this server, which could not
+  build the built-ins' own ETF/CDI blends. `validate_strategy` refuses a ticker
+  the B3 plane never priced, by name, and warns with the first price date of a
+  late listing; the guide's section 2 and the create/validate descriptions say so.
 
 ## Not done (yet)
 

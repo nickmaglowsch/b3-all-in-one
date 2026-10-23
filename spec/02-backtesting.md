@@ -35,7 +35,8 @@ as-is; this spec covers how it's exposed to tenants.
   cached in parquet per worker — runs share it.
 
 ### Results
-- Per run: pre/after-tax equity curves, tax_paid, loss_carryforward, turnover, drawdown
+- Per run: pre/after-tax equity curves, tax_paid, loss_carryforward (on B3 the sum of
+  the operações comuns and FII pools), turnover, drawdown
   series, target weights over time; metrics (Ann Return/Vol, Sharpe, Max DD, Calmar) vs
   IBOV and CDI. Rendered as the existing Plotly tear sheets, ported to the web UI.
 - Run history per tenant with side-by-side comparison (metrics table across runs).
@@ -65,9 +66,9 @@ their own tickers).
 
 Still open: the loop's engine extensions — dated cash flows, seeded initial state, and the
 asset-class tax model (see `05-strategy-linked-portfolio.md` "Engine work" and
-`04-roadmap.md`). The tax-model item also fixes a known inaccuracy in the bench itself:
-isenção is applied per rebalance row instead of per calendar month, and FII uses a single
-flat rate.
+`04-roadmap.md`). The tax-model item has shipped for the bench itself: isenção per
+calendar month, and per-class lines on B3 (ETF/BDR sales get no isenção, FII pays 20% in
+its own pool) — see `04-roadmap.md` item 5.
 
 The engine test suite is the regression net for all of it — it covers simulation, the DSL,
 the config engines and corporate actions. Keep it green.

@@ -320,3 +320,49 @@ def test_contribution_defers_over_hold_rows():
     res = _run(tw, FLAT, contribution=1_000.0)
     assert res["contributions"].tolist() == [0.0, 1_000.0, 0.0, 2_000.0, 1_000.0]
     assert res["aftertax_values"].iloc[-1] == pytest.approx(100.0 + 4 * 1_000.0)
+
+
+# ── Determinism ───────────────────────────────────────────────────────────────
+
+def test_compute_trades_walks_the_held_book_then_the_new_targets_in_order():
+    positions = {"Z": {"cost_basis": 1.0, "current_value": 50.0},
+                 "M": {"cost_basis": 1.0, "current_value": 50.0}}
+    tw = pd.Series({"A": 0.25, "M": 0.25, "Q": 0.5, "Z": 0.0})
+    sells, buys = compute_trades(positions, tw, 100.0)
+    assert list(sells) == ["Z", "M"]
+    assert list(buys) == ["A", "Q"]
+
+
+_HASH_RUN = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import numpy as np, pandas as pd
+from backtests.core.simulation import run_simulation
+rng = np.random.default_rng(3)
+idx = pd.date_range("2015-01-31", periods=60, freq="ME")
+cols = [f"T{i:02d}USDT" for i in range(12)]
+r = pd.DataFrame(rng.normal(0.01, 0.1, (60, 12)), index=idx, columns=cols)
+w = pd.DataFrame(rng.uniform(0, 1, (60, 12)), index=idx, columns=cols)
+w = w.where(rng.uniform(size=w.shape) > 0.4, 0.0)
+w = w.div(w.sum(axis=1), axis=0).fillna(0.0)
+res = run_simulation(r, w, initial_capital=100_000.0, slippage=0.001)
+print(repr(res["pretax_values"].tolist()), repr(res["aftertax_values"].tolist()))
+"""
+
+
+def test_a_run_does_not_depend_on_the_string_hash_seed():
+    """The rebalance used to walk a set of tickers, so the order positions were
+    sold, bought and summed — and with it a run's last bits — followed
+    PYTHONHASHSEED: two runs of one book could differ by ~1e-11 BRL, which is
+    how test_signal_warmup's exact full-history check failed in CI only."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = str(Path(__file__).resolve().parents[1])
+    outs = {subprocess.run([sys.executable, "-c", _HASH_RUN, root], capture_output=True,
+                           text=True, check=True,
+                           env={**os.environ, "PYTHONHASHSEED": str(seed)}).stdout
+            for seed in range(6)}
+    assert len(outs) == 1

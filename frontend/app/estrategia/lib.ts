@@ -6,7 +6,7 @@ import type { Sleeve, SleevesSaveResult, Target } from "@/lib/types";
 // Reused across the two feature dirs I own — same queryKey dedupes the fetch.
 export { useStrategies, useCreateBacktest } from "../bench/lib";
 
-export const CASH_REF = "CASH_CDI";
+export { CASH_REF } from "@/lib/portfolioSleeves";
 
 export function useSleeves() {
   return useQuery({

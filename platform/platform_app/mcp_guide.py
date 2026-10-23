@@ -3,7 +3,7 @@
 The engine's own reference is engine/docs/config_strategies.md, written for
 people editing YAML in the repo. This is the same language from the other side
 of the API: the request shape create_strategy accepts (which is not the YAML
-shape — portfolios take strategy_ref/target_pct, not raw sleeves), the limits
+shape — portfolios take strategy_ref|ticker + target_pct, not raw sleeves), the limits
 the platform enforces, and how to read a result without fooling yourself.
 Keep it in step with strategy_specs.py when that model grows a field.
 """
@@ -26,7 +26,8 @@ GUIDE = """\
 Strategies are **data, not code**: a JSON spec over a safe expression language.
 Two kinds exist. The engine builds target weights; a shared simulator does the
 rebalancing, slippage and the Brazilian tax engine (15%, R$20k monthly isenção
-for B3 stocks, loss carry-forward), so every result has a pre-tax and an
+for B3 stocks only — not ETFs or BDRs —, FIIs 20%, loss carry-forward), so every
+result has a pre-tax and an
 after-tax curve. The after-tax one is the truth.
 
 ## 1. Rank-and-hold (`kind: "rank_and_hold"`)
@@ -128,16 +129,53 @@ previous period (no look-ahead); `offset: 0` the current row.
 
 ## 2. Portfolio (`kind: "fixed_weight"`)
 
-A constant-weight blend of strategies plus cash, rebalanced on its own grid.
-Sleeves name built-ins, the user's rank_and_hold strategies, or `CASH_CDI`;
-percentages must sum to 100. A portfolio cannot contain another user portfolio.
+A constant-weight blend, rebalanced on its own grid — the same engine the
+built-in blends ("DIVO11 / CDI / IVVB11 (thirds)") run on. Each sleeve is
+exactly one of:
+
+- `{"strategy_ref": "<name>", "target_pct": N}` — a built-in, one of the user's
+  rank_and_hold strategies, or `CASH_CDI` (cash earning the CDI). A portfolio
+  cannot contain another user portfolio.
+- `{"ticker": "<B3 code>", "target_pct": N}` — one listed instrument held
+  directly, e.g. `IVVB11.SA` (S&P 500 in BRL), `DIVO11.SA`, `BOVA11.SA`
+  (Ibovespa); `.SA` is optional. Indices (`^BVSP`) are not tradable — use the ETF.
+
+Kinds mix freely; percentages must sum to 100 and a ticker appears in one
+sleeve only.
+
+```json
+{"kind": "fixed_weight", "name": "Example 40/30/30", "rebalance": "QE",
+ "sleeves": [{"ticker": "IVVB11.SA", "target_pct": 40},
+             {"ticker": "DIVO11.SA", "target_pct": 30},
+             {"strategy_ref": "CASH_CDI", "target_pct": 30}]}
+```
 
 ```json
 {"kind": "fixed_weight", "name": "AI Blend", "rebalance": "QE",
  "sleeves": [{"strategy_ref": "MomSharpe", "target_pct": 40},
              {"strategy_ref": "AI Momentum 6m Top20", "target_pct": 40},
-             {"strategy_ref": "CASH_CDI", "target_pct": 20}]}
+             {"ticker": "IVVB11.SA", "target_pct": 20}]}
 ```
+
+- validate_strategy refuses a ticker the B3 price plane has never priced, by
+  name, and says why for an index or a renda-fixa ETF (LFTB11, IMAB11: not in
+  the price history the bench reads). One that lists after the history starts
+  (IVVB11: 2014) comes back as a warning with its first price date: until then
+  its weight is held in CDI, as the built-ins do — so a backtest from before
+  that date is partly a cash one. One that stopped trading comes back with its
+  last date: after it the sleeve sits at its last price, earning 0%.
+- Tax: the same engine as the built-in blends, per asset class as the IRPF
+  apurates it. Ações (and units) pay 15% with the R$20k monthly isenção, tested
+  on the month's ações sales only; ETFs (IVVB11, BOVA11, DIVO11…) and BDRs pay
+  15% with no isenção at all; both share one loss carry. FIIs pay 20% in a
+  carry of their own; a `*11` the bench does not know as an ETF or unit is
+  presumed a FII (so a rank strategy holding old units pays 20% on them). Cash
+  (CASH_CDI, and where a regime parks) is booked like ações, isenção included,
+  and so is the IBOV column a regime overlay can hold. `loss_carryforward` in a
+  run's curves is the two carries summed.
+- A portfolio with ticker sleeves backtests and lists like any other, but the
+  live rebalance target ("Ativar" in /estrategia) only takes strategies and
+  CASH_CDI, so it cannot be activated there.
 
 ## 3. Running backtests
 

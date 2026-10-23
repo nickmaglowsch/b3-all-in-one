@@ -16,6 +16,7 @@ import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
+import { fromSelect, rowToSleeve, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -34,6 +35,7 @@ import {
   type TradeLine,
 } from "./lib";
 import { SettingsPanel } from "./Settings";
+import { TickerOptions } from "./TickerOptions";
 
 const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
 
@@ -101,25 +103,6 @@ export default function EstrategiaPage() {
 }
 
 // ── sleeves editor ──────────────────────────────────────────────────────────
-
-interface Row {
-  strategy_ref: string;
-  target_pct: string; // kept as string so the input can be cleared mid-edit
-}
-
-// Engine fixed_weight spec → the editor's rows. Readback caveat (spec/06): sleeves
-// are {strategy, weight(fraction)} or {asset:"CDI", weight}; map back to
-// {strategy_ref, target_pct(%)} and asset:"CDI" → CASH_CDI.
-function specToRows(spec: Record<string, unknown>): Row[] {
-  const sleeves = Array.isArray(spec.sleeves)
-    ? (spec.sleeves as Record<string, unknown>[])
-    : [];
-  return sleeves.map((s) => ({
-    strategy_ref:
-      s.asset === "CDI" ? CASH_REF : String(s.strategy ?? s.ticker ?? ""),
-    target_pct: String(Math.round(Number(s.weight ?? 0) * 1e6) / 1e4),
-  }));
-}
 
 function SleevesEditor() {
   const sleeves = useSleeves();
@@ -201,9 +184,9 @@ function SleevesEditor() {
   );
 
   const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
-  const refs = rows.map((r) => r.strategy_ref);
+  const refs = rows.map(selectValue); // a ticker row is keyed by its ticker
   const hasDup = new Set(refs).size !== refs.length;
-  const hasBlank = rows.some((r) => !r.strategy_ref || r.target_pct.trim() === "");
+  const hasBlank = rows.some((r) => !selectValue(r) || r.target_pct.trim() === "");
   const sumOk = Math.abs(sum - 100) < 0.01;
   const sleevesValid = rows.length > 0 && sumOk && !hasDup && !hasBlank;
   // While a saved carteira is in the editor its rows are not the live target, so
@@ -251,10 +234,7 @@ function SleevesEditor() {
           kind: "fixed_weight",
           name: name.trim(),
           description: desc.trim() || undefined,
-          sleeves: rows.map((r) => ({
-            strategy_ref: r.strategy_ref,
-            target_pct: parseFloat(r.target_pct),
-          })),
+          sleeves: rows.map(rowToSleeve),
         },
       },
       { onSuccess: endEdit },
@@ -294,14 +274,15 @@ function SleevesEditor() {
           {rows.map((r, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
-                value={r.strategy_ref}
-                onChange={(e) => setField(i, { strategy_ref: e.target.value })}
+                value={selectValue(r)}
+                onChange={(e) => setField(i, fromSelect(e.target))}
                 className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink"
               >
                 <option value="">selecione…</option>
                 <option value={CASH_REF}>Caixa (CDI)</option>
                 {optGroup("Estratégias da plataforma", builtinRefs)}
                 {userRefs.length > 0 && optGroup("Minhas estratégias de regra", userRefs)}
+                <TickerOptions rows={rows} editId={editId} />
               </select>
               <div className="flex items-center gap-1">
                 <input

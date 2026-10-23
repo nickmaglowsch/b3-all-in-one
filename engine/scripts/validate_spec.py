@@ -52,18 +52,55 @@ def _expr_names(expr: str) -> set[str]:
     return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} - called
 
 
+def _check_expr(expr: str, errors: list[str]) -> bool:
+    """Syntax, then the functions it calls — a closed set, so an unknown one is
+    a typo caught here rather than a backtest that fails minutes later. Returns
+    whether the expression reads CVM fundamentals (f_* keys)."""
+    try:
+        signal_dsl.check_syntax(expr)
+    except ValueError as e:
+        errors.append(str(e))
+        return False
+    tree = ast.parse(expr, mode="eval")
+    called = {n.func.id for n in ast.walk(tree)
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    if unknown := sorted(called - signal_dsl.FUNCTION_NAMES):
+        errors.append(f"signal expr: unknown function(s) {unknown}; available: "
+                      f"{sorted(signal_dsl.FUNCTION_NAMES)}")
+    return any(n.startswith("f_") for n in _expr_names(expr))
+
+
+# What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
+_RULE_KEYS = {"top_pct", "park", "default", "min_true"}
+
+
+def _validate_regime(regime, errors: list[str]) -> None:
+    """The overlay's structure: every input reads a flag, every rule conditions
+    only on inputs it declares. A rule keyed on a misspelt input otherwise never
+    matches and the book silently parks in CDI for the whole run."""
+    if not regime:
+        return
+    inputs = regime.get("inputs", {}) if isinstance(regime, dict) else None
+    if not isinstance(inputs, dict) or not isinstance(regime.get("rules"), list):
+        errors.append("regime: needs an `inputs` mapping and a `rules` list")
+        return
+    for name, cfg in inputs.items():
+        if not isinstance(cfg, dict) or not isinstance(cfg.get("flag"), str):
+            errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
+                          "series (e.g. bench_above)")
+    for rule in regime["rules"]:
+        extra = set(rule) - set(inputs) - _RULE_KEYS if isinstance(rule, dict) else {"?"}
+        if extra:
+            errors.append(f"regime rule {rule!r}: {sorted(extra)} is not a declared input")
+
+
 def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
     """Validate a rank_and_hold spec's signal block, appending any errors.
     Returns whether the signal references CVM fundamentals (f_* keys)."""
     sig = spec.get("signal") or {}
 
     if "expr" in sig:
-        expr = sig["expr"]
-        try:
-            signal_dsl.check_syntax(expr)
-        except ValueError as e:
-            errors.append(str(e))
-        return any(n.startswith("f_") for n in _expr_names(expr))
+        return _check_expr(sig["expr"], errors)
 
     ref = sig.get("factor")
     if isinstance(ref, str) and ref.startswith("store:"):
@@ -104,6 +141,7 @@ def validate(spec: dict) -> dict:
             errors.append(f"invalid spec: {e}")
         if kind == "rank_and_hold":
             needs_funds = _validate_rank_signal(spec, errors)
+            _validate_regime(spec.get("regime"), errors)
 
     needs_funds = needs_funds or bool(spec.get("needs_fundamentals"))
 

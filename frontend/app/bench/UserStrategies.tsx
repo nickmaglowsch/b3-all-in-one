@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StrategyForm } from "./StrategyForm";
-import { RuleBadge } from "./StrategyGallery";
+import { OriginBadge, RuleBadge } from "./StrategyGallery";
 
 export function UserStrategies({
   onBacktest,
@@ -118,6 +118,7 @@ export function UserStrategies({
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold text-ink">{s.name}</span>
                     <RuleBadge />
+                    <OriginBadge origin={s.origin} />
                   </div>
                   {typeof s.spec.description === "string" && (
                     <p className="mt-0.5 line-clamp-2 text-xs leading-snug text-muted">

@@ -8,16 +8,18 @@ Split out of routes.py, which only needs the compiled dict.
 """
 from __future__ import annotations
 
+import json
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _REBALANCE = Literal["ME", "QE", "W-FRI"]
+_MARKET = Literal["B3", "US", "CRYPTO"]
 
 # The compiled spec reaches validate_spec.py as one argv element, which the kernel
 # caps at 128 KB: past that the exec fails with E2BIG and the save is a 500. These
 # bounds keep any spec far inside it, and are generous for a field a person types.
-_NAME_MAX, _TEXT_MAX, _SLEEVES_MAX = 120, 2000, 50
+_NAME_MAX, _TEXT_MAX, _SLEEVES_MAX, _REGIME_MAX = 120, 2000, 50, 16 * 1024
 
 
 class _Finite(BaseModel):
@@ -51,7 +53,9 @@ class _RankSelection(_Finite):
     top_pct: float | None = Field(default=None, gt=0, le=1)
     top_n: int | None = Field(default=None, ge=1)
     min_names: int = Field(default=1, ge=1)
+    min_hold: int | None = Field(default=None, ge=1)
     dedup_roots: bool = False
+    sticky: bool | None = None
 
     @model_validator(mode="after")
     def _one_cut(self):
@@ -67,10 +71,27 @@ class RankStrategyIn(_Finite):
     rebalance: _REBALANCE = "ME"
     needs_fundamentals: bool = False
     warmup_pad: int | None = Field(default=None, ge=0)
-    weighting: Literal["equal", "market_cap"] = "equal"
+    weighting: Literal["equal", "adtv", "market_cap"] = "equal"
+    # None = B3. Unknown planes are refused here, never silently run as B3.
+    market: _MARKET | None = None
     universe: _RankUniverse = Field(default_factory=_RankUniverse)
     signal: _RankSignal
     selection: _RankSelection
+    # The macro overlay ({inputs, rules, ...}, docs/config_strategies.md). Shape is
+    # the engine's to judge; only its size is ours. It used to be absent here, so
+    # pydantic dropped the bench form's regime on every save without a word.
+    regime: dict | None = None
+
+    @field_validator("regime")
+    @classmethod
+    def _regime_shape(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        if not isinstance(v.get("rules"), list) or not isinstance(v.get("inputs", {}), dict):
+            raise ValueError("regime needs a `rules` list (and an `inputs` mapping)")
+        if len(json.dumps(v, allow_nan=False)) > _REGIME_MAX:  # ValueError on NaN too
+            raise ValueError("regime too large")
+        return v
 
 
 class PortfolioSleeveIn(_Finite):
@@ -106,6 +127,10 @@ def _compile_rank(m: RankStrategyIn) -> dict:
     }
     if m.needs_fundamentals:
         spec["needs_fundamentals"] = True
+    if m.market:
+        spec["market"] = m.market
+    if m.regime:
+        spec["regime"] = m.regime
     if m.warmup_pad is not None:
         spec["warmup_pad"] = m.warmup_pad
     return spec

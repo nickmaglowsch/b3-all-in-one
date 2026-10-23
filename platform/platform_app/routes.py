@@ -1469,7 +1469,7 @@ async def _compile_and_validate(
 def _user_strategy_dict(r: UserStrategy) -> dict:
     return {
         "id": str(r.id), "name": r.name, "kind": r.kind, "spec": r.spec,
-        "source": "user",
+        "source": "user", "origin": r.origin,  # "mcp": saved by an AI (spec/09)
         "created_at": r.created_at.isoformat() if r.created_at else None,
         "updated_at": r.updated_at.isoformat() if r.updated_at else None,
     }

@@ -32,6 +32,20 @@ export function RuleBadge() {
   );
 }
 
+export function OriginBadge({ origin }: { origin: string | null }) {
+  // Saved by an AI over /mcp (spec/09) — the one thing a list of the user's own
+  // strategies cannot otherwise tell them: which ones they did not write.
+  if (origin !== "mcp") return null;
+  return (
+    <span
+      className={`${badgeCls} border-navy/25 bg-navy/[0.06] text-navy`}
+      title="Criada por uma IA via MCP"
+    >
+      IA
+    </span>
+  );
+}
+
 export function UserBadge() {
   // Distinguishes this tenant's own strategies from the built-in gallery —
   // ownership is the one distinction worth the interface accent.

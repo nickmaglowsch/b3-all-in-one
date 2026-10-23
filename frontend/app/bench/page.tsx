@@ -12,6 +12,7 @@ import { RunsList } from "./RunsList";
 import { RunsPurge } from "./RunsPurge";
 import { ComparePanel } from "./ComparePanel";
 import { UserStrategies } from "./UserStrategies";
+import { McpConnect } from "./McpConnect";
 import { useBacktests, useStrategies } from "./lib";
 
 export default function BenchPage() {
@@ -84,6 +85,10 @@ export default function BenchPage() {
           cloneFrom={cloneFrom}
           onConsumeClone={() => setCloneFrom(null)}
         />
+      </div>
+
+      <div className="mt-4">
+        <McpConnect />
       </div>
 
       <div className="mt-4">

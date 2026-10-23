@@ -264,14 +264,14 @@ export interface SignalDef {
   [param: string]: unknown; // default params (lookback, …)
 }
 
-// GET /strategies/user — the tenant's rows, spec in the engine schema verbatim.
-// `spec` is loosely typed here; each builder maps it to/from its own form shape.
+// GET /strategies/user — the tenant's rows; `spec` is the engine schema, loosely typed.
 export interface UserStrategy {
   id: string;
   name: string;
   kind: StrategyKind;
   spec: Record<string, unknown>;
   source: "user";
+  origin: "mcp" | null; // "mcp" = saved by an AI over /mcp (spec/09)
   created_at: string | null;
   updated_at: string | null;
 }

@@ -21,6 +21,7 @@ had.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sqlite3
 import subprocess
@@ -59,6 +60,15 @@ BLEND = {
                 {"ticker": "IVVB11.SA", "weight": 0.4},
                 {"asset": "CDI", "weight": 0.2}],
 }
+# Momentum that drops a name after a month worse than -20%. The crash empties
+# the universe, so the rows after it are "hold" rows (fewer than min_names).
+THIN = {**MOM, "name": "ThinMom",
+        "signal": {"expr": "where(roll_sum(shift(log_ret, 1), lookback), "
+                           "shift(ret, 1) > -0.2)", "lookback": 12}}
+# A bundle key inside a window: mf_composite is 13 rows of warm-up of its own
+# before the 12-row mean even starts.
+SMOOTH = {**MOM, "name": "SmoothMF", "warmup_pad": 1,
+          "signal": {"expr": "roll_mean(mf_composite, 12)", "apply_glitch": False}}
 
 
 def _prices(seed: int, perturb_after: str | None = None) -> pd.DataFrame:
@@ -103,6 +113,8 @@ def world(tmp_path_factory):
     specs.mkdir()
     (specs / "warm_mom.yaml").write_text(yaml.safe_dump(MOM))
     (specs / "warm_blend.yaml").write_text(yaml.safe_dump(BLEND))
+    (specs / "thin_mom.yaml").write_text(yaml.safe_dump(THIN))
+    (specs / "smooth_mf.yaml").write_text(yaml.safe_dump(SMOOTH))
     plane = _plane(root / "plane.sqlite", _prices(5))
     return {"root": root, "specs": str(specs), "plane": plane, "runs": {}}
 
@@ -272,6 +284,10 @@ def test_the_pre_roll_is_sized_from_the_spec(monkeypatch):
     code = next(n for n in sorted(get_registry().names())
                 if not isinstance(get_registry().get(n), (RankAndHold, FixedWeight)))
     assert _months(code, "ME") == warmup.CODE_MONTHS + warmup.MARGIN_MONTHS
+    # ...stretched by a look-back parameter on a coarse grid: QMV skips
+    # lookback + 2 periods, which at QE is past the floor.
+    assert _months("QMV", "QE") == 14 * 3 + 3
+    assert _months("QMV", "QE", lookback=36) == 38 * 3 + 3
 
 
 def test_expression_windows_count_in_their_own_units(monkeypatch):
@@ -281,14 +297,20 @@ def test_expression_windows_count_in_their_own_units(monkeypatch):
         spec = {**MOM, "signal": {"expr": expr, **sig}, "warmup_pad": 0}
         return warmup.months_for(RankAndHold(spec), {}, freq)
 
-    # A grid window past the spec's lookback: four years of months.
-    assert months("-roll_std(ret, 48)") == 51
-    # Windows nest by adding: 36 + 12 + 1 rows.
-    assert months("roll_mean(roll_sum(shift(log_ret, 1), 12), 36)") == 52
-    # Inside at_rebalance a window is sessions: 252 is a year, under the floor.
-    assert months("-at_rebalance(roll_std(pct_change(adj_close), 252))") == 16
+    # Rows: what `ret` consumes (1) + the window's (47) + the i-1 read (1).
+    assert months("-roll_std(ret, 48)") == 49 + 3
+    # Windows nest by adding: 1 + 1 + 11 + 35 + 1 rows.
+    assert months("roll_mean(roll_sum(shift(log_ret, 1), 12), 36)") == 49 + 3
+    # Inside at_rebalance a window is sessions: 252 is a year, plus the i-1 row.
+    assert months("-at_rebalance(roll_std(pct_change(adj_close), 252))") == 13 + 3
     # A scalar the expression reads, resolved like the run resolves it.
-    assert months("roll_sum(ret, lookback * 4)", lookback=12) == 51
+    assert months("roll_sum(ret, lookback * 4)", lookback=12) == 49 + 3
+    # A bundle key costs its own warm-up: mf_composite is 13 rows before the
+    # mean starts, dist_ma200 200 sessions — whether inside a window or bare.
+    assert months("roll_mean(mf_composite, 12)") == 13 + 11 + 1 + 3
+    assert months("roll_mean(dist_ma200, 12)") == math.ceil(1 + 200 / 21 + 11 + 1) + 3
+    bare = {**MOM, "signal": {"factor": "mf_composite"}, "warmup_pad": 0}
+    assert warmup.months_for(RankAndHold(bare), {}, "ME") == 13 + 1 + 3
     # Bounded, whatever the expression asks for.
     assert months("roll_sum(ret, 600)") == warmup.MAX_MONTHS
 
@@ -299,3 +321,73 @@ def test_the_env_knob_overrides_every_strategy(monkeypatch):
     assert warmup.load_start("2019-01-01", 0) == "2019-01-01"
     monkeypatch.setenv("ENGINE_WARMUP_MONTHS", "24")
     assert _months("MomSharpe / IVVB11 / CDI (40/40/20)", "QE") == 24
+    monkeypatch.setenv("ENGINE_WARMUP_MONTHS", "two years")
+    with pytest.raises(ValueError, match="ENGINE_WARMUP_MONTHS must be a whole number"):
+        _months("MomSharpe", "ME")
+
+
+# ── Review regressions ────────────────────────────────────────────────────────
+
+def test_a_hold_row_on_the_first_rebalance_keeps_the_book_held_into_it(world):
+    """The crash empties ThinMom's universe, so its rows after it are "hold"
+    rows. A window opening on one used to start in cash — the simulator reads an
+    all-zero first row as "not started" — and report a warm-up warning with five
+    years of history loaded, while a longer run held its book through it."""
+    short, s_curves = _run(world, "ThinMom", "2020-05-01")
+    _, l_curves = _run(world, "ThinMom", "2018-01-01")
+    assert short["invested_from"] == "2020-05-31"
+    assert not [w for w in short["data_warnings"]
+                if w["code"] in (warmup.WARNING, warmup.NOT_INVESTED)]
+    # The first row buys the held book as drifted to that date, so from there on
+    # the two runs hold the same thing and earn the same pre-tax returns.
+    a = _period_returns(s_curves, "2020-05-31")
+    b = _period_returns(l_curves, "2020-05-31")
+    assert len(a) == 31 and a.index.equals(b.index)
+    np.testing.assert_allclose(a.to_numpy(), b.to_numpy(), rtol=0, atol=1e-12)
+
+
+def test_a_bundle_key_inside_a_window_is_warmed_up_before_the_window(world):
+    m, _ = _run(world, "SmoothMF", "2019-01-01")
+    assert m["warmup_months"] == 13 + 11 + 1 + 3
+    assert m["invested_from"] == "2019-01-31"
+    assert not _warnings(m)
+
+
+def _book_frame(dates, live_from):
+    tw = pd.DataFrame(0.0, index=pd.DatetimeIndex(dates), columns=["A", "B"])
+    tw.loc[tw.index >= pd.Timestamp(live_from), "A"] = 1.0
+    return tw
+
+
+def test_an_empty_first_row_with_history_behind_it_is_not_called_a_warm_up():
+    """Only a pre-roll the archive could not cover is a warm-up problem. A book
+    empty for a reason of its own — thin universe, a filter — says so instead."""
+    dates = pd.date_range("2019-01-31", periods=6, freq="ME")
+    tw = _book_frame(dates, "2019-03-31")
+    covered = {"sessions": pd.date_range("2017-08-01", "2019-06-30")}
+    invested, notes = warmup.late_books("X", tw, dates[0], covered, "2017-08-01", 17)
+    assert invested == "2019-03-31"
+    assert [n["code"] for n in notes] == [warmup.NOT_INVESTED]
+    short = {"sessions": pd.date_range("2018-06-01", "2019-06-30")}
+    _, notes = warmup.late_books("X", tw, dates[0], short, "2017-08-01", 17)
+    assert [n["code"] for n in notes] == [warmup.WARNING]
+    # Live before the window opens: held into it, so invested from the open.
+    early = _book_frame(pd.date_range("2018-01-31", periods=18, freq="ME"), "2018-03-31")
+    assert warmup.late_books("X", early, pd.Timestamp("2019-01-31"), covered,
+                             "2017-08-01", 17) == ("2019-01-31", [])
+
+
+def test_cut_drifts_the_held_book_exactly_as_the_simulator_marks_it():
+    dates = pd.date_range("2019-01-31", periods=4, freq="ME")
+    tw = pd.DataFrame([[0.5, 0.5], [0.0, 0.0], [0.0, 0.0], [0.2, 0.8]],
+                      index=dates, columns=["A", "B"])
+    ret = pd.DataFrame([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [0.0, 0.0]],
+                       index=dates, columns=["A", "B"])
+    r_in, tw_in = warmup.cut(ret, tw, "2019-03-01")
+    assert r_in.index.equals(dates[2:])
+    # A doubled in February and B in March: back to 50/50 by the March close.
+    assert tw_in.iloc[0].tolist() == pytest.approx([0.5, 0.5])
+    assert tw_in.iloc[1].tolist() == [0.2, 0.8]
+    # Nothing held before the window: the empty first row stays empty.
+    _, untouched = warmup.cut(ret, tw.iloc[1:], "2019-03-01")
+    assert untouched.iloc[0].tolist() == [0.0, 0.0]

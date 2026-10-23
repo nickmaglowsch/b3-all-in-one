@@ -160,13 +160,18 @@ Warm-up does not eat the window. The history a signal needs before it exists
 (a 12-month lookback, a `roll_std(..., 252)`, a portfolio's strategy sleeves)
 is read from **before** `start`; trades, taxes and the curve still begin at
 `start`, and a signal at date t only uses data up to t. So a run is invested
-from its first rebalance, and two windows of one strategy hold the same book on
-the dates they share. `window.invested_from` is the first rebalance on which
-every book in the run (each strategy sleeve too) was invested. When the data
-does not reach far enough back (a start near the beginning of history), the
-warm-up falls inside the window: `invested_from` is later and `data_warnings`
-has `{"code": "warmup_inside_window", "detail": {"strategy", "invested_from"}}`
-— until that date the book sat in cash or CDI, so judge the run from there.
+from its first rebalance, and two windows of one strategy usually hold the same
+book on the dates they share — not always: a regime flag ranked against all
+the history loaded (`bench_vol_pctrank`, `bench_calm`), a `sticky` selection, or
+any book whose choice depends on what it held before can differ while the two
+paths converge. `window.invested_from` is the first rebalance on which every
+book in the run (each strategy sleeve too) was invested. When the data does not
+reach far enough back (a start near the beginning of history), the warm-up
+falls inside the window: `invested_from` is later and `data_warnings` has
+`{"code": "warmup_inside_window", "detail": {"strategy", "invested_from"}}`.
+`not_invested_at_start` (same detail) means the history was there but the book
+was empty anyway (too few names passed the filters). Either way the book sat in
+cash or CDI until `invested_from`, so judge the run from there.
 
 - Compare against built-ins over the **same window** (list_backtests).
 - Every variant you try is a hypothesis test; many tries on one window find

@@ -8,12 +8,12 @@ test compared books that were not invested over the same dates — a 2019 start
 of the 40/40/20 blend printed a -10% max drawdown against -25% for the same
 blend over 2013..2026.
 
-So the runner now loads `months_for(...)` of extra history before `start`, lets
-the strategy build its signals over all of it, and cuts the pre-roll off with
-`in_window` before anything is simulated. The pre-roll feeds signals and nothing
-else: no trade, tax event or NAV point lands before `start`. Look-ahead is not
-touched — a weight at row t still reads row t-1 — the rows before the window
-are only *there* now.
+So the runner now loads `months_for(...)` of extra history before `start` (sized
+by backtests.core.warmup_size), lets the strategy build its signals over all of
+it, and cuts the pre-roll off with `cut` before anything is simulated. No trade,
+tax event or NAV point lands before `start`. Look-ahead is not touched — a
+weight at row t still reads row t-1 — the rows before the window are only
+*there* now.
 
 When the plane does not reach back that far (a window opening at the first bar
 of the archive) the warm-up falls back inside the window, as before, and
@@ -21,48 +21,33 @@ of the archive) the warm-up falls back inside the window, as before, and
 """
 from __future__ import annotations
 
-import ast
 import math
-import operator
 import os
 
 import pandas as pd
 
-from backtests.core.config_strategy import FixedWeight, RankAndHold, _signal_defs
+from backtests.core import warmup_size
+from backtests.core.simulation import _apply_returns
 
-# A hand-written strategy keeps its warm-up in a loop this module cannot read
-# (`range(lookback + 2, ...)`, a three-year fundamentals window, a 400-day SMA),
-# so it gets one generous pre-roll that covers every one of them shipped today.
-CODE_MONTHS = 36
-# Slack on top of what a spec declares: a period label is the period's *end*, so
-# a pre-roll cut at an arbitrary date loses up to one period off its front.
+# Slack on top of what the definition asks for: a period label is the period's
+# *end*, so a pre-roll cut at an arbitrary date loses up to one period off its
+# front — and on a quarterly grid three months is exactly that one period.
 MARGIN_MONTHS = 3
 # The ceiling. A longer load is a bigger heap (see backtests.core.memory), and a
 # window that needs more than ten years of warm-up is a spec to look at, not to
 # feed.
 MAX_MONTHS = 120
+CODE_MONTHS = warmup_size.CODE_MONTHS
 
-_MONTHS_PER_PERIOD = {"ME": 1.0, "QE": 3.0, "W-FRI": 7 / 30.44}
-# Windows inside `at_rebalance(...)` count sessions, not grid periods. 21 is a B3
-# month; a 30-session crypto month makes this an overestimate, the safe side.
-_DAILY_MONTHS = 1 / 21
-
-# What the bundle derives for every spec before its own expression runs: the
-# glitch mask is a 12-period rolling max, mf_composite a skip-1 12-period
-# momentum, the regime flags a 10-period mean and a percentile rank that starts
-# at 12 periods, `ma200_m` 200 sessions. Covered by 13 periods and a year.
-_BUNDLE_PERIODS = 13
-_BUNDLE_MONTHS = 12.0
-
-# DSL functions whose second argument is a look-back, and what it defaults to.
-_WINDOWED = {"shift", "roll_sum", "roll_mean", "roll_std", "roll_var", "roll_min",
-             "roll_max", "roll_median", "roll_skew", "roll_kurt", "pct_change",
-             "diff", "ewm_mean", "ewm_std"}
-_DEFAULT_WINDOW = {"pct_change": 1.0, "diff": 1.0}
-_ARITH = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
-          ast.Div: operator.truediv}
-
+# The pre-roll ran short: the archive opens after the date it was read from.
 WARNING = "warmup_inside_window"
+# Not invested on the window's first rebalance although the history was there:
+# the book was empty for a reason of its own (thin universe, a filter, late
+# fundamentals coverage).
+NOT_INVESTED = "not_invested_at_start"
+# How far after the requested load date the first session may fall and still
+# count as covered: a pre-roll starting on a weekend or a holiday is not short.
+_GRACE = pd.Timedelta(days=7)
 
 
 def months_for(strat, params: dict, freq: str) -> int:
@@ -74,8 +59,13 @@ def months_for(strat, params: dict, freq: str) -> int:
     """
     override = os.environ.get("ENGINE_WARMUP_MONTHS", "").strip()
     if override:
-        return max(0, int(override))
-    need = _strategy_months(strat, params, _MONTHS_PER_PERIOD.get(freq, 1.0))
+        try:
+            return max(0, int(override))
+        except ValueError:
+            raise ValueError(
+                f"ENGINE_WARMUP_MONTHS must be a whole number of months "
+                f"(0 disables the pre-roll), got {override!r}") from None
+    need = warmup_size.strategy_months(strat, params, freq)
     return int(min(MAX_MONTHS, math.ceil(need) + MARGIN_MONTHS))
 
 
@@ -93,103 +83,58 @@ def in_window(frame, start):
     return frame.loc[frame.index >= pd.Timestamp(start)]
 
 
-def _strategy_months(strat, params: dict, mpp: float) -> float:
-    if isinstance(strat, FixedWeight):
-        return _blend_months(strat.spec, params, mpp)
-    if isinstance(strat, RankAndHold):
-        return _ranker_months(strat.spec, params, mpp)
-    return float(CODE_MONTHS)
+def _live(tw: pd.DataFrame) -> pd.Index:
+    return tw.index[tw.fillna(0.0).abs().sum(axis=1) > 0]
 
 
-def _blend_months(spec: dict, params: dict, mpp: float) -> float:
-    """The longest warm-up among a blend's strategy sleeves.
+def cut(returns: pd.DataFrame, tw: pd.DataFrame, start) -> tuple:
+    """``(returns, tw)`` from `start` on, with the book held into `start` kept.
 
-    A nested sleeve runs on the blend's grid and with the blend's params over
-    its own defaults (FixedWeight.generate_signals), so it is sized the same way.
-    One period at least: a ticker sleeve's first return needs the mark before it.
+    An all-zero row means "hold" to the simulator once it is invested and "not
+    started" before — so a hold row that lands first in the window would leave
+    the run in cash until the next live row, where a longer run of the same
+    strategy is holding a book. The first row instead buys that book: the last
+    live pre-roll row, drifted through the returns since, exactly as the
+    simulator would have marked it (`_apply_returns`, same clipping). With no
+    live row before `start` there is nothing held, and the row stays empty.
+
+    `returns` must be the matrix the simulator gets (`universe.fill_returns`),
+    so the drift is the one a longer run books.
     """
-    from backtests.core.strategy_registry import get_registry
-
-    need = mpp
-    for sleeve in spec.get("sleeves", []):
-        if "strategy" in sleeve:
-            sub = get_registry().get(sleeve["strategy"])
-            sub_params = {**sub.get_default_parameters(), **params}
-            need = max(need, _strategy_months(sub, sub_params, mpp))
-    return need
+    r_in, tw_in = in_window(returns, start), in_window(tw, start)
+    if len(tw_in) and not len(_live(tw_in.iloc[:1])):
+        held = _held_book(returns, tw, tw_in.index[0])
+        if held is not None:
+            tw_in = tw_in.copy()
+            tw_in.iloc[0] = held.reindex(tw_in.columns).fillna(0.0)
+    return r_in, tw_in
 
 
-def _ranker_months(spec: dict, params: dict, mpp: float) -> float:
-    """A rank_and_hold spec's warm-up: what its own loop skips (`warmup`, or
-    lookback + warmup_pad), what its regime flags read, what the windows in its
-    expression add up to, and what the bundle needs — whichever is longest."""
-    sig = spec.get("signal", {})
-    lookback = int(params.get("lookback", sig.get("lookback", 0)) or 0)
-    periods = int(spec.get("warmup", lookback + int(spec.get("warmup_pad", 1))))
-    offsets = [int(ic.get("offset", 1))
-               for ic in (spec.get("regime") or {}).get("inputs", {}).values()]
-    periods = max(periods, _BUNDLE_PERIODS + max(offsets, default=0))
-    return max(periods * mpp, _BUNDLE_MONTHS, _expr_months(sig, lookback, params, mpp))
-
-
-def _expr_months(sig: dict, lookback: int, params: dict, mpp: float) -> float:
-    """Months of history the signal expression consumes before its first value.
-
-    Resolved with the scalars `config_strategy.resolve_factor` evaluates it with,
-    so `roll_sum(x, lookback)` reads the lookback the run will use. A factor that
-    is a bare bundle key has no expression here; the bundle floor covers it.
-    """
-    entry = _signal_defs().get(sig.get("factor"), {}) if "expr" not in sig else {}
-    expr = sig.get("expr") or entry.get("expr")
-    if not expr:
-        return 0.0
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except SyntaxError:
-        return 0.0          # the run itself fails on it, with the parse error
-    scalars = {**entry, **sig, "lookback": lookback, **params}
-    return _span(tree.body, scalars, mpp)
-
-
-def _span(node, scalars: dict, unit: float) -> float:
-    """Months before `node` has its first value, `unit` months to a row.
-
-    Windows nest by adding — `roll_sum(shift(x, 1), 12)` needs 13 rows — and
-    branches by taking the longest. Inside `at_rebalance(...)` a row is a
-    session, not a period.
-    """
-    if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
-        return max((_span(c, scalars, unit) for c in ast.iter_child_nodes(node)),
-                   default=0.0)
-    fn, args = node.func.id, node.args
-    inner_unit = _DAILY_MONTHS if fn == "at_rebalance" else unit
-    need = max((_span(a, scalars, inner_unit) for a in args), default=0.0)
-    if fn in _WINDOWED:
-        window = _scalar(args[1], scalars) if len(args) > 1 else _DEFAULT_WINDOW.get(fn)
-        need += max(window or 0.0, 0.0) * unit
-    return need
-
-
-def _scalar(node, scalars: dict) -> float | None:
-    """`node` as a number — a literal, a scalar param, or arithmetic over them
-    (`lookback * 21`) — or None when it is anything else."""
-    if isinstance(node, ast.Constant) and type(node.value) in (int, float):
-        return float(node.value)
-    if isinstance(node, ast.Name):
-        value = scalars.get(node.id)
-        return float(value) if type(value) in (int, float) else None
-    if isinstance(node, ast.BinOp) and type(node.op) in _ARITH:
-        left, right = _scalar(node.left, scalars), _scalar(node.right, scalars)
-        if left is None or right is None or (right == 0 and isinstance(node.op, ast.Div)):
-            return None
-        return _ARITH[type(node.op)](left, right)
-    return None
+def _held_book(returns: pd.DataFrame, tw: pd.DataFrame, first) -> pd.Series | None:
+    """The weights the book bought on its last live row before `first` has
+    drifted to by the close of `first`, or None if there is no such book."""
+    live = _live(tw.loc[tw.index < first])
+    if not len(live):
+        return None
+    row = tw.loc[live[-1]].fillna(0.0)
+    book = {t: {"current_value": float(w), "cost_basis": float(w)}
+            for t, w in row[row != 0].items()}
+    for date in returns.index[(returns.index > live[-1]) & (returns.index <= first)]:
+        _apply_returns(book, returns.loc[date])
+    nav = sum(p["current_value"] for p in book.values())
+    if nav <= 0:
+        return None         # wiped out while held; nothing left to carry
+    return pd.Series({t: p["current_value"] / nav for t, p in book.items()})
 
 
 # ── What the run reports ──────────────────────────────────────────────────────
 
-def _first_live(tw: pd.DataFrame):
-    live = tw.index[tw.fillna(0.0).abs().sum(axis=1) > 0]
+def _first_live(book: pd.DataFrame, opens):
+    """The first rebalance from `opens` on that `book` holds something on. A
+    book live at or before `opens` holds from `opens` — a hold row carries it."""
+    live = _live(book)
+    if len(live) and live[0] <= opens:
+        return opens
     return live[0] if len(live) else None
 
 
@@ -197,26 +142,34 @@ def _iso(date) -> str | None:
     return None if date is None else date.date().isoformat()
 
 
-def late_books(name: str, tw: pd.DataFrame, shared) -> tuple[str | None, list]:
-    """``(invested_from, warnings)`` for a run's in-window weights `tw`.
+def _short(shared, loaded_from: str, months: int) -> bool:
+    """Whether the history before `start` fell short of the pre-roll asked for."""
+    sessions = shared.get("sessions")
+    if not months or sessions is None or not len(sessions):
+        return True
+    return pd.Timestamp(sessions[0]) > pd.Timestamp(loaded_from) + _GRACE
 
-    `invested_from` is the first rebalance on which every book in the run holds
-    something: the strategy's own and, in a blend, each strategy sleeve's — a
-    sleeve still warming up has its share parked in CDI, which keeps the blend's
-    rows non-empty and would otherwise hide it. None if some book never goes
-    live in the window.
 
-    A book that is not live on the window's first rebalance gets a
-    `warmup_inside_window` warning: the history before `start` was too short to
-    warm its signal up (or it held nothing there for a reason of its own — thin
-    universe, a parked regime with no cash leg — which reads the same here).
+def late_books(name: str, tw: pd.DataFrame, opens, shared,
+               loaded_from: str, months: int) -> tuple[str | None, list]:
+    """``(invested_from, warnings)`` for a run whose window opens on `opens`.
+
+    `tw` is the strategy's whole book, pre-roll included: it is what says
+    whether something was held into the window. `invested_from` is the first
+    rebalance on which every book in the run holds something: the strategy's own
+    and, in a blend, each strategy sleeve's — a sleeve still warming up has its
+    share parked in CDI, which keeps the blend's rows non-empty and would
+    otherwise hide it. None if some book never goes live in the window.
+
+    A book not live on `opens` is reported: `warmup_inside_window` when the
+    archive did not reach back as far as the pre-roll asked (the warm-up fell in
+    the window), `not_invested_at_start` when it did and the book was empty
+    anyway.
     """
-    opens = tw.index[0]
-    books = {name: tw}
-    for sleeve, book in (shared.get("_sleeve_books") or {}).items():
-        books[sleeve] = in_window(book, opens)
-    firsts = {k: _first_live(b) for k, b in books.items()}
-    warnings = [{"code": WARNING,
+    books = {name: tw, **(shared.get("_sleeve_books") or {})}
+    firsts = {k: _first_live(b, opens) for k, b in books.items()}
+    code = WARNING if _short(shared, loaded_from, months) else NOT_INVESTED
+    warnings = [{"code": code,
                  "detail": {"strategy": k, "invested_from": _iso(d),
                             "first_rebalance": _iso(opens)}}
                 for k, d in firsts.items() if d is None or d > opens]

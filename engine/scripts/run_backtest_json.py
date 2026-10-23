@@ -166,22 +166,24 @@ def main() -> None:
     # (or the sqlite default) so a bare sqlite run still works.
     db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
     warmup_months = warmup.months_for(strat, params, freq)
+    loaded_from = warmup.load_start(start, warmup_months)
     shared = build_shared_data(db_path, start, end, freq,
                                include_fundamentals=needs_funds, market=market,
-                               warmup_from=warmup.load_start(start, warmup_months))
+                               warmup_from=loaded_from)
     memory.trace("shared_data")
 
-    ret_matrix, tw = strat.generate_signals(shared, params)
+    ret_matrix, full_tw = strat.generate_signals(shared, params)
+    # Not a bare fillna(0.0): once the price fill stops at delisting a dead
+    # name's return is NaN, and zeroing it would freeze the position at its last
+    # value forever. fill_returns books the terminal return.
+    returns = universe.fill_returns(ret_matrix, shared["delist_ret"])
     # The pre-roll is for the signals only. Cut here, before the simulator sees a
     # row of it, so no trade, tax event or NAV mark lands before `start`.
-    ret_matrix, tw = warmup.in_window(ret_matrix, start), warmup.in_window(tw, start)
+    returns, tw = warmup.cut(returns, full_tw, start)
     tw = dedup_target_weights(tw, shared["adtv"], market=market)
     memory.trace("signals")
     result = run_simulation(
-        # Not a bare fillna(0.0): once the price fill stops at delisting a
-        # dead name's return is NaN, and zeroing it would freeze the position
-        # at its last value forever. fill_returns books the terminal return.
-        returns_matrix=universe.fill_returns(ret_matrix, shared["delist_ret"]),
+        returns_matrix=returns,
         target_weights=tw,
         initial_capital=initial_capital,
         # Rate, isenção, apuração period and carry policy all come from the
@@ -213,7 +215,8 @@ def main() -> None:
     # The last read of the bundle. Everything below works off `result`, `tw` and
     # `strat_daily`, so the daily panels — the largest objects in the process —
     # are dropped before the metrics and the artifacts are built.
-    invested_from, late = warmup.late_books(name, tw, shared)
+    invested_from, late = warmup.late_books(
+        name, full_tw, tw.index[0], shared, loaded_from, warmup_months)
     data_warnings = shared.get("data_warnings", []) + late
     del shared
     memory.trace("simulation")
@@ -259,7 +262,9 @@ def main() -> None:
         "periods": int(len(idx)),
         # The first rebalance every book in the run held something on. With the
         # warm-up read from before `start` this is the window's first rebalance;
-        # later means the archive was too short for it (see data_warnings).
+        # later means the archive was too short for it, or the book was empty
+        # (see data_warnings). In a what-if replay it is when the book could
+        # first take money; the flows themselves land on their own dates.
         "invested_from": invested_from,
         "warmup_months": warmup_months,
         "initial_capital": initial_capital,

@@ -87,11 +87,14 @@ What a spec author has to know per plane:
 | glitch band (`has_glitch`) | +100% / -45% | +100% / -45% | +500% / -90% |
 | `dedup_roots` | collapses share classes | **no-op** (no roots) | **no-op** |
 | fundamentals (`f_*`) | CVM | SEC XBRL | **none — a spec that reads them is rejected** |
-| tax | 15%, R$20k monthly isenção, loss carries | 15%, no isenção, annual apuração, no carry | 15%, R$35k monthly isenção, **no loss carry at all** |
+| tax | per class: ações 15% + R$20k monthly isenção on ações sales; ETF/BDR 15%, **no isenção**, same carry; FII 20%, own carry | 15%, no isenção, annual apuração, no carry | 15%, R$35k monthly isenção, **no loss carry at all** |
 
 Tax is not a spec field. `markets.resolve_tax` takes the rate, the isenção, the
 apuração period and the carry policy from the class's rule; only the rate is
-overridable, as a what-if.
+overridable, as a what-if (on B3 it sets the ações and ETF/BDR lines; FII keeps
+its 20%). A B3 column's class is `asset_classes.b3_class`, a copy of taxcore's
+`ativos_b3.asset_class` that `tests/test_asset_classes.py` checks against it.
+CDI_ASSET is booked on the ações line, as it always was.
 
 ### Naming the benchmark honestly
 

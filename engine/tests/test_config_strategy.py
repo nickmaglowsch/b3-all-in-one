@@ -196,10 +196,14 @@ def _registry_with(monkeypatch, *strategies):
     monkeypatch.setattr(sr, "get_registry", lambda: reg)
 
 
-def test_a_ticker_sleeve_adds_to_a_nested_book_holding_the_same_name(monkeypatch):
-    # User portfolios mix sleeve kinds freely: a strategy that holds IVVB11 next
-    # to an IVVB11 ticker sleeve. The ticker's weight used to be *assigned* over
-    # the column, dropping the nested book's share of it on the floor.
+@pytest.mark.parametrize("ticker_first", [False, True])
+def test_a_ticker_sleeve_adds_to_a_nested_book_holding_the_same_name(monkeypatch,
+                                                                      ticker_first):
+    # A strategy that holds IVVB11 next to an IVVB11 ticker sleeve — which is
+    # what "MomSharpe / IVVB11 / CDI" is whenever MomSharpe's liquid universe
+    # picks the ETF. The ticker's weight used to be *assigned* over the column:
+    # with the strategy listed first, its share of IVVB11 was dropped and
+    # pushed to CDI by the residual parking. Now the two add, in either order.
     from backtests.core.strategy_base import StrategyBase
 
     idx, shared = _blend_shared()
@@ -217,11 +221,13 @@ def test_a_ticker_sleeve_adds_to_a_nested_book_holding_the_same_name(monkeypatch
     _registry_with(monkeypatch, _HoldsIvvb())
     ivvb = pd.Series(np.linspace(100.0, 150.0, len(idx)), index=idx)
     monkeypatch.setattr(core_data, "download_benchmark", lambda t, s, e: ivvb)
+    sleeves = [{"strategy": "_HoldsIvvb", "weight": 0.6},
+               {"ticker": "IVVB11.SA", "weight": 0.4}]
     spec = {"name": "mix", "kind": "fixed_weight", "rebalance": "QE",
-            "sleeves": [{"strategy": "_HoldsIvvb", "weight": 0.6},
-                        {"ticker": "IVVB11.SA", "weight": 0.4}]}
-    _, tw = FixedWeight(spec).generate_signals(shared, {})
+            "sleeves": sleeves[::-1] if ticker_first else sleeves}
+    r, tw = FixedWeight(spec).generate_signals(shared, {})
     assert np.allclose(tw["IVVB11"], 0.6 * 0.5 + 0.4)
+    assert np.allclose(r["IVVB11"].iloc[1:], ivvb.pct_change().iloc[1:])
     assert np.allclose(tw["A"], 0.3)
     assert np.allclose(tw.sum(axis=1), 1.0)
 

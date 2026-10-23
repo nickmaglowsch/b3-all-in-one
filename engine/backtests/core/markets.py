@@ -66,6 +66,11 @@ class MarketSpec:
     # and cripto compensates no loss at all, and the bench used to do neither.
     tax_period: str
     loss_carry: str
+    # Whether the apuração splits by asset class, and by which scheme. B3 does:
+    # ações, ETF/BDR and FII are separate lines with their own isenção and rate
+    # (tax.b3_rules, taxcore `apuracao.REGRAS`). The rate and isenção above are
+    # then the ações line's. None: one line for every sale, as US and crypto have.
+    asset_classes: str | None = None
 
 
 # Character-for-character the predicate the two B3 loaders and
@@ -88,6 +93,11 @@ MARKETS = {
         # compensável sem prazo.
         tax_rate=0.15, monthly_sales_exemption=20_000.0,
         tax_period="mensal", loss_carry="forward",
+        # ...but only for ações: an ETF or BDR sale gets no isenção, a FII pays
+        # 20% in a loss pool of its own. The bench used to apply the line above
+        # to every B3 sale, so an ETF blend selling under R$20k a month was
+        # scored as tax-free.
+        asset_classes="B3",
     ),
     "US": MarketSpec(
         key="US", currency="USD", table="market_prices", symbol_column="symbol",
@@ -182,4 +192,5 @@ def resolve_tax(key: str | None, params: dict | None = None) -> dict:
         "monthly_sales_exemption": spec.monthly_sales_exemption,
         "tax_period": spec.tax_period,
         "loss_carry": spec.loss_carry,
+        "asset_classes": spec.asset_classes,
     }

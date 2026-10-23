@@ -26,7 +26,8 @@ GUIDE = """\
 Strategies are **data, not code**: a JSON spec over a safe expression language.
 Two kinds exist. The engine builds target weights; a shared simulator does the
 rebalancing, slippage and the Brazilian tax engine (15%, R$20k monthly isenção
-for B3 stocks, loss carry-forward), so every result has a pre-tax and an
+for B3 stocks only — not ETFs or BDRs —, FIIs 20%, loss carry-forward), so every
+result has a pre-tax and an
 after-tax curve. The after-tax one is the truth.
 
 ## 1. Rank-and-hold (`kind: "rank_and_hold"`)
@@ -157,15 +158,17 @@ sleeve only.
 ```
 
 - validate_strategy refuses a ticker the B3 price plane has never priced, by
-  name. One that lists after the history starts (IVVB11: 2014) comes back as a
-  warning with its first price date: until then its weight is held in CDI, as
-  the built-ins do — so a backtest from before that date is partly a cash one.
-- Tax: ticker sleeves are taxed exactly like the built-in blends' — the same
-  simulator and rule. The bench applies the B3 ações rule (15%, R$20k monthly
-  isenção, loss carry) to the whole book's sales and does not yet treat ETFs
-  apart (by law an ETF sale gets no isenção), so an ETF-heavy book whose
-  monthly sales stay under R$20k reads better after tax than the Receita would
-  score it. Built-ins included; compare like with like.
+  name, and says why for an index or a renda-fixa ETF (LFTB11, IMAB11: not in
+  the price history the bench reads). One that lists after the history starts
+  (IVVB11: 2014) comes back as a warning with its first price date: until then
+  its weight is held in CDI, as the built-ins do — so a backtest from before
+  that date is partly a cash one. One that stopped trading comes back with its
+  last date: after it the sleeve sits at its last price, earning 0%.
+- Tax: the same engine as the built-in blends, per asset class as the IRPF
+  apurates it. Ações (and units) pay 15% with the R$20k monthly isenção, tested
+  on the month's ações sales only; ETFs (IVVB11, BOVA11, DIVO11…) and BDRs pay
+  15% with no isenção at all; both share one loss carry. FIIs pay 20% in a
+  carry of their own. Cash (CASH_CDI) is booked like ações.
 - A portfolio with ticker sleeves backtests and lists like any other, but the
   live rebalance target ("Ativar" in /estrategia) only takes strategies and
   CASH_CDI, so it cannot be activated there.

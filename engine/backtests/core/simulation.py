@@ -210,6 +210,7 @@ def run_simulation(
     tax_period: str = taxmod.MONTHLY,
     loss_carry: str = taxmod.FORWARD,
     contribution: "float | pd.Series" = 0.0,
+    asset_classes: "str | None" = None,
 ) -> dict:
     """
     Run a generic, institutional-grade portfolio simulation.
@@ -228,6 +229,7 @@ def run_simulation(
         loss_carry: "forward", "period" or "none". Ganho de capital (cripto)
                        compensates nothing; exterior nets inside the year and
                        carries nothing across it.
+        asset_classes: "B3" apurates per asset class (tax.market_ledger); None, one line.
         slippage: Transaction cost applied per trade (e.g., 0.001 for 0.1%)
         contribution: Periodic buy-in in BRL (aporte). Two forms:
                      • scalar — a flat amount **per calendar month**; deposits
@@ -259,12 +261,10 @@ def run_simulation(
             "or both (initial_capital=0 with a contribution is a pure-DCA run)."
         )
 
-    pt_pos = {}  # Pre-tax ledger
-    at_pos = {}  # After-tax ledger
+    pt_pos, at_pos = {}, {}  # pre-tax and after-tax positions
 
-    ledger = taxmod.Ledger(taxmod.Rule(
-        rate=tax_rate, exemption=monthly_sales_exemption,
-        period=tax_period, carry=loss_carry))
+    ledger = taxmod.market_ledger(tax_rate, monthly_sales_exemption, tax_period,
+                                  loss_carry, asset_classes)
     pt_ledger = taxmod.free_ledger()
 
     pretax_values, aftertax_values = [], []

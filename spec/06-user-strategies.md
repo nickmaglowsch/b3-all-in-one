@@ -87,9 +87,14 @@ first price its weight sits in CDI, as in "DIVO11 / CDI / IVVB11 (thirds)".
 - Backtests for free via `run_backtest_json` + `run_simulation`. Ticker sleeves
   run through `FixedWeight`'s ticker branch and the market's tax rule exactly as
   the built-ins' do (`engine/tests/test_user_portfolio_parity.py` pins a user
-  copy of the thirds to the built-in's curves). That rule is the B3 ações one
-  for the whole book; the engine does not treat ETF sales apart (no isenção by
-  law) — for built-ins or user portfolios.
+  copy of the thirds to the built-in's curves). The B3 apuração is per class,
+  as taxcore's: ações (incl. units) 15% with the R$20k isenção on ações sales;
+  ETFs and BDRs 15% with no isenção, sharing the ações loss pool; FIIs 20% in
+  their own (`tax.market_ledger`, `asset_classes.py`). Same for built-ins and
+  user portfolios.
+- A nested strategy and a ticker sleeve on the same instrument add their
+  weights (a MomSharpe that picks IVVB11 next to an IVVB11 sleeve), and a
+  nested portfolio's ETF columns carry that portfolio's own returns.
 - **Live target stays `PortfolioSleeve`.** "Promote to live" compiles the spec's
   sleeves through the existing PUT `/portfolio/sleeves` logic (routes.py:268).
   Two representations on purpose: named spec = saved/backtestable artifact;
@@ -133,7 +138,9 @@ first price its weight sits in CDI, as in "DIVO11 / CDI / IVVB11 (thirds)".
    `fixed_weight`: each sleeve is exactly one of ticker / asset CDI / strategy,
    and every ticker must have prices on the B3 plane (`sleeve_tickers.py`, the
    one plane read on save) — unknown is an error naming it, a first price after
-   the history starts is a warning naming the date. Prints
+   the history starts or a last price before it ends is a warning naming the
+   date, an index or a renda-fixa ETF (outside COTAHIST) is an error saying so.
+   A fractional code (PETR4F) is normalised to its round lot by the platform. Prints
    `{ok, errors, warnings, needs_fundamentals}`, exit 0/1. Platform shells it on
    save and returns the warnings with the row.
 3. No dry-run backtest on save; first real backtest is the dry run. (The ticker

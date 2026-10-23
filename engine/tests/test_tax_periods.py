@@ -178,6 +178,9 @@ def test_the_rate_stays_a_what_if_knob_and_the_rule_does_not():
     country."""
     resolved = markets.resolve_tax("CRYPTO", {
         "tax_rate": 0.20, "monthly_sales_exemption": 0.0,
-        "tax_period": "anual", "loss_carry": "forward"})
+        "tax_period": "anual", "loss_carry": "forward", "asset_classes": "B3"})
     assert resolved == {"tax_rate": 0.20, "monthly_sales_exemption": 35_000.0,
-                        "tax_period": tax.MONTHLY, "loss_carry": tax.NONE}
+                        "tax_period": tax.MONTHLY, "loss_carry": tax.NONE,
+                        "asset_classes": None}
+    # B3 apurates per class; that is the market's, not a parameter either.
+    assert markets.resolve_tax("B3", {"asset_classes": None})["asset_classes"] == "B3"

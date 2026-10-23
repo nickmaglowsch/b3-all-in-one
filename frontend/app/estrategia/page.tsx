@@ -16,7 +16,7 @@ import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
-import { rowToSleeve, specToRows, type SleeveRow } from "@/lib/portfolioSleeves";
+import { fromSelect, rowToSleeve, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -104,9 +104,6 @@ export default function EstrategiaPage() {
 
 // ── sleeves editor ──────────────────────────────────────────────────────────
 
-// Rows ↔ saved specs (ticker sleeves included) live in lib/portfolioSleeves.
-type Row = SleeveRow;
-
 function SleevesEditor() {
   const sleeves = useSleeves();
   const strategies = useStrategies();
@@ -187,9 +184,9 @@ function SleevesEditor() {
   );
 
   const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
-  const refs = rows.map((r) => r.strategy_ref);
+  const refs = rows.map(selectValue); // a ticker row is keyed by its ticker
   const hasDup = new Set(refs).size !== refs.length;
-  const hasBlank = rows.some((r) => !r.strategy_ref || r.target_pct.trim() === "");
+  const hasBlank = rows.some((r) => !selectValue(r) || r.target_pct.trim() === "");
   const sumOk = Math.abs(sum - 100) < 0.01;
   const sleevesValid = rows.length > 0 && sumOk && !hasDup && !hasBlank;
   // While a saved carteira is in the editor its rows are not the live target, so
@@ -277,15 +274,15 @@ function SleevesEditor() {
           {rows.map((r, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
-                value={r.strategy_ref}
-                onChange={(e) => setField(i, { strategy_ref: e.target.value })}
+                value={selectValue(r)}
+                onChange={(e) => setField(i, fromSelect(e.target.value))}
                 className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink"
               >
                 <option value="">selecione…</option>
                 <option value={CASH_REF}>Caixa (CDI)</option>
                 {optGroup("Estratégias da plataforma", builtinRefs)}
                 {userRefs.length > 0 && optGroup("Minhas estratégias de regra", userRefs)}
-                <TickerOptions rows={rows} />
+                <TickerOptions rows={rows} editId={editId} />
               </select>
               <div className="flex items-center gap-1">
                 <input

@@ -44,6 +44,7 @@ def plane(tmp_path, monkeypatch) -> str:
     _insert(conn, "DIVO11", ["2005-01-20", "2020-01-02"])
     _insert(conn, "IVVB11", ["2014-05-02", "2020-01-02"])
     _insert(conn, "NOADJ11", ["2015-01-02"], adj=None)
+    _insert(conn, "GONE3", ["2005-01-03", "2010-06-30"])        # delisted in 2010
     conn.commit()
     conn.close()
     monkeypatch.setenv("ENGINE_DATABASE_URL", db)
@@ -106,17 +107,44 @@ def test_an_empty_plane_says_so(tmp_path, monkeypatch):
 
 def test_an_unreadable_plane_refuses_without_leaking_the_driver_error(
         tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ENGINE_DATABASE_URL", str(tmp_path / "no_tables.sqlite"))
+    db = tmp_path / "no_tables.sqlite"
+    sqlite3.connect(db).close()                 # a database without the schema
+    monkeypatch.setenv("ENGINE_DATABASE_URL", str(db))
     errors, _ = sleeve_tickers.check(_thirds("IVVB11.SA"))
     assert errors == ["could not check the ticker sleeves: the B3 price plane "
                       "could not be read"]
     assert "no such table" in capsys.readouterr().err   # the detail is logged
 
 
+def test_a_missing_sqlite_plane_is_not_created_by_the_check(tmp_path, monkeypatch):
+    """With ENGINE_DATABASE_URL unset the fallback is config.DB_PATH; opening it
+    for a save-time probe must not leave an empty database file behind."""
+    from b3_pipeline import config
+    missing = tmp_path / "never.sqlite"
+    monkeypatch.delenv("ENGINE_DATABASE_URL", raising=False)
+    monkeypatch.setattr(config, "DB_PATH", missing)
+    errors, _ = sleeve_tickers.check(_thirds("IVVB11.SA"))
+    assert errors and "could not be read" in errors[0]
+    assert not missing.exists()
+
+
+def test_a_delisted_ticker_warns_with_its_last_date(plane):
+    errors, warnings = sleeve_tickers.check(_thirds("GONE3.SA"))
+    assert errors == []
+    assert len(warnings) == 1
+    assert "GONE3.SA" in warnings[0] and "2010-06-30" in warnings[0] and "0%" in warnings[0]
+
+
+@pytest.mark.parametrize("ticker", ["LFTB11.SA", "IMAB11", "LFTS11.SA"])
+def test_a_renda_fixa_etf_says_why_it_is_refused(plane, ticker):
+    errors, _ = sleeve_tickers.check(_thirds(ticker))
+    assert len(errors) == 1 and "renda-fixa ETF" in errors[0] and ticker in errors[0]
+
+
 def test_specs_without_ticker_sleeves_never_touch_the_plane(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("plane read")
-    monkeypatch.setattr(sleeve_tickers, "first_prices", boom)
+    monkeypatch.setattr(sleeve_tickers, "price_spans", boom)
     blend = {"name": "B", "kind": "fixed_weight", "rebalance": "QE",
              "sleeves": [{"strategy": "MomSharpe", "weight": 0.5},
                          {"asset": "CDI", "weight": 0.5}]}

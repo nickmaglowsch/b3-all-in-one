@@ -30,6 +30,7 @@ _NAME_MAX, _TEXT_MAX, _SLEEVES_MAX, _REGIME_MAX = 120, 2000, 50, 16 * 1024
 # and the plane's `$` namespace is stored series (CDI, IPCA), not instruments.
 _TICKER_MAX = 16
 _TICKER = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}(\.SA)?")
+_FRACTIONAL = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}F")
 
 
 class _Finite(BaseModel):
@@ -120,11 +121,19 @@ class PortfolioSleeveIn(_Finite):
         for it is the engine's to say (validate_spec), on save."""
         if v is None:
             return v
-        t = v.strip().upper()
+        t = v.strip().upper().removesuffix(".SA")
+        # PETR4F is the fractional market's code for the PETR4 share. The plane
+        # keeps only the round-lot market (the parser drops TPMERC 020), and a
+        # backtest holds amounts, not lots — so it is the same sleeve.
+        if _FRACTIONAL.fullmatch(t):
+            t = t[:-1]
+        if t.startswith(("^", "$")):
+            raise ValueError(f"ticker {v!r} is an index, not a listed instrument — "
+                             "hold it through its ETF (BOVA11.SA tracks the Ibovespa)")
         if not _TICKER.fullmatch(t):
-            raise ValueError(f"ticker {v!r} is not a B3 code like IVVB11.SA — an index "
-                             "is not tradable, hold it through its ETF (BOVA11.SA)")
-        return t if t.endswith(".SA") else f"{t}.SA"
+            raise ValueError(f"ticker {v!r} is not a B3 trading code: four characters "
+                             "and a one- or two-digit class, like PETR4 or IVVB11.SA")
+        return f"{t}.SA"
 
     @model_validator(mode="after")
     def _one_source(self):

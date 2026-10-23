@@ -151,6 +151,12 @@ def test_the_rates_match_the_taxcore_rules_they_are_copied_from():
     # a loss carry ganho de capital does not grant.
     assert '"AÇÃO": Regra(("AÇÃO",), 0.15, 20_000.0, True, "6015", "mensal", grupo="COMUNS")' in text, (
         "taxcore's ações rule moved — update markets.MARKETS['B3']")
+    # The other two B3 lines, copied into tax.b3_rules.
+    assert '"FII": Regra(("FII",), 0.20, None, True, "6015", "mensal")' in text, (
+        "taxcore's FII rule moved — update tax.b3_rules / tax.FII_RATE")
+    assert ('"BDR_ETF": Regra(("BDR", "ETF_RV"), 0.15, None, True, "6015", "mensal",\n'
+            '                     grupo="COMUNS")') in text, (
+        "taxcore's BDR/ETF rule moved — update tax.b3_rules")
     assert '"CRIPTO": Regra(("CRIPTO",), 0.15, 35_000.0, False, "4600", "mensal",' in text, (
         "taxcore's cripto rule moved — update markets.MARKETS['CRYPTO']")
     assert '"EXTERIOR": Regra(("EXTERIOR",), 0.15, None, True, "-", "anual")' in text, (

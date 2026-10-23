@@ -25,6 +25,15 @@ Still open, in order:
    default beat the market's own rule. Consequence to know about: every stored
    B3 backtest's after-tax curve moves, because the timing and the isenção were
    both wrong before.
+   Per-class lines followed (PR #78): a B3 month is apurated on taxcore's lines —
+   AÇÃO (15%, R$20k isenção on *ações* sales only), BDR_ETF (15%, no isenção,
+   same operações comuns loss pool) and FII (20%, own pool) — via
+   `tax.market_ledger` and `asset_classes.b3_class`, a copy of taxcore's
+   `ativos_b3.asset_class` that `test_asset_classes` checks against taxcore's
+   own classifier and `monthly_apuracao`. Renda fixa (CDI_ASSET, ETFs de renda
+   fixa) stays on the ações line, as before; taxing it at source is still open.
+   Books of only ações and CDI score bit-for-bit as before; ETF/BDR/FII books
+   pay more, and their stored runs keep the old numbers until re-run.
 
 ### US prices — decided, and what is still thin
 

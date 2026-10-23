@@ -52,8 +52,9 @@ def _s(ref, pct):
 
 async def test_compiles_to_the_builtin_shape():
     """Sleeve for sleeve what specs/divo_cdi_ivvb.yaml says — and the dict
-    engine/tests/test_user_portfolio_parity.py runs against the built-in."""
-    body = PortfolioStrategyIn(**_port("Mine", _t("divo11", 34), _s("CASH_CDI", 33),
+    engine/tests/test_user_portfolio_parity.py runs against the built-in. Case,
+    the .SA suffix and the fractional market's F are all normalised away."""
+    body = PortfolioStrategyIn(**_port("Mine", _t("divo11F", 34), _s("CASH_CDI", 33),
                                        _t("IVVB11.SA", 33)))
     assert _compile_portfolio(body) == {
         "name": "Mine", "kind": "fixed_weight", "description": "", "rebalance": "QE",
@@ -107,7 +108,8 @@ async def test_mcp_rejects_an_unknown_ticker_by_name(client, plane):
 
 
 @pytest.mark.parametrize("sleeves, needle", [
-    ([_t("^BVSP", 100)], "not a B3 code"),
+    ([_t("^BVSP", 100)], "is an index"),
+    ([_t("PETRO4", 100)], "not a B3 trading code"),
     ([{"ticker": "IVVB11", "strategy_ref": "MomSharpe", "target_pct": 100}],
      "exactly one of strategy_ref / ticker"),
     ([{"target_pct": 100}], "exactly one of strategy_ref / ticker"),

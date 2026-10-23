@@ -19,7 +19,7 @@ export function TickerOptions({ rows, editId }: { rows: SleeveRow[]; editId?: st
   return (
     <optgroup label="Ativos (ticker)">
       {tickers.map((t) => (
-        <option key={t} value={tickerValue(t)}>
+        <option key={t} value={tickerValue(t)} data-ticker={t}>
           {t}
         </option>
       ))}

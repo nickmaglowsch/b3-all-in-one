@@ -35,7 +35,8 @@ as-is; this spec covers how it's exposed to tenants.
   cached in parquet per worker — runs share it.
 
 ### Results
-- Per run: pre/after-tax equity curves, tax_paid, loss_carryforward, turnover, drawdown
+- Per run: pre/after-tax equity curves, tax_paid, loss_carryforward (on B3 the sum of
+  the operações comuns and FII pools), turnover, drawdown
   series, target weights over time; metrics (Ann Return/Vol, Sharpe, Max DD, Calmar) vs
   IBOV and CDI. Rendered as the existing Plotly tear sheets, ported to the web UI.
 - Run history per tenant with side-by-side comparison (metrics table across runs).

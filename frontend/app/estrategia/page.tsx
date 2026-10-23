@@ -275,7 +275,7 @@ function SleevesEditor() {
             <div key={i} className="flex items-center gap-2">
               <select
                 value={selectValue(r)}
-                onChange={(e) => setField(i, fromSelect(e.target.value))}
+                onChange={(e) => setField(i, fromSelect(e.target))}
                 className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink"
               >
                 <option value="">selecione…</option>

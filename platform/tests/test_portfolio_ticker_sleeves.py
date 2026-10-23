@@ -122,6 +122,16 @@ async def test_malformed_ticker_sleeves_are_refused_before_the_engine(client, sl
     assert err and bad.startswith("invalid spec") and needle in bad, bad
 
 
+async def test_the_pickers_ticker_prefix_is_not_a_strategy_name(client):
+    """/estrategia gives ticker options the value "@ticker:<code>"; no strategy
+    may be named so, or its option would share that value."""
+    h = await auth(client, "tickers-reserved@example.com", modules=["bench"])
+    token = await _token(client, h)
+    bad, err = await _call(client, token, "validate_strategy", spec=_port(
+        "@Ticker:IVVB11.SA", _s("CASH_CDI", 100)))
+    assert err and "reserved" in bad, bad
+
+
 async def test_a_ticker_passed_as_strategy_ref_gets_a_hint(client):
     h = await auth(client, "tickers-hint@example.com", modules=["bench"])
     r = await client.post("/strategies/user", headers=h, json=_port(

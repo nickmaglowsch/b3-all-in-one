@@ -15,7 +15,9 @@ import re
 from typing import Annotated, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator,
+)
 
 _REBALANCE = Literal["ME", "QE", "W-FRI"]
 _MARKET = Literal["B3", "US", "CRYPTO"]
@@ -31,6 +33,20 @@ _NAME_MAX, _TEXT_MAX, _SLEEVES_MAX, _REGIME_MAX = 120, 2000, 50, 16 * 1024
 _TICKER_MAX = 16
 _TICKER = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}(\.SA)?")
 _FRACTIONAL = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}F")
+# /estrategia's sleeve picker gives ticker options this value prefix
+# (frontend/lib/portfolioSleeves.ts). Refused at the start of a strategy name so
+# no strategy option can ever share a ticker option's value.
+_RESERVED_PREFIX = "@ticker:"
+
+
+def _no_reserved_prefix(name: str) -> str:
+    if name.strip().lower().startswith(_RESERVED_PREFIX):
+        raise ValueError(f"names may not start with {_RESERVED_PREFIX!r} (reserved)")
+    return name
+
+
+_Name = Annotated[str, Field(min_length=1, max_length=_NAME_MAX),
+                  AfterValidator(_no_reserved_prefix)]
 
 
 class _Finite(BaseModel):
@@ -77,7 +93,7 @@ class _RankSelection(_Finite):
 
 class RankStrategyIn(_Finite):
     kind: Literal["rank_and_hold"]
-    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    name: _Name
     description: str = Field(default="", max_length=_TEXT_MAX)
     rebalance: _REBALANCE = "ME"
     needs_fundamentals: bool = False
@@ -144,7 +160,7 @@ class PortfolioSleeveIn(_Finite):
 
 class PortfolioStrategyIn(_Finite):
     kind: Literal["fixed_weight"]
-    name: str = Field(min_length=1, max_length=_NAME_MAX)
+    name: _Name
     description: str = Field(default="", max_length=_TEXT_MAX)
     rebalance: _REBALANCE = "QE"
     sleeves: list[PortfolioSleeveIn] = Field(min_length=1, max_length=_SLEEVES_MAX)

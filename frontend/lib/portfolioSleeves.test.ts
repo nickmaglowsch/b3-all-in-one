@@ -38,25 +38,36 @@ test("a saved portfolio's sleeves round-trip through the editor rows", () => {
   ]);
 });
 
+// What a <select> onChange hands over: the value and the chosen option.
+const pick = (value: string, ticker?: string) => ({
+  value,
+  selectedOptions: [{ dataset: ticker ? { ticker } : {} }],
+});
+
 test("a strategy named like a ticker, or like the old encoding, stays a strategy", () => {
   for (const name of ["IVVB11.SA", "ticker:IVVB11.SA"]) {
     const [row] = specToRows({ sleeves: [{ strategy: name, weight: 1 }] });
     assert.equal(selectValue(row), name);
-    assert.deepEqual(fromSelect(selectValue(row)), { strategy_ref: name, ticker: undefined });
+    assert.deepEqual(fromSelect(pick(selectValue(row))), { strategy_ref: name, ticker: undefined });
     assert.deepEqual(rowToSleeve(row), { strategy_ref: name, target_pct: 100 });
   }
-  // And a ticker row's select value is one no strategy option can have.
+  // A ticker is told apart by its option's data-ticker, not by parsing a value.
   const [tickerRow] = specToRows({ sleeves: [{ ticker: "IVVB11.SA", weight: 1 }] });
-  assert.notEqual(selectValue(tickerRow), "IVVB11.SA");
-  assert.deepEqual(fromSelect(selectValue(tickerRow)), { strategy_ref: "", ticker: "IVVB11.SA" });
   assert.equal(selectValue(tickerRow), tickerValue("IVVB11.SA"));
+  assert.match(selectValue(tickerRow), /^[\x20-\x7e]+$/); // printable, survives SSR
+  assert.deepEqual(fromSelect(pick(selectValue(tickerRow), "IVVB11.SA")), {
+    strategy_ref: "",
+    ticker: "IVVB11.SA",
+  });
+  // Without a selected option (a bare value), it is read as a strategy.
+  assert.deepEqual(fromSelect({ value: "MomSharpe" }), { strategy_ref: "MomSharpe", ticker: undefined });
 });
 
 test("the saved tickers stay pickable after a row moves off them", () => {
   const saved = specTickers(THIRDS);
   assert.deepEqual(saved, ["DIVO11.SA"]);
   const rows = specToRows(THIRDS);
-  const moved = [{ ...rows[0], ...fromSelect("MomSharpe") }, ...rows.slice(1)];
+  const moved = [{ ...rows[0], ...fromSelect(pick("MomSharpe")) }, ...rows.slice(1)];
   assert.equal(moved[0].ticker, undefined);
   assert.deepEqual(tickerOptions(moved, saved), ["DIVO11.SA"]);
   // Each once, saved first.

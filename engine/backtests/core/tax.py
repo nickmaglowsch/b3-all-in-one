@@ -89,7 +89,9 @@ class Rule:
 # stays on the ações line, which is where the bench has always booked it. taxcore
 # leaves it out of the apuração (it is taxed at source); modelling that is its
 # own change, and keeping it here means a book of only ações and CDI scores
-# exactly as it did before the lines existed.
+# exactly as it did before the lines existed. The `IBOV` column a regime overlay
+# holds (an index, unknown to taxcore) falls on the ações line the same way, and
+# a *11 on none of taxcore's lists is a FII, as taxcore presumes it.
 FII_RATE = 0.20
 _B3_LINE = {"AÇÃO": "AÇÃO", "ETF_RF": "AÇÃO", "ETF_RV": "BDR_ETF", "BDR": "BDR_ETF",
             "FII": "FII"}
@@ -201,9 +203,15 @@ class Ledger:
         does, and what the old code (which added it to the carry regardless)
         gave crypto for free. On the line of the class that was written off.
         """
+        # Grouped by line, and booked as each group's one sum: on a single-line
+        # ledger that is exactly the old L + (a + b), not (L + a) + b — float
+        # addition is not associative, and single-line markets promise the same
+        # bytes as before the lines existed.
+        dead: dict = {}
         for t in [t for t, p in positions.items() if p["current_value"] == 0]:
-            loss = universe.realise_write_offs({t: positions.pop(t)})
-            self._totals[self._classify(t)][2] += loss
+            dead.setdefault(self._classify(t), {})[t] = positions.pop(t)
+        for name, group in dead.items():
+            self._totals[name][2] += universe.realise_write_offs(group)
 
     def accrue(self, when, sales: dict, positions: dict) -> float:
         """Book one rebalance. Returns the tax now due for the previous period."""

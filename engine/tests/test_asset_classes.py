@@ -33,6 +33,7 @@ REPRESENTATIVE = {
     "ZZZZ11": "FII",                         # unlisted *11: taxcore presumes FII
     "LFTB11": "ETF_RF",
     "CDI_ASSET": "AÇÃO",                     # the engine's cash sleeve, as before
+    "IBOV": "AÇÃO",                          # a regime overlay's index column
 }
 
 
@@ -62,7 +63,7 @@ def test_lines_follow_taxcore_regras():
 
 
 def test_the_classifier_is_taxcores_on_every_listed_name():
-    names = sorted(set(REPRESENTATIVE) - {"CDI_ASSET"} | asset_classes.ETF_RV
+    names = sorted(set(REPRESENTATIVE) | asset_classes.ETF_RV
                    | asset_classes.ETF_RF | asset_classes.UNITS)
     theirs = _taxcore(
         "import json, sys\n"
@@ -180,6 +181,26 @@ def test_a_fii_write_off_lands_on_the_fii_line():
     ledger.accrue(pd.Timestamp("2024-01-31"), {"PETR4": 32_000.0}, positions)
     assert ledger.close() == pytest.approx(0.15 * 2_000.0)
     assert ledger.carry == pytest.approx(1_000.0)
+
+
+@pytest.mark.parametrize("market, names", [
+    ("US", ("AAA", "BBB")), ("CRYPTO", ("ETHUSDT", "SOLUSDT")), ("B3", ("PETR4", "VALE3"))])
+def test_simultaneous_write_offs_book_as_one_sum(market, names):
+    """Two names wiped out on one rebalance add to the period's loss as one sum,
+    L + (a + b), as the single-line ledger always did — not (L + a) + b, which
+    differs in the last bits and broke the byte-for-byte promise for US, crypto
+    and ações-only books."""
+    s = markets.resolve_tax(market)
+    ledger = tax.market_ledger(s["tax_rate"], s["monthly_sales_exemption"],
+                               s["tax_period"], s["loss_carry"], s["asset_classes"])
+    line = next(iter(ledger.rules))
+    ledger.realise_write_offs({"OLD": {"cost_basis": 0.1, "current_value": 0.0}})
+    positions = {names[0]: {"cost_basis": 0.2, "current_value": 0.0},
+                 names[1]: {"cost_basis": 0.3, "current_value": 0.0}}
+    ledger.realise_write_offs(positions)
+    assert positions == {}
+    assert (0.1 + 0.2) + 0.3 != 0.1 + (0.2 + 0.3)     # the case is a real one
+    assert ledger._totals[line][2] == 0.1 + (0.2 + 0.3)
 
 
 def test_a_book_of_acoes_and_cdi_scores_exactly_as_before():

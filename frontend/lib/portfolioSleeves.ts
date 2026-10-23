@@ -20,10 +20,11 @@ export type SleeveBody =
   | { strategy_ref: string; target_pct: number }
   | { ticker: string; target_pct: number };
 
-// The row picker is one <select> over strategies and tickers, so a ticker
-// option needs a value no strategy option can have. Strategy names are free
-// text, but Postgres text cannot hold a NUL, so no saved name can start with one.
-const TICKER_VALUE = "\u0000";
+// The row picker is one <select> over strategies and tickers. A ticker option
+// says it is one in a data attribute (`data-ticker`), which is what a choice is
+// read by; its value carries a prefix the platform refuses at the start of a
+// strategy name (strategy_specs._RESERVED_PREFIX), so the value is unique too.
+const TICKER_VALUE = "@ticker:";
 
 // Engine fixed_weight spec → rows. Readback caveat (spec/06): sleeves are
 // {strategy, weight(fraction)}, {asset:"CDI", weight} or {ticker, weight}; map
@@ -57,10 +58,18 @@ export function selectValue(r: SleeveRow): string {
   return r.ticker ? TICKER_VALUE + r.ticker : r.strategy_ref;
 }
 
-export function fromSelect(value: string): Pick<SleeveRow, "strategy_ref" | "ticker"> {
-  return value.startsWith(TICKER_VALUE)
-    ? { strategy_ref: "", ticker: value.slice(TICKER_VALUE.length) }
-    : { strategy_ref: value, ticker: undefined };
+// The <select> as an onChange hands it over: its value, and the chosen option's
+// dataset — the part that says "this is a ticker".
+export interface PickedSelect {
+  value: string;
+  selectedOptions?: ArrayLike<{ dataset?: { ticker?: string } }>;
+}
+
+export function fromSelect(select: PickedSelect): Pick<SleeveRow, "strategy_ref" | "ticker"> {
+  const ticker = select.selectedOptions?.[0]?.dataset?.ticker;
+  return ticker
+    ? { strategy_ref: "", ticker }
+    : { strategy_ref: select.value, ticker: undefined };
 }
 
 export const tickerValue = (ticker: string) => TICKER_VALUE + ticker;

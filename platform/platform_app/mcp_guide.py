@@ -168,7 +168,11 @@ sleeve only.
   apurates it. Ações (and units) pay 15% with the R$20k monthly isenção, tested
   on the month's ações sales only; ETFs (IVVB11, BOVA11, DIVO11…) and BDRs pay
   15% with no isenção at all; both share one loss carry. FIIs pay 20% in a
-  carry of their own. Cash (CASH_CDI) is booked like ações.
+  carry of their own; a `*11` the bench does not know as an ETF or unit is
+  presumed a FII (so a rank strategy holding old units pays 20% on them). Cash
+  (CASH_CDI, and where a regime parks) is booked like ações, isenção included,
+  and so is the IBOV column a regime overlay can hold. `loss_carryforward` in a
+  run's curves is the two carries summed.
 - A portfolio with ticker sleeves backtests and lists like any other, but the
   live rebalance target ("Ativar" in /estrategia) only takes strategies and
   CASH_CDI, so it cannot be activated there.

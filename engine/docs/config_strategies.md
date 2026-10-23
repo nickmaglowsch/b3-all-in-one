@@ -94,7 +94,21 @@ apuração period and the carry policy from the class's rule; only the rate is
 overridable, as a what-if (on B3 it sets the ações and ETF/BDR lines; FII keeps
 its 20%). A B3 column's class is `asset_classes.b3_class`, a copy of taxcore's
 `ativos_b3.asset_class` that `tests/test_asset_classes.py` checks against it.
-CDI_ASSET is booked on the ações line, as it always was.
+Known approximations, all inherited from or chosen to match that rule:
+
+- A `*11` name on none of taxcore's lists (ETFs, units, renda-fixa ETFs) is a FII
+  at 20% in its own carry — taxcore's "presumido". On a user's extract that is
+  rare; the bench's 30-year COTAHIST universe holds many more such names (old
+  units, delisted or unlisted ETFs), so a rank strategy that holds them is scored
+  at the FII rate. This moves rank strategies' after-tax numbers, not their
+  pre-tax ones.
+- CDI_ASSET (the cash sleeve, and where regimes park) is booked on the ações line,
+  isenção included, as it always was; taxcore leaves renda fixa out of the
+  apuração because it is taxed at source.
+- The `IBOV` column a regime overlay adds as an asset (`add_ibov`) is an index,
+  not a ticker taxcore knows; it lands on the ações line too, isenção included.
+- `loss_carryforward` in the run's curves is the prejuízo a compensar summed over
+  the B3 pools — operações comuns (ações + ETF/BDR) plus FII.
 
 ### Naming the benchmark honestly
 

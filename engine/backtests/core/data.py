@@ -199,9 +199,7 @@ def download_benchmark(ticker: str, start: str, end: str, *,
     ENGINE_BENCH_OFFLINE run at once.
     """
     spec = markets.get(market)
-    symbol = ticker.strip().upper()
-    symbol = spec.aliases.get(
-        symbol, symbol.removesuffix(spec.suffix_strip) if spec.suffix_strip else symbol)
+    symbol = markets.plane_symbol(ticker, market)
     if symbol.startswith("$"):
         # The `$` namespace is global by shape — $CDI, $IPCA, $USDBRL and the
         # stored indices belong to no single market, so they are not scoped.

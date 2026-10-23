@@ -310,10 +310,10 @@ class RankAndHold(_SpecStrategy):
 # ── Fixed-weight blend engine ─────────────────────────────────────────────────
 
 class FixedWeight(_SpecStrategy):
-    """Constant-weight sleeves rebalanced on the grid. Sleeves are B3/Yahoo
-    tickers (downloaded), the special asset ``CDI``, or another registered
-    ``strategy`` (its whole book becomes one sleeve). Generic version of
-    divo_cdi_ivvb.py:55-86."""
+    """Constant-weight sleeves rebalanced on the grid. Sleeves are B3 tickers
+    (read off the plane), the special asset ``CDI``, or another registered
+    ``strategy`` (its whole book becomes one sleeve). User portfolios compile to
+    the same three forms (platform strategy_specs), so they run through here too."""
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
         return [
@@ -323,61 +323,26 @@ class FixedWeight(_SpecStrategy):
         ]
 
     def generate_signals(self, shared_data: dict, params: dict):
-        from backtests.core.data import download_benchmark
-
         spec = self.spec
-        ret = shared_data["ret"]
-        cdi = shared_data["cdi_monthly"]
         park = bool(spec.get("park_in_cdi_until_live", True))
         # per_sleeve: park each dead ETF's weight in CDI individually (divo style).
         # all_or_nothing: hold nothing until every ETF is live, else 100% CDI
         # (baseline_thirds style).
         park_mode = spec.get("park_mode", "per_sleeve")
-
-        start, end = str(ret.index[0].date()), str(ret.index[-1].date())
-        r = ret.copy()
-        r["CDI_ASSET"] = cdi
-
-        tw = pd.DataFrame(0.0, index=ret.index, columns=r.columns)
-        tw["CDI_ASSET"] = 0.0
+        r = shared_data["ret"].copy()
+        r["CDI_ASSET"] = shared_data["cdi_monthly"]
+        tw = pd.DataFrame(0.0, index=r.index, columns=r.columns)
 
         etf_cols = []
         for sleeve in spec["sleeves"]:
             weight = float(sleeve["weight"])
             if sleeve.get("asset") == "CDI":
                 tw["CDI_ASSET"] += weight
-                continue
-            if "strategy" in sleeve:
-                # Nest a registered strategy as one sleeve: run it, scale its
-                # target weights by this sleeve's weight, and fold them into the
-                # blend. Its own assets (stocks, CDI_ASSET) already share the
-                # blend's return matrix, so no new return streams are needed.
-                from backtests.core.strategy_registry import get_registry
-                sub = get_registry().get(sleeve["strategy"])
-                sub_params = {**sub.get_default_parameters(), **params}
-                _, tw_sub = sub.generate_signals(shared_data, sub_params)
-                for col in tw_sub.columns:
-                    if col not in tw.columns:
-                        tw[col] = 0.0
-                    if col not in r.columns:
-                        r[col] = shared_data["cdi_monthly"] if col == "CDI_ASSET" else 0.0
-                    tw[col] = tw[col] + weight * tw_sub[col].reindex(tw.index).fillna(0.0)
-                continue
-            ticker = sleeve["ticker"]
-            col = ticker.split(".")[0]
-            px_daily = download_benchmark(ticker, start, end)
-            # Stash the daily ETF returns so the daily NAV reconstruction
-            # (metrics.strategy_daily_values) can mark this sleeve intra-period;
-            # the rebalance-cadence `r[col]` below can't reveal its drawdown.
-            shared_data.setdefault("_daily_asset_ret", {})[col] = px_daily.pct_change()
-            px = px_daily.reindex(ret.index, method="ffill")
-            r[col] = px.pct_change().fillna(0.0)
-            tw[col] = weight
-            etf_cols.append(col)
-            if park and park_mode == "per_sleeve":
-                dead = px.isna()
-                tw.loc[dead, col] = 0.0
-                tw.loc[dead, "CDI_ASSET"] += weight
+            elif "strategy" in sleeve:
+                _nest_sleeve(sleeve["strategy"], weight, shared_data, params, r, tw)
+            else:
+                etf_cols.append(_ticker_sleeve(sleeve["ticker"], weight, shared_data, r, tw,
+                                               park and park_mode == "per_sleeve"))
 
         if park and park_mode == "all_or_nothing" and etf_cols:
             live = (r[etf_cols] != 0).all(axis=1).cummax()   # baseline_thirds.py:70-71
@@ -395,3 +360,41 @@ class FixedWeight(_SpecStrategy):
         tw.loc[live_rows, "CDI_ASSET"] = tw.loc[live_rows, "CDI_ASSET"] + resid[live_rows]
 
         return r, tw
+
+
+def _nest_sleeve(name: str, weight: float, shared_data: dict, params: dict, r, tw) -> None:
+    """Nest a registered strategy as one sleeve: run it, scale its target weights
+    by this sleeve's weight and fold them into the blend, in place. Its stocks and
+    CDI_ASSET already share the blend's return matrix; a column that does not (a
+    nested portfolio's ETF) takes the nested run's own returns, not a flat zero."""
+    from backtests.core.strategy_registry import get_registry
+    sub = get_registry().get(name)
+    r_sub, tw_sub = sub.generate_signals(shared_data, {**sub.get_default_parameters(), **params})
+    for col in tw_sub.columns:
+        if col not in tw.columns:
+            tw[col] = 0.0
+        if col not in r.columns:
+            r[col] = r_sub[col].reindex(r.index).fillna(0.0) if col in r_sub else 0.0
+        tw[col] = tw[col] + weight * tw_sub[col].reindex(tw.index).fillna(0.0)
+
+
+def _ticker_sleeve(ticker: str, weight: float, shared_data: dict, r, tw, park: bool) -> str:
+    """One listed instrument as a sleeve, folded into ``r``/``tw`` in place; returns
+    its column. With ``park``, the weight sits in CDI on rows before its first price."""
+    from backtests.core.data import download_benchmark
+    col = ticker.split(".")[0]
+    px_daily = download_benchmark(ticker, str(r.index[0].date()), str(r.index[-1].date()))
+    # Stash the daily ETF returns so the daily NAV reconstruction
+    # (metrics.strategy_daily_values) can mark this sleeve intra-period;
+    # the rebalance-cadence `r[col]` below can't reveal its drawdown.
+    shared_data.setdefault("_daily_asset_ret", {})[col] = px_daily.pct_change()
+    px = px_daily.reindex(r.index, method="ffill")
+    r[col] = px.pct_change().fillna(0.0)
+    # Added, not assigned: a nested strategy sleeve may already hold this name,
+    # and assigning would drop that share of the book without a word.
+    tw[col] = (tw[col] if col in tw.columns else 0.0) + weight
+    if park:
+        dead = px.isna()
+        tw.loc[dead, col] -= weight
+        tw.loc[dead, "CDI_ASSET"] += weight
+    return col

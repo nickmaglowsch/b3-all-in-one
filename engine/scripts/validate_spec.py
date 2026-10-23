@@ -1,4 +1,4 @@
-"""Validate a user-authored strategy spec — no market-data run.
+"""Validate a user-authored strategy spec — no backtest run.
 
 Usage:
     python scripts/validate_spec.py --spec-json '<json>'
@@ -10,8 +10,13 @@ validates the factor: check_syntax on an inline expr:, resolves a factor:
 reference against signals.yaml or the whitelisted shared_data keys, rejects
 store:<id>, and flags needs_fundamentals when any f_* key is referenced.
 
-Prints one JSON line {"ok": bool, "errors": [...], "needs_fundamentals": bool}
-to stdout, exit 0 when ok else 1. The platform shells this on save.
+For a fixed_weight spec it checks each sleeve's shape, and — the one step that
+reads the market plane (ENGINE_DATABASE_URL) — that every `ticker` sleeve names
+an instrument the B3 plane has prices for (backtests.core.sleeve_tickers).
+
+Prints one JSON line {"ok": bool, "errors": [...], "warnings": [...],
+"needs_fundamentals": bool} to stdout, exit 0 when ok else 1. The platform
+shells this on save and returns the warnings with the saved strategy.
 """
 from __future__ import annotations
 
@@ -24,7 +29,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backtests.core import markets, signal_dsl
+from backtests.core import markets, signal_dsl, sleeve_tickers
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 
 # shared_data frames a bare `factor:` reference may name, per
@@ -94,6 +99,26 @@ def _validate_regime(regime, errors: list[str]) -> None:
             errors.append(f"regime rule {rule!r}: {sorted(extra)} is not a declared input")
 
 
+def _validate_sleeves(spec: dict, errors: list[str]) -> None:
+    """Each fixed_weight sleeve is exactly one of a `ticker`, the `asset` CDI or a
+    nested `strategy`, with a numeric weight. FixedWeight branches on those keys,
+    so a sleeve carrying two would silently run as whichever it tests first, and
+    one carrying none would fail minutes into a backtest instead of here."""
+    sleeves = spec.get("sleeves")
+    if not isinstance(sleeves, list) or not sleeves:
+        errors.append("fixed_weight: `sleeves` must be a non-empty list")
+        return
+    for i, sl in enumerate(sleeves):
+        kinds = [k for k in ("ticker", "asset", "strategy") if k in sl] \
+            if isinstance(sl, dict) else []
+        weight = sl.get("weight") if isinstance(sl, dict) else None
+        if len(kinds) != 1 or (kinds == ["asset"] and sl["asset"] != "CDI"):
+            errors.append(f"sleeve {i}: needs exactly one of ticker / asset: CDI / "
+                          f"strategy, got {sl!r}")
+        elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            errors.append(f"sleeve {i}: needs a numeric `weight`")
+
+
 def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
     """Validate a rank_and_hold spec's signal block, appending any errors.
     Returns whether the signal references CVM fundamentals (f_* keys)."""
@@ -142,6 +167,8 @@ def validate(spec: dict) -> dict:
         if kind == "rank_and_hold":
             needs_funds = _validate_rank_signal(spec, errors)
             _validate_regime(spec.get("regime"), errors)
+        else:
+            _validate_sleeves(spec, errors)
 
     needs_funds = needs_funds or bool(spec.get("needs_fundamentals"))
 
@@ -161,6 +188,21 @@ def validate(spec: dict) -> dict:
     return {"ok": not errors, "errors": errors, "needs_fundamentals": needs_funds}
 
 
+def report(spec: dict) -> dict:
+    """validate(), then the spec's ticker sleeves against the market plane.
+
+    Apart from validate() so that one stays pure. The plane is read only when the
+    spec is otherwise sound and has a ticker sleeve, so every other save costs no
+    query at all.
+    """
+    out = {**validate(spec), "warnings": []}
+    if out["ok"] and spec.get("kind") == "fixed_weight":
+        errors, out["warnings"] = sleeve_tickers.check(spec)
+        out["errors"] += errors
+        out["ok"] = not out["errors"]
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec-json", required=True, help="engine spec dict as JSON")
@@ -169,13 +211,14 @@ def main() -> None:
     try:
         spec = json.loads(args.spec_json)
     except json.JSONDecodeError as e:
-        report = {"ok": False, "errors": [f"invalid spec JSON: {e}"], "needs_fundamentals": False}
+        out = {"ok": False, "errors": [f"invalid spec JSON: {e}"], "warnings": [],
+               "needs_fundamentals": False}
     else:
-        report = validate(spec)
+        out = report(spec)
 
-    json.dump(report, sys.stdout)
+    json.dump(out, sys.stdout)
     sys.stdout.write("\n")
-    raise SystemExit(0 if report["ok"] else 1)
+    raise SystemExit(0 if out["ok"] else 1)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
+import { rowToSleeve, specToRows, type SleeveRow } from "@/lib/portfolioSleeves";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -34,6 +35,7 @@ import {
   type TradeLine,
 } from "./lib";
 import { SettingsPanel } from "./Settings";
+import { TickerOptions } from "./TickerOptions";
 
 const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
 
@@ -102,24 +104,8 @@ export default function EstrategiaPage() {
 
 // ── sleeves editor ──────────────────────────────────────────────────────────
 
-interface Row {
-  strategy_ref: string;
-  target_pct: string; // kept as string so the input can be cleared mid-edit
-}
-
-// Engine fixed_weight spec → the editor's rows. Readback caveat (spec/06): sleeves
-// are {strategy, weight(fraction)} or {asset:"CDI", weight}; map back to
-// {strategy_ref, target_pct(%)} and asset:"CDI" → CASH_CDI.
-function specToRows(spec: Record<string, unknown>): Row[] {
-  const sleeves = Array.isArray(spec.sleeves)
-    ? (spec.sleeves as Record<string, unknown>[])
-    : [];
-  return sleeves.map((s) => ({
-    strategy_ref:
-      s.asset === "CDI" ? CASH_REF : String(s.strategy ?? s.ticker ?? ""),
-    target_pct: String(Math.round(Number(s.weight ?? 0) * 1e6) / 1e4),
-  }));
-}
+// Rows ↔ saved specs (ticker sleeves included) live in lib/portfolioSleeves.
+type Row = SleeveRow;
 
 function SleevesEditor() {
   const sleeves = useSleeves();
@@ -251,10 +237,7 @@ function SleevesEditor() {
           kind: "fixed_weight",
           name: name.trim(),
           description: desc.trim() || undefined,
-          sleeves: rows.map((r) => ({
-            strategy_ref: r.strategy_ref,
-            target_pct: parseFloat(r.target_pct),
-          })),
+          sleeves: rows.map(rowToSleeve),
         },
       },
       { onSuccess: endEdit },
@@ -302,6 +285,7 @@ function SleevesEditor() {
                 <option value={CASH_REF}>Caixa (CDI)</option>
                 {optGroup("Estratégias da plataforma", builtinRefs)}
                 {userRefs.length > 0 && optGroup("Minhas estratégias de regra", userRefs)}
+                <TickerOptions rows={rows} />
               </select>
               <div className="flex items-center gap-1">
                 <input

@@ -150,6 +150,20 @@ def keys() -> list:
     return sorted(MARKETS)
 
 
+def plane_symbol(ticker: str, key: str | None = None) -> str:
+    """What a caller-facing ticker is called on the market's plane.
+
+    `IVVB11.SA` is `IVVB11` (the ".SA" suffix is from the yfinance era) and
+    `^BVSP` is the stored index `$IBOV`. One function because two callers have to
+    agree on it: `download_benchmark`, which reads a sleeve's prices, and the
+    save-time check that a user's ticker sleeve names something it will find.
+    """
+    spec = get(key)
+    symbol = ticker.strip().upper()
+    return spec.aliases.get(
+        symbol, symbol.removesuffix(spec.suffix_strip) if spec.suffix_strip else symbol)
+
+
 def resolve_tax(key: str | None, params: dict | None = None) -> dict:
     """The tax kwargs `run_simulation` needs, taken from the law.
 

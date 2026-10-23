@@ -37,7 +37,7 @@ from platform_app.models import (
 from platform_app.routes_portfolio_index import bounded, current_rf_marks
 from platform_app.routes_portfolio_settings import _settings_dict
 from platform_app.strategy_specs import (
-    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank,
+    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank, check_sleeve_refs, live_sleeves,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant, get_owned
 
@@ -1412,11 +1412,13 @@ async def get_strategy_spec(
 # ── User-created strategies (spec/06) ─────────────────────────────────────────
 # Pydantic validates the statically-checkable rules at the boundary (name, numeric
 # ranges, rebalance enum, portfolio weights). The engine's validate_spec.py does the
-# deep signal/factor validation; the gallery resolves sleeve refs + the cycle guard.
+# deep signal/factor validation and checks ticker sleeves against the price plane;
+# the gallery resolves sleeve refs + the cycle guard.
 
-async def _validate_spec_engine(spec: dict) -> bool:
-    """Shell validate_spec.py; raise 422 on structured errors, return
-    needs_fundamentals (inferred from f_* refs)."""
+async def _validate_spec_engine(spec: dict) -> dict:
+    """Shell validate_spec.py; raise 422 on structured errors, return the report:
+    needs_fundamentals (inferred from f_* refs) and warnings (a ticker's late first
+    price)."""
     proc = await subprocs.offload(
         enginerun.run_script, "validate_spec.py", ["--spec-json", json.dumps(spec)])
     try:
@@ -1425,7 +1427,7 @@ async def _validate_spec_engine(spec: dict) -> bool:
         raise HTTPException(500, subprocs.report("validate_spec", proc))
     if not report.get("ok"):
         raise HTTPException(422, "; ".join(report.get("errors") or ["invalid spec"]))
-    return bool(report.get("needs_fundamentals"))
+    return report
 
 
 async def _compile_and_validate(
@@ -1444,23 +1446,17 @@ async def _compile_and_validate(
         rows = (await session.scalars(
             select(UserStrategy).where(UserStrategy.tenant_id == tid)
         )).all()
-        user_fixed = {r.name for r in rows if r.kind == "fixed_weight" and r.id != exclude_id}
         user_rank = {r.name for r in rows if r.kind == "rank_and_hold"}
-        resolvable = builtin_names | user_rank | {"CASH_CDI"}
-        for s in body.sleeves:
-            ref = s.strategy_ref
-            if ref in user_fixed or ref == name:
-                raise HTTPException(
-                    422, f"sleeve {ref!r}: a portfolio cannot reference another user "
-                         f"portfolio (would recurse)")
-            if ref not in resolvable:
-                raise HTTPException(422, f"unknown sleeve strategy_ref: {ref!r}")
+        check_sleeve_refs(body, resolvable=builtin_names | user_rank | {"CASH_CDI"},
+                          user_portfolios={r.name for r in rows if r.kind == "fixed_weight"
+                                           and r.id != exclude_id})
         spec = _compile_portfolio(body)
 
-    needs_funds = await _validate_spec_engine(spec)
+    report = await _validate_spec_engine(spec)
+    needs_funds = bool(report.get("needs_fundamentals"))
     if needs_funds:
         spec["needs_fundamentals"] = True  # persist inferred flag for gallery/engine
-    warnings: list[str] = []
+    warnings: list[str] = list(report.get("warnings") or [])
     if needs_funds and not await _fundamentals_available():
         warnings.append(_needs_funds_msg([name]))
     return spec, warnings
@@ -1609,13 +1605,9 @@ async def promote_user_strategy(
     row = await _get_user_strategy(sid, tid, session)
     if row.kind != "fixed_weight":
         raise HTTPException(422, "only portfolio (fixed_weight) strategies can be promoted")
-    sleeves = [
-        SleeveIn(
-            strategy_ref="CASH_CDI" if sl.get("asset") == "CDI" else sl["strategy"],
-            target_pct=round(float(sl["weight"]) * 100.0, 6),
-        )
-        for sl in row.spec.get("sleeves", [])
-    ]
+    # Refuses a portfolio with ticker sleeves: the live target holds strategies.
+    sleeves = [SleeveIn(strategy_ref=ref, target_pct=pct)
+               for ref, pct in live_sleeves(row.spec, row.name)]
     return await put_sleeves(sleeves, tenant, session)
 
 

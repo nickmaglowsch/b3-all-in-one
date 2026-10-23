@@ -7,6 +7,21 @@ it, and what comes back.
 """
 from __future__ import annotations
 
+# Not a oneOf: several clients flatten or drop it, and pydantic gives the model a
+# precise message when a sleeve carries both keys or neither.
+_SLEEVE = {
+    "type": "object",
+    "description": "Exactly one of strategy_ref / ticker, plus target_pct.",
+    "properties": {
+        "strategy_ref": {"type": "string", "description": (
+            "A gallery strategy (built-in or your rank_and_hold) or CASH_CDI.")},
+        "ticker": {"type": "string", "description": (
+            "A listed B3 instrument held directly, e.g. IVVB11.SA, DIVO11.SA, "
+            "BOVA11.SA. Its weight sits in CDI until its first price.")},
+        "target_pct": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
+    },
+    "required": ["target_pct"],
+}
 _SPEC = {
     "type": "object",
     "description": (
@@ -14,7 +29,9 @@ _SPEC = {
         "rebalance, weighting, universe{min_adtv,min_price,smallcap_below_median}, "
         "signal{factor|expr, lookback, ...}, selection{top_pct|top_n, min_names, "
         "dedup_roots, min_hold, sticky}, regime?}. kind=fixed_weight: {kind, name, "
-        "description, rebalance, sleeves[{strategy_ref, target_pct}]} summing to 100. "
+        "description, rebalance, sleeves[...]} with target_pct summing to 100, each "
+        "sleeve exactly one of {strategy_ref, target_pct} (a gallery strategy or "
+        "CASH_CDI) or {ticker, target_pct} (a listed B3 instrument, e.g. IVVB11.SA). "
         "Full reference: get_authoring_guide."),
     "properties": {
         "kind": {"type": "string", "enum": ["rank_and_hold", "fixed_weight"]},
@@ -27,7 +44,7 @@ _SPEC = {
         "signal": {"type": "object"},
         "selection": {"type": "object"},
         "regime": {"type": "object"},
-        "sleeves": {"type": "array", "items": {"type": "object"}},
+        "sleeves": {"type": "array", "items": _SLEEVE},
     },
     "required": ["kind", "name"],
 }
@@ -73,11 +90,17 @@ TOOLS = [
           "(\"mcp\" = created by an AI)."),
     _tool("validate_strategy",
           "Check a spec without saving it: schema, expression syntax, factor names, "
-          "market/fundamentals compatibility. Returns the compiled spec and warnings.",
+          "market/fundamentals compatibility, portfolio sleeve refs, and that each "
+          "ticker sleeve is priced on the B3 plane (an unknown ticker is an error "
+          "naming it; one listed after history starts is a warning with its first "
+          "price date). Returns the compiled spec and warnings.",
           {"spec": _SPEC}, ["spec"]),
     _tool("create_strategy",
-          "Save a new strategy for the user. It appears in /bench under \"Minhas "
-          "estratégias\" marked as created by AI, and can then be backtested by name.",
+          "Save a new strategy for the user: a rank_and_hold book, or a fixed_weight "
+          "portfolio whose sleeves are strategies, CASH_CDI and/or listed tickers "
+          "(e.g. IVVB11.SA). It appears in /bench under \"Minhas estratégias\" marked "
+          "as created by AI, and can then be backtested by name. Same checks as "
+          "validate_strategy.",
           {"spec": _SPEC}, ["spec"], read_only=False),
     _tool("update_strategy",
           "Replace one of the user's strategies with a new spec (renaming allowed; "

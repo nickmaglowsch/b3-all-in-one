@@ -3,7 +3,7 @@
 The engine's own reference is engine/docs/config_strategies.md, written for
 people editing YAML in the repo. This is the same language from the other side
 of the API: the request shape create_strategy accepts (which is not the YAML
-shape — portfolios take strategy_ref/target_pct, not raw sleeves), the limits
+shape — portfolios take strategy_ref|ticker + target_pct, not raw sleeves), the limits
 the platform enforces, and how to read a result without fooling yourself.
 Keep it in step with strategy_specs.py when that model grows a field.
 """
@@ -128,16 +128,47 @@ previous period (no look-ahead); `offset: 0` the current row.
 
 ## 2. Portfolio (`kind: "fixed_weight"`)
 
-A constant-weight blend of strategies plus cash, rebalanced on its own grid.
-Sleeves name built-ins, the user's rank_and_hold strategies, or `CASH_CDI`;
-percentages must sum to 100. A portfolio cannot contain another user portfolio.
+A constant-weight blend, rebalanced on its own grid — the same engine the
+built-in blends ("DIVO11 / CDI / IVVB11 (thirds)") run on. Each sleeve is
+exactly one of:
+
+- `{"strategy_ref": "<name>", "target_pct": N}` — a built-in, one of the user's
+  rank_and_hold strategies, or `CASH_CDI` (cash earning the CDI). A portfolio
+  cannot contain another user portfolio.
+- `{"ticker": "<B3 code>", "target_pct": N}` — one listed instrument held
+  directly, e.g. `IVVB11.SA` (S&P 500 in BRL), `DIVO11.SA`, `BOVA11.SA`
+  (Ibovespa); `.SA` is optional. Indices (`^BVSP`) are not tradable — use the ETF.
+
+Kinds mix freely; percentages must sum to 100 and a ticker appears in one
+sleeve only.
+
+```json
+{"kind": "fixed_weight", "name": "Example 40/30/30", "rebalance": "QE",
+ "sleeves": [{"ticker": "IVVB11.SA", "target_pct": 40},
+             {"ticker": "DIVO11.SA", "target_pct": 30},
+             {"strategy_ref": "CASH_CDI", "target_pct": 30}]}
+```
 
 ```json
 {"kind": "fixed_weight", "name": "AI Blend", "rebalance": "QE",
  "sleeves": [{"strategy_ref": "MomSharpe", "target_pct": 40},
              {"strategy_ref": "AI Momentum 6m Top20", "target_pct": 40},
-             {"strategy_ref": "CASH_CDI", "target_pct": 20}]}
+             {"ticker": "IVVB11.SA", "target_pct": 20}]}
 ```
+
+- validate_strategy refuses a ticker the B3 price plane has never priced, by
+  name. One that lists after the history starts (IVVB11: 2014) comes back as a
+  warning with its first price date: until then its weight is held in CDI, as
+  the built-ins do — so a backtest from before that date is partly a cash one.
+- Tax: ticker sleeves are taxed exactly like the built-in blends' — the same
+  simulator and rule. The bench applies the B3 ações rule (15%, R$20k monthly
+  isenção, loss carry) to the whole book's sales and does not yet treat ETFs
+  apart (by law an ETF sale gets no isenção), so an ETF-heavy book whose
+  monthly sales stay under R$20k reads better after tax than the Receita would
+  score it. Built-ins included; compare like with like.
+- A portfolio with ticker sleeves backtests and lists like any other, but the
+  live rebalance target ("Ativar" in /estrategia) only takes strategies and
+  CASH_CDI, so it cannot be activated there.
 
 ## 3. Running backtests
 

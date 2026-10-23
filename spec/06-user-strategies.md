@@ -16,8 +16,9 @@ one system:
 - **Rule strategy** = a user-authored `rank_and_hold` spec (factor, universe
   filters, top-N, weighting).
 - **Portfolio strategy** = a `fixed_weight` spec whose sleeves are rule
-  strategies + `CDI` — so it backtests through the *same* path, no parallel
-  machinery.
+  strategies, built-ins, listed tickers (`IVVB11.SA`) + `CDI` — the sleeve
+  forms the built-in blends use — so it backtests through the *same* path, no
+  parallel machinery.
 
 Reuse the spec system and the existing backtest/advise paths. Do not invent
 new strategy machinery.
@@ -75,15 +76,26 @@ user_strategies
 
 ## Portfolio strategy semantics
 
-Store as a `user_strategies` row, `kind='fixed_weight'`. Sleeves map 1:1:
-`{strategy_ref: X, target_pct: 40}` → `{strategy: X, weight: 0.40}`; `CASH_CDI`
-→ `{asset: CDI, weight: ...}`.
+Store as a `user_strategies` row, `kind='fixed_weight'`. A request sleeve is
+exactly one of `{strategy_ref, target_pct}` or `{ticker, target_pct}`, and maps
+1:1: `{strategy_ref: X, target_pct: 40}` → `{strategy: X, weight: 0.40}`;
+`CASH_CDI` → `{asset: CDI, weight: ...}`; `{ticker: IVVB11, target_pct: 25}` →
+`{ticker: IVVB11.SA, weight: 0.25}` (normalised to the built-ins' spelling). The
+compiled spec always carries `park_in_cdi_until_live: true`: before a ticker's
+first price its weight sits in CDI, as in "DIVO11 / CDI / IVVB11 (thirds)".
 
-- Backtests for free via `run_backtest_json` + `run_simulation`.
+- Backtests for free via `run_backtest_json` + `run_simulation`. Ticker sleeves
+  run through `FixedWeight`'s ticker branch and the market's tax rule exactly as
+  the built-ins' do (`engine/tests/test_user_portfolio_parity.py` pins a user
+  copy of the thirds to the built-in's curves). That rule is the B3 ações one
+  for the whole book; the engine does not treat ETF sales apart (no isenção by
+  law) — for built-ins or user portfolios.
 - **Live target stays `PortfolioSleeve`.** "Promote to live" compiles the spec's
   sleeves through the existing PUT `/portfolio/sleeves` logic (routes.py:268).
   Two representations on purpose: named spec = saved/backtestable artifact;
-  sleeve set = single live target. One-way sync at promote.
+  sleeve set = single live target. One-way sync at promote. A live sleeve is a
+  strategy (advised per strategy), so promoting a portfolio with ticker sleeves
+  is a 422 naming them — never a silent drop of part of the portfolio.
 - **Cycle guard:** a user portfolio sleeve may reference built-ins, `CASH_CDI`,
   or the tenant's *rank_and_hold* strategies — never another user
   `fixed_weight` (prevents registry recursion at config_strategy.py:362).
@@ -117,9 +129,15 @@ Store as a `user_strategies` row, `kind='fixed_weight'`. Sleeves map 1:1:
    signal, `ast.parse` + the `_ALLOWED` whitelist walk (expose
    `signal_dsl.check_syntax(expr)`); factor must be a `signals.yaml` name or a
    whitelisted shared-data key; **reject `store:`**; infer/enforce
-   `needs_fundamentals: true` when any `f_*` key is referenced. Prints
-   `{ok, errors, needs_fundamentals}`, exit 0/1. Platform shells it on save.
-3. No dry-run backtest on save; first real backtest is the dry run.
+   `needs_fundamentals: true` when any `f_*` key is referenced. For
+   `fixed_weight`: each sleeve is exactly one of ticker / asset CDI / strategy,
+   and every ticker must have prices on the B3 plane (`sleeve_tickers.py`, the
+   one plane read on save) — unknown is an error naming it, a first price after
+   the history starts is a warning naming the date. Prints
+   `{ok, errors, warnings, needs_fundamentals}`, exit 0/1. Platform shells it on
+   save and returns the warnings with the row.
+3. No dry-run backtest on save; first real backtest is the dry run. (The ticker
+   check reads two index probes off `prices`, not a backtest.)
    Fundamentals gaps → clean 422 via `EngineNeedsFundamentals`
    (enginerun.py:27), reusing the soft-warning-on-save pattern from
    `put_sleeves` (routes.py:298-303).

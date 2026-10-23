@@ -421,6 +421,10 @@ table in `backtests/core/signal_dsl.py`. That's rare; factors are data.
 - **Warmup / shift.** The loop starts at `signal.lookback + warmup_pad`
   (default pad 1). An expression that shifts one extra row (`shift(...,1)`)
   consumes a row — use `warmup_pad: 2` to match a `range(lookback+2, ...)` original.
+  The headless runner loads those rows from *before* the run's `start` and cuts
+  them off before simulating (`backtests/core/warmup.py`), so the warm-up does not
+  cost the window; `warmup`/`lookback`/`warmup_pad` and the expression's windows
+  size that pre-roll, so keep them honest.
 - **`apply_glitch`.** Defaults true (NaN-out flagged prints before ranking). Set
   `false` when the factor is already clean/pre-masked (`mf_composite`) or when the
   `expr` masks each leg itself with `mask_glitch(...)` (see `multifactor.yaml`).

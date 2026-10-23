@@ -41,6 +41,9 @@ def summarize(run: dict) -> dict:
         out["error"] = run["error"][-600:]
     if m:
         out["window"] = {k: m.get(k) for k in ("start", "end", "freq", "market", "periods")}
+        # The first rebalance the book was invested on. A run before the engine
+        # warmed signals up ahead of `start` has none; null, not a guess.
+        out["window"]["invested_from"] = m.get("invested_from")
         out.update({b: _basis(m, b) for b in BASES})
         out["total_tax_paid"] = m.get("total_tax_paid")
         out["final_aftertax_nav"] = m.get("final_aftertax_nav")

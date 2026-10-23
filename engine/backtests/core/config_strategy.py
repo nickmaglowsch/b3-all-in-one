@@ -363,13 +363,14 @@ class FixedWeight(_SpecStrategy):
 
 
 def _nest_sleeve(name: str, weight: float, shared_data: dict, params: dict, r, tw) -> None:
-    """Nest a registered strategy as one sleeve: run it, scale its target weights
-    by this sleeve's weight and fold them into the blend, in place. Its stocks and
-    CDI_ASSET already share the blend's return matrix; a column that does not (a
-    nested portfolio's ETF) takes the nested run's own returns, not a flat zero."""
+    """Run a registered strategy, scale its book by `weight`, fold it into the blend
+    in place. Its stocks and CDI_ASSET already share the blend's return matrix; a
+    column that does not (a nested portfolio's ETF) takes the nested run's returns."""
     from backtests.core.strategy_registry import get_registry
     sub = get_registry().get(name)
     r_sub, tw_sub = sub.generate_signals(shared_data, {**sub.get_default_parameters(), **params})
+    # For warmup.late_books: a sleeve still warming up hides behind CDI.
+    shared_data.setdefault("_sleeve_books", {})[name] = tw_sub
     for col in tw_sub.columns:
         if col not in tw.columns:
             tw[col] = 0.0
@@ -384,9 +385,8 @@ def _ticker_sleeve(ticker: str, weight: float, shared_data: dict, r, tw, park: b
     from backtests.core.data import download_benchmark
     col = ticker.split(".")[0]
     px_daily = download_benchmark(ticker, str(r.index[0].date()), str(r.index[-1].date()))
-    # Stash the daily ETF returns so the daily NAV reconstruction
-    # (metrics.strategy_daily_values) can mark this sleeve intra-period;
-    # the rebalance-cadence `r[col]` below can't reveal its drawdown.
+    # Daily returns for metrics.strategy_daily_values to mark this sleeve
+    # intra-period; the rebalance-cadence `r[col]` can't reveal its drawdown.
     shared_data.setdefault("_daily_asset_ret", {})[col] = px_daily.pct_change()
     px = px_daily.reindex(r.index, method="ffill")
     r[col] = px.pct_change().fillna(0.0)

@@ -67,16 +67,15 @@ def compute_trades(
       • diff > 0 while short is a *sell*: covering realizes taxable P&L.
       • crossing zero is close-then-open: the whole position through sells,
         the new side through buys.
-    Pure: no mutation of `positions`. Set-iteration order is irrelevant — the
-    outputs are per-ticker dict entries, no cross-ticker accumulation here.
+    Pure: no mutation of `positions`. The order is not irrelevant, though: the
+    caller sums over these dicts and opens positions in their order, and float
+    addition is not associative. A set here made a run's last bits depend on the
+    process's string hash seed — held book first, then new targets, in order.
     """
     sells: dict[str, float] = {}  # {ticker: cash_to_raise}
     buys: dict[str, float] = {}   # {ticker: cash_to_deploy}
 
-    target_tickers = set(target_weights[target_weights != 0].index)
-    current_tickers = set(positions.keys())
-    all_tickers = target_tickers | current_tickers
-
+    all_tickers = dict.fromkeys([*positions, *target_weights[target_weights != 0].index])
     for t in all_tickers:
         current_val = positions.get(t, {}).get("current_value", 0.0)
         target_w = target_weights.get(t, 0.0)

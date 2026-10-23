@@ -19,6 +19,8 @@ from platform_app.billing import (
 )
 from platform_app.config import settings
 from platform_app.db import engine
+from platform_app.mcp_auth import mcp_tokens_router
+from platform_app.mcp_server import mcp_router
 from platform_app.models import User
 from platform_app.oauth_login import bind_oauth_state
 from platform_app.oauth_login import router as oauth_login_router
@@ -152,6 +154,11 @@ app.include_router(backtest_retention_router, dependencies=[Depends(needs_bench)
 # The rulers the bench draws a run against. Gated with the bench itself: they
 # are only reachable from it, and the engine subprocess behind them is not free.
 app.include_router(benchmarks_router, dependencies=[Depends(needs_bench)])
+# The bench for AI clients (spec/09). The token routes carry the bench gate
+# themselves; /mcp authenticates its own bearer tokens and re-checks the gate on
+# every tool call, so neither can sit behind the session-JWT dependency here.
+app.include_router(mcp_tokens_router)
+app.include_router(mcp_router)
 
 
 @app.get("/health")

@@ -98,6 +98,31 @@ gated on `RUN_MIGRATIONS=1`); the **worker** applies its own procrastinate schem
 Uploaded files land on a shared `uploads_data` volume mounted into both services at
 `/data/uploads`, so files the api saves are visible to the worker's import jobs.
 
+### Strategy research by AI — the bench as an MCP server (spec/09)
+
+`POST /mcp` speaks the [Model Context Protocol](https://modelcontextprotocol.io)
+(Streamable HTTP, stateless JSON), so Claude — or any MCP client — can read the
+strategy language, save strategies and run backtests on the user's account. What it
+saves lands in **Minhas estratégias** with an `IA` badge; its runs land in **Rodadas**.
+
+- `GET/POST/DELETE /mcp/tokens` — the book's access tokens (`bench` module). The
+  token (`qtx_mcp_…`) is shown once at creation and stored as a sha256; it does not
+  expire, revoking it is how it ends. The `/bench` page has a card that mints one
+  and prints the line to paste:
+
+  ```bash
+  claude mcp add --transport http quantax-bench https://<api>/mcp \
+    --header 'Authorization: Bearer qtx_mcp_…'
+  ```
+
+- Tools: `get_authoring_guide`, `list_signals`, `list_strategies`,
+  `get_strategy_spec`, `list_my_strategies`, `validate_strategy`, `create_strategy`,
+  `update_strategy`, `delete_strategy`, `run_backtest` (waits up to `wait_seconds`),
+  `get_backtest`, `list_backtests` (a leaderboard: `sort_by=sharpe`, after-tax by
+  default) and `get_backtest_curve` (downsampled curves + calendar-year returns).
+  Each is a thin adapter over the route the bench UI calls, so validation, the
+  backtest quota and the caches are shared. See `spec/09-mcp.md`.
+
 ### Portfolio benchmarking (spec/03)
 
 Two complementary answers to "how am I doing?", both off the tenant's own book:

@@ -2,29 +2,16 @@ import datetime
 import uuid
 
 from fastapi_users_db_sqlalchemy.generics import GUID
-from fastapi_users.db import (
-    SQLAlchemyBaseOAuthAccountTableUUID,
-    SQLAlchemyBaseUserTableUUID,
-)
+from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
-    BigInteger,
-    Boolean,
-    Date,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    Numeric,
-    String,
-    Text,
-    UniqueConstraint,
-    func,
-    text,
+    BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Numeric, String, Text,
+    UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from platform_app.db import Base
+from platform_app.mcp_models import McpToken  # noqa: F401  (registers the table)
 
 
 class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, Base):
@@ -349,6 +336,8 @@ class UserStrategy(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     kind: Mapped[str] = mapped_column(Text, nullable=False)  # rank_and_hold | fixed_weight
     spec: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # Who authored it: NULL from the bench form, "mcp" from an AI over /mcp (spec/09).
+    origin: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -456,3 +445,4 @@ class TaxSummary(Base):
     computed_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+

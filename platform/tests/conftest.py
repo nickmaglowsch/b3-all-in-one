@@ -78,7 +78,8 @@ def sample_value(col):
         dict: {},
         datetime.date: datetime.date(2026, 1, 1),
         datetime.datetime: datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC),
-    }.get(py, "x")
+    # A unique text column (mcp_tokens.token_hash) is seeded once per book.
+    }.get(py, uuid.uuid4().hex if col.unique else "x")
 
 
 async def seed_tenant_tables(session, tenant_id) -> list:

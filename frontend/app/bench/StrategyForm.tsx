@@ -196,10 +196,11 @@ function StrategyFormInner({
   );
   // Optional signal/top-level fields the form doesn't expose — preserved so an
   // edit or full clone round-trips instead of silently dropping
-  // range/shift/warmup_pad.
+  // range/shift/warmup_pad, or an AI-authored spec's market/min_hold/sticky.
   const [preserved] = useState(() => ({
     signal: srcSpec ? pick(obj(srcSpec.signal), ["range", "shift", "apply_glitch"]) : {},
-    top: srcSpec ? pick(srcSpec, ["warmup_pad"]) : {},
+    selection: srcSpec ? pick(obj(srcSpec.selection), ["min_hold", "sticky"]) : {},
+    top: srcSpec ? pick(srcSpec, ["warmup_pad", "market"]) : {},
     fundLocked: Boolean(srcSpec?.needs_fundamentals ?? clone?.needs_fundamentals),
   }));
   // Regime overlay: parsed from the source spec (edit/full clone), else empty.
@@ -228,8 +229,7 @@ function StrategyFormInner({
     : isFundExpr(factorExpr) || preserved.fundLocked;
 
   const error = validate(f);
-  const apiMsg =
-    save.error ? errorText(save.error, "Falha ao salvar a estratégia.") : null;
+  const apiMsg = save.error ? errorText(save.error, "Falha ao salvar a estratégia.") : null;
 
   function submit() {
     setTried(true);
@@ -240,7 +240,7 @@ function StrategyFormInner({
     if (f.lookback !== "") signal.lookback = Number(f.lookback);
     Object.assign(signal, preserved.signal);
 
-    const selection: Record<string, unknown> = {};
+    const selection: Record<string, unknown> = { ...preserved.selection };
     if (f.selMode === "top_pct") selection.top_pct = Number(f.topPct);
     else selection.top_n = Number(f.topN);
     if (f.minNames !== "") selection.min_names = Number(f.minNames);

@@ -52,7 +52,7 @@ CONTACT = "privacidade@quantax.com.br"
 # the same reason — it carries the tail of a subprocess stderr, so a deliberately
 # corrupt .xlsx would otherwise turn the export into a map of the deploy. The
 # row's `status` still says the job failed, which is the part that is about them.
-_INTERNAL_COLUMNS = {"stored_path", "artifacts_path", "error"}
+_INTERNAL_COLUMNS = {"stored_path", "artifacts_path", "error", "token_hash"}
 
 
 def _tenant_tables() -> list:

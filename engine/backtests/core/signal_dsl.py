@@ -114,6 +114,11 @@ def _build_funcs(ns: dict) -> dict:
     }
 
 
+# The callable vocabulary, by name. The table is built per namespace (two of its
+# entries close over the data), but its keys never depend on it.
+FUNCTION_NAMES = frozenset(_build_funcs({}))
+
+
 def _reject_disallowed_syntax(tree: ast.AST, expr: str) -> None:
     """Walk the AST and reject any node type outside the whitelist. Shared by
     evaluate() (before eval) and check_syntax() (data-free validation) so the

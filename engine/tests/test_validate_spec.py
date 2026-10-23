@@ -108,3 +108,42 @@ def test_an_unknown_market_is_rejected_rather_than_defaulting_to_b3():
     r = validate(_rank({"factor": "momentum", "lookback": 6}, market="USA"))
     assert not r["ok"]
     assert any("Unknown market" in e for e in r["errors"])
+
+
+def test_an_unknown_function_is_rejected_at_save_not_at_run():
+    r = validate(_rank({"expr": "roll_summ(ret, lookback)", "lookback": 6}))
+    assert not r["ok"]
+    assert any("unknown function(s) ['roll_summ']" in e for e in r["errors"])
+
+
+def test_every_documented_function_passes():
+    expr = ("nan_add(rank(zscore(roll_sum(shift(log_ret, 1), lookback))), "
+            "demean(-at_rebalance(ewm_std(pct_change(adj_close), 21))))")
+    assert validate(_rank({"expr": expr, "lookback": 6}))["ok"]
+
+
+_GATE = {"inputs": {"trend": {"flag": "bench_above", "offset": 1}},
+         "rules": [{"trend": True}, {"min_true": 1, "top_pct": 0.05},
+                   {"default": True, "park": True}]}
+
+
+def test_a_well_formed_regime_is_ok():
+    assert validate(_rank({"factor": "momentum"}, regime=_GATE))["ok"]
+
+
+def test_a_rule_on_an_undeclared_input_is_rejected():
+    regime = {**_GATE, "rules": [{"trnd": True}, {"default": True, "park": True}]}
+    r = validate(_rank({"factor": "momentum"}, regime=regime))
+    assert not r["ok"] and any("['trnd'] is not a declared input" in e for e in r["errors"])
+
+
+def test_a_regime_input_without_a_flag_is_rejected():
+    regime = {**_GATE, "inputs": {"trend": {"offset": 1}}}
+    r = validate(_rank({"factor": "momentum"}, regime=regime))
+    assert not r["ok"] and any("needs a `flag`" in e for e in r["errors"])
+
+
+def test_a_regime_without_rules_is_rejected():
+    for regime in ({"inputs": {}}, ["not", "a", "mapping"]):
+        r = validate(_rank({"factor": "momentum"}, regime=regime))
+        assert not r["ok"] and any("`rules` list" in e for e in r["errors"])

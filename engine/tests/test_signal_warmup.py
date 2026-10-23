@@ -35,7 +35,7 @@ import yaml
 
 from b3_pipeline import market_storage, storage
 from backtests.core import shared_data as sd
-from backtests.core import warmup
+from backtests.core import universe, warmup
 from backtests.core.config_strategy import FixedWeight, RankAndHold
 from backtests.core.strategy_registry import get_registry
 
@@ -240,21 +240,25 @@ def test_a_full_history_run_is_the_old_run_plus_the_warning(world, strategy):
 
 # ── (e) no look-ahead ─────────────────────────────────────────────────────────
 
-def _book(monkeypatch, plane: str) -> pd.DataFrame:
-    """WarmMom's in-window weights, in process, as the runner builds them."""
+def _book(monkeypatch, plane: str, spec=MOM, params=None,
+          start="2019-01-01", loaded_from=None) -> pd.DataFrame:
+    """A spec's in-window weights, in process, as the runner builds them —
+    loaded from its own pre-roll, or from `loaded_from` when given."""
     def flat(s, e, *_a, **_k):
         return pd.Series(0.0, index=pd.bdate_range(s, e))
     monkeypatch.setattr(sd, "download_cdi_daily", flat)
     monkeypatch.setattr(sd, "download_benchmark",
                         lambda t, s, e, **k: flat(s, e) + 100.0)
     monkeypatch.setenv("ENGINE_DATABASE_URL", plane)
-    strat = RankAndHold(MOM)
-    params = strat.get_default_parameters()
-    months = warmup.months_for(strat, params, "ME")
-    shared = sd.build_shared_data(plane, "2019-01-01", LAST_BAR, "ME", market="CRYPTO",
-                                  warmup_from=warmup.load_start("2019-01-01", months))
-    _, tw = strat.generate_signals(shared, params)
-    return warmup.in_window(tw, "2019-01-01")
+    monkeypatch.delenv("ENGINE_WARMUP_MONTHS", raising=False)
+    strat = RankAndHold(spec)
+    params = params or strat.get_default_parameters()
+    loaded_from = loaded_from or warmup.load_start(
+        start, warmup.months_for(strat, params, "ME"))
+    shared = sd.build_shared_data(plane, start, LAST_BAR, "ME", market="CRYPTO",
+                                  warmup_from=loaded_from)
+    ret, tw = strat.generate_signals(shared, params)
+    return warmup.cut(universe.fill_returns(ret, shared["delist_ret"]), tw, start)[1]
 
 
 def test_weights_at_t_ignore_every_bar_after_t(world, tmp_path, monkeypatch):
@@ -309,6 +313,11 @@ def test_expression_windows_count_in_their_own_units(monkeypatch):
     # mean starts, dist_ma200 200 sessions — whether inside a window or bare.
     assert months("roll_mean(mf_composite, 12)") == 13 + 11 + 1 + 3
     assert months("roll_mean(dist_ma200, 12)") == math.ceil(1 + 200 / 21 + 11 + 1) + 3
+    # The glitch mask is 12 periods of its own, read inside an expression or,
+    # by default, applied over the whole signal.
+    assert months("roll_mean(mask_glitch(ret), 3)", apply_glitch=False) == 12 + 2 + 1 + 3
+    assert months("-roll_std(ret, 3)", apply_glitch=False) == 1 + 2 + 1 + 3
+    assert months("-roll_std(ret, 3)") == 12 + 1 + 3
     bare = {**MOM, "signal": {"factor": "mf_composite"}, "warmup_pad": 0}
     assert warmup.months_for(RankAndHold(bare), {}, "ME") == 13 + 1 + 3
     # Bounded, whatever the expression asks for.
@@ -365,16 +374,61 @@ def test_an_empty_first_row_with_history_behind_it_is_not_called_a_warm_up():
     dates = pd.date_range("2019-01-31", periods=6, freq="ME")
     tw = _book_frame(dates, "2019-03-31")
     covered = {"sessions": pd.date_range("2017-08-01", "2019-06-30")}
-    invested, notes = warmup.late_books("X", tw, dates[0], covered, "2017-08-01", 17)
+    invested, notes = warmup.late_books("X", tw, covered, "2017-08-01", 17)
     assert invested == "2019-03-31"
     assert [n["code"] for n in notes] == [warmup.NOT_INVESTED]
     short = {"sessions": pd.date_range("2018-06-01", "2019-06-30")}
-    _, notes = warmup.late_books("X", tw, dates[0], short, "2017-08-01", 17)
+    _, notes = warmup.late_books("X", tw, short, "2017-08-01", 17)
     assert [n["code"] for n in notes] == [warmup.WARNING]
-    # Live before the window opens: held into it, so invested from the open.
-    early = _book_frame(pd.date_range("2018-01-31", periods=18, freq="ME"), "2018-03-31")
-    assert warmup.late_books("X", early, pd.Timestamp("2019-01-31"), covered,
-                             "2017-08-01", 17) == ("2019-01-31", [])
+
+
+def test_invested_from_follows_what_the_window_actually_holds():
+    months = pd.date_range("2018-11-30", periods=6, freq="ME")
+    covered = {"sessions": pd.date_range("2017-01-01", "2019-06-30")}
+    ret = pd.DataFrame(0.0, index=months, columns=["A", "B"])
+    # Held into the window: `cut` carries the book, so invested from the open.
+    held = _book_frame(months, "2018-11-30")
+    held.loc["2019-01-31"] = 0.0
+    _, tw = warmup.cut(ret, held, "2019-01-01")
+    assert warmup.late_books("X", tw, covered, "2017-01-01", 17) == ("2019-01-31", [])
+    # Wiped out while held: there is nothing to carry, so not invested yet.
+    wiped, idle = ret.copy(), held.copy()
+    idle.loc["2018-12-31"] = 0.0
+    wiped.loc["2018-12-31", "A"] = -1.0
+    _, tw = warmup.cut(wiped, idle, "2019-01-01")
+    assert warmup.late_books("X", tw, covered, "2017-01-01", 17)[0] == "2019-02-28"
+    # A blend's sleeve empty on the open has its share in CDI on both runs: the
+    # blend is not invested in it there, whatever the sleeve held before.
+    blend = _book_frame(months, "2018-11-30")
+    sleeves = {**covered, "_sleeve_books": {"S": held}}
+    _, tw = warmup.cut(ret, blend, "2019-01-01")
+    invested, notes = warmup.late_books("X", tw, sleeves, "2017-01-01", 17)
+    assert invested == "2019-02-28"
+    assert [(n["code"], n["detail"]["strategy"]) for n in notes] == \
+        [(warmup.NOT_INVESTED, "S")]
+
+
+def test_the_glitch_mask_is_warmed_up_before_the_window(tmp_path, monkeypatch):
+    """`_build_signal` masks every signal with `has_glitch` (a 12-period rolling
+    max) unless the spec opts out, and that mask is outside the expression. A
+    pre-roll sized from the expression alone left BottomVol — six months of
+    daily vol — ten rows: the mask had not started on the window's first rows,
+    and the book held a name whose unadjusted 10:1 reverse split a longer run
+    screens out for a year."""
+    prices = _prices(5)
+    split = (prices["symbol"] == "S03USDT") & (prices["date"] >= pd.Timestamp("2018-06-15").date())
+    for col in ("open", "high", "low", "close", "adj_close", "split_adj_close",
+                "close_brl", "adj_close_brl"):
+        prices.loc[split, col] *= 10.0
+    plane = _plane(tmp_path / "split.sqlite", prices)
+    spec = {**get_registry().get("BottomVol").spec, "market": "CRYPTO"}
+    strat = RankAndHold(spec)
+    params = {**strat.get_default_parameters(), "min_adtv": 0, "min_price": 0}
+    assert warmup.months_for(strat, params, "ME") == 13 + 3
+    window = _book(monkeypatch, plane, spec, params)
+    full = _book(monkeypatch, plane, spec, params, loaded_from=FIRST_BAR)
+    assert window.loc["2019-01-31", "S03USDT"] == 0.0
+    pd.testing.assert_frame_equal(window, full)
 
 
 def test_cut_drifts_the_held_book_exactly_as_the_simulator_marks_it():

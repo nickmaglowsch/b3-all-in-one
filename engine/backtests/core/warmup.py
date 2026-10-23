@@ -130,11 +130,8 @@ def _held_book(returns: pd.DataFrame, tw: pd.DataFrame, first) -> pd.Series | No
 # ── What the run reports ──────────────────────────────────────────────────────
 
 def _first_live(book: pd.DataFrame, opens):
-    """The first rebalance from `opens` on that `book` holds something on. A
-    book live at or before `opens` holds from `opens` — a hold row carries it."""
-    live = _live(book)
-    if len(live) and live[0] <= opens:
-        return opens
+    """The first rebalance from `opens` on that `book` holds something on."""
+    live = _live(book.loc[book.index >= opens])
     return live[0] if len(live) else None
 
 
@@ -150,22 +147,25 @@ def _short(shared, loaded_from: str, months: int) -> bool:
     return pd.Timestamp(sessions[0]) > pd.Timestamp(loaded_from) + _GRACE
 
 
-def late_books(name: str, tw: pd.DataFrame, opens, shared,
+def late_books(name: str, tw: pd.DataFrame, shared,
                loaded_from: str, months: int) -> tuple[str | None, list]:
-    """``(invested_from, warnings)`` for a run whose window opens on `opens`.
+    """``(invested_from, warnings)`` for a run's in-window weights `tw`.
 
-    `tw` is the strategy's whole book, pre-roll included: it is what says
-    whether something was held into the window. `invested_from` is the first
-    rebalance on which every book in the run holds something: the strategy's own
-    and, in a blend, each strategy sleeve's — a sleeve still warming up has its
-    share parked in CDI, which keeps the blend's rows non-empty and would
-    otherwise hide it. None if some book never goes live in the window.
+    `tw` is the book `cut` returned — so a book held into the window already
+    shows on its first row, and one wiped out while held does not. `invested_from`
+    is the first rebalance on which every book in the run holds something: the
+    strategy's own and, in a blend, each strategy sleeve's. A sleeve with an
+    empty row has its share parked in CDI, which keeps the blend's rows
+    non-empty and would otherwise hide it — whether it is still warming up or
+    holding nothing that period, it is not invested in what it is there for.
+    None if some book never goes live in the window.
 
     A book not live on `opens` is reported: `warmup_inside_window` when the
     archive did not reach back as far as the pre-roll asked (the warm-up fell in
     the window), `not_invested_at_start` when it did and the book was empty
     anyway.
     """
+    opens = tw.index[0]
     books = {name: tw, **(shared.get("_sleeve_books") or {})}
     firsts = {k: _first_live(b, opens) for k, b in books.items()}
     code = WARNING if _short(shared, loaded_from, months) else NOT_INVESTED

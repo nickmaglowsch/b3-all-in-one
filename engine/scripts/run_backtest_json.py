@@ -172,15 +172,18 @@ def main() -> None:
                                warmup_from=loaded_from)
     memory.trace("shared_data")
 
-    ret_matrix, full_tw = strat.generate_signals(shared, params)
+    ret_matrix, tw = strat.generate_signals(shared, params)
+    # Before the cut: the book `warmup.cut` carries into `start` from the pre-roll
+    # must be the deduplicated one the simulator would have held. Row by row, so
+    # the in-window rows are what deduplicating after the cut gave.
+    tw = dedup_target_weights(tw, shared["adtv"], market=market)
     # Not a bare fillna(0.0): once the price fill stops at delisting a dead
     # name's return is NaN, and zeroing it would freeze the position at its last
     # value forever. fill_returns books the terminal return.
     returns = universe.fill_returns(ret_matrix, shared["delist_ret"])
     # The pre-roll is for the signals only. Cut here, before the simulator sees a
     # row of it, so no trade, tax event or NAV mark lands before `start`.
-    returns, tw = warmup.cut(returns, full_tw, start)
-    tw = dedup_target_weights(tw, shared["adtv"], market=market)
+    returns, tw = warmup.cut(returns, tw, start)
     memory.trace("signals")
     result = run_simulation(
         returns_matrix=returns,
@@ -215,8 +218,7 @@ def main() -> None:
     # The last read of the bundle. Everything below works off `result`, `tw` and
     # `strat_daily`, so the daily panels — the largest objects in the process —
     # are dropped before the metrics and the artifacts are built.
-    invested_from, late = warmup.late_books(
-        name, full_tw, tw.index[0], shared, loaded_from, warmup_months)
+    invested_from, late = warmup.late_books(name, tw, shared, loaded_from, warmup_months)
     data_warnings = shared.get("data_warnings", []) + late
     del shared
     memory.trace("simulation")

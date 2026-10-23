@@ -112,14 +112,24 @@ def _ranker_months(spec: dict, params: dict, mpp: float) -> float:
     """A rank_and_hold spec's warm-up, the longest of: the rows its own loop
     skips (`warmup`, or lookback + warmup_pad); what its regime flags need before
     the offset it reads them at; and its expression, plus the row the weight at
-    i reads it from (i - 1)."""
+    i reads it from (i - 1).
+
+    The expression is not the whole signal. `_build_signal` masks it with
+    `has_glitch` unless `apply_glitch: false`, and that mask is a 12-period
+    rolling max that masks nothing until it has its twelve rows — so a 6-month
+    low-vol book loaded from 10 months back held a reverse split's fake return
+    that a longer run screens out. The mask is costed like the expression.
+    """
     sig = spec.get("signal", {})
     lookback = int(params.get("lookback", sig.get("lookback", 0)) or 0)
     periods = int(spec.get("warmup", lookback + int(spec.get("warmup_pad", 1))))
     regime = (spec.get("regime") or {}).get("inputs", {})
     flags = [_leaf(ic.get("flag"), mpp) + int(ic.get("offset", 1)) * mpp
              for ic in regime.values()]
-    return max(periods * mpp, *flags, _expr_months(sig, lookback, params, mpp) + mpp)
+    signal = _expr_months(sig, lookback, params, mpp)
+    if sig.get("apply_glitch", True):
+        signal = max(signal, _leaf("has_glitch", mpp))
+    return max(periods * mpp, *flags, signal + mpp)
 
 
 def _expr_months(sig: dict, lookback: int, params: dict, mpp: float) -> float:
@@ -166,6 +176,8 @@ class _Span:
         fn, args = node.func.id, node.args
         inner = _SESSION if fn == "at_rebalance" else unit
         need = max((self.months(a, inner) for a in args), default=0.0)
+        if fn == "mask_glitch":     # reads has_glitch, which is not an argument
+            need = max(need, _leaf("has_glitch", self.mpp))
         return need + self._rows(fn, args) * unit
 
     def _rows(self, fn: str, args) -> float:

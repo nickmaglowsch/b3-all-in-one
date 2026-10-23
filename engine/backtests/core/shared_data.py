@@ -101,6 +101,7 @@ def build_shared_data(
     freq: str = "ME",
     include_fundamentals: bool = False,
     market: str = markets.DEFAULT,
+    warmup_from: str | None = None,
 ) -> dict:
     """
     Load and precompute all shared DataFrames needed by strategy plugins.
@@ -113,6 +114,10 @@ def build_shared_data(
         market:   Which market to trade — see backtests.core.markets. Defaults to
                   B3, so every shipped spec and every stored user strategy that
                   does not mention a market keeps its exact behaviour.
+        warmup_from: Load the market from this earlier date, so signals have
+                  their history before `start` (backtests.core.warmup). Every
+                  frame then starts here; the caller cuts the pre-roll off.
+                  `data_warnings` still describes the window from `start`.
 
     Returns:
         A dict-like bundle of the precomputed DataFrames and Series — see the
@@ -122,6 +127,9 @@ def build_shared_data(
     """
     spec = markets.get(market)
     lookback = 12  # default lookback periods
+    # Everything is read from the pre-roll on; only the coverage notes are about
+    # the window the caller asked for.
+    window_start, start = start, warmup_from or start
 
     # ── 1. The market, as a view rather than a load ──────────────────────────
     view = plane.MarketView(db_path, start, end, spec)
@@ -250,7 +258,7 @@ def build_shared_data(
             intervals, sessions, symbols, dense=False),
         # What this window's data cannot support, as codes. Every branch lives
         # inside coverage_notes, which degrades to [] rather than failing a run.
-        "data_warnings": universe.coverage_notes(db_path, spec.key, start, end),
+        "data_warnings": universe.coverage_notes(db_path, spec.key, window_start, end),
     })
 
     _defer_derived(shared, freq, intervals, sessions, symbols)

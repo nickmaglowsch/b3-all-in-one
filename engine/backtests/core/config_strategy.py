@@ -356,6 +356,8 @@ class FixedWeight(_SpecStrategy):
                 sub = get_registry().get(sleeve["strategy"])
                 sub_params = {**sub.get_default_parameters(), **params}
                 _, tw_sub = sub.generate_signals(shared_data, sub_params)
+                # For warmup.late_books: a sleeve still warming up hides behind CDI.
+                shared_data.setdefault("_sleeve_books", {})[sleeve["strategy"]] = tw_sub
                 for col in tw_sub.columns:
                     if col not in tw.columns:
                         tw[col] = 0.0

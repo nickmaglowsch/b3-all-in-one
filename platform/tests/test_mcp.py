@@ -272,6 +272,7 @@ async def _seed_done_run(session_maker, tid, strategy, sharpe, ann, tmp: Path) -
             params={"params": {"lookback": 6}, "start": "2020-01-01", "end": None, "freq": "ME"},
             metrics={"strategy": strategy, "start": "2020-01-01", "end": "2021-12-31",
                      "freq": "ME", "market": "B3", "periods": 4, "data_warnings": [],
+                     "invested_from": "2020-01-31",
                      "total_tax_paid": 1.0, "final_aftertax_nav": 132.0,
                      "pretax": block("Pre-Tax"), "aftertax": block("After-Tax")},
             artifacts_path=str(out),
@@ -314,6 +315,7 @@ async def test_backtest_tools(client, tmp_path):
     assert [r["run_id"] for r in board][:2] == [good, meh]
     assert {r["status"] for r in board[2:]} == {"pending"}  # no metric → last
     assert board[0]["aftertax"]["sharpe"] == 0.9 and board[0]["window"]["end"] == "2021-12-31"
+    assert board[0]["window"]["invested_from"] == "2020-01-31"
     only, _ = await _call(client, token, "list_backtests", strategy="LowVol")
     assert [r["run_id"] for r in only] == [meh]
     _, err = await _call(client, token, "list_backtests", sort_by="vibes")
@@ -363,7 +365,12 @@ async def test_client_book_token_needs_empresarial(client):
 
 
 async def test_results_helpers_edges():
-    from platform_app.mcp_results import ToolError, _sample, _yearly, leaderboard
+    from platform_app.mcp_results import ToolError, _sample, _yearly, leaderboard, summarize
+
+    # A run stored before the engine reported invested_from says null, not a date.
+    old = summarize({"id": "r", "strategy": "A", "status": "done",
+                     "metrics": {"start": "2019-01-01", "pretax": {}}})
+    assert old["window"]["invested_from"] is None
 
     assert _sample(3, 10) == [0, 1, 2]
     assert _sample(100, 5)[-1] == 99 and len(_sample(100, 5)) == 5

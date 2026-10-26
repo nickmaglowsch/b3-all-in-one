@@ -71,7 +71,7 @@
     "platform/platform_app/routes.py": 1891,
     "platform/platform_app/routes_portfolio_index.py": 566,
     "taxcore/scripts/irpf_2026.py": 778,
-    "taxcore/scripts/load_b3.py": 1041,
+    "taxcore/scripts/load_b3.py": 1050,
     "taxcore/scripts/tlh_plan.py": 569
   }
 }

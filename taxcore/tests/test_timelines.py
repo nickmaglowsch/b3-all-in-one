@@ -6,7 +6,9 @@ médio. Within one date the walk depends on row order, so the frame itself —
 values, dtypes, column order, row order, index — is the contract. Each test runs
 the production builder against a row-by-row reference (the original iterrows
 construction, kept here as the oracle) on the vendored fixtures and on a small
-book of edge cases: same-day ties, NaN quantities and amounts, *F tickers, a
+book of edge cases: same-day ties (whose buy leg must come first — see
+test_import_rules.test_a_same_day_round_trip_leaves_no_phantom_position),
+NaN quantities and amounts, *F tickers, a
 cash_events file old enough to lack `event_category`, a bonificação whose
 custo atribuído (qty × price) is the one cost a qty_event carries.
 """
@@ -36,7 +38,7 @@ def reference_position_timeline(trades, cash_events, consolidate):
         t["ticker"] = t["ticker"].astype(str).str.replace(
             _FRACTIONAL_RE, _ROUND_LOT, regex=True)
     rows = []
-    for _, r in t.sort_values("date").iterrows():
+    for _, r in t.sort_values("date", kind="stable").iterrows():
         rows.append({"ticker": r["ticker"], "date": pd.to_datetime(r["date"]),
                      "kind": "trade", "sq": float(r["signed_qty"]),
                      "price": float(r["price"]), "amount": 0.0,
@@ -65,7 +67,9 @@ def reference_position_timeline(trades, cash_events, consolidate):
                          "market": None})
     timeline = pd.DataFrame(rows).dropna(subset=["date", "ticker"])
     timeline["__order"] = timeline["kind"].map({"trade": 0, "qty_event": 1, "amort": 2})
-    return timeline.sort_values(["ticker", "date", "__order"]).reset_index(drop=True)
+    timeline["__leg"] = np.where(timeline["sq"] < 0, 1, 0)
+    return (timeline.sort_values(["ticker", "date", "__order", "__leg"])
+            .reset_index(drop=True))
 
 
 def reference_build_timeline():

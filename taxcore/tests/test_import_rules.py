@@ -8,6 +8,7 @@ used to be read into a wrong number.
   - BDR dividends were filed as isentos, código 09 (M6)
   - an auctioned fraction was no sale at all (L2)
   - an oversell left positions.csv with a negative holding (M1, positions half)
+  - a same-day round trip walked sell-first dropped the sell and kept the buy
 """
 from __future__ import annotations
 
@@ -346,3 +347,37 @@ def test_an_oversell_does_not_poison_the_next_buy():
                                               ("2025-02-03", "Compra", "PETR4", 300, 40.0)))
     assert (pos.iloc[0]["qty"], pos.iloc[0]["avg_cost"]) == (300, 40.0)
     assert incomplete == ["PETR4"]
+
+
+# --- a same-day round trip has no row order to trust -------------------------
+
+@pytest.mark.parametrize("sell_first", [True, False])
+def test_a_same_day_round_trip_leaves_no_phantom_position(sell_first):
+    """Neither extract records a time of day, so both legs of a day trade can
+    arrive in either order. Walked sell-first the sell found no inventory to
+    come off, was dropped as an orphan, and the buy was left standing as a
+    holding that had already been sold — at a cost basis to match."""
+    legs = [("2025-01-02", "Venda", "ECOR3", 400, 11.46),
+            ("2025-01-02", "Compra", "ECOR3", 400, 11.47)]
+    pos, incomplete = derive_positions(trades(*(legs if sell_first else legs[::-1])))
+    assert pos.empty
+    assert incomplete == []
+
+
+def test_a_call_assigned_the_day_the_shares_were_bought_closes_the_position(run_main):
+    """The user's case: a covered call is assigned and the delivery is booked
+    under the option series, so process_option_activity rewrites it onto the
+    underlying and appends it *after* the day's spot rows. The buy that covered
+    it is the same day, and the sale used to land first and vanish."""
+    summary, _err, _t, _ev, pos = run_main({
+        "negociacao.xlsx": (NEG_COLS, [
+            neg("19/10/2020", "Compra", "ITUB4", 800, 23.36),
+            ["19/10/2020", "Venda", "Exercício de Opção de Compra", "19/10/2020",
+             ITAU, "ITUBJ234E", 800, 23.36, 18688.0]]),
+        "movimentacao.xlsx": (MOV_COLS, [
+            mov("Debito", "21/10/2020", "Transferência - Liquidação",
+                "ITUB4 - ITAU UNIBANCO HOLDING S/A", 800, 23.36, 18688.0)]),
+    })
+    assert summary["option_activity"]["exercises_resolved"] == 1
+    assert pos.empty
+    assert summary["incomplete_history"] == []

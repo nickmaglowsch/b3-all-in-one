@@ -663,7 +663,7 @@ def _position_timeline(
                              "date": pd.to_datetime(df["date"]), "kind": kind,
                              "sq": 0.0, "price": 0.0, "amount": 0.0, **cols})
 
-    t = trades.sort_values("date")
+    t = trades.sort_values("date", kind="stable")
     parts = [frame(t, "trade", sq=t["signed_qty"].astype(float),
                    price=t["price"].astype(float), market=t["market"])]
 
@@ -690,7 +690,16 @@ def _position_timeline(
     # (so a split applies to post-trade qty, and an amort applies after).
     kind_order = {"trade": 0, "qty_event": 1, "amort": 2}
     timeline["__order"] = timeline["kind"].map(kind_order)
-    return timeline.sort_values(["ticker", "date", "__order"]).reset_index(drop=True)
+    # And within the day's trades, buys before sells. No extract records a time
+    # of day, so a same-day round trip — a day trade, or shares bought in the
+    # morning to deliver against a call assigned that afternoon — arrives in
+    # arbitrary order, and walked sell-first the sell has no inventory to come
+    # off: derive_positions drops it as an orphan and leaves the buy standing as
+    # a holding that was already sold. Buy-first can invent nothing, and it is
+    # the order realizacao._realizar_dia has always used for a day's trades.
+    timeline["__leg"] = np.where(timeline["sq"] < 0, 1, 0)
+    return (timeline.sort_values(["ticker", "date", "__order", "__leg"])
+            .reset_index(drop=True))
 
 
 def derive_positions(

@@ -276,9 +276,7 @@ async def create_portal(user: User = Depends(current_active_user)) -> dict:
 async def _find_user(session: AsyncSession, sub: dict) -> User | None:
     customer_id = sub.get("customer")
     if customer_id:
-        user = await session.scalar(
-            select(User).where(User.stripe_customer_id == customer_id)
-        )
+        user = await session.scalar(select(User).where(User.stripe_customer_id == customer_id))
         if user:
             return user
     tenant_id = (sub.get("metadata") or {}).get("tenant_id")
@@ -293,6 +291,8 @@ async def _apply_subscription(event: dict, session: AsyncSession) -> None:
     user = await _find_user(session, sub)
     if user is None:
         return  # another product on the same Stripe account — not ours to act on
+    # Lock the row and read it again: a delivery racing ours waits here, then sees our commit.
+    await session.refresh(user, with_for_update={"of": User})  # OF: the oauth join is nullable
     fired_at = datetime.datetime.fromtimestamp(event["created"], datetime.UTC)
     status = "canceled" if (canceled := event["type"].endswith(".deleted")) else sub.get("status")
     if user.plan_event_at and (fired_at, _STAGE.get(status, -1)) < (

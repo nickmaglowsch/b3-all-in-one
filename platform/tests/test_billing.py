@@ -10,6 +10,7 @@ mais escada. Ligar `bench` não dá `irpf`, e é exatamente essa independência 
 comparação por índice (o `LADDER.index` de antes) não consegue expressar.
 """
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -18,6 +19,7 @@ import time
 import pytest
 import stripe
 
+from platform_app import billing
 from platform_app.billing import CARTEIRA, EMPRESARIAL, MODULES
 from platform_app.config import settings
 from tests.conftest import auth
@@ -337,6 +339,49 @@ async def test_a_same_second_incomplete_never_overwrites_active(client):
     body, sig = _event("deleted", "canceled")
     assert (await client.post("/billing/webhook", content=body, headers=sig)).status_code == 200
     assert (await client.get("/billing", headers=headers)).json()["modules"] == [CARTEIRA]
+
+
+async def test_a_stale_event_racing_a_cancellation_does_not_resurrect_it(client, monkeypatch):
+    """Duas entregas da mesma assinatura em paralelo: um `updated(active)` antigo lê
+    a linha, e antes de gravar o `deleted` mais novo é aplicado. A checagem de ordem
+    olhava a foto lida antes, então o evento antigo gravava por cima e o tenant
+    cancelado voltava a ter os módulos. A intercalação é forçada: o antigo para
+    logo depois de achar o usuário e só segue quando o cancelamento já commitou."""
+    headers = await _auth(client, "billing-corrida@example.com")
+    tenant_id = (await client.get("/me", headers=headers)).json()["id"]
+    now = int(time.time()) + 900
+    prices = [PRICES["irpf"], PRICES["bench"]]
+
+    async def _post(kind, created, status):
+        body, sig = _signed(_sub_event(
+            kind, prices=prices, created=created, status=status, sub_id="sub_corrida",
+            customer="cus_corrida", metadata={"tenant_id": tenant_id}))
+        r = await client.post("/billing/webhook", content=body, headers=sig)
+        assert r.status_code == 200, r.text
+
+    await _post("created", now, "active")
+    await _post("updated", now + 1, "past_due")
+
+    found, release = asyncio.Event(), asyncio.Event()
+    find_user = billing._find_user
+
+    async def _paused_find_user(session, sub):
+        user = await find_user(session, sub)
+        if sub.get("status") == "active":
+            found.set()
+            await release.wait()
+        return user
+
+    monkeypatch.setattr(billing, "_find_user", _paused_find_user)
+    stale = asyncio.create_task(_post("updated", now + 2, "active"))
+    await asyncio.wait_for(found.wait(), 10)
+    await _post("deleted", now + 3, "canceled")
+    release.set()
+    await asyncio.wait_for(stale, 10)
+
+    sub = (await client.get("/billing", headers=headers)).json()
+    assert sub["status"] == "canceled"
+    assert sub["modules"] == [CARTEIRA]
 
 
 # ── checkout ──────────────────────────────────────────────────────────────────

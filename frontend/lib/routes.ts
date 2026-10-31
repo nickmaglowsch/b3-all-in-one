@@ -48,6 +48,8 @@ export function postLoginTarget(next: string | null | undefined): string {
   if (!next || /[\u0000-\u0020\u007f]/.test(next) || !/^\/[^/\\]/.test(next)) return APP_HOME;
   const base = "https://app.invalid";
   const url = new URL(next, base);
-  if (url.origin !== base) return APP_HOME;
+  // Dot segments collapse on parse: `/.//evil.example` comes out as the path
+  // `//evil.example`, which the router then resolves to another origin.
+  if (url.origin !== base || url.pathname.startsWith("//")) return APP_HOME;
   return isPublicRoute(url.pathname) ? APP_HOME : url.pathname + url.search + url.hash;
 }

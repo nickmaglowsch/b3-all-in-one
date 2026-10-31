@@ -93,3 +93,32 @@ test("um `next` público não é destino de login", () => {
     assert.equal(postLoginTarget(next), APP_HOME, next);
   }
 });
+
+// O parser de URL apaga tab/LF/CR em qualquer posição: `/\t/evil.example` passa
+// num teste da string crua e o navegador resolve `//evil.example`.
+test("caractere de controle não abre caminho para outra origem", () => {
+  for (const next of [
+    "/\t/evil.example",
+    "/\n/evil.example/x",
+    "/\r/evil.example",
+    "/\t\\evil.example",
+    "/ /evil.example",
+  ]) {
+    assert.equal(postLoginTarget(next), APP_HOME, JSON.stringify(next));
+  }
+});
+
+// O parser resolve segmentos de ponto: `/.//evil.example` vira o caminho
+// `//evil.example`, que o router resolve para outra origem.
+test("segmento de ponto não abre caminho para outra origem", () => {
+  for (const next of [
+    "/.//evil.example",
+    "/..//evil.example",
+    "/a/..//evil.example",
+    "/%2e//evil.example",
+    "/./\\evil.example",
+    "/.\\/evil.example",
+  ]) {
+    assert.equal(postLoginTarget(next), APP_HOME, JSON.stringify(next));
+  }
+});

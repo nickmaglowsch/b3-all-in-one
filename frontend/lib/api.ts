@@ -339,8 +339,27 @@ export function refreshSession(force = false): Promise<void> {
 // API's own host, it is first-party everywhere.
 export const GOOGLE_LOGIN_URL = `${API_URL}/auth/google/login`;
 
+// Set by googleLogin, consumed by the callback. The API's fragment carries only
+// the token, so without this /auth/callback#token=<anyone's jwt> logs whoever
+// opens the link into that account (login CSRF), silently replacing their own
+// session. sessionStorage is per tab, so a link opened from outside the app
+// arrives without the marker.
+// ponytail: stopgap without an API change; the full fix is a nonce the API signs
+// into the state token and echoes back in the fragment.
+const LOGIN_PENDING_KEY = "b3_login_pending";
+
 export function googleLogin(): void {
+  window.sessionStorage.setItem(LOGIN_PENDING_KEY, "1");
   window.location.href = GOOGLE_LOGIN_URL;
+}
+
+/** The token in the callback fragment, but only if this tab started a Google
+ *  login. Consumes the marker either way: one login, one token. */
+export function acceptCallbackToken(hash: string): string | null {
+  const pending = window.sessionStorage.getItem(LOGIN_PENDING_KEY);
+  window.sessionStorage.removeItem(LOGIN_PENDING_KEY);
+  const token = new URLSearchParams(hash.replace(/^#/, "")).get("token");
+  return pending ? token : null;
 }
 
 // dev-login is public (POST, no body) and returns a JWT in development mode.

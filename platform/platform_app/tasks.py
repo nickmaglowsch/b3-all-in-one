@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 
 from procrastinate import App, PsycopgConnector
+from procrastinate.exceptions import AlreadyEnqueued
 from sqlalchemy import delete, insert, select, update
 
 from platform_app import b3run, enginerun, specstore, subprocs
@@ -264,6 +265,21 @@ async def process_imports(tenant_id: str) -> dict:
             "trades": len(trades), "cash_events": len(events), "positions": len(positions),
             "rf_marks": len(rf_marks),
         }
+
+
+async def defer_process_imports(tid: uuid.UUID) -> None:
+    """At most one waiting process_imports per tenant. load_b3 is a full rebuild,
+    and a waiting job reads every stored extract when it starts, a later upload's
+    included, so a second one is pure waste. Unlocked, one tenant could queue a
+    rebuild per request and hold both worker slots every tenant's imports and
+    backtests share. `lock` keeps a job deferred while one runs from taking the
+    other slot alongside it."""
+    key = f"imports:{tid}"
+    try:
+        await process_imports.configure(queueing_lock=key, lock=key).defer_async(
+            tenant_id=str(tid))
+    except AlreadyEnqueued:
+        pass  # the waiting job will read this upload too
 
 
 def _sniffed_kinds(stdout: str) -> dict[str, str]:

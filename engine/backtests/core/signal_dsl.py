@@ -54,6 +54,12 @@ _ALLOWED = (
 # exponent past this bound is a mistake or an attack, never a factor.
 _MAX_EXPONENT = 64
 
+# The exponent bound alone is not enough: `((9**64)**64)**64` keeps every
+# exponent at 64 while the integer grows ~64x in bits per level. So any scalar
+# integer an operation produces is bounded too; a few thousand bits is far past
+# any real factor's arithmetic and still cheap to compute one more step from.
+_MAX_SCALAR_BITS = 4096
+
 
 def _zscore(x: pd.DataFrame) -> pd.DataFrame:
     m = x.mean(axis=1)
@@ -140,6 +146,21 @@ def check_syntax(expr: str) -> None:
     except SyntaxError as e:
         raise ValueError(f"signal expr: parse error in {expr!r}: {e.msg}") from e
     _reject_disallowed_syntax(tree, expr)
+    _fold_constant_arithmetic(tree.body, expr)
+
+
+def _fold_constant_arithmetic(node, expr: str) -> None:
+    """Evaluate every data-free subtree now, so the exponent and scalar-size
+    bounds that _ev enforces at run time also reject at save time."""
+    if (isinstance(node, ast.BinOp)
+            and not any(isinstance(n, (ast.Name, ast.Call)) for n in ast.walk(node))):
+        try:
+            _ev(node, {}, {})
+        except ArithmeticError as e:
+            raise ValueError(f"signal expr: {e} in {expr!r}") from e
+        return
+    for child in ast.iter_child_nodes(node):
+        _fold_constant_arithmetic(child, expr)
 
 
 def evaluate(expr: str, namespace) -> pd.DataFrame:
@@ -157,6 +178,14 @@ def evaluate(expr: str, namespace) -> pd.DataFrame:
     _reject_disallowed_syntax(tree, expr)
     funcs = _build_funcs(namespace)
     return _ev(tree.body, namespace, funcs)
+
+
+def _bounded_scalar(out):
+    if isinstance(out, int) and not isinstance(out, bool) and out.bit_length() > _MAX_SCALAR_BITS:
+        raise ValueError(
+            f"signal expr: scalar of {out.bit_length()} bits exceeds the maximum "
+            f"of {_MAX_SCALAR_BITS} (nested exponentiation is not allowed)")
+    return out
 
 
 def _ev(node, ns, funcs):
@@ -178,7 +207,7 @@ def _ev(node, ns, funcs):
                 and abs(right) > _MAX_EXPONENT):
             raise ValueError(
                 f"signal expr: exponent {right!r} exceeds the maximum of {_MAX_EXPONENT}")
-        return _BINOPS[type(node.op)](left, right)
+        return _bounded_scalar(_BINOPS[type(node.op)](left, right))
     if isinstance(node, ast.Compare):
         if len(node.ops) != 1:
             raise ValueError(f"signal expr: chained comparisons are not allowed in {ast.dump(node)!r}")

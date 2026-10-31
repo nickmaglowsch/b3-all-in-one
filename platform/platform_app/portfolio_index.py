@@ -275,7 +275,7 @@ def build_index(
             px = series.get(day)
             if px is not None:
                 last_close[ticker] = px
-        nav.append(sum(q * last_close.get(t, 0.0) for t, q in qty.items() if q))
+        nav.append(sum(q * px for t, px in last_close.items() if (q := qty.get(t))))
 
     # Held at some point but never priced — their value is missing from every
     # NAV, so the caller discloses them rather than quietly under-reporting.

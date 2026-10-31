@@ -267,6 +267,11 @@ async def process_imports(tenant_id: str) -> dict:
         }
 
 
+def imports_lock(tid: uuid.UUID) -> str:
+    """The queueing_lock and lock every process_imports defer must carry."""
+    return f"imports:{tid}"
+
+
 async def defer_process_imports(tid: uuid.UUID) -> None:
     """At most one waiting process_imports per tenant. load_b3 is a full rebuild,
     and a waiting job reads every stored extract when it starts, a later upload's
@@ -274,7 +279,7 @@ async def defer_process_imports(tid: uuid.UUID) -> None:
     rebuild per request and hold both worker slots every tenant's imports and
     backtests share. `lock` keeps a job deferred while one runs from taking the
     other slot alongside it."""
-    key = f"imports:{tid}"
+    key = imports_lock(tid)
     try:
         await process_imports.configure(queueing_lock=key, lock=key).defer_async(
             tenant_id=str(tid))

@@ -72,6 +72,23 @@ async def test_reprocess_imports_defers_once_per_tenant(tmp_path):
     assert len(await _import_jobs(a)) == 1
 
 
+async def test_reprocess_imports_job_shares_the_upload_lock(tmp_path):
+    """Unlocked, the reprocess job could run beside the tenant's own upload job
+    and take both worker slots: it carries the same locks an upload's does."""
+    tid = uuid.uuid4()
+    await _seed_imports(tmp_path, tid, ["done"])
+    await maintenance.reprocess_imports(tenants=[tid])
+    async with tasks.app.open_async():
+        jobs = await tasks.app.connector.execute_query_all_async(
+            "SELECT lock, queueing_lock FROM procrastinate_jobs WHERE task_name ="
+            " 'process_imports' AND args->>'tenant_id' = %(t)s", t=str(tid))
+        # An upload now finds the waiting job instead of queueing a second.
+        await tasks.defer_process_imports(tid)
+    key = tasks.imports_lock(tid)
+    assert jobs == [{"lock": key, "queueing_lock": key}]
+    assert len(await _import_jobs(tid)) == 1
+
+
 async def test_reprocess_imports_dry_run_and_limit_defer_nothing_extra(tmp_path):
     a, b = uuid.uuid4(), uuid.uuid4()
     await _seed_imports(tmp_path, a, ["done"])

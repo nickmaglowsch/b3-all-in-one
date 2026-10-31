@@ -100,6 +100,13 @@ def test_rejects_scalar_pow_tower_at_save_and_at_run():
         signal_dsl.evaluate(f"ret * {expr}", _frames())
 
 
+def test_a_constant_python_cannot_compute_is_a_value_error():
+    """`1.5 | 2` parses and passes the syntax whitelist but raises TypeError when
+    folded: it must surface as the ValueError validate_spec turns into a 422."""
+    with pytest.raises(ValueError):
+        signal_dsl.check_syntax("ret * (1.5 | 2)")
+
+
 def test_allows_the_exponents_signals_actually_use():
     ns = _frames()
     pdt.assert_frame_equal(signal_dsl.evaluate("ret ** 2", ns), ns["ret"] ** 2)

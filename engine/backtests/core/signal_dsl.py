@@ -156,7 +156,9 @@ def _fold_constant_arithmetic(node, expr: str) -> None:
             and not any(isinstance(n, (ast.Name, ast.Call)) for n in ast.walk(node))):
         try:
             _ev(node, {}, {})
-        except ArithmeticError as e:
+        # TypeError: a constant the grammar admits but Python won't compute,
+        # `1.5 | 2`. A 422 at save, not a 500.
+        except (ArithmeticError, TypeError) as e:
             raise ValueError(f"signal expr: {e} in {expr!r}") from e
         return
     for child in ast.iter_child_nodes(node):

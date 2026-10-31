@@ -19,6 +19,8 @@ cron that silently never fires.
 import asyncio
 import os
 
+from procrastinate.jobs import Status
+
 from platform_app import tasks_ingest  # noqa: F401  (registers the periodics)
 from platform_app.tasks import app
 
@@ -71,6 +73,15 @@ async def _close_orphans(queues: list[str]) -> None:
     matches. Scaling a role to several replicas would break that premise.
     """
     for queue in queues or ["default"]:
+        # Its procrastinate job is stuck the same way, at `doing`, and a `doing`
+        # job keeps its `lock`: a process_imports left there would hold
+        # imports:<tenant> forever and that tenant's uploads would never run.
+        # A heartbeat older than 0 s is every worker but this one, which has
+        # not registered yet.
+        for job in await app.job_manager.get_stalled_jobs(
+                queue=queue, seconds_since_heartbeat=0):
+            await app.job_manager.finish_job_by_id_async(
+                job.id, Status.FAILED, delete_job=False)
         if queue not in _ORPHANS:
             continue
         sql, msg = _ORPHANS[queue]

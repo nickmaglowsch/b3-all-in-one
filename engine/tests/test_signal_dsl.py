@@ -89,6 +89,24 @@ def test_rejects_oversized_exponent(expr):
         signal_dsl.evaluate(expr, _frames())
 
 
+def test_rejects_scalar_pow_tower_at_save_and_at_run():
+    """Every exponent here is 64, under _MAX_EXPONENT, yet the result grows ~64x
+    in bits per level (k=3 is 53M bits, 10 s of CPU). Both the save-time check
+    and evaluation must refuse it before computing the next level."""
+    expr = "((((9**64)**64)**64)**64)**64"
+    with pytest.raises(ValueError, match="bits"):
+        signal_dsl.check_syntax(expr)
+    with pytest.raises(ValueError, match="bits"):
+        signal_dsl.evaluate(f"ret * {expr}", _frames())
+
+
+def test_a_constant_python_cannot_compute_is_a_value_error():
+    """`1.5 | 2` parses and passes the syntax whitelist but raises TypeError when
+    folded: it must surface as the ValueError validate_spec turns into a 422."""
+    with pytest.raises(ValueError):
+        signal_dsl.check_syntax("ret * (1.5 | 2)")
+
+
 def test_allows_the_exponents_signals_actually_use():
     ns = _frames()
     pdt.assert_frame_equal(signal_dsl.evaluate("ret ** 2", ns), ns["ret"] ** 2)

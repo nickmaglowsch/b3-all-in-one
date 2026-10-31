@@ -16,8 +16,10 @@ import pytest
 from sqlalchemy import func, select
 
 from platform_app import b3run, tasks
+from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.models import Import, Position, RendaFixaMark, Trade
+from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -96,3 +98,24 @@ async def test_overlapping_jobs_leave_one_copy_of_the_book(fake_load_b3, tmp_pat
     assert await _count(Position, tid) == 1
     # Unserialised, the second writer also tripped uq_rf_marks_tenant_ticker_date.
     assert await _count(RendaFixaMark, tid) == 1
+
+
+async def test_uploads_while_a_job_waits_share_it(client, tmp_path, monkeypatch):
+    """Every POST /imports deferred its own job, each a full rebuild over every
+    extract, so a tenant could fill the two worker slots other tenants share.
+    The waiting job reads all stored extracts when it starts: one is enough."""
+    monkeypatch.setattr(settings, "uploads_dir", str(tmp_path))
+    headers = await auth(client, "imports-queueing-lock@example.com")
+    for i in range(3):
+        r = await client.post("/imports", headers=headers, files=[(
+            "files", (f"negociacao-{uuid.uuid4()}.xlsx", b"x",
+                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))])
+        assert r.status_code == 200, r.text
+    async with async_session_maker() as s:
+        tid = await s.scalar(select(Import.tenant_id).where(Import.id == uuid.UUID(r.json()[0]["id"])))
+    assert await _count(Import, tid) == 3
+    async with tasks.app.open_async():
+        jobs = await tasks.app.connector.execute_query_all_async(
+            "SELECT lock FROM procrastinate_jobs WHERE task_name = 'process_imports'"
+            " AND status = 'todo' AND args->>'tenant_id' = %(t)s", t=str(tid))
+    assert jobs == [{"lock": f"imports:{tid}"}]

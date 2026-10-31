@@ -487,7 +487,7 @@ async def get_portfolio_index(
     # the whole purchase as a same-day total loss that never recovers. The
     # disclosure below is a caveat, not a guard — it would have narrated that
     # wrong number instead of removing it.
-    accrued = pidx.accrue_rf(grid, rf_marks, rf_terms, levels)
+    accrued = await asyncio.to_thread(pidx.accrue_rf, grid, rf_marks, rf_terms, levels)
     undrawn = set(rf_marks) - set(accrued)
     if undrawn:
         for ticker in undrawn:
@@ -512,7 +512,7 @@ async def get_portfolio_index(
     # holding filter rebuilds the whole TWR, it does not slice a finished line.
     closes.update({t: s for t, s in accrued.items() if t in selected})
 
-    built = pidx.build_index(grid, closes, qty_deltas, flows)
+    built = await asyncio.to_thread(pidx.build_index, grid, closes, qty_deltas, flows)
     bench = await _benchmarks(grid)
 
     series = [{"date": d, "portfolio": v}

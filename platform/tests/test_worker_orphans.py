@@ -99,3 +99,32 @@ async def test_a_closed_orphan_stops_counting_against_the_quota(monkeypatch):
     await _boot(monkeypatch, None)
     async with async_session_maker() as session:
         assert await inflight_backtests(session, user) == 1   # pending only
+
+
+async def test_the_default_worker_releases_its_dead_predecessors_import_lock(monkeypatch):
+    """A process_imports SIGKILLed mid-run stays `doing` and keeps its lock, so
+    every later upload of that tenant would wait behind it forever. Boot fails
+    it; the ingest worker's job on its own queue is left alone."""
+    from platform_app import tasks
+
+    tid = uuid.uuid4()
+    async with tasks.app.open_async():
+        c = tasks.app.connector
+        await tasks.process_imports.configure(lock=tasks.imports_lock(tid)).defer_async(
+            tenant_id=str(tid))
+        await tasks.process_imports.configure(queue="ingest").defer_async(tenant_id=str(tid))
+        dead = (await c.execute_query_one_async(
+            "INSERT INTO procrastinate_workers (last_heartbeat)"
+            " VALUES (now() - interval '1 hour') RETURNING id"))["id"]
+        await c.execute_query_async(
+            "UPDATE procrastinate_jobs SET status = 'doing', worker_id = %(w)s"
+            " WHERE args->>'tenant_id' = %(t)s", w=dead, t=str(tid))
+
+    await _boot(monkeypatch, None)
+
+    async with tasks.app.open_async():
+        jobs = await tasks.app.connector.execute_query_all_async(
+            "SELECT queue_name, status FROM procrastinate_jobs"
+            " WHERE args->>'tenant_id' = %(t)s ORDER BY queue_name", t=str(tid))
+    assert jobs == [{"queue_name": "default", "status": "failed"},
+                    {"queue_name": "ingest", "status": "doing"}]

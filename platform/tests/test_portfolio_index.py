@@ -477,6 +477,42 @@ async def _seed_renda_fixa(tenant_id: uuid.UUID) -> None:
 
 
 @_asyncio
+async def test_index_math_runs_off_the_event_loop(client, monkeypatch):
+    """accrue_rf and build_index walk grid x book in pure Python. Run on the
+    loop, one tenant's large book stalled every other request on the API. The
+    plane and benchmarks are stubbed, so this needs no market plane."""
+    import threading
+
+    from platform_app import portfolio_index as pidx
+    from platform_app import routes_portfolio_index as rpi
+
+    headers = await auth(client, "pidx-off-loop@example.com", modules=["indice"])
+    tid = uuid.UUID((await client.get("/me", headers=headers)).json()["id"])
+    await _seed_book(tid)
+    grid = [date(2023, 1, 16), date(2023, 6, 30), date(2023, 12, 29)]
+
+    async def plane(tickers, start):
+        return grid, {"PETR4": {d: 30.0 for d in grid}, "VALE3": {d: 70.0 for d in grid}}
+
+    async def benchmarks(grid):
+        return {}
+
+    monkeypatch.setattr(rpi, "_plane", plane)
+    monkeypatch.setattr(rpi, "_benchmarks", benchmarks)
+    threads: dict[str, threading.Thread] = {}
+    for name in ("accrue_rf", "build_index"):
+        def spy(*a, _real=getattr(pidx, name), _name=name):
+            threads[_name] = threading.current_thread()
+            return _real(*a)
+        monkeypatch.setattr(pidx, name, spy)
+
+    r = await client.get("/portfolio/index", headers=headers)
+    assert r.status_code == 200, r.text
+    assert set(threads) == {"accrue_rf", "build_index"}
+    assert threading.current_thread() not in threads.values(), threads
+
+
+@_asyncio
 @pytest.mark.market
 async def test_positions_price_renda_fixa_from_its_own_mark(client):
     """/portfolio/positions used to drop every OTC contract to null and leave the

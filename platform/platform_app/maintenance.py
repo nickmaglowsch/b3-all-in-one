@@ -87,12 +87,15 @@ async def _defer_import(tid: uuid.UUID, missing: list[str] | None,
         return "skipped_already_queued"
     if dry_run:
         return "would_defer"
+    key = tasks.imports_lock(tid)
     try:
+        # Same locks as an upload's defer: without them this job could run
+        # beside the tenant's own and take both worker slots.
         await tasks.process_imports.configure(
-            priority=MAINTENANCE_PRIORITY).defer_async(tenant_id=str(tid))
+            priority=MAINTENANCE_PRIORITY, queueing_lock=key, lock=key,
+        ).defer_async(tenant_id=str(tid))
     except AlreadyEnqueued:
-        # process_imports takes no queueing_lock today; should one be added,
-        # a collision means a job for this tenant is already waiting.
+        # An upload's job is already waiting and will read the whole book.
         return "skipped_already_queued"
     return "deferred"
 

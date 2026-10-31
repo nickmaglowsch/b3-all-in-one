@@ -21,6 +21,7 @@ class FakeApp:
     def __init__(self, schema_exists: bool):
         self.connector = self
         self.schema_manager = self
+        self.job_manager = self
         self._schema_exists = schema_exists
         self.applied = 0
         self.runs: list[tuple[list[str], int]] = []
@@ -35,6 +36,9 @@ class FakeApp:
 
     async def execute_query_all_async(self, sql: str, **_args) -> list:
         return []  # the orphan sweep; covered against a real DB in test_worker_orphans
+
+    async def get_stalled_jobs(self, **_args) -> list:
+        return []  # likewise
 
     async def apply_schema_async(self) -> None:
         self.applied += 1

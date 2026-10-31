@@ -153,10 +153,10 @@ async def create_imports(
     await asyncio.to_thread(_persist)
     await session.commit()
 
-    # One job for the whole batch (load_b3 is a full rebuild over all files at once).
+    # One job for the whole batch, and per tenant (see defer_process_imports).
     # ponytail: per-request procrastinate pool — imports are rare human actions.
     async with tasks.app.open_async():
-        await tasks.process_imports.defer_async(tenant_id=str(tid))
+        await tasks.defer_process_imports(tid)
 
     return [
         {"id": str(i.id), "filename": i.filename, "kind": i.kind, "status": i.status}

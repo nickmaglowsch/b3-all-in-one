@@ -41,7 +41,13 @@ export const entryHref = (hasSession: boolean) => (hasSession ? APP_HOME : "/log
  *  sending you back to `/login`) or the door the person was trying to get
  *  past (`/`). */
 export function postLoginTarget(next: string | null | undefined): string {
-  if (!next || !/^\/[^/\\]/.test(next)) return APP_HOME;
-  const pathname = next.split(/[?#]/)[0];
-  return isPublicRoute(pathname) ? APP_HOME : next;
+  // The URL parser strips tab/LF/CR anywhere, so `/\t/evil.example` passes a
+  // check on the raw string and still resolves to `//evil.example`. Refuse
+  // control characters and spaces outright, then judge what the browser will
+  // resolve, not what was typed.
+  if (!next || /[\u0000-\u0020\u007f]/.test(next) || !/^\/[^/\\]/.test(next)) return APP_HOME;
+  const base = "https://app.invalid";
+  const url = new URL(next, base);
+  if (url.origin !== base) return APP_HOME;
+  return isPublicRoute(url.pathname) ? APP_HOME : url.pathname + url.search + url.hash;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { setToken } from "@/lib/api";
+import { acceptCallbackToken, setToken } from "@/lib/api";
 import { useBrowserValue } from "@/lib/hooks";
 import { APP_HOME } from "@/lib/routes";
 
@@ -28,8 +28,17 @@ export default function AuthCallbackPage() {
   // wiped the one being stored here. Keep it that way — nothing on this page may
   // call the API before setToken.
   useEffect(() => {
-    const token = readHashToken();
-    if (!token) return;
+    if (!readHashToken()) return;
+    // Only a login this tab started (lib/api.ts); a token from a link someone
+    // sent is dropped, never stored over the session already here.
+    const token = acceptCallbackToken(window.location.hash);
+    // Drop the fragment either way, so React's dev double effect sees no token
+    // instead of a consumed marker and a rejection racing the navigation below.
+    window.history.replaceState(null, "", window.location.pathname);
+    if (!token) {
+      window.location.replace("/login");
+      return;
+    }
     setToken(token);
     // Full navigation (not router.replace) so the token never lingers in history
     // and the app re-reads auth from a clean URL.

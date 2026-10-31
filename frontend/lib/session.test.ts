@@ -69,6 +69,17 @@ test("o Google login é uma navegação para a API, sem fetch nenhum", async () 
   assert.equal(win.location.href, `${mod.API_URL}/auth/google/login`);
 });
 
+// O fragmento só traz o token. Sem o marcador que googleLogin deixa na aba, um
+// link /auth/callback#token=<jwt de outra conta> entrava nessa conta (login CSRF)
+// por cima da sessão de quem abriu.
+test("o callback só aceita token de um login começado nesta aba", async () => {
+  const { mod } = await load();
+  assert.equal(mod.acceptCallbackToken("#token=jwt-do-atacante"), null);
+  mod.googleLogin();
+  assert.equal(mod.acceptCallbackToken("#token=jwt-meu"), "jwt-meu");
+  assert.equal(mod.acceptCallbackToken("#token=jwt-de-novo"), null, "um login, um token");
+});
+
 // --------------------------------------------------------------------------
 // Renovação da sessão
 // --------------------------------------------------------------------------

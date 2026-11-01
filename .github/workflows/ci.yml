@@ -10,12 +10,21 @@ on:
   # Nothing here is exclusive to the schedule; every job also runs on a PR.
   schedule:
     - cron: "0 5 * * 1"
+  # runner: see .github/workflows/runner-fallback.yml, which dispatches this with
+  # runner=self-hosted when GitHub refuses hosted jobs (billing).
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "github-hosted, or self-hosted for the fallback runner on the VPS (used when hosted minutes are blocked)"
+        required: false
+        type: choice
+        options: [github-hosted, self-hosted]
+        default: github-hosted
 
 jobs:
   platform-tests:
     name: Platform API tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     services:
       postgres:
         # Same image as the VPS's infra_postgres, so extension behaviour matches.
@@ -24,7 +33,9 @@ jobs:
           POSTGRES_USER: postgres
           # platform/tests/conftest.py hardcodes this DSN — don't change it here alone.
           POSTGRES_PASSWORD: devpassword
-        ports: ["5432:5432"]
+        # Loopback only: on the self-hosted fallback this is the production VPS,
+        # with no firewall in front of a password everyone can read here.
+        ports: ["127.0.0.1:5432:5432"]
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -67,7 +78,7 @@ jobs:
 
   engine-tests:
     name: Engine tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -85,7 +96,7 @@ jobs:
 
   taxcore-tests:
     name: Taxcore tests
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -99,7 +110,7 @@ jobs:
 
   quality-gates:
     name: Structural quality gates
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -126,7 +137,7 @@ jobs:
     # 1100-line irpf_2026.py took minutes; against the extracted apuracao.py the whole
     # job is ~25s (271 mutants, ~15s of mutmut), so there is nothing left to justify
     # letting a PR merge without it. Widen `source_paths` and re-measure this.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -187,7 +198,7 @@ jobs:
 
   frontend:
     name: Frontend build
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -215,7 +226,7 @@ jobs:
     # and the dockerignore is a whitelist: a new package or runtime file that
     # misses either passes all of CI and fails only in the prod container — and
     # for an ingest module, silently, at 06:00. Built here, not pushed.
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - run: docker build -f platform/Dockerfile -t b3-platform:ci .
@@ -241,7 +252,7 @@ jobs:
 
   compose-config:
     name: Production compose config
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - run: |

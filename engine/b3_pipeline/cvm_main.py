@@ -38,7 +38,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from . import b3_corporate_actions, config, cvm_downloader, cvm_parser, cvm_storage, fca_parser, storage
+from . import b3_corporate_actions, config, cvm_downloader, cvm_parser, cvm_storage, fca_parser, free_float, storage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -508,7 +508,7 @@ def run_fundamentals_pipeline(
      5c. Fetch ticker mappings from B3 API (unless skip_ticker_fetch)
      6. Parse and upsert DFP filings
      7. Parse and upsert ITR filings
-     8. Parse and upsert FRE filings + propagate shares_outstanding
+     8. Parse and upsert FRE filings + propagate shares_outstanding + free float
      9. [No-op] Valuation ratios are computed dynamically at query time
     10. Log summary statistics
     [When include_historical=True:]
@@ -541,7 +541,6 @@ def run_fundamentals_pipeline(
             end_year = config.get_current_year()
         logger.info(f"Year range: {start_year} – {end_year}")
 
-        # Steps 3-5: Download DFP, ITR, FRE files concurrently
         logger.info("")
         logger.info("Steps 3-5/10: Downloading DFP, ITR, FRE files concurrently...")
 
@@ -688,6 +687,7 @@ def run_fundamentals_pipeline(
 
         logger.info("Propagating FRE shares_outstanding into DFP/ITR rows...")
         _propagate_fre_shares(conn)
+        free_float.ingest(conn, fre_paths)  # free_float_pit; warns, never raises
 
         logger.info("Propagating tickers from cvm_companies into fundamentals_pit...")
         ticker_rows = cvm_storage.populate_tickers_from_cvm_companies(conn)

@@ -30,7 +30,13 @@ def download_itr_file(year: int, force: bool = False) -> Optional[Path]:
 
 
 def download_fre_file(year: int, force: bool = False) -> Optional[Path]:
-    """Download a FRE ZIP file for the given year."""
+    """Download a FRE ZIP file for the given year.
+
+    The current and previous year are always re-fetched: CVM adds FRE versions
+    to them all year, and free_float_pit only learns a version's receipt date
+    by seeing it. ponytail: older years get late versions too (rarely);
+    force-download a full refresh if that ever matters."""
+    force = force or year >= config.get_current_year() - 1
     return _yearly_zip(config.CVM_FRE_BASE_URL, "fre", year, force)
 
 

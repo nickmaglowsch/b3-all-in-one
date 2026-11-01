@@ -14,7 +14,7 @@ from typing import List, Optional
 
 import pandas as pd
 
-from . import config, market_storage, split_storage, sql_stream, us_storage
+from . import config, free_float, market_storage, split_storage, sql_stream, us_storage
 
 logger = logging.getLogger(__name__)
 
@@ -528,7 +528,7 @@ def init_db(conn: sqlite3.Connection, rebuild: bool = False, cvm_only: bool = Fa
         SCHEMA_FUNDAMENTALS_MONTHLY,
         INDEX_FUNDAMENTALS_MONTHLY_TICKER,
         INDEX_FUNDAMENTALS_MONTHLY_MONTH_END,
-    ] + market_storage.DDL + split_storage.DDL + us_storage.DDL
+    ] + market_storage.DDL + split_storage.DDL + us_storage.DDL + free_float.DDL
     for stmt in ddl_statements:
         cursor.execute(_pg_ddl(stmt) if pg else stmt)
 

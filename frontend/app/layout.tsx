@@ -1,23 +1,30 @@
 import type { Metadata, Viewport } from "next";
-import { Archivo, IBM_Plex_Sans, IBM_Plex_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Providers } from "@/lib/providers";
 import { AppShell } from "@/components/AppShell";
 
-const archivo = Archivo({
+// Self-hosted (latin subset, woff2, SIL OFL — see app/fonts/OFL-*.txt) so the build
+// never has to reach Google. Archivo and IBM Plex Sans are one variable
+// file each; IBM Plex Mono is static, one file per weight.
+const archivo = localFont({
   variable: "--font-archivo",
-  subsets: ["latin"],
-  weight: ["700", "800"],
+  display: "swap",
+  src: [{ path: "./fonts/Archivo-latin-variable.woff2", weight: "700 800" }],
 });
-const plexSans = IBM_Plex_Sans({
+const plexSans = localFont({
   variable: "--font-plex-sans",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  display: "swap",
+  src: [{ path: "./fonts/IBMPlexSans-latin-variable.woff2", weight: "400 600" }],
 });
-const plexMono = IBM_Plex_Mono({
+const plexMono = localFont({
   variable: "--font-plex-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+  display: "swap",
+  src: [
+    { path: "./fonts/IBMPlexMono-400-latin.woff2", weight: "400" },
+    { path: "./fonts/IBMPlexMono-500-latin.woff2", weight: "500" },
+    { path: "./fonts/IBMPlexMono-600-latin.woff2", weight: "600" },
+  ],
 });
 
 export const metadata: Metadata = {

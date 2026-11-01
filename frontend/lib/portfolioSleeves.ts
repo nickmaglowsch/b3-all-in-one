@@ -87,3 +87,22 @@ export function tickerOptions(rows: SleeveRow[], saved: string[]): string[] {
   const held = rows.map((r) => r.ticker).filter((t): t is string => !!t);
   return [...new Set([...saved, ...held])];
 }
+
+// A saved carteira's request body. Its grid (rebalance, rebalance_months — an
+// MCP-made semiannual one) has no control in this editor, so an edit keeps the
+// spec's own instead of resetting it to quarterly.
+export function portfolioBody(
+  name: string,
+  desc: string,
+  rows: SleeveRow[],
+  spec: Record<string, unknown>,
+): Record<string, unknown> {
+  const kept = ["rebalance", "rebalance_months"].filter((k) => spec[k] != null);
+  return {
+    kind: "fixed_weight",
+    name: name.trim(),
+    description: desc.trim() || undefined,
+    sleeves: rows.map(rowToSleeve),
+    ...Object.fromEntries(kept.map((k) => [k, spec[k]])),
+  };
+}

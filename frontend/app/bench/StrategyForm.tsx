@@ -17,7 +17,7 @@ import {
   type RegimeValue,
 } from "./RegimeEditor";
 import { Field, inputCls } from "./Field";
-import { LegsNote, signalError, signalSource, specExtras } from "./specExtras";
+import { ExprWeightingOption, LegsNote, obj, signalError, signalSource, specExtras, topFor, weightingOf, type Weighting } from "./specExtras";
 
 type SelMode = "top_pct" | "top_n";
 
@@ -36,7 +36,7 @@ interface FormState {
   topN: string;
   minNames: string;
   dedupRoots: boolean;
-  weighting: "equal" | "market_cap";
+  weighting: Weighting;
   rebalance: "ME" | "QE" | "W-FRI";
 }
 
@@ -62,8 +62,6 @@ const DEFAULTS: FormState = {
 // f_* shared-data keys are CVM fundamentals; \bf_ won't match fin_vol / has_glitch.
 const isFundExpr = (s: string) => /\bf_/.test(s);
 
-const obj = (v: unknown): Record<string, unknown> =>
-  v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const numStr = (v: unknown, fallback = "") =>
   v == null || v === "" ? fallback : String(v);
@@ -88,7 +86,7 @@ function fromSpec(spec: Record<string, unknown>): FormState {
     topN: numStr(sel.top_n, "20"),
     minNames: numStr(sel.min_names, "5"),
     dedupRoots: Boolean(sel.dedup_roots),
-    weighting: spec.weighting === "market_cap" ? "market_cap" : "equal",
+    weighting: weightingOf(spec.weighting),
     rebalance:
       spec.rebalance === "QE" || spec.rebalance === "W-FRI"
         ? spec.rebalance
@@ -252,7 +250,7 @@ function StrategyFormInner({
       },
       signal,
       selection,
-      ...preserved.top,
+      ...topFor(preserved.top, f.weighting),
     };
     if (!isEmptyRegime(regime)) body.regime = compileRegime(regime);
 
@@ -482,6 +480,7 @@ function StrategyFormInner({
           >
             <option value="equal">Igual</option>
             <option value="market_cap">Por tamanho (ADTV)</option>
+            <ExprWeightingOption show={"weight_expr" in preserved.top} />
           </select>
         </Field>
         <Field label="Rebalance">

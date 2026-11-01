@@ -52,17 +52,29 @@ def test_legs_rank_and_blend_like_the_equivalent_expression():
     pd.testing.assert_frame_equal(a, b)
 
 
-def test_coverage_any_scores_a_name_on_the_legs_it_has():
+def test_coverage_any_scores_a_missing_leg_as_that_legs_average():
     idx = pd.date_range("2020-01-31", periods=2, freq="ME")
     a = pd.DataFrame([[1.0, 2.0, 3.0]] * 2, index=idx, columns=list("XYZ"))
     b = pd.DataFrame([[3.0, np.nan, 1.0]] * 2, index=idx, columns=list("XYZ"))
     cfg = {"legs": [{"factor": "a", "transform": "raw"},
-                    {"factor": "b", "transform": "raw"}]}
+                    {"factor": "b", "transform": "raw", "weight": -1.0}]}
     every = resolve_factor(cfg, {"a": a, "b": b})
     some = resolve_factor({**cfg, "coverage": "any"}, {"a": a, "b": b})
     assert np.isnan(every.loc[idx[0], "Y"])          # all: Y lacks leg b
-    assert some.loc[idx[0], "Y"] == 2.0              # any: Y scored on leg a alone
-    assert some.loc[idx[0], "X"] == 2.0              # mean of 1 and 3
+    assert some.loc[idx[0], "Y"] == 2.0 - 2.0        # any: b's average (2) stands in
+    assert some.loc[idx[0], "Z"] == 3.0 - 1.0
+
+
+def test_coverage_any_does_not_favour_names_missing_a_negative_leg():
+    shared = _synthetic_shared(n_tickers=40)
+    shared["half"] = shared["adtv"].copy()
+    shared["half"].iloc[:, :10] = np.nan             # 10 of 40 names lack the leg
+    spec = _rank(signal={"legs": [{"expr": "ret"}, {"factor": "half", "weight": -1}],
+                         "coverage": "any", "apply_glitch": False})
+    _, tw = RankAndHold(spec).generate_signals(shared, {})
+    held = (_held(tw) > 0)
+    share = held.iloc[:, :10].to_numpy().sum() / held.to_numpy().sum()
+    assert share < 0.45                               # was ~98% when a gap scored 0
 
 
 def test_vars_name_a_frame_the_expression_and_legs_can_read():
@@ -99,6 +111,22 @@ def test_weight_expr_falls_back_to_equal_when_nothing_scores_above_zero():
         shared, {})
     row = _held(tw).iloc[-1]
     assert np.allclose(row[row > 0], 0.2)
+
+
+def test_an_infinite_weight_is_ignored_not_turned_into_equal_weight():
+    shared = _synthetic_shared()
+    shared["w"] = shared["adtv"].copy()
+    shared["w"].iloc[:, 0] = np.inf
+    _, tw = RankAndHold(_rank(weighting="expr", weight_expr="w")).generate_signals(shared, {})
+    row = _held(tw).iloc[-1]
+    held = row[row > 0]
+    assert not np.allclose(held, 1 / len(held))
+
+
+def test_a_scalar_weight_expr_is_a_clear_error():
+    with pytest.raises(ValueError, match="weight_expr must read market data"):
+        RankAndHold(_rank(weighting="expr", weight_expr="lookback")).generate_signals(
+            _synthetic_shared(), {})
 
 
 def test_max_weight_caps_each_name_and_keeps_the_book_whole():
@@ -181,6 +209,32 @@ def test_rebalance_months_on_a_weekly_grid_takes_the_first_week():
     assert list(_held(tw).index) == [pd.Timestamp("2020-03-06")]
 
 
+def test_rebalance_months_snap_to_the_next_row_on_a_coarser_grid():
+    idx = pd.date_range("2020-03-31", periods=8, freq="QE")
+    tw = only_in_months(pd.DataFrame(1.0, index=idx, columns=["A"]), [1, 7])
+    # January 2020 is before the grid's first month, so the first trade is September.
+    assert [d.month for d in _held(tw).index] == [9, 3, 9]
+
+
+def test_a_never_funded_book_buys_on_a_hold_row_instead_of_going_bankrupt():
+    from backtests.core.simulation import run_simulation
+    shared = _synthetic_shared()
+    r, tw = RankAndHold(_rank(rebalance_months=[6, 12])).generate_signals(shared, {})
+    flows = pd.Series(10_000.0, index=r.index)
+    out = run_simulation(r, tw, initial_capital=0, contribution=flows)
+    nav = out["pretax_values"]
+    assert len(nav) > 12 and nav.iloc[-1] > 0         # not cut off after one row
+
+
+def test_the_pre_roll_reaches_back_to_the_last_listed_month():
+    plain = RankAndHold(_rank())
+    annual = RankAndHold(_rank(rebalance_months=[12]))
+    semi = RankAndHold(_rank(rebalance_months=[6, 12]))
+    base = strategy_months(plain, {}, "ME")
+    assert strategy_months(annual, {}, "ME") == base + 12
+    assert strategy_months(semi, {}, "ME") == base + 6
+
+
 def test_a_nested_sleeve_on_rebalance_months_holds_its_book_in_the_blend(monkeypatch):
     shared = _synthetic_shared()
     shared["cdi_monthly"] = pd.Series(0.01, index=shared["ret"].index)
@@ -223,7 +277,13 @@ def test_validator_accepts_the_new_shapes():
 
 
 @pytest.mark.parametrize("spec, msg", [
-    (_rank(signal={"vars": {"rank": "ret"}, "expr": "rank"}), "not a function"),
+    (_rank(signal={"vars": {"rank": "ret"}, "expr": "rank"}), "is taken"),
+    (_rank(signal={"vars": {"momentum": "ret"}, "factor": "momentum"}), "is taken"),
+    (_rank(signal={"vars": {"lookback": "ret"}, "expr": "lookback"}), "is taken"),
+    (_rank(signal={"vars": {"ret": "adtv"}, "expr": "ret"}), "is taken"),
+    (_rank(signal={"vars": {"f_x": "adtv"}, "expr": "f_x"}), "is taken"),
+    (_rank(weighting="expr", weight_expr="lookback * 2"), "reads no market data"),
+    (_rank(signal={"legs": [{"expr": "1"}]}), "reads no market data"),
     (_rank(signal={"legs": [{"expr": "ret", "factor": "momentum"}]}), "exactly one"),
     (_rank(signal={"legs": [{"expr": "ret", "transform": "log"}]}), "transform"),
     (_rank(weighting="expr"), "weight_expr"),

@@ -5,7 +5,7 @@
 
 type Obj = Record<string, unknown>;
 
-const obj = (v: unknown): Obj => (v && typeof v === "object" ? (v as Obj) : {});
+export const obj = (v: unknown): Obj => (v && typeof v === "object" ? (v as Obj) : {});
 const pick = (o: Obj, keys: string[]) =>
   Object.fromEntries(keys.filter((k) => o[k] != null).map((k) => [k, o[k]]));
 
@@ -25,11 +25,7 @@ export function specExtras(spec: Obj | null): SpecExtras {
     signal,
     selection: pick(obj(s.selection), ["min_hold", "sticky"]),
     universe: pick(obj(s.universe), ["sectors"]),
-    top: {
-      ...pick(s, ["warmup_pad", "market", "weight_expr", "max_weight", "rebalance_months"]),
-      // weight_expr is only valid with weighting "expr", which the select lacks.
-      ...(s.weighting === "expr" ? { weighting: "expr" } : {}),
-    },
+    top: pick(s, ["warmup_pad", "market", "weight_expr", "max_weight", "rebalance_months"]),
     legs: Array.isArray(signal.legs),
   };
 }
@@ -59,4 +55,24 @@ export function LegsNote({ show }: { show: boolean }) {
       abaixo é ignorado.
     </p>
   );
+}
+
+export type Weighting = "equal" | "market_cap" | "expr";
+
+// `adtv` is the same scheme the select calls market_cap; `expr` needs the
+// spec's weight_expr, which is why the select only offers it when there is one.
+export function weightingOf(w: unknown): Weighting {
+  if (w === "expr") return "expr";
+  return w === "market_cap" || w === "adtv" ? "market_cap" : "equal";
+}
+
+// The preserved top-level fields for a save: weight_expr only rides along while
+// the select still says "expr" — switched off, it would be refused.
+export function topFor(top: Obj, weighting: Weighting): Obj {
+  if (weighting === "expr") return top;
+  return Object.fromEntries(Object.entries(top).filter(([k]) => k !== "weight_expr"));
+}
+
+export function ExprWeightingOption({ show }: { show: boolean }) {
+  return show ? <option value="expr">Por expressão (weight_expr do MCP)</option> : null;
 }

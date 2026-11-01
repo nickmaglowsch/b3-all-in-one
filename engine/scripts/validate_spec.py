@@ -2,6 +2,7 @@
 
 Usage:
     python scripts/validate_spec.py --spec-json '<json>'
+    python scripts/validate_spec.py --spec-json - < spec.json   # how the platform calls it
 
 <json> is an engine spec dict (the same schema strategy_registry.discover()
 loads from specs/*.yaml). Constructs the matching config engine (RankAndHold /
@@ -135,7 +136,7 @@ def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
     if not isinstance(local, dict):
         errors.append("signal.vars must map names to expressions")
         local = {}
-    funds = _validate_vars(local, errors)
+    funds = _validate_vars(local, sig, errors)
     if "legs" in sig:
         funds |= _validate_legs(sig, errors, local)
     else:
@@ -143,17 +144,39 @@ def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
     if spec.get("weighting") == "expr":
         if isinstance(spec.get("weight_expr"), str):
             funds |= _check_expr(spec["weight_expr"], errors)
+            _reads_data(spec["weight_expr"], "weight_expr", sig, local, errors)
         else:
             errors.append("weighting `expr` needs a `weight_expr` expression")
     return funds
 
 
-def _validate_vars(local: dict, errors: list[str]) -> bool:
+# A var may not reuse a name something else already answers to: inside an
+# expression the scalars win and as a `factor:` the named signals do, so a var
+# called `lookback` or `momentum` would silently be ignored.
+_DATA_PREFIXES = ("f_", "div_", "bench_", "ibov_", "cdi_", "sector_")
+
+
+def _var_name_taken(name: str, sig: dict) -> bool:
+    return (not name.isidentifier() or name in signal_dsl.FUNCTION_NAMES
+            or name in _signal_defs() or name in SHARED_DATA_KEYS
+            or name in sig or name in ("lookback", "weight", "transform", "has_glitch")
+            or name.startswith(_DATA_PREFIXES))
+
+
+def _reads_data(expr: str, what: str, sig: dict, local: dict, errors: list[str]) -> None:
+    """A leg or weight_expr must name some market data (or a var); one built of
+    numbers and scalar keys alone is a constant, not a cross-section."""
+    scalars = {k for k, v in sig.items() if isinstance(v, (int, float))} | {"lookback"}
+    if not _expr_names(expr) - scalars:
+        errors.append(f"{what}: {expr!r} reads no market data")
+
+
+def _validate_vars(local: dict, sig: dict, errors: list[str]) -> bool:
     funds = False
     for name, expr in local.items():
-        if not name.isidentifier() or name in signal_dsl.FUNCTION_NAMES:
-            errors.append(f"signal.vars: {name!r} must be a plain name that is not "
-                          "a function")
+        if _var_name_taken(name, sig):
+            errors.append(f"signal.vars: {name!r} is taken (a function, a named "
+                          "signal, a data frame or a signal key) — pick another name")
         if isinstance(expr, str):
             funds |= _check_expr(expr, errors)
         else:
@@ -177,6 +200,8 @@ def _validate_legs(sig: dict, errors: list[str], local: dict) -> bool:
                           f"{sorted(_LEG_TRANSFORMS)}")
         else:
             funds |= _validate_factor(leg, errors, local)
+            if isinstance(leg.get("expr"), str):
+                _reads_data(leg["expr"], f"signal.legs[{i}]", sig, local, errors)
     return funds
 
 
@@ -296,11 +321,13 @@ def report(spec: dict) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--spec-json", required=True, help="engine spec dict as JSON")
+    ap.add_argument("--spec-json", required=True,
+                    help='engine spec dict as JSON, or "-" to read it from stdin')
     args = ap.parse_args()
+    raw = sys.stdin.read() if args.spec_json == "-" else args.spec_json
 
     try:
-        spec = json.loads(args.spec_json)
+        spec = json.loads(raw)
     except json.JSONDecodeError as e:
         out = {"ok": False, "errors": [f"invalid spec JSON: {e}"], "warnings": [],
                "needs_fundamentals": False}

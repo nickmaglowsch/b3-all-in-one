@@ -69,10 +69,22 @@ def strategy_months(strat, params: dict, freq: str) -> float:
 
 def _months(strat, params: dict, mpp: float) -> float:
     if isinstance(strat, FixedWeight):
-        return _blend_months(strat.spec, params, mpp)
-    if isinstance(strat, RankAndHold):
-        return _ranker_months(strat.spec, params, mpp)
-    return _code_months(params, mpp)
+        need = _blend_months(strat.spec, params, mpp)
+    elif isinstance(strat, RankAndHold):
+        need = _ranker_months(strat.spec, params, mpp)
+    else:
+        return _code_months(params, mpp)
+    return need + _month_gap(strat.spec.get("rebalance_months"))
+
+
+def _month_gap(months) -> float:
+    """A `rebalance_months` book on `start` is the one bought in the listed month
+    before it — up to a year back — so the pre-roll has to reach that month too,
+    or the run opens in cash where a longer one is invested."""
+    if not months:
+        return 0.0
+    m = sorted(set(months))
+    return float(max((b - a) % 12 or 12 for a, b in zip(m, m[1:] + m[:1])))
 
 
 def _code_months(params: dict, mpp: float) -> float:

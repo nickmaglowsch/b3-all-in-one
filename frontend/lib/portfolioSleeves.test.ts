@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   CASH_REF,
   fromSelect,
+  portfolioBody,
   rowToSleeve,
   selectValue,
   specTickers,
@@ -81,4 +82,13 @@ test("a spec without sleeves reads as no rows", () => {
   assert.deepEqual(specToRows({ sleeves: [{ weight: 1 }] }), [
     { strategy_ref: "", target_pct: "100" },
   ]);
+});
+
+test("portfolioBody keeps the edited spec's grid, and a new carteira has none", () => {
+  const rows = [{ strategy_ref: CASH_REF, target_pct: "100" }];
+  const body = portfolioBody(" Semi ", "", rows, { rebalance: "ME", rebalance_months: [6, 12] });
+  assert.equal(body.name, "Semi");
+  assert.equal(body.rebalance, "ME");
+  assert.deepEqual(body.rebalance_months, [6, 12]);
+  assert.equal("rebalance_months" in portfolioBody("New", "", rows, {}), false);
 });

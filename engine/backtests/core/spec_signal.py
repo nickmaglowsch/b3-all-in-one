@@ -15,6 +15,7 @@ import functools
 from collections import ChainMap
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from backtests.core import signal_dsl
@@ -60,26 +61,44 @@ _LEG_TRANSFORMS = {
 }
 
 
+def _frame(x, what: str) -> pd.DataFrame:
+    """A leg or weight_expr has to be a (date x ticker) frame; a bare number
+    (`1`, `lookback`) is a spec mistake, said here instead of as an AttributeError
+    from the selection loop."""
+    if not isinstance(x, pd.DataFrame):
+        raise ValueError(f"{what} must read market data (a date x ticker frame), "
+                         f"got {type(x).__name__}")
+    return x
+
+
+def _neutral(x: pd.DataFrame) -> pd.DataFrame:
+    """Missing cells as the row's average: ~0.5 for a rank, 0 for a z-score. A
+    row the leg does not cover at all is the same constant for every name."""
+    return x.T.fillna(x.mean(axis=1)).T.fillna(0.0)
+
+
 def _combine_legs(cfg: dict, shared, params: dict | None) -> pd.DataFrame:
     """A weighted sum of legs, each a factor or expr of its own. ``coverage:
     all`` (default) scores only names every leg covers; ``any`` scores a name on
-    the legs it has, as a weighted mean — the two_leg_value case, where P/B and
-    ROE come from different tables and a plain sum drops every name missing one.
+    the legs it has — the two_leg_value case, where P/B and ROE come from
+    different tables and a plain sum drops every name missing one. A leg a name
+    lacks counts as that leg's average on the date, so the gap neither helps nor
+    hurts it, whatever the sign of the leg's weight.
 
     Each leg reads the signal's scalars (``lookback`` and any extra numbers)."""
     base = {k: v for k, v in cfg.items() if k not in ("legs", "vars", "expr", "factor")}
-    num = den = None
+    legs = []
     for leg in cfg["legs"]:
-        x = resolve_factor({**base, **leg}, shared, params)
-        x = _LEG_TRANSFORMS[leg.get("transform", "rank")](x)
-        w = float(leg.get("weight", 1.0))
-        if cfg.get("coverage", "all") == "all":
-            num = w * x if num is None else num + w * x      # NaN where any leg is
-            continue
-        part, seen = (w * x).fillna(0.0), x.notna() * abs(w)
-        num = part if num is None else num.add(part, fill_value=0.0)
-        den = seen if den is None else den.add(seen, fill_value=0.0)
-    return num if den is None else num / den.where(den > 0)
+        x = _frame(resolve_factor({**base, **leg}, shared, params), "a signal leg")
+        legs.append((float(leg.get("weight", 1.0)),
+                     _LEG_TRANSFORMS[leg.get("transform", "rank")](x)))
+    if cfg.get("coverage", "all") == "all":
+        return sum(w * x for w, x in legs)               # NaN where any leg is
+    idx = functools.reduce(pd.Index.union, (x.index for _, x in legs))
+    cols = functools.reduce(pd.Index.union, (x.columns for _, x in legs))
+    legs = [(w, x.reindex(index=idx, columns=cols)) for w, x in legs]
+    covered = sum(x.notna().astype(int) for _, x in legs) > 0
+    return sum(w * _neutral(x) for w, x in legs).where(covered)
 
 
 def resolve_factor(cfg: dict, shared: dict, params: dict | None = None) -> pd.DataFrame:
@@ -144,7 +163,8 @@ def _weight_frame(spec: dict, params: dict, shared: dict) -> pd.DataFrame | None
         return None
     cfg = {k: v for k, v in _signal_cfg(spec, params).items()
            if k not in ("factor", "expr", "legs")}
-    return resolve_factor({**cfg, "expr": spec["weight_expr"]}, shared, params)
+    return _frame(resolve_factor({**cfg, "expr": spec["weight_expr"]}, shared, params),
+                  "weight_expr")
 
 
 def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
@@ -173,13 +193,20 @@ def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
 
 
 def only_in_months(tw: pd.DataFrame, months) -> pd.DataFrame:
-    """Trade only on the first grid row of each listed calendar month; every other
-    row is all-zero, which run_simulation holds (drifts) rather than rebalances.
-    So `rebalance: ME` + `rebalance_months: [6, 12]` is a semiannual book, and the
-    rows it trades on are fixed by the calendar — not by where the window starts."""
+    """Trade only on the first grid row on or after the 1st of each listed
+    calendar month; every other row is all-zero, which run_simulation holds
+    (drifts) rather than rebalances. So `rebalance: ME` + `rebalance_months:
+    [6, 12]` is a semiannual book, and the rows it trades on are fixed by the
+    calendar — not by where the window starts. A grid with no row in a listed
+    month (a run overriding the spec's ME with QE) trades on the next row."""
     if not months:
         return tw
     idx = tw.index
-    first = ~pd.Series(idx.to_period("M"), index=idx).duplicated().to_numpy()
-    tw.loc[~(idx.month.isin(list(months)) & first)] = 0.0
+    first = idx[0].to_period("M").start_time
+    starts = [pd.Timestamp(y, m, 1) for y in range(idx[0].year, idx[-1].year + 1)
+              for m in months]
+    pos = idx.searchsorted([t for t in starts if t >= first])
+    keep = np.zeros(len(idx), dtype=bool)
+    keep[pos[pos < len(idx)]] = True
+    tw.loc[~keep] = 0.0
     return tw

@@ -1419,8 +1419,8 @@ async def _validate_spec_engine(spec: dict) -> dict:
     """Shell validate_spec.py; raise 422 on structured errors, return the report:
     needs_fundamentals (inferred from f_* refs) and warnings (a ticker's late first
     price)."""
-    proc = await subprocs.offload(
-        enginerun.run_script, "validate_spec.py", ["--spec-json", json.dumps(spec)])
+    proc = await subprocs.offload(  # stdin: one argv element over 128 KB is E2BIG
+        enginerun.run_script, "validate_spec.py", ["--spec-json", "-"], stdin=json.dumps(spec))
     try:
         report = json.loads((proc.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):

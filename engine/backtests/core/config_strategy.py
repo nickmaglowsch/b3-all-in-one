@@ -256,7 +256,8 @@ class RankAndHold(_SpecStrategy):
         # A held name it scores NaN or below zero gets nothing; if none score
         # above zero, the book falls back to equal weight rather than holding cash.
         if scheme == "expr" and wframe is not None:
-            size = wframe.iloc[i - 1].reindex(selected).clip(lower=0).fillna(0.0)
+            size = (wframe.iloc[i - 1].reindex(selected).replace([np.inf, -np.inf], np.nan)
+                    .clip(lower=0).fillna(0.0))
             tot = size.sum()
             if tot > 0 and np.isfinite(tot):
                 return (size / tot).to_dict()

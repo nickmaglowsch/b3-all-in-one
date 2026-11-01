@@ -16,7 +16,7 @@ import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
-import { fromSelect, rowToSleeve, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
+import { fromSelect, portfolioBody, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -117,6 +117,7 @@ function SleevesEditor() {
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [editId, setEditId] = useState<string | undefined>();
+  const [editSpec, setEditSpec] = useState<Record<string, unknown>>({});
   // The live sleeves as they stood when "Editar" borrowed the rows for a saved
   // carteira. The rows are shared, so without this a cancelled edit left the
   // carteira's mix sitting in the live editor — dirty, so never reseeded, and
@@ -203,6 +204,7 @@ function SleevesEditor() {
     setName(u.name);
     setDesc(typeof u.spec.description === "string" ? u.spec.description : "");
     setEditId(u.id);
+    setEditSpec(u.spec);
     saveStrat.reset();
     document
       .getElementById("sleeves")
@@ -216,6 +218,7 @@ function SleevesEditor() {
     setName("");
     setDesc("");
     setEditId(undefined);
+    setEditSpec({});
     if (!live) return;
     if (live.dirty) {
       setRows(live.rows);
@@ -230,12 +233,7 @@ function SleevesEditor() {
     saveStrat.mutate(
       {
         id: editId,
-        body: {
-          kind: "fixed_weight",
-          name: name.trim(),
-          description: desc.trim() || undefined,
-          sleeves: rows.map(rowToSleeve),
-        },
+        body: portfolioBody(name, desc, rows, editSpec),
       },
       { onSuccess: endEdit },
     );

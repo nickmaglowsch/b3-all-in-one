@@ -182,6 +182,12 @@ rebalance_months: [6, 12]  # optional: trade only on the first grid row of these
                            #   calendar months; every other row is all-zero, which
                            #   run_simulation holds (drift, no trades). [6, 12] on
                            #   ME = semiannual, [12] = annual. Also on fixed_weight.
+                           #   A grid with no row in a month trades on the next row.
+                           #   Contributions wait (uninvested) for the next listed
+                           #   month; a never-funded run (initial_capital 0) buys
+                           #   its first book on the first row cash arrives. As a
+                           #   nested sleeve, the book is carried forward and the
+                           #   blend rebalances back to it on its own grid.
 needs_fundamentals: false  # set true to load CVM fundamentals (f_* shared keys)
 warmup_pad: 1              # rows skipped at the start = max_lookback + warmup_pad
                            #   (use 2 when the signal has shift:1; see Gotchas)
@@ -209,10 +215,14 @@ signal:
   # legs:
   #   - {factor: momentum, weight: 0.6}                  # transform: rank (default)
   #   - {expr: "f_net_income_ttm / f_equity", weight: 0.4, transform: zscore}
-  # coverage: all          # all: score names every leg covers; any: weighted mean
-  #                        #   of the legs a name has (legs from different tables)
+  # coverage: all          # all: score names every leg covers; any: a leg a name
+  #                        #   lacks counts as that leg's row average (legs from
+  #                        #   different tables). A leg must read market data.
   # vars:                  # named sub-expressions, in order; expr, legs and
-  #   mom: "roll_sum(shift(log_ret, 1), lookback)"     # weight_expr read them by name
+  #   mom: "roll_sum(shift(log_ret, 1), lookback)"     # weight_expr read them by name.
+  #                        # A var name may not shadow a function, a signals.yaml
+  #                        # name, a data key (f_/div_/bench_/ibov_/cdi_/sector_…),
+  #                        # a signal key or lookback (validate_spec refuses it).
 
 selection:
   top_pct: 0.10            # fraction of eligible universe... OR:
@@ -319,7 +329,7 @@ are rejected.
 Dividend frames (B3, `backtests.core.dividends`, built on first read from
 `corporate_actions`): `div_yield_12m` (trailing-12-month cash per share, each
 payment over the grid price on/before it — split-proof), `div_count_12m`
-(payment dates in the last 12 months) and `div_years_3y` (how many of the last
+(distinct data-com dates — `event_date`, the last day with rights — in the last 12 months) and `div_years_3y` (how many of the last
 three 12-month windows had one; `>= 2` is besst_quality's `paid_regularly`).
 
 The evaluator is **safe**: expressions are parsed with `ast` and only this

@@ -7,6 +7,7 @@ import math
 import pandas as pd
 
 from backtests.core import tax as taxmod
+from backtests.core.trades import compute_trades  # noqa: F401  (re-exported)
 
 
 def _apply_returns(
@@ -39,68 +40,6 @@ def _apply_returns(
             r = 0.50
 
         pos["current_value"] *= 1.0 + r
-
-
-def compute_trades(
-    positions: dict,
-    target_weights: pd.Series,
-    nav: float,
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Pure rebalance diff: BRL to sell and buy per ticker to hit target weights.
-
-    Args:
-        positions: current ledger, {ticker: {"cost_basis", "current_value"}}.
-        target_weights: target weight per ticker for this rebalance row.
-        nav: portfolio value to rebalance to (may include a pending buy-in).
-
-    Returns:
-        (sells, buys) in BRL.
-          sells[t] = cash to raise by selling a long OR covering a short — the
-                     amount that must go through the tax engine.
-          buys[t]  = cash to deploy into a long, OR (negative) capital to open /
-                     extend a short (never taxed: opening a position realizes no
-                     gain).
-
-    Routing follows the *current* sign of the holding, not whether it is held:
-      • diff < 0 while flat or short opens / deepens a short: a negative *buy*,
-        never taxed. (As a sell it read as a full cover and dropped the short.)
-      • diff > 0 while short is a *sell*: covering realizes taxable P&L.
-      • crossing zero is close-then-open: the whole position through sells,
-        the new side through buys.
-    Pure: no mutation of `positions`. The order is not irrelevant, though: the
-    caller sums over these dicts and opens positions in their order, and float
-    addition is not associative. A set here made a run's last bits depend on the
-    process's string hash seed — held book first, then new targets, in order.
-    """
-    sells: dict[str, float] = {}  # {ticker: cash_to_raise}
-    buys: dict[str, float] = {}   # {ticker: cash_to_deploy}
-
-    all_tickers = dict.fromkeys([*positions, *target_weights[target_weights != 0].index])
-    for t in all_tickers:
-        current_val = positions.get(t, {}).get("current_value", 0.0)
-        target_w = target_weights.get(t, 0.0)
-        if pd.isna(target_w):
-            target_w = 0.0
-
-        target_val = nav * target_w
-        diff = target_val - current_val
-
-        if diff < -0.01:            # less exposure: sell a long, or open/deepen a short
-            if current_val > 0:
-                sells[t] = current_val if target_val < 0 else abs(diff)
-                if target_val < 0:
-                    buys[t] = target_val    # flip: close the long, open the short
-            else:
-                buys[t] = diff              # negative capital, never taxed
-        elif diff > 0.01:           # more exposure: buy a long, or cover a short
-            if current_val < 0:
-                sells[t] = abs(current_val) if target_val > 0 else diff
-                if target_val > 0:
-                    buys[t] = target_val    # flip: cover the short, open the long
-            else:
-                buys[t] = diff
-
-    return sells, buys
 
 
 def _execute_rebalance(
@@ -198,6 +137,18 @@ def _execute_rebalance(
     return tax_paid, cash_drag, turnover_pct
 
 
+def _row_book(t_weights: pd.Series, last_book, nav: float):
+    """(targets, live, last live book) for a row. An all-zero row holds — but a
+    book never funded yet (initial_capital=0, the what-if replay) has nothing
+    to hold and would read as bankrupt, so it buys the last live book with the
+    cash that has arrived. A rebalance_months book holds for months at a time."""
+    if t_weights.abs().sum() != 0:
+        return t_weights, True, t_weights
+    if nav == 0 and last_book is not None:
+        return last_book, True, last_book
+    return t_weights, False, last_book
+
+
 def run_simulation(
     returns_matrix: pd.DataFrame,
     target_weights: pd.DataFrame,
@@ -272,6 +223,7 @@ def run_simulation(
 
     initialized = False
     last_deploy = None      # date of the last rebalance that received a deposit
+    last_book = None        # the last live target row, for a never-funded hold row
     deployed = 0.0          # BRL of dated flows already deployed (Series path only)
 
     # Contract guard: NAV is defined as the sum of position values and this engine
@@ -311,6 +263,7 @@ def run_simulation(
                     at_pos[t] = {"cost_basis": alloc, "current_value": alloc}
 
             initialized = True
+            last_book = t_weights
             last_deploy = date
 
             nav0 = sum(p["current_value"] for p in pt_pos.values())
@@ -335,7 +288,7 @@ def run_simulation(
         # everything, and since sale proceeds aren't tracked as cash
         # (NAV = sum of position values), NAV would collapse to 0 and fake a
         # margin call on the next step.
-        live = bool(t_weights.abs().sum() != 0)
+        t_weights, live, last_book = _row_book(t_weights, last_book, pt_nav + at_nav)
 
         # ── Step 1b: Periodic buy-in (aporte) ────
         # Whole calendar months elapsed since the last deposit — exact for ME/QE

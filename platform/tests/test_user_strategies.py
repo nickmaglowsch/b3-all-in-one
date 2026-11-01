@@ -341,3 +341,13 @@ async def test_the_widened_language_rejects(client, over):
     h = await _headers(client)
     r = await client.post("/strategies/user", json=_rank("BadWide", **over), headers=h)
     assert r.status_code == 422, r.text
+
+
+async def test_a_spec_past_the_argv_limit_saves_rather_than_500s(client):
+    # 16 vars of 1990 non-ASCII chars: ~200 KB once json.dumps escapes them,
+    # which as one argv element failed the validator's exec (E2BIG).
+    h = await _headers(client)
+    vars_ = {f"v{i}": "é" * 1990 for i in range(16)}
+    body = _rank("HugeVars", signal={"vars": vars_, "factor": "momentum", "lookback": 6})
+    r = await client.post("/strategies/user", json=body, headers=h)
+    assert r.status_code in (200, 422), r.text

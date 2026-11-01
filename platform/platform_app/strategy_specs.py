@@ -22,11 +22,10 @@ from pydantic import (
 _REBALANCE = Literal["ME", "QE", "W-FRI"]
 _MARKET = Literal["B3", "US", "CRYPTO"]
 
-# The compiled spec reaches validate_spec.py as one argv element, which the kernel
-# caps at 128 KB: past that the exec fails with E2BIG and the save is a 500. These
-# bounds keep any spec far inside it, and are generous for a field a person types.
+# The compiled spec reaches validate_spec.py on stdin (routes._validate_spec_engine),
+# so argv's 128 KB cap no longer bounds it; these keep a spec — and the JSONB row —
+# a sane size, and are generous for a field a person types.
 _NAME_MAX, _TEXT_MAX, _SLEEVES_MAX, _REGIME_MAX = 120, 2000, 50, 16 * 1024
-# With the vars and legs below, the worst-case spec is ~75 KB: still inside it.
 _VARS_MAX, _LEGS_MAX, _KEYWORDS_MAX, _KEYWORD_LEN = 16, 8, 20, 80
 # A B3 trading code — a four-character root and a one- or two-digit class
 # (PETR4, IVVB11) — optionally with the ".SA" the built-in specs carry from the

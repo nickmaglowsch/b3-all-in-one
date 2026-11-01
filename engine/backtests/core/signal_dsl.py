@@ -116,10 +116,12 @@ def _build_funcs(ns: dict) -> dict:
             if sector_pit is None or sector_pit.empty:
                 raise ValueError("signal expr: sector functions need CVM sector data, "
                                  "and this market plane has none (B3 only)")
-            labels = _sector_labels(sector_pit, x).to_numpy().ravel()
+            # Integer codes, not the strings: grouping on objects is the slow part.
+            codes = pd.factorize(_sector_labels(sector_pit, x).to_numpy().ravel())[0]
             v = x.to_numpy(dtype=float).ravel()
             long = pd.DataFrame({"d": np.repeat(np.arange(len(x)), x.shape[1]),
-                                 "s": labels, "v": v}).dropna(subset=["s"])
+                                 "s": codes, "v": v})
+            long = long[long["s"] >= 0]                      # -1 = no sector on file
             g = long.groupby(["d", "s"])["v"]
             out = np.full(v.shape, np.nan)
             out[long.index] = _GROUPED[how](g, long["v"]).to_numpy()

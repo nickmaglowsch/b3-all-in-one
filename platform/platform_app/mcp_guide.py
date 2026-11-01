@@ -136,8 +136,9 @@ sub-factors, each put on a common scale first.
   different window, write the number into the leg's expr.
 - `coverage: "all"` (default) scores only names every leg covers; `"any"`
   scores a name on the legs it has — a leg it lacks counts as that leg's
-  average on the date, so the gap neither helps nor hurts, whatever the sign of
-  the weight. Use it when legs come from different tables (prices vs filings).
+  average on the date, whatever the sign of the weight. That pulls such a name
+  toward the middle, so a top-N picks it a little less often than one with
+  every leg. Use it when legs come from different tables (prices vs filings).
 - A leg's expr must read market data or a var; a bare number is refused.
 - `vars` (up to 16) are named expressions, evaluated in order, each able to
   read the earlier ones; `expr`, every leg and `weight_expr` can read them, by

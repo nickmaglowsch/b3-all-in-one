@@ -82,8 +82,9 @@ def _combine_legs(cfg: dict, shared, params: dict | None) -> pd.DataFrame:
     all`` (default) scores only names every leg covers; ``any`` scores a name on
     the legs it has — the two_leg_value case, where P/B and ROE come from
     different tables and a plain sum drops every name missing one. A leg a name
-    lacks counts as that leg's average on the date, so the gap neither helps nor
-    hurts it, whatever the sign of the leg's weight.
+    lacks counts as that leg's average on the date, whatever the sign of the
+    leg's weight — which pulls the name toward the middle, so a top-N picks it
+    slightly less often than a name with every leg.
 
     Each leg reads the signal's scalars (``lookback`` and any extra numbers)."""
     base = {k: v for k, v in cfg.items() if k not in ("legs", "vars", "expr", "factor")}

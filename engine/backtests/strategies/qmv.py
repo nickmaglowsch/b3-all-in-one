@@ -22,6 +22,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from backtests.core import fundamentals
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
     COMMON_RUN_SPECS, COMMON_MIN_ADTV, COMMON_REBALANCE_FREQ,
@@ -102,8 +103,8 @@ class QMVStrategy(StrategyBase):
         # (Yahoo's ^BVSP calendar can start/end offset from ret.index; positional
         # indexing would misalign the vol dial for the whole backtest)
         ibov_vol = shared_data["ibov_vol_monthly"].reindex(ret.index)
-        f_ni_ttm = shared_data.get("f_net_income_ttm_m", pd.DataFrame())
-        f_equity = shared_data.get("f_equity_m", pd.DataFrame())
+        f_ni_ttm = fundamentals.require(shared_data, "f_net_income_ttm_m", self.name)
+        f_equity = fundamentals.require(shared_data, "f_equity_m", self.name)
 
         min_adtv = params.get("min_adtv", 2_000_000)
         min_price = params.get("min_price", 1.0)

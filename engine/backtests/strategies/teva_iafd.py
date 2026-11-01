@@ -60,10 +60,11 @@ ponytail: CVM's taxonomy files protein under "Alimentos" and airlines under
 list. That list is not point-in-time.
 ponytail: CVM files some manufacturers under "Comércio (Atacado e Varejo)"
 (INTB, Intelbras, which the official index holds), so they are excluded too.
-Known data issues outside this module (prod, 2026-11): select_constituents'
-share counts double CIEL's 2015 split (25.8% weight) and miss a DIRR split;
-TIMS's FY2024/25 DFPs are all zeros (falls back to stale FY2023 -> out
-2025-26); ABEV's FY2016/17 DFPs exist only as 2018-07 re-filings (stale ->
+Known data issues outside this module (prod, 2026-11): fixed in code, live
+after the next prices + CVM re-ingest — CIEL's 2015 split counted twice (FRE
+anchor, pit.share_count_anchor), DIRR's 2025 split dropped (B3 data-com /
+percentage factor, split_validation), TIMS's all-zero FY2024/25 DFPs and a
+net debt that ignored aplicações financeiras (cvm_metrics). ABEV's FY2016/17 DFPs exist only as 2018-07 re-filings (stale ->
 out 2016-18), and reorganisations that changed the CNPJ (AMBV -> ABEV 2013,
 TIMP -> TIMS 2020) are not linked, so their history restarts.
 """

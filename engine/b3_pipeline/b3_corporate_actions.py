@@ -312,9 +312,7 @@ def parse_stock_dividends(
         if ex_date is None:
             continue
 
-        # Sanity-check: B3 real-world splits are at most a few thousand to one.
-        # The adjustments layer already caps at 1000x, but storing junk in the DB
-        # pollutes the stock_actions table. Reject anything beyond that bound here.
+        # B3 real-world splits are at most ~1000:1; junk would pollute stock_actions.
         _MAX_SPLIT_FACTOR = 1000.0
         _MIN_SPLIT_FACTOR = 1.0 / 1000.0
         if factor > _MAX_SPLIT_FACTOR or factor < _MIN_SPLIT_FACTOR:
@@ -333,7 +331,8 @@ def parse_stock_dividends(
             continue
 
         if label == config.B3_LABEL_DESDOBRAMENTO:
-            action_type = config.EVENT_TYPE_STOCK_SPLIT
+            # B3 quotes the % of new shares (DIRR 1:3 = 200), like a bonificação
+            action_type, factor = config.EVENT_TYPE_STOCK_SPLIT, 1.0 + factor / 100.0
         elif label == config.B3_LABEL_GRUPAMENTO:
             action_type = config.EVENT_TYPE_REVERSE_SPLIT
         elif label == config.B3_LABEL_BONIFICACAO:

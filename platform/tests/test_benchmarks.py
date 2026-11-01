@@ -15,6 +15,7 @@ import datetime
 
 import pytest
 
+from platform_app import routes_benchmarks
 from tests.conftest import auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -49,7 +50,9 @@ async def test_the_catalogue_is_the_list_the_picker_renders(client):
 
     assert r.status_code == 200, r.text
     keys = [b["key"] for b in r.json()]
-    assert keys == ["cdi", "ipca", "ibov", "sp500", "bitcoin"]
+    assert keys == ["cdi", "ipca", "ibov", "sp500", "bitcoin", "selic",
+                    "irfm1", "irfm1p", "irfm", "irfmp2", "imab5", "imab5p",
+                    "imab5p2", "imab", "imas", "imageral"]
     # Every entry carries what the UI has to render: a pt-BR label and the note
     # that says what the number actually is (a proxy, a currency, an index).
     assert all(b["label"] and b["note"] for b in r.json())
@@ -189,16 +192,16 @@ async def test_the_default_window_ends_today_and_needs_no_arguments(client, monk
     call has to be answerable — otherwise every caller reimplements a default."""
     headers = await _bencher(client, "defaults@example.com")
     seen: list = []
-    _stub(monkeypatch, {"cdi": {}, "ibov": {}, "ipca": {}, "sp500": {},
-                        "bitcoin": {}, "offline": True}, seen)
+    _stub(monkeypatch, {**{k: {} for k in routes_benchmarks.KEYS}, "offline": True},
+          seen)
 
     r = await client.get("/benchmarks/series", headers=headers)
 
     assert r.status_code == 200, r.text
     start, end, names = seen[0]
     assert end == datetime.date.today().isoformat()
-    assert names == ("cdi", "ipca", "ibov", "sp500", "bitcoin")
-    assert r.json()["unavailable"] == ["cdi", "ipca", "ibov", "sp500", "bitcoin"]
+    assert names == tuple(routes_benchmarks.KEYS)
+    assert r.json()["unavailable"] == routes_benchmarks.KEYS
 
 
 async def test_the_cache_is_bounded(monkeypatch):

@@ -175,6 +175,38 @@ def _latest_plane_close(
     return as_of, prices
 
 
+def _rf_etf_closes(db_path: str, end: str) -> dict[str, float]:
+    """{ticker: latest own close} for the renda-fixa ETFs a sleeve can hold.
+
+    B3 books them outside COTAHIST, so neither `prices` nor the shared frame's
+    raw_close ever carries them, and a target weight on IMAB11 used to come back
+    as `unpriced_skipped` — accepted at save time, then never traded. Their
+    marks are in `external_prices` (b3_pipeline/external_prices.py). Kept apart
+    from `_latest_plane_close` so that function stays row-for-row equal to the
+    raw_close it replaced, which is what its equivalence test pins.
+
+    Only the ETF's own close, never the spliced index level: a trade is sized in
+    shares at what the share costs today.
+    """
+    from b3_pipeline import config, storage
+
+    tickers = sorted(config.RF_ETF_INDEX)
+    marks = ", ".join("?" for _ in tickers)
+    ranked = f"""
+        SELECT ticker, close FROM (
+            SELECT ticker, close,
+                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+            FROM external_prices
+            WHERE date <= ? AND close IS NOT NULL AND ticker IN ({marks})
+        ) latest
+        WHERE rn = 1
+    """
+    with storage.get_connection(db_path) as conn:
+        rows = storage.read_sql(ranked, conn, params=[end, *tickers])
+    return {str(t): float(c) for t, c in zip(rows["ticker"], rows["close"])
+            if pd.notna(c) and float(c) > 0}
+
+
 def _build_trades(
     positions_in: dict, cash: float, target_row: pd.Series, all_prices: dict[str, float]
 ) -> dict:
@@ -299,9 +331,10 @@ def _advise_from_strategy(args) -> dict:
         ),
     }
     if args.positions:
+        db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
         out["trades"] = _build_trades(
             json.loads(args.positions), args.nav_cash, row,
-            _latest_prices(shared["raw_close"]))
+            {**_rf_etf_closes(db_path, end), **_latest_prices(shared["raw_close"])})
     return out
 
 
@@ -317,6 +350,7 @@ def _advise_from_weights(args) -> dict:
     as_of, prices = _latest_plane_close(db_path, start, end)
     if as_of is None:
         raise SystemExit("no price data available to value --weights")
+    prices = {**_rf_etf_closes(db_path, end), **prices}
 
     row = pd.Series(
         {t: float(w) for t, w in weights_in.items() if t != "CASH_CDI"}, dtype=float)

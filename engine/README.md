@@ -29,7 +29,8 @@ true — the platform stitches together several official feeds:
 | **B3** | `listedCompaniesProxy` API | Dividends, JCP, splits, reverse splits, bonus shares |
 | **CVM** | `dados.cvm.gov.br` bulk CSVs (DFP/ITR/FCA) | Structured fundamentals (2010→present) + PIT ticker map |
 | **CVM** | "Download Múltiplo" legacy channel | Pre-2010 fundamentals (~2006–2009), *opt-in, credentialed* |
-| **BCB** | Central Bank API | CDI risk-free daily series |
+| **BCB** | Central Bank API | CDI risk-free daily series; CDI, IPCA and Selic levels (`$CDI`, `$IPCA`, `$SELIC`) |
+| **ANBIMA** | IMA / IMA-P2 CSV download, one date per request | Fixed-income index levels (`$IMAB`, `$IRFM`, `$IMAS`, …; 2010→) — benchmarks, and the history spliced in front of the renda-fixa ETFs (`b3_pipeline/anbima_series.py`). The P2 indexes are stored going forward only, as benchmarks |
 | **B3** | the plane itself (`prices`, `external_prices`) | Benchmarks: the Ibovespa (`$IBOV`, B3's own series), ETF sleeves (IVVB11, DIVO11, …) |
 
 Splits use B3's **official factors** (not heuristic jump detection), so

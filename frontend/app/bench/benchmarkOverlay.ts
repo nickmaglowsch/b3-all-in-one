@@ -16,14 +16,17 @@ import { type Benchmark, useBenchmarks, useBenchmarkSeries } from "./lib";
 // Dashed, always. A ruler is not the same *kind* of line as a backtest, and
 // colour alone would put the two in one visual class — the comparison the chart
 // exists to make would then depend on remembering which hue was which.
-const BENCH_DASH = "5 3";
-
-// Benchmark colours run backwards from the end of the palette while run colours
-// run forwards from the start (lib's `seriesColor`), so the two only collide
-// once four runs are on the chart — and there the dash still separates them.
-// Fixed to the catalogue's order rather than the selection's, so checking a
-// second benchmark never recolours the first.
-export const benchColor = (i: number) => `var(--series-${8 - (i % 8)})`;
+//
+// The catalogue outgrew the palette (16 rulers, 8 colours), so a ruler is a
+// (colour, dash) pair: four colours from the back half of the palette, times
+// four dash patterns. Run colours run forwards from the start (lib's
+// `seriesColor`), so the two share no hue until a fifth run is on the chart —
+// and there the dash still separates them. Fixed to the catalogue's order
+// rather than the selection's, so checking a second benchmark never recolours
+// the first.
+const BENCH_DASHES = ["5 3", "1 3", "8 3 1 3", "12 4"];
+export const benchColor = (i: number) => `var(--series-${8 - (i % 4)})`;
+export const benchDash = (i: number) => BENCH_DASHES[Math.floor(i / 4) % 4];
 
 export interface BenchmarkOverlay {
   catalog: Benchmark[];
@@ -70,7 +73,7 @@ export function useBenchmarkOverlay(
         key: b.key,
         label: b.label,
         color: benchColor(index(b.key)),
-        dash: BENCH_DASH,
+        dash: benchDash(index(b.key)),
       })),
     colorOf: (key) => benchColor(index(key)),
   };

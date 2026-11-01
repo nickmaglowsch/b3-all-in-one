@@ -18,10 +18,10 @@ Usage:
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from . import (adjustments, b3_corporate_actions, config, downloader,
+from . import (adjustments, anbima_series, b3_corporate_actions, config, downloader,
                external_prices, ibov_series, index_series, parser, storage,
                tesouro_direto)
 
@@ -47,7 +47,7 @@ def _fetch_level_series(conn) -> None:
         # The CDI and IPCA levels renda fixa accrues against. Rewritten whole
         # each run from a fixed epoch, so a stored level never depends on the
         # window that happened to fetch it — no resume state, nothing to heal.
-        ("5c", "BCB index series (CDI, IPCA)", "BCB index series",
+        ("5c", "BCB index series (CDI, IPCA, Selic)", "BCB index series",
          lambda: index_series.build(datetime.now().date())),
         # The Ibovespa, from B3's own publication. Same whole-rewrite posture as
         # 5c, and for the same reason — one request per year, no resume state.
@@ -74,6 +74,67 @@ def _fetch_level_series(conn) -> None:
                 storage.upsert_external_prices(conn, rows)
         except Exception as e:
             logger.error(f"{name} fetch failed, continuing: {e}")
+
+
+# Days per upsert in the ANBIMA backfill. The first run is ~4,300 requests (half
+# an hour); writing as it goes means a run killed in the middle keeps what it
+# fetched, and the next one resumes after the newest stored day.
+_ANBIMA_CHUNK = 100
+
+
+def _fetch_anbima_indexes(conn) -> None:
+    """Step 5e: ANBIMA's IMA family and the two P2 indexes, one date a request.
+
+    The IMA history does not roll off, so it resumes from the newest stored date
+    — the whole of it on the first run, the last session or two every night
+    after — plus whatever the failure ledger says is still owed: resuming from
+    the max is what steps over a day a network error skipped, and the ledger is
+    what pays it back. A holiday answers "Não há dados" and is settled.
+
+    The P2 page keeps only its last week, so there is nothing to resume and
+    nothing a ledger could recover past it: each run fetches the trailing window
+    minus what is stored, and a day missed for longer than that is gone.
+    """
+    today = datetime.now().date()
+    source = anbima_series.SOURCE_IMA
+    last = storage.max_external_price_date(conn, source)
+    pending = storage.pending_external_failures(conn, source)
+    start = last + timedelta(days=1) if last else anbima_series.ANBIMA_START
+    days = sorted(set(anbima_series.weekdays(start, today)) | pending)
+    logger.info(f"ANBIMA IMA: {len(days)} day(s) from {start} "
+                f"({len(pending)} retried)")
+    failed = 0
+    for i in range(0, len(days), _ANBIMA_CHUNK):
+        chunk = days[i:i + _ANBIMA_CHUNK]
+        gave_up = None
+        try:
+            result = anbima_series.backfill(chunk)
+        except anbima_series.GaveUp as e:
+            # Store and record what the chunk got before the breaker tripped,
+            # then stop: the caller logs it as this step's failure.
+            result, gave_up = e.result, e
+        if not result.rows.empty:
+            storage.upsert_external_prices(conn, result.rows)
+        for day in chunk:
+            if day in result.failed:
+                storage.record_external_failure(conn, source, day, result.failed[day])
+            elif day in pending:
+                storage.clear_external_failure(conn, source, day)
+        failed += len(result.failed)
+        if gave_up:
+            raise gave_up
+    if failed:
+        logger.warning(f"{failed} ANBIMA day(s) failed and are queued for retry")
+
+    since = today - timedelta(days=anbima_series.P2_HEAL_DAYS)
+    stored = storage.stored_external_dates(conn, since, anbima_series.SOURCE_P2)
+    p2_days = [d for d in anbima_series.weekdays(since, today) if d not in stored]
+    result = anbima_series.backfill(p2_days, p2=True)
+    if not result.rows.empty:
+        storage.upsert_external_prices(conn, result.rows)
+    if result.failed:
+        logger.warning(f"{len(result.failed)} ANBIMA P2 day(s) failed; ANBIMA keeps "
+                       f"about a week of P2, so they are retried until they age out")
 
 
 def run_pipeline(
@@ -251,6 +312,16 @@ def run_pipeline(
             logger.error(f"External price fetch failed, continuing: {e}")
 
         _fetch_level_series(conn)
+
+        logger.info("")
+        logger.info("Step 5e/9: Fetching ANBIMA fixed-income indexes...")
+        try:
+            _fetch_anbima_indexes(conn)
+        except Exception as e:
+            # Same posture as every third-party step: an unreachable ANBIMA
+            # leaves the renda-fixa ETFs with their own ~14 months and the
+            # benchmarks disclosed as unavailable, where they were before.
+            logger.error(f"ANBIMA index fetch failed, continuing: {e}")
 
         if not skip_corporate_actions:
             logger.info("")

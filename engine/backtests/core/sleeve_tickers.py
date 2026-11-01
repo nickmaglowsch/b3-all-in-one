@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from b3_pipeline import config, storage
+from b3_pipeline import anbima_series, config, storage
 from backtests.core import markets
 
 # A first price this long after the plane's own first session is a listing date
@@ -28,6 +28,20 @@ from backtests.core import markets
 # a last price this long before the plane's last session is a delisting. Inside
 # either, it is just where the history starts or stops.
 _GAP_DAYS = 31
+
+# An index refused as a sleeve says which listed fund holds it, where one does;
+# an index no fund here tracks ($CDI, $SELIC, $IPCA, ...) gets no hint at all
+# rather than a pointer to the Ibovespa's.
+_TRACKED_BY = {
+    "$IBOV": "BOVA11.SA tracks the Ibovespa",
+    "$IMAB": "IMAB11.SA tracks IMA-B",
+    "$IMAB5P": "IB5M11.SA tracks IMA-B 5+",
+    "$IMAB5P2": "B5P211.SA tracks IMA-B 5 P2",
+    "$IRFMP2": "IRFM11.SA tracks IRF-M P2",
+    "$IMAB5": "the closest listed fund is B5P211.SA, which tracks IMA-B 5 P2",
+    "$IRFM": "the closest listed fund is IRFM11.SA, which tracks IRF-M P2",
+    "$IMAS": "the closest listed fund is LFTS11.SA, which tracks Teva Tesouro Selic",
+}
 
 
 def ticker_sleeves(spec: dict) -> list[str]:
@@ -52,12 +66,19 @@ def _connect():
     return storage.get_connection()
 
 
-def price_spans(symbols: list[str]) -> tuple[dict, tuple]:
-    """({plane symbol: (first, last) priced date}, (plane's first, last date)).
+def price_spans(symbols: list[str]) -> tuple[dict, tuple, dict]:
+    """({plane symbol: (first, last) priced date}, (plane's first, last date),
+    {external ticker: (first, last)}).
 
     Index probes only: `prices` is keyed on (ticker, date) and indexed on date. A
     row without `adj_close` does not count, because `download_benchmark` drops it
     too — a symbol that only has those is as unpriced to the run as a missing one.
+
+    A renda-fixa ETF is not in `prices` at all. Its span is the one
+    `download_benchmark` will hand the backtest: from the first day of its
+    spliced index (data._rf_etf_series) to its own last close. The raw
+    `external_prices` spans come back too, for the warning that says where the
+    ETF's own closes start and what stands in before them.
     """
     spec = markets.get(markets.DEFAULT)
     col, table = spec.symbol_column, spec.table
@@ -70,35 +91,88 @@ def price_spans(symbols: list[str]) -> tuple[dict, tuple]:
             f"GROUP BY {col}", conn, params=params)
         plane = storage.read_sql(
             f"SELECT MIN(date) AS first_day, MAX(date) AS last_day FROM {table}", conn)
+        rf = [s for s in symbols if s in config.RF_ETF_INDEX]
+        wanted = sorted({t for s in rf for t in (s, config.RF_ETF_INDEX[s].index)})
+        ext_params = {f"e{i}": t for i, t in enumerate(wanted)}
+        ext_rows = storage.read_sql(
+            "SELECT ticker AS symbol, MIN(date) AS first_day, MAX(date) AS last_day "
+            "FROM external_prices WHERE ticker IN "
+            f"({', '.join(f':{k}' for k in ext_params)}) GROUP BY ticker",
+            conn, params=ext_params) if wanted else found.iloc[0:0]
     spans = {row.symbol: (_as_date(row.first_day), _as_date(row.last_day))
              for row in found.itertuples()}
+    ext = {row.symbol: (_as_date(row.first_day), _as_date(row.last_day))
+           for row in ext_rows.itertuples()}
+    if rf:
+        # The span is read off the very series the backtest will get, so the
+        # check and the run cannot disagree about where the splice starts.
+        from backtests.core.data import _rf_etf_series
+        for s in rf:
+            px = _rf_etf_series(s, "1900-01-01", "2999-12-31")
+            if len(px):
+                spans[s] = (px.index[0].date(), px.index[-1].date())
     if not len(plane):
-        return spans, (None, None)
-    return spans, (_as_date(plane["first_day"].iloc[0]), _as_date(plane["last_day"].iloc[0]))
+        return spans, (None, None), ext
+    return (spans, (_as_date(plane["first_day"].iloc[0]),
+                    _as_date(plane["last_day"].iloc[0])), ext)
 
 
 def _plane_symbols(tickers: list[str], errors: list[str]) -> dict[str, str]:
     """{ticker: plane symbol} for the tickers that can be on the plane at all.
 
-    The `$` namespace is stored series — the Ibovespa, the CDI, IPCA — not things
-    a holder can buy; `^BVSP` resolves into it. ETFs de renda fixa are tradable
-    but B3 books them outside COTAHIST, so they live in `external_prices` from
-    mid-2025 only and `download_benchmark` cannot read them as a sleeve. Both are
-    refused by name, saying why, rather than reported as "unknown".
+    The `$` namespace is stored series — the Ibovespa, the CDI, IPCA, the ANBIMA
+    indexes — not things a holder can buy; `^BVSP` resolves into it. They are
+    refused by name, saying which ETF holds the index where one does.
+
+    ETFs de renda fixa are tradable but B3 books them outside COTAHIST, so their
+    own closes start in mid-2025. The ones with an ANBIMA index in
+    config.RF_ETF_INDEX pass, with that index spliced in front of them (see
+    `_splice_warning`); the rest have nothing to splice and are refused, saying
+    why, rather than held in CDI for all but their last year.
     """
     out = {}
     for t in tickers:
         sym = markets.plane_symbol(t)
         if sym.startswith("$"):
-            errors.append(f"ticker {t!r} is an index, not a listed instrument — hold "
-                          "it through an ETF (BOVA11.SA tracks the Ibovespa)")
-        elif sym in config.RENDA_FIXA_ETFS:
-            errors.append(f"ticker {t!r} is a renda-fixa ETF: B3 publishes it outside "
-                          "the equity price history this bench reads, so it is not "
-                          "supported as a sleeve yet — use CASH_CDI for cash")
+            hint = _TRACKED_BY.get(sym)
+            errors.append(f"ticker {t!r} is an index, not a listed instrument"
+                          + (f" — hold it through an ETF ({hint})" if hint else ""))
+        elif sym in config.RF_ETF_NO_INDEX:
+            errors.append(f"ticker {t!r} is a renda-fixa ETF with prices only from "
+                          f"mid-2025, and {config.RF_ETF_NO_INDEX[sym]}, so a backtest "
+                          "cannot hold it — use CASH_CDI for cash")
         else:
             out[t] = sym
     return out
+
+
+def _splice_warning(t: str, sym: str, span: tuple, ext: dict) -> str | None:
+    """What a renda-fixa ETF sleeve holds before its own first close; None when
+    its own closes cover everything the index could have.
+
+    Names the index, the dates and the fee, and says when the index is not the
+    fund's own: a backtest that reads IMA-B 5 for an IMA-B 5 P2 fund, or IMA-S
+    for a Teva Tesouro Selic one, is close, and is still something else. An
+    index that stops short of the ETF's first close is said too — nothing is
+    spliced then (data._rf_etf_series), and the late-listing warning alone
+    would not say why.
+    """
+    p = config.RF_ETF_INDEX[sym]
+    own_first = ext[sym][0]
+    name = f"{anbima_series.NAMES[p.index]} (ANBIMA)"
+    if span[0] >= own_first:
+        base = ext.get(p.index)
+        if base and base[0] < own_first:
+            return (f"ticker {t!r}: {name} has no level on {own_first.isoformat()}, "
+                    f"its first own close (the index stops at {base[1].isoformat()}), "
+                    "so nothing is spliced in front of it")
+        return None
+    fee = f"{p.fee * 100:.2f}%/yr"
+    lead = (f"ticker {t!r} has no price of its own before {own_first.isoformat()}: "
+            f"from {span[0].isoformat()} until then it follows")
+    if p.tracks:
+        return f"{lead} {name} minus {fee}, a stand-in: its own index is {p.tracks}"
+    return f"{lead} its own index, {name}, minus {fee}"
 
 
 def _judge(t: str, span: tuple | None, plane: tuple, errors: list, warnings: list):
@@ -136,7 +210,7 @@ def check(spec: dict) -> tuple[list[str], list[str]]:
     if not symbols:
         return errors, []
     try:
-        spans, plane = price_spans(sorted(set(symbols.values())))
+        spans, plane, ext = price_spans(sorted(set(symbols.values())))
     except Exception as e:  # noqa: BLE001 — any driver error means "not checked"
         # The detail goes to stderr, not into the report: a driver error can carry
         # the plane's host and role, and the 422 the report becomes is shown to
@@ -150,4 +224,8 @@ def check(spec: dict) -> tuple[list[str], list[str]]:
     warnings: list[str] = []
     for t, sym in symbols.items():
         _judge(t, spans.get(sym), plane, errors, warnings)
+        if sym in config.RF_ETF_INDEX and sym in ext and sym in spans:
+            note = _splice_warning(t, sym, spans[sym], ext)
+            if note:
+                warnings.append(note)
     return errors, warnings

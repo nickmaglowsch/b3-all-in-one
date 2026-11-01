@@ -163,7 +163,7 @@ def test_level_series_steps_survive_each_others_failures(monkeypatch, caplog):
     assert written == ["CDI", "2024-05-01"]
     msgs = [r.getMessage() for r in caplog.records]
     assert msgs == [
-        "", "Step 5c/9: Fetching BCB index series (CDI, IPCA)...",
+        "", "Step 5c/9: Fetching BCB index series (CDI, IPCA, Selic)...",
         "", "Step 5c2/9: Fetching Ibovespa index series...",
         "Ibovespa series fetch failed, continuing: down",
         "", "Step 5d/9: Fetching Tesouro Direto prices...",

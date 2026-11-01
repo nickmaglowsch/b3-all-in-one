@@ -50,6 +50,39 @@ CATALOG = [
      "note": "retorno total do SPY convertido a reais — carrega o dólar junto"},
     {"key": "bitcoin", "label": "Bitcoin (em reais)",
      "note": "BTC/USDT convertido a reais — carrega o dólar junto"},
+    # Appended rather than slotted by kind: the bench colours a ruler by its
+    # position here, and moving the five above would recolour saved views.
+    {"key": "selic", "label": "Selic",
+     "note": "taxa Selic diária acumulada (BCB) — o que paga um Tesouro Selic, "
+             "colado no CDI"},
+    # ANBIMA's indexes (engine/b3_pipeline/anbima_series.py). None is
+    # investable: each is a portfolio of títulos públicos marked to market, and
+    # an ETF that tracks one earns it minus its fee.
+    {"key": "irfm1", "label": "IRF-M 1",
+     "note": "prefixados (LTN/NTN-F) até 1 ano, a mercado (ANBIMA) — não investível"},
+    {"key": "irfm1p", "label": "IRF-M 1+",
+     "note": "prefixados acima de 1 ano, a mercado (ANBIMA) — não investível"},
+    {"key": "irfm", "label": "IRF-M",
+     "note": "todos os prefixados, a mercado (ANBIMA) — não investível"},
+    {"key": "irfmp2", "label": "IRF-M P2",
+     "note": "seleção de prefixados que o IRFM11 replica (ANBIMA) — não "
+             "investível; guardado só desde que o ingest começou, a ANBIMA não publica "
+             "o histórico"},
+    {"key": "imab5", "label": "IMA-B 5",
+     "note": "NTN-B (IPCA+) até 5 anos, a mercado (ANBIMA) — não investível"},
+    {"key": "imab5p", "label": "IMA-B 5+",
+     "note": "NTN-B acima de 5 anos, a mercado (ANBIMA) — não investível"},
+    {"key": "imab5p2", "label": "IMA-B 5 P2",
+     "note": "seleção de NTN-B até 5 anos que o B5P211 replica (ANBIMA) — não "
+             "investível; guardado só desde que o ingest começou, a ANBIMA não publica "
+             "o histórico"},
+    {"key": "imab", "label": "IMA-B",
+     "note": "todas as NTN-B (IPCA+), a mercado (ANBIMA) — não investível"},
+    {"key": "imas", "label": "IMA-S",
+     "note": "todas as LFT (Tesouro Selic), a mercado (ANBIMA) — não investível"},
+    {"key": "imageral", "label": "IMA-Geral",
+     "note": "todos os títulos públicos federais, a mercado (ANBIMA) — não "
+             "investível"},
 ]
 
 KEYS = [b["key"] for b in CATALOG]

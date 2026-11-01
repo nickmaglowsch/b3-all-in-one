@@ -4,6 +4,7 @@ Configuration constants for B3 data pipeline.
 
 from pathlib import Path
 from datetime import datetime
+from typing import NamedTuple
 
 BASE_COTAHIST_URL = (
     "https://bvmf.bmfbovespa.com.br/InstDados/SerHist/COTAHIST_A{year}.ZIP"
@@ -37,6 +38,64 @@ B3_TRADE_INFO_FILE = "TradeInformationConsolidated"
 RENDA_FIXA_ETFS = frozenset({
     "LFTB11", "LFTS11", "IMAB11", "IRFM11", "IB5M11", "FIXA11", "B5P211",
 })
+
+
+class RfEtfIndex(NamedTuple):
+    """What a renda-fixa ETF's history follows before its own first close.
+
+    `index` is the stored ANBIMA level spliced in front of the ETF
+    (b3_pipeline/anbima_series.py), `fee` the fund's annual taxa de
+    administração, taken off the index day by day — a fund never earns its
+    index, it earns its index minus what it charges. `tracks`, when set, says
+    `index` is a stand-in for the fund's real index, which we cannot store back
+    far enough, and is the prose the warning uses.
+    """
+    index: str
+    fee: float
+    source: str
+    tracks: str | None = None
+
+
+# Benchmarks and fees checked 2026-11-01 against each fund's own page (itnow.com.br
+# answers 403 to a script; the figures are from the ETF registry that links to
+# it, and agree with Status Invest).
+RF_ETF_INDEX = {
+    "IMAB11": RfEtfIndex("$IMAB", 0.0025, "https://www.itnow.com.br/imab11/"),
+    "IB5M11": RfEtfIndex("$IMAB5P", 0.0025, "https://www.itnow.com.br/ib5m11/"),
+    # Their real indexes are the P2 selections, and ANBIMA serves only the last
+    # week of those — stored nightly as benchmarks ($IMAB5P2, $IRFMP2), but they
+    # start in 2026-10, long after these ETFs' own closes do, so they can never
+    # be what is spliced. The parent index the P2 portfolio is drawn from stands
+    # in: on 2026-10-30, IRF-M P2 and IRF-M moved by the same -0.1844% and IMA-B
+    # 5 P2 and IMA-B 5 by the same -0.0608%; 24-month returns differ by ~0.4pp.
+    "B5P211": RfEtfIndex("$IMAB5", 0.0020, "https://www.itnow.com.br/b5p211/",
+                         tracks="IMA-B 5 P2, which has no public history"),
+    "IRFM11": RfEtfIndex("$IRFM", 0.0020, "https://www.itnow.com.br/irfm11/",
+                         tracks="IRF-M P2, which has no public history"),
+    # Its index, Teva Tesouro Selic (ITBR SELIC), holds only LFTs maturing more
+    # than two years out and is not published for free. IMA-S is every LFT at
+    # market price: the same instrument, a CDI-like accrual plus a small
+    # mark-to-market on the spread, differing only in the maturity bucket — the
+    # one stand-in here that is close enough to call close, and it is said so.
+    "LFTS11": RfEtfIndex("$IMAS", 0.0019, "https://investoetf.com/etf/LFTS11/",
+                         tracks="Teva Tesouro Selic (LFTs maturing in over two "
+                                "years), which is not published for free"),
+}
+
+# The renda-fixa ETFs with no index on the plane close enough to stand in, so a
+# backtest could see them only from mid-2025 and is refused them instead. Said
+# per ticker, because "not supported" without the reason reads as an oversight.
+RF_ETF_NO_INDEX = {
+    # MarketVector Brazil Treasury 760 Day Target Duration: Tesouro Selic plus
+    # ~9% in NTN-B 2060 (Set/2026) to hold a 760-day duration. That NTN-B slice
+    # is a long-duration bet IMA-S does not carry at all.
+    # https://www.investoetf.com/etf/lftb11/
+    "LFTB11": "its index (MarketVector Brazil Treasury 760 Day, Tesouro Selic plus "
+              "long NTN-Bs) has no free history and no stored index approximates it",
+    # B3's own index of 3-year DI futures; neither B3 nor ANBIMA publish its
+    # history for free.
+    "FIXA11": "its index (B3's 3-year DI futures index) has no free history",
+}
 
 # B3's daily file has a rolling retention window of roughly 14 months — older
 # dates answer 200 with an empty body. Anything not ingested before it rolls off

@@ -13,10 +13,11 @@ Usage:
 contract it has always had. Output: {"<name>": {"YYYY-MM-DD": level, ...}, ...,
 "offline": bool} — one key per *requested* name, and nothing else.
 
-Levels are raw and each series is on its own scale: IBOV in points, CDI and IPCA
-as compounded accrual factors, S&P 500 and bitcoin as prices in reais. Nothing
-here rebases them, because only the caller knows the window's own grid — and
-mixing scales is exactly why the caller must rebase before drawing.
+Levels are raw and each series is on its own scale: IBOV and the ANBIMA indexes
+in points, CDI, IPCA and Selic as compounded accrual factors, S&P 500 and bitcoin
+as prices in reais. Nothing here rebases them, because only the caller knows the
+window's own grid — and mixing scales is exactly why the caller must rebase
+before drawing.
 
 Network: none. Everything comes out of the plane the ingest runs write, so a
 page load reads the database and nothing else. `offline` therefore means "the
@@ -48,6 +49,20 @@ BENCHMARKS = {
     "ipca": ("$IPCA", "B3"),        # BCB SGS 433, cumulative factor
     "sp500": ("$SPX", "B3"),        # SPY total return in BRL (a named proxy)
     "bitcoin": ("BTCUSDT", "CRYPTO"),
+    "selic": ("$SELIC", "B3"),      # BCB SGS 11, cumulative factor
+    # ANBIMA's fixed-income indexes (b3_pipeline/anbima_series.py), index
+    # points. The P2 pair is stored going forward only, so an older window
+    # comes back empty for them and the caller reports them unavailable.
+    "irfm1": ("$IRFM1", "B3"),
+    "irfm1p": ("$IRFM1P", "B3"),
+    "irfm": ("$IRFM", "B3"),
+    "irfmp2": ("$IRFMP2", "B3"),
+    "imab5": ("$IMAB5", "B3"),
+    "imab5p": ("$IMAB5P", "B3"),
+    "imab5p2": ("$IMAB5P2", "B3"),
+    "imab": ("$IMAB", "B3"),
+    "imas": ("$IMAS", "B3"),
+    "imageral": ("$IMAGERAL", "B3"),
 }
 
 DEFAULT_NAMES = ("ibov", "cdi")

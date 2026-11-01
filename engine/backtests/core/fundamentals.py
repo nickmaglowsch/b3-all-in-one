@@ -41,6 +41,26 @@ logger = logging.getLogger(__name__)
 _STALENESS_DAYS = 400
 
 
+class FundamentalsNotLoaded(RuntimeError):
+    """A strategy asked shared_data for an `f_*` frame that is not there."""
+
+
+def require(shared: dict, key: str, who: str) -> pd.DataFrame:
+    """shared[key], or a loud FundamentalsNotLoaded — never an empty stand-in.
+
+    An empty default reads as "no company qualifies", so a run that never
+    loaded fundamentals (needs_fundamentals unset, or the table empty) held
+    nothing and reported it as a result: a user blend's TevaAtivosReais sleeve
+    never invested that way. advise_weights maps this to its exit 3 (a 422).
+    """
+    if key not in shared:
+        raise FundamentalsNotLoaded(
+            f"{who}: CVM fundamentals ({key}) were not loaded for this run — the "
+            "strategy needs them (needs_fundamentals) and fundamentals_pit must "
+            "be ingested (python -m b3_pipeline.cvm_main)")
+    return shared[key]
+
+
 def attach(shared: dict, db_path: str, start: str, end: str, freq: str,
            ret: pd.DataFrame, market: str = "B3") -> None:
     """Add every `f_*` frame to `shared`, in place.

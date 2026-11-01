@@ -87,6 +87,29 @@ class StrategyRegistry:
         user_dir = os.environ.get("ENGINE_USER_SPECS_DIR")
         if user_dir:
             self._load_specs(Path(user_dir), user=True)
+        self._inherit_data_needs()
+
+    def _inherit_data_needs(self) -> None:
+        """A spec needs CVM fundamentals if any `strategy` sleeve does, at any depth.
+
+        The runners load fundamentals only when the strategy they run says so
+        (needs_fundamentals), and a spec only says what its author wrote: the
+        platform's validate_spec infers the flag from f_* keys, which a sleeve
+        naming a code strategy (TevaAtivosReais) has none of. So a user blend
+        holding Teva ran without share counts and its sleeve never invested.
+        Resolved here, after every strategy is registered — a spec cannot ask
+        the registry while it is being built.
+        """
+        def needs(strat, seen: frozenset) -> bool:
+            sleeves = (getattr(strat, "spec", None) or {}).get("sleeves") or []
+            subs = [sl["strategy"] for sl in sleeves
+                    if isinstance(sl, dict) and sl.get("strategy") in self._strategies]
+            return bool(getattr(strat, "needs_fundamentals", False)) or any(
+                n not in seen and needs(self._strategies[n], seen | {n}) for n in subs)
+
+        for strat in self._strategies.values():
+            if getattr(strat, "spec", None) is not None:
+                strat.needs_fundamentals = needs(strat, frozenset({strat.name}))
 
     def _load_specs(self, spec_dir: Path, user: bool = False) -> None:
         """Register every ``*.yaml`` spec in ``spec_dir``, warning past bad ones."""

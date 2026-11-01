@@ -2,9 +2,12 @@
 Strategy: TevaAtivosReais — Teva Dividendos Ativos Reais Listados (replica)
 
 Replicates the Teva Dividendos Ativos Reais index methodology:
-  - Universe filtered point-in-time by CVM sector (Setor_Atividade) sourced from
-    CVM FCA data — survivorship-free (covers delisted companies), no hardcoded
-    ticker list. Default targets Utilities (energy + saneamento); CVM's taxonomy
+  - Universe filtered by CVM sector (SETOR_ATIV) from CVM's company register —
+    survivorship-free (covers delisted companies), no hardcoded ticker list
+    (backtests.core.data.load_sector_pit). An empty register raises instead of
+    returning an empty book, which inside the "Teva / IVVB11 / CDI" blend had
+    silently parked the whole sleeve in CDI. Default targets Utilities (energy
+    + saneamento); CVM's taxonomy
     has no clean bucket for Shoppings or toll-road concessions (see
     `eligible_sectors` param).
   - Eligibility: market cap > R$500mm and liquidity (ADTV) floor.
@@ -31,7 +34,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtests.core.data import sector_membership, sector_membership_asof
+from backtests.core.data import (
+    SectorRegistryEmpty, sector_membership, sector_membership_asof,
+)
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -44,8 +49,8 @@ _DB_PATH = Path(__file__).resolve().parents[2] / "b3_market_data.sqlite"
 # - <sector>" holding variants are included). CVM's taxonomy cleanly identifies
 # Utilities (energy + saneamento); it has no dedicated bucket for Shoppings or
 # toll-road concessions, so those Teva sectors can't be reproduced from this
-# source without a proprietary mapping. Sourced point-in-time from FCA data,
-# which covers delisted companies — no survivorship bias.
+# source without a proprietary mapping. The register covers delisted companies
+# — no survivorship bias.
 _DEFAULT_SECTORS = ["Energia Elétrica", "Saneamento"]
 
 
@@ -115,6 +120,22 @@ def blend_weights(mcap: pd.Series, score: pd.Series, cap: float = 0.10) -> pd.Se
 
 # ── DB-backed dividend-yield matrix ───────────────────────────────────────────
 
+def _ticker_sectors(sector_pit: pd.DataFrame, tickers) -> pd.DataFrame:
+    """The register's [root, ref_date, sector] expanded to the plane's `tickers`
+    by root (ELET -> ELET3, ELET6), giving the [ticker, ...] frame the
+    sector_membership helpers take.
+
+    Raises on an empty register rather than returning no names: an empty book
+    is, inside the "Teva / IVVB11 / CDI" blend, a third of the portfolio parked
+    in CDI and reported as a result — which is how it ran in production.
+    """
+    if sector_pit.empty:
+        raise SectorRegistryEmpty("TevaAtivosReais")
+    t = pd.DataFrame({"ticker": list(tickers)})
+    t["root"] = t["ticker"].str[:4]
+    return t.merge(sector_pit, on="root")
+
+
 def build_dy_12m(db_path, tickers: list[str]) -> dict[str, pd.Series]:
     """
     Return {ticker: monthly series of trailing-12m dividend yield}.
@@ -179,8 +200,8 @@ class TevaAtivosReaisStrategy(StrategyBase):
         "Replica of the Teva Dividendos Ativos Reais index: dividend-focused "
         "portfolio of Utilities (energy + saneamento), weighted 50% by market "
         "cap and 50% by a 36-month capped Dividend Score, with a 10% "
-        "per-issuer cap. Universe is filtered point-in-time by CVM sector "
-        "(FCA data, survivorship-free). Semiannual rebalance."
+        "per-issuer cap. Universe is filtered by CVM sector (CVM company "
+        "register, survivorship-free). Semiannual rebalance."
     )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
@@ -211,7 +232,7 @@ class TevaAtivosReaisStrategy(StrategyBase):
                 description=(
                     "Comma-separated CVM Setor_Atividade keywords (substring match, "
                     "includes 'Emp. Adm. Part.' holdings). Default targets Utilities. "
-                    "Sourced point-in-time from CVM FCA data (survivorship-free). "
+                    "Sourced from CVM's company register (survivorship-free). "
                     "CVM's taxonomy has no clean Shoppings / toll-road bucket."
                 ),
             ),
@@ -235,19 +256,15 @@ class TevaAtivosReaisStrategy(StrategyBase):
         ]
 
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
-        if not keywords or raw_close.empty or shares.empty:
-            return ret, tw
-
-        # ── Point-in-time sector universe (survivorship-free) ─────────────────
-        sector_pit = shared_data.get("sector_pit", pd.DataFrame())
-        member = sector_membership(sector_pit, keywords)
-        member = member[member["ticker"].isin(ret.columns)]
-        if member.empty:
-            return ret, tw
+        # ── Sector universe (survivorship-free) ───────────────────────────────
         # full universe ever eligible (for the DY matrix); per-date eligibility
-        # uses the classification AS-OF the rebalance date — the latest filing
-        # on/before it — so reclassification out of the sector revokes it
-        universe = list(member["ticker"].unique())
+        # uses the classification AS-OF the rebalance date — the latest record
+        # on/before it (the register's single record holds from the start)
+        sector_pit = _ticker_sectors(shared_data.get("sector_pit", pd.DataFrame()),
+                                     ret.columns)
+        universe = list(sector_membership(sector_pit, keywords)["ticker"].unique())
+        if not universe or raw_close.empty or shares.empty:
+            return ret, tw
         elig_asof = sector_membership_asof(sector_pit, keywords, ret.index)
         elig_asof = elig_asof.reindex(columns=universe, fill_value=False)
 
@@ -256,7 +273,7 @@ class TevaAtivosReaisStrategy(StrategyBase):
         for i in range(1, len(ret)):
             prev = ret.index[i - 1]
 
-            # ── Eligible names at `prev` (latest sector filing on/before prev) ─
+            # ── Eligible names at `prev` (latest sector record on/before prev) ─
             elig_row = elig_asof.loc[prev]
             eligible = [t for t in universe if bool(elig_row[t])]
             if not eligible:

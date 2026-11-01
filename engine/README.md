@@ -81,17 +81,19 @@ python -m b3_pipeline.cvm_main                       # all available years
 python -m b3_pipeline.cvm_main --start-year 2020     # from 2020 onward
 python -m b3_pipeline.cvm_main --rebuild             # rebuild fundamentals tables
 python -m b3_pipeline.cvm_main --skip-ticker-fetch   # skip B3 ticker-map fetch
-python -m b3_pipeline.cvm_main --include-historical  # + FCA/CAD/IPE metadata (register, PIT tickers)
+python -m b3_pipeline.cvm_main --include-historical  # + IPE (2003-2009) filing index
 ```
 
 Ingests structured DFP/ITR filings into **point-in-time** `fundamentals_pit`
 (keyed by filing, so backtests can query "what was known on date X" with no
 look-ahead), then materialises a monthly snapshot (`fundamentals_monthly`).
 Valuation ratios (P/E, P/B, EV/EBITDA) are computed **dynamically at query
-time**, not stored. `--include-historical` adds the CAD company register
-(listing/delisting dates) and FCA point-in-time ticker map — which closes the
-survivorship hole for delisted names — but does **not** provide pre-2010
-financials.
+time**, not stored. Every run also loads the CAD company register
+(listing/delisting dates and CVM's sector, `cvm_companies.sector`) and the FCA
+point-in-time ticker map — which close the survivorship hole for delisted names;
+the sector strategies (BESST Quality, TevaAtivosReais) build their universes
+from them by CNPJ, not from a ticker list. `--include-historical` adds the IPE
+filing index, but does **not** provide pre-2010 financials.
 
 Fundamentals therefore start at 2010. A credentialed CVM channel ("Download
 Múltiplo") that reaches back to ~2006 was built and removed: it needed

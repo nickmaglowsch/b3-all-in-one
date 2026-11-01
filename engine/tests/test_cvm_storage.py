@@ -313,6 +313,7 @@ def test_pg_migration_statements():
         "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS listing_date DATE",
         "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS delisting_date DATE",
         "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS ticker_root TEXT",
+        "ALTER TABLE cvm_companies ADD COLUMN IF NOT EXISTS sector TEXT",
         "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
         "ALTER TABLE fundamentals_monthly ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
         "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_on DOUBLE PRECISION",

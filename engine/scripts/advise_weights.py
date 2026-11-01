@@ -286,6 +286,7 @@ def _build_shared(start: str, end: str, freq: str, needs_funds: bool):
 def _advise_from_strategy(args) -> dict:
     from backtests.core.strategy_registry import get_registry
     from backtests.core.strategy_base import dedup_target_weights
+    from backtests.core.data import SectorRegistryEmpty
 
     strat = get_registry().get(args.strategy)
     params = strat.get_default_parameters()
@@ -298,7 +299,10 @@ def _advise_from_strategy(args) -> dict:
 
     shared = _build_shared(start, end, freq, needs_funds)
 
-    _, tw = strat.generate_signals(shared, params)
+    try:
+        _, tw = strat.generate_signals(shared, params)
+    except SectorRegistryEmpty:  # same fixable gap as no fundamentals: the CVM
+        _exit_needs_fundamentals(args.strategy)  # ingest loads both -> 422, not 500
     tw = dedup_target_weights(tw, shared["adtv"])
 
     # Last live row: skip all-zero warmup rows (before inception) and park/hold

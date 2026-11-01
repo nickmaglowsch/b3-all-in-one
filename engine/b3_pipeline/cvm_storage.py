@@ -277,33 +277,33 @@ def upsert_fundamentals_pit(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
 
 
 def upsert_cad_company_dates(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Upsert company listing/delisting dates from the CVM CAD dataset.
+    """Upsert company listing/delisting dates and sector from the CVM CAD dataset.
 
     Does NOT overwrite existing ticker or b3_trading_name values.
     listing_date uses COALESCE (first known date is canonical).
     delisting_date is always overwritten (cancellations can be updated).
+    sector (SETOR_ATIV) takes the register's current value, keeping the old one
+    only when the register's is blank — it is what sector strategies read
+    (backtests.core.data.load_sector_pit), so a reclassification should land.
     Returns number of rows processed.
     """
     sql = """
-        INSERT INTO cvm_companies (cnpj, cvm_code, company_name, listing_date, delisting_date, updated_at)
-        VALUES (:cnpj, :cvm_code, :company_name, :listing_date, :delisting_date, CURRENT_TIMESTAMP)
+        INSERT INTO cvm_companies (cnpj, cvm_code, company_name, listing_date,
+                                   delisting_date, sector, updated_at)
+        VALUES (:cnpj, :cvm_code, :company_name, :listing_date, :delisting_date,
+                :sector, CURRENT_TIMESTAMP)
         ON CONFLICT(cnpj) DO UPDATE SET
             cvm_code       = COALESCE(cvm_companies.cvm_code, excluded.cvm_code),
             company_name   = COALESCE(cvm_companies.company_name, excluded.company_name),
             listing_date   = COALESCE(cvm_companies.listing_date, excluded.listing_date),
             delisting_date = excluded.delisting_date,
+            sector         = COALESCE(excluded.sector, cvm_companies.sector),
             updated_at     = CURRENT_TIMESTAMP
     """
-    # Normalise None/NaN to Python None for SQLite
-    records = []
-    for rec in df.to_dict("records"):
-        records.append({
-            "cnpj": rec["cnpj"],
-            "cvm_code": rec.get("cvm_code"),
-            "company_name": rec.get("company_name"),
-            "listing_date": rec.get("listing_date") or None,
-            "delisting_date": rec.get("delisting_date") or None,
-        })
+    # df_records: pandas' string dtype leaves missing dates NaN, a PG DATE refuses it
+    cols = ("cvm_code", "company_name", "listing_date", "delisting_date", "sector")
+    records = [{"cnpj": rec["cnpj"], **{c: rec.get(c) or None for c in cols}}
+               for rec in storage.df_records(df)]
     storage.executemany(conn, sql, records)
     conn.commit()
     logger.info(f"Upserted {len(records):,} CAD company date rows")

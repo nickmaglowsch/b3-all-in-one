@@ -295,3 +295,49 @@ async def test_foreign_junk_and_unknown_strategy_ids_are_the_same_404(client):
             r = await client.request(method, path, json=body, headers=h)
             assert (r.status_code, r.json()) == (404, {"detail": "strategy not found"}), (
                 method, path)
+
+
+async def test_the_widened_language_saves_and_round_trips(client):
+    h = await _headers(client)
+    body = _rank(
+        "WideRank", rebalance_months=[12, 6], weighting="expr", weight_expr="1 / vol_60d",
+        max_weight=0.1,
+        universe={"min_adtv": 1_000_000, "min_price": 1.0,
+                  "sectors": {"exclude": ["banc"]}},
+        signal={"vars": {"mom": "roll_sum(shift(log_ret, 1), lookback)"}, "lookback": 6,
+                "legs": [{"factor": "mom"}, {"factor": "div_yield_12m", "weight": 0.5}],
+                "coverage": "any"})
+    r = await client.post("/strategies/user", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    spec = r.json()["spec"]
+    assert spec["rebalance_months"] == [6, 12]                     # sorted
+    assert spec["weight_expr"] == "1 / vol_60d" and spec["max_weight"] == 0.1
+    assert spec["universe"]["sectors"] == {"include": [], "exclude": ["banc"]}
+    assert spec["signal"]["legs"][1] == {"factor": "div_yield_12m", "weight": 0.5,
+                                         "transform": "rank"}
+    assert spec["signal"]["coverage"] == "any" and "mom" in spec["signal"]["vars"]
+
+    semi = {"kind": "fixed_weight", "name": "SemiPort", "rebalance": "QE",
+            "rebalance_months": [6, 12], "sleeves": [
+                {"strategy_ref": "WideRank", "target_pct": 60},
+                {"strategy_ref": "CASH_CDI", "target_pct": 40}]}
+    r = await client.post("/strategies/user", json=semi, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["spec"]["rebalance_months"] == [6, 12]
+
+
+@pytest.mark.parametrize("over", [
+    {"rebalance": "QE", "rebalance_months": [1, 7]},              # never a QE row
+    {"weighting": "expr"},                                         # no weight_expr
+    {"weight_expr": "adtv"},                                       # not weighting expr
+    {"max_weight": 0},
+    {"signal": {"factor": "momentum", "legs": [{"expr": "ret"}]}},  # two sources
+    {"signal": {"legs": [{"expr": "ret", "factor": "momentum"}]}},
+    {"signal": {"legs": [{"expr": "ret", "transform": "log"}]}},
+    {"market": "US", "signal": {"factor": "div_yield_12m"}},       # engine: B3 only
+    {"signal": {"vars": {"rank": "ret"}, "expr": "rank"}},         # engine: shadows rank()
+])
+async def test_the_widened_language_rejects(client, over):
+    h = await _headers(client)
+    r = await client.post("/strategies/user", json=_rank("BadWide", **over), headers=h)
+    assert r.status_code == 422, r.text

@@ -26,6 +26,8 @@ _MARKET = Literal["B3", "US", "CRYPTO"]
 # caps at 128 KB: past that the exec fails with E2BIG and the save is a 500. These
 # bounds keep any spec far inside it, and are generous for a field a person types.
 _NAME_MAX, _TEXT_MAX, _SLEEVES_MAX, _REGIME_MAX = 120, 2000, 50, 16 * 1024
+# With the vars and legs below, the worst-case spec is ~75 KB: still inside it.
+_VARS_MAX, _LEGS_MAX, _KEYWORDS_MAX, _KEYWORD_LEN = 16, 8, 20, 80
 # A B3 trading code — a four-character root and a one- or two-digit class
 # (PETR4, IVVB11) — optionally with the ".SA" the built-in specs carry from the
 # yfinance era. `^BVSP` and `$IBOV` fail it on purpose: indices are not tradable,
@@ -55,15 +57,45 @@ class _Finite(BaseModel):
     model_config = ConfigDict(allow_inf_nan=False)
 
 
+_Keywords = Annotated[list[Annotated[str, Field(min_length=1, max_length=_KEYWORD_LEN)]],
+                      Field(max_length=_KEYWORDS_MAX)]
+
+
+class _Sectors(_Finite):
+    """CVM sector keywords (case-insensitive substrings of SETOR_ATIV)."""
+    include: _Keywords = []
+    exclude: _Keywords = []
+
+
 class _RankUniverse(_Finite):
     min_adtv: float = Field(default=1_000_000.0, ge=0)
     min_price: float = Field(default=1.0, ge=0)
     smallcap_below_median: bool = False
+    sectors: _Sectors | None = None
+
+
+class _RankLeg(_Finite):
+    factor: str | None = Field(default=None, max_length=_NAME_MAX)
+    expr: str | None = Field(default=None, max_length=_TEXT_MAX)
+    weight: float = 1.0
+    transform: Literal["rank", "zscore", "raw"] = "rank"
+
+    @model_validator(mode="after")
+    def _one_source(self):
+        if bool(self.factor) == bool(self.expr):
+            raise ValueError("a leg needs exactly one of factor / expr")
+        return self
 
 
 class _RankSignal(_Finite):
     factor: str | None = Field(default=None, max_length=_NAME_MAX)
     expr: str | None = Field(default=None, max_length=_TEXT_MAX)
+    legs: list[_RankLeg] | None = Field(default=None, min_length=1, max_length=_LEGS_MAX)
+    coverage: Literal["all", "any"] | None = None
+    # Named sub-expressions the expr, the legs and weight_expr can read. Whether
+    # each name is legal (an identifier, not a function) is the engine's to say.
+    vars: dict[Annotated[str, Field(max_length=64)],
+               Annotated[str, Field(max_length=_TEXT_MAX)]] | None = None
     lookback: int | None = Field(default=None, ge=1, le=36)
     shift: int | None = Field(default=None, ge=0)
     range: list[float] | None = Field(default=None, max_length=8)
@@ -71,8 +103,10 @@ class _RankSignal(_Finite):
 
     @model_validator(mode="after")
     def _one_source(self):
-        if bool(self.factor) == bool(self.expr):
-            raise ValueError("signal needs exactly one of factor / expr")
+        if sum(map(bool, (self.factor, self.expr, self.legs))) != 1:
+            raise ValueError("signal needs exactly one of factor / expr / legs")
+        if self.vars is not None and len(self.vars) > _VARS_MAX:
+            raise ValueError(f"signal.vars: at most {_VARS_MAX} names")
         return self
 
 
@@ -91,14 +125,33 @@ class _RankSelection(_Finite):
         return self
 
 
+_Months = Annotated[list[Annotated[int, Field(ge=1, le=12)]],
+                    Field(min_length=1, max_length=12)]
+
+
+def _check_months(months: list[int] | None, rebalance: str) -> list[int] | None:
+    """Calendar months to trade in (config_strategy.only_in_months); a QE grid
+    only has rows in quarter-end months, so any other would never trade."""
+    if months is None:
+        return None
+    months = sorted(set(months))
+    if rebalance == "QE" and (off := [m for m in months if m % 3]):
+        raise ValueError(f"rebalance_months {off}: a quarterly grid only has rows in "
+                         "months 3, 6, 9 and 12 — use rebalance ME for other months")
+    return months
+
+
 class RankStrategyIn(_Finite):
     kind: Literal["rank_and_hold"]
     name: _Name
     description: str = Field(default="", max_length=_TEXT_MAX)
     rebalance: _REBALANCE = "ME"
+    rebalance_months: _Months | None = None
     needs_fundamentals: bool = False
     warmup_pad: int | None = Field(default=None, ge=0)
-    weighting: Literal["equal", "adtv", "market_cap"] = "equal"
+    weighting: Literal["equal", "adtv", "market_cap", "expr"] = "equal"
+    weight_expr: str | None = Field(default=None, max_length=_TEXT_MAX)
+    max_weight: float | None = Field(default=None, gt=0, le=1)
     # None = B3. Unknown planes are refused here, never silently run as B3.
     market: _MARKET | None = None
     universe: _RankUniverse = Field(default_factory=_RankUniverse)
@@ -119,6 +172,13 @@ class RankStrategyIn(_Finite):
         if len(json.dumps(v, allow_nan=False)) > _REGIME_MAX:  # ValueError on NaN too
             raise ValueError("regime too large")
         return v
+
+    @model_validator(mode="after")
+    def _weights_and_months(self):
+        if (self.weighting == "expr") != bool(self.weight_expr):
+            raise ValueError("weight_expr goes with weighting `expr`, and only with it")
+        self.rebalance_months = _check_months(self.rebalance_months, self.rebalance)
+        return self
 
 
 class PortfolioSleeveIn(_Finite):
@@ -163,10 +223,12 @@ class PortfolioStrategyIn(_Finite):
     name: _Name
     description: str = Field(default="", max_length=_TEXT_MAX)
     rebalance: _REBALANCE = "QE"
+    rebalance_months: _Months | None = None
     sleeves: list[PortfolioSleeveIn] = Field(min_length=1, max_length=_SLEEVES_MAX)
 
     @model_validator(mode="after")
     def _weights_sum(self):
+        self.rebalance_months = _check_months(self.rebalance_months, self.rebalance)
         total = sum(s.target_pct for s in self.sleeves)
         if abs(total - 100.0) > 1e-2:  # == weights sum to 1 ± 1e-4
             raise ValueError(f"portfolio percentages must sum to 100 (got {total:g})")
@@ -197,6 +259,9 @@ def _compile_rank(m: RankStrategyIn) -> dict:
         spec["regime"] = m.regime
     if m.warmup_pad is not None:
         spec["warmup_pad"] = m.warmup_pad
+    for key in ("weight_expr", "max_weight", "rebalance_months"):
+        if getattr(m, key) is not None:
+            spec[key] = getattr(m, key)
     return spec
 
 
@@ -219,6 +284,7 @@ def _compile_portfolio(m: PortfolioStrategyIn) -> dict:
         "name": m.name.strip(), "kind": "fixed_weight", "description": m.description,
         "rebalance": m.rebalance, "park_in_cdi_until_live": True,
         "sleeves": [_compile_sleeve(s) for s in m.sleeves],
+        **({"rebalance_months": m.rebalance_months} if m.rebalance_months else {}),
     }
 
 

@@ -20,82 +20,21 @@ strategy is expressed as ``earnings_yield`` (higher yield = cheaper), etc.
 """
 from __future__ import annotations
 
-import functools
-from collections import ChainMap
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
-from backtests.core import markets, signal_dsl
+from backtests.core import markets
+# resolve_factor and _signal_defs are re-exported: scripts and tests import them
+# from here, where they lived before spec_signal.
+from backtests.core.spec_signal import (  # noqa: F401
+    _build_signal, _signal_defs, _weight_frame, only_in_months, resolve_factor,
+    sector_filter,
+)
 from backtests.core.strategy_base import (
-    market_param,
+    market_param, cap_and_renormalize,
     StrategyBase, ParameterSpec, keep_most_liquid_per_root,
     COMMON_RUN_SPECS, COMMON_START_DATE, COMMON_END_DATE,
 )
-
-
-# ── Signals as data ───────────────────────────────────────────────────────────
-# A factor is a string expression (the signal DSL, see signal_dsl.py) over
-# shared_data frames. Named signals live in backtests/strategies/signals.yaml;
-# specs may also inline an `expr:`. resolve_factor / _build_signal wire it in.
-
-@functools.lru_cache(maxsize=1)
-def _signal_defs() -> dict:
-    """Load the named-signal definitions from backtests/strategies/signals.yaml
-    (factor name -> {expr, <default params>})."""
-    import yaml
-    path = Path(__file__).resolve().parent.parent / "strategies" / "signals.yaml"
-    return yaml.safe_load(path.read_text()) or {}
-
-
-def _eval_expr(expr: str, scalars: dict, shared: dict) -> pd.DataFrame:
-    """A signal expression over the shared_data frames plus any numeric scalars —
-    chained, not copied, and scalars win. See signal_dsl.evaluate for why."""
-    ns = {k: v for k, v in scalars.items() if isinstance(v, (int, float))}
-    return signal_dsl.evaluate(expr, ChainMap(ns, shared))
-
-
-def resolve_factor(cfg: dict, shared: dict, params: dict | None = None) -> pd.DataFrame:
-    """Resolve one factor cfg to a wide (higher=better) frame. In precedence:
-
-    1. an inline ``expr:`` string (the signal DSL);
-    2. a named signal from ``signals.yaml`` (also a DSL ``expr``);
-    3. a bare ``shared_data`` key (e.g. ``mf_composite``, ``f_pe_ratio_dyn``).
-
-    ``params`` (UI/default values) override the signal's own defaults, so a
-    ``lookback`` slider flows into the expression.
-    """
-    scalars = {**cfg, **(params or {})}
-    if "expr" in cfg:
-        return _eval_expr(cfg["expr"], scalars, shared)
-
-    ref = cfg.get("factor")
-    defs = _signal_defs()
-    if ref in defs:
-        entry = defs[ref]
-        merged = {**entry, **scalars}       # spec/params override the signal's defaults
-        return _eval_expr(entry["expr"], merged, shared)
-    if ref in shared:
-        return shared[ref]
-    raise KeyError(
-        f"Unknown factor {ref!r}: not an expr, a name in signals.yaml, "
-        f"or a shared_data key"
-    )
-
-
-def _build_signal(spec: dict, params: dict, shared: dict) -> tuple[pd.DataFrame, int]:
-    """Return (signal_df, lookback). The signal is a single factor/expression;
-    composite blends are just an ``expr`` using ``rank()``/``zscore()`` (see
-    specs/multifactor.yaml)."""
-    cfg = {**spec["signal"]}
-    cfg["lookback"] = params.get("lookback", cfg.get("lookback", 0))
-    sig = resolve_factor(cfg, shared, params)
-    if cfg.get("apply_glitch", True):
-        glitch = shared.get("has_glitch")
-        if glitch is not None:
-            sig = sig.where(glitch != 1)
-    return sig, int(cfg.get("lookback", 0) or 0)
 
 
 def _eval_regime(regime: dict, shared: dict, i: int, index=None):
@@ -220,6 +159,8 @@ class RankAndHold(_SpecStrategy):
         vrange = spec.get("signal", {}).get("range")
         smallcap = bool(uni.get("smallcap_below_median", False))
         weighting = spec.get("weighting", "equal")
+        wframe = _weight_frame(spec, params, shared_data)
+        sector_ok = sector_filter(uni.get("sectors"), shared_data, ret.index)
 
         signal, max_lb = _build_signal(spec, params, shared_data)
         start = int(spec.get("warmup", max_lb + int(spec.get("warmup_pad", 1))))
@@ -258,7 +199,7 @@ class RankAndHold(_SpecStrategy):
             # the liquidity mask applies and the extras drop out.
             sig_row = signal.iloc[i - 1].reindex(adtv_r.index)
 
-            mask = (adtv_r >= min_adtv) & (raw_r >= min_price)
+            mask = (adtv_r >= min_adtv) & (raw_r >= min_price) & sector_ok.iloc[i - 1]
             valid = sig_row[mask].dropna()
             valid = valid[np.isfinite(valid)]
             if vrange is not None:
@@ -282,15 +223,24 @@ class RankAndHold(_SpecStrategy):
                 n = int(top_n) if top_n else max(min_hold, int(len(valid) * eff_top_pct))
                 selected = valid.nlargest(n).index.tolist()
             prev_sel = selected
-            w = self._weights(selected, adtv_r, signal, i, weighting)
+            w = self._weights(selected, adtv_r, wframe, i, weighting, spec.get("max_weight"))
             for t, wt in w.items():
                 if t in tw.columns:
                     tw.iloc[i, tw.columns.get_loc(t)] = wt
 
-        return r, tw
+        return r, only_in_months(tw, spec.get("rebalance_months"))
+
+    @classmethod
+    def _weights(cls, selected, adtv_r, wframe, i, scheme, max_weight=None) -> dict:
+        """The book's weights; ``max_weight`` caps each name and spreads the
+        excess over the rest (equal weight when the cap cannot be met)."""
+        w = cls._scheme_weights(selected, adtv_r, wframe, i, scheme)
+        if not max_weight:
+            return w
+        return cap_and_renormalize(pd.Series(w, dtype=float), float(max_weight)).to_dict()
 
     @staticmethod
-    def _weights(selected, adtv_r, signal, i, scheme) -> dict:
+    def _scheme_weights(selected, adtv_r, wframe, i, scheme) -> dict:
         # "market_cap" is a legacy alias for "adtv" and weights by liquidity, as
         # it always did — this engine has no share counts, so it never saw a cap.
         # The word is not free: sp500_b3/top_mcap weight by a real point-in-time
@@ -301,6 +251,14 @@ class RankAndHold(_SpecStrategy):
             size = adtv_r[selected].clip(lower=0)
             tot = size.sum()
             if tot > 0:
+                return (size / tot).to_dict()
+        # "expr": proportional to weight_expr's value, read at the signal's row.
+        # A held name it scores NaN or below zero gets nothing; if none score
+        # above zero, the book falls back to equal weight rather than holding cash.
+        if scheme == "expr" and wframe is not None:
+            size = wframe.iloc[i - 1].reindex(selected).clip(lower=0).fillna(0.0)
+            tot = size.sum()
+            if tot > 0 and np.isfinite(tot):
                 return (size / tot).to_dict()
         # equal (default) and fallback
         w = 1.0 / len(selected)
@@ -359,7 +317,7 @@ class FixedWeight(_SpecStrategy):
         resid = (1.0 - tw.sum(axis=1)).clip(lower=0.0)
         tw.loc[live_rows, "CDI_ASSET"] = tw.loc[live_rows, "CDI_ASSET"] + resid[live_rows]
 
-        return r, tw
+        return r, only_in_months(tw, spec.get("rebalance_months"))
 
 
 def _nest_sleeve(name: str, weight: float, shared_data: dict, params: dict, r, tw) -> None:
@@ -369,6 +327,11 @@ def _nest_sleeve(name: str, weight: float, shared_data: dict, params: dict, r, t
     from backtests.core.strategy_registry import get_registry
     sub = get_registry().get(name)
     r_sub, tw_sub = sub.generate_signals(shared_data, {**sub.get_default_parameters(), **params})
+    if getattr(sub, "spec", {}).get("rebalance_months"):
+        # Its all-zero months mean "hold", not "nothing": carry its last book
+        # forward, or the blend would park this sleeve's share in CDI on them.
+        live = tw_sub.abs().sum(axis=1) > 0
+        tw_sub = tw_sub[live].reindex(tw_sub.index).ffill().fillna(0.0)
     # For warmup.late_books: a sleeve still warming up hides behind CDI.
     shared_data.setdefault("_sleeve_books", {})[name] = tw_sub
     for col in tw_sub.columns:

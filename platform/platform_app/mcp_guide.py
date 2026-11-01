@@ -43,7 +43,7 @@ rebalance.
   "description": "6-month momentum, top 20 names, monthly.",
   "market": "B3",                          // B3 (default) | US | CRYPTO
   "rebalance": "ME",                       // ME monthly | QE quarterly | W-FRI weekly
-  "weighting": "equal",                    // equal | adtv (liquidity-weighted)
+  "weighting": "equal",                    // equal | adtv (liquidity) | expr (weight_expr)
   "universe": {"min_adtv": 1000000, "min_price": 1.0, "smallcap_below_median": false},
   "signal": {"factor": "momentum", "lookback": 6},
   "selection": {"top_n": 20, "min_names": 5, "dedup_roots": false}
@@ -84,6 +84,14 @@ B3-only derived: `f_pe_ratio_dyn`, `f_pb_ratio_dyn`, `f_ev_ebitda_dyn`, `f_*_m`)
 | masking | `mask_glitch(x)`, `where(x, cond)` (keep x where cond, else NaN) |
 | combining | `nan_add(a, b)` — sum two legs that have different coverage |
 | calendar | `at_rebalance(x)` — daily frame onto the rebalance grid |
+| sector (B3) | `sector_rank(x)`, `sector_zscore(x)`, `sector_demean(x)` — the same, within each CVM sector |
+
+Dividends (B3 only, from B3's corporate actions): `div_yield_12m`
+(trailing-12-month cash dividends + JCP per share over price, each payment
+over the price it was paid at), `div_count_12m` (payment dates in the last 12
+months), `div_years_3y` (how many of the last three 12-month windows had a
+payment, 0..3 — `div_years_3y >= 2` is the indices' "regular payer" screen).
+A name with no record reads 0.
 
 Operators: `+ - * / **`, unary `-`, comparisons, `&` / `|`. Parenthesise
 comparisons: `(a > 0) & (b < 1)`. No attribute access, subscripts or other calls.
@@ -101,6 +109,59 @@ ROE), or every name missing one leg disappears. Off B3, prices are BRL and
 filings USD: **rank** fundamentals ratios, never band them with `range`. On B3
 CVM income lines are year-to-date — set them against prices only via the `_ttm`
 frames.
+
+### Multi-leg signals and named sub-expressions
+
+Instead of `factor`/`expr`, a signal may be `legs`: a weighted sum of
+sub-factors, each put on a common scale first.
+
+```json
+"signal": {
+  "lookback": 6,
+  "vars": {"mom": "roll_sum(shift(log_ret, 1), lookback)",
+           "qual": "f_net_income_ttm / f_equity"},
+  "legs": [
+    {"factor": "mom", "weight": 0.5},
+    {"expr": "sector_rank(qual)", "weight": 0.3, "transform": "raw"},
+    {"factor": "div_yield_12m", "weight": 0.2, "transform": "zscore"}
+  ],
+  "coverage": "any"
+}
+```
+
+- A leg is exactly one of `factor` / `expr`; `weight` (default 1) may be
+  negative; `transform` is `rank` (default, percentile per date), `zscore` or
+  `raw`. Every leg reads the signal's `lookback` and extra numeric keys — for a
+  different window, write the number into the leg's expr.
+- `coverage: "all"` (default) scores only names every leg covers; `"any"`
+  scores a name on the legs it has, as a weighted mean — use it when legs come
+  from different tables (prices vs CVM filings).
+- `vars` (up to 16) are named expressions, evaluated in order, each able to
+  read the earlier ones; `expr`, every leg and `weight_expr` can read them, by
+  name inside an expression or as a leg's `factor`. A name may not be a
+  function's (`rank`, `shift`, ...).
+
+### Weights, caps, sectors and the calendar
+
+- `"weighting": "expr"` with `"weight_expr": "<expression>"` (same language,
+  same `vars`) weights each held name in proportion to the expression's value
+  at the signal's date. Inverse volatility: `"1 / vol_60d"`; signal-weighted:
+  `"rank(mom)"`. A held name scoring NaN or <= 0 gets nothing; if none score
+  above 0 the book is equal-weighted.
+- `"max_weight": 0.1` caps every name at 10% and hands the excess to the
+  others in proportion. Hold at least `1 / max_weight` names (`min_names`),
+  or the cap cannot be met and the book is equal-weighted instead.
+- `"universe": {"sectors": {"include": ["banc", "energia"], "exclude": []}}`
+  (B3) keeps names whose latest CVM sector (SETOR_ATIV) contains an `include`
+  keyword and none of the `exclude` ones, case-insensitive. CVM's sectors
+  include "Bancos", "Energia Elétrica", "Saneamento, Serv. Água e Gás",
+  "Telecomunicações", "Seguradoras e Corretoras". A name with no sector on file
+  fails `include`. A run fails, rather than sitting in cash, when the plane has
+  no sector data.
+- `"rebalance_months": [6, 12]` trades only on the first grid row of those
+  calendar months and holds (lets the book drift, no trades, no tax) on every
+  other row: a semiannual book on `rebalance: "ME"`; `[12]` is annual. On `QE`
+  only 3, 6, 9 and 12 exist. Works on portfolios too.
 
 ### Regime overlay (optional, rank_and_hold only)
 

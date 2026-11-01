@@ -67,9 +67,20 @@ def _zscore(x: pd.DataFrame) -> pd.DataFrame:
     return x.sub(m, axis=0).div(s, axis=0)
 
 
+def _sector_labels(sector_pit: pd.DataFrame, x: pd.DataFrame) -> pd.DataFrame:
+    """Each of x's names' CVM sector as of each of x's dates: the latest filing on
+    or before it (NaN before a name's first)."""
+    wide = (sector_pit.sort_values("ref_date")
+            .drop_duplicates(["ref_date", "ticker"], keep="last")
+            .pivot(index="ref_date", columns="ticker", values="sector"))
+    return (wide.reindex(wide.index.union(x.index)).ffill()
+            .reindex(index=x.index, columns=x.columns))
+
+
 def _build_funcs(ns: dict) -> dict:
     glitch = ns.get("has_glitch")
     rebal = ns.get("ret")          # the strategy's rebalance grid (rows x tickers)
+    sector_pit = ns.get("sector_pit")
 
     def mask_glitch(x):
         return x.where(glitch != 1) if glitch is not None else x
@@ -86,6 +97,23 @@ def _build_funcs(ns: dict) -> dict:
         freq = rebal.index.freq or pd.infer_freq(rebal.index)
         out = x.resample(freq).last() if freq is not None else x
         return out.reindex(columns=rebal.columns).reindex(rebal.index, method="ffill")
+
+    def by_sector(fn):
+        """A cross-sectional fn applied within each CVM sector instead of across
+        the whole row — sector-neutral ranks and z-scores. A name with no
+        sector on file comes out NaN (unranked), not pooled with strangers."""
+        def apply(x):
+            if sector_pit is None or sector_pit.empty:
+                raise ValueError("signal expr: sector functions need CVM sector data, "
+                                 "and this market plane has none (B3 only)")
+            labels = _sector_labels(sector_pit, x)
+            out = pd.DataFrame(np.nan, index=x.index, columns=x.columns)
+            for sector in pd.unique(labels.to_numpy().ravel()):
+                if isinstance(sector, str):
+                    m = labels == sector
+                    out = out.where(~m, fn(x.where(m)))
+            return out
+        return apply
 
     return {
         # time-series (operate per column, along time)
@@ -112,6 +140,10 @@ def _build_funcs(ns: dict) -> dict:
         "rank": lambda x: x.rank(axis=1, pct=True),   # pandas semantics (parity)
         "zscore": _zscore,
         "demean": lambda x: x.sub(x.mean(axis=1), axis=0),
+        # the same, within each CVM sector (B3)
+        "sector_rank": by_sector(lambda x: x.rank(axis=1, pct=True)),
+        "sector_zscore": by_sector(_zscore),
+        "sector_demean": by_sector(lambda x: x.sub(x.mean(axis=1), axis=0)),
         # data-quality / shaping
         "mask_glitch": mask_glitch,
         "where": lambda x, cond: x.where(cond),          # keep where cond, else NaN

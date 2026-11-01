@@ -7,6 +7,8 @@ where it actually lives — in `b3_pipeline.downloader` — not in each caller.
 """
 from __future__ import annotations
 
+import io
+import zipfile
 from unittest.mock import patch, MagicMock
 
 import requests
@@ -102,11 +104,14 @@ def test_ipe_download_uses_the_same_downloader(tmp_path):
          patch("b3_pipeline.downloader.requests.get") as mock_get:
         mock_cfg.CVM_DATA_DIR = tmp_path
         mock_cfg.CVM_IPE_BASE_URL = "https://example.com/"
-        mock_get.return_value = _ok_response(b"ipe zip")
+        body = io.BytesIO()
+        with zipfile.ZipFile(body, "w") as zf:
+            zf.writestr("ipe.csv", "a")
+        mock_get.return_value = _ok_response(body.getvalue())
 
         result = ipe_downloader.download_ipe_file(2024)
         assert result == tmp_path / "ipe_cia_aberta_2024.zip"
-        assert result.read_bytes() == b"ipe zip"
+        assert result.read_bytes() == body.getvalue()
         assert mock_get.call_args.args[0] == "https://example.com/ipe_cia_aberta_2024.zip"
 
         # Second call with the file now on disk short-circuits.

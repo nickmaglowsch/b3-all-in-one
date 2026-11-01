@@ -88,7 +88,10 @@ the line, and multiplying it by today's NAV would invent a series.
 (`api.bcb.gov.br`, required by `build_shared_data`, reliable) and nothing else.
 **Benchmarks come off the plane**, not Yahoo: `^BVSP` resolves to `$IBOV` and the
 ETF sleeves to their own COTAHIST tickers, so IBOV is a real series now instead of
-a flat stub. Set `ENGINE_BENCH_OFFLINE=1` (compose sets it on api+worker;
+a flat stub. A renda-fixa ETF sleeve (IMAB11, B5P211, …) reads its own B3 closes
+from mid-2025 and, before them, its ANBIMA index net of the fund's fee
+(`engine/b3_pipeline/anbima_series.py`, mapping in `b3_pipeline/config.py`
+`RF_ETF_INDEX`); the save-time check warns which index stands in, and when. Set `ENGINE_BENCH_OFFLINE=1` (compose sets it on api+worker;
 `platform/tests` set it too) to stub CDI and the benchmarks and run fully offline —
 valid for price-only strategies (`LowVol`, `MomSharpe`, …). ETF/regime strategies
 need the real series and are not supported on the offline path.

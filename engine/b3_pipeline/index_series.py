@@ -1,4 +1,4 @@
-"""CDI and IPCA as price series, so renda fixa can be accrued off the plane.
+"""CDI, IPCA and Selic as price series, so renda fixa can be accrued off the plane.
 
 A CDB indexed to 95% do CDI has no market and no feed. What it does have is a
 published rate, and the platform needs that rate the same way it needs a close:
@@ -11,8 +11,8 @@ accrued and unpriced on network weather reports two different total returns for
 the same window on two different days, for reasons that have nothing to do with
 the market. So it is stored, and it is stored as what it already is: an index.
 
-Stored in `external_prices` under reserved tickers (`$CDI`, `$IPCA`) — the `$`
-matches no B3 code and no renda fixa contract prefix, by shape, so the platform's
+Stored in `external_prices` under reserved tickers (`$CDI`, `$IPCA`, `$SELIC`) —
+the `$` matches no B3 code and no renda fixa contract prefix, by shape, so the platform's
 existing UNION picks them up with no new query and no chance of collision.
 
 Levels, not rates: `close` is the cumulative factor since INDEX_SERIES_START, so
@@ -38,9 +38,12 @@ logger = logging.getLogger(__name__)
 SOURCE = "BCB_SGS"
 
 # SGS series. 12 is the CDI's daily rate in percent per business day; 433 is the
-# IPCA's monthly change in percent. Both are free and unauthenticated.
-CDI_SERIES, IPCA_SERIES = 12, 433
-CDI_TICKER, IPCA_TICKER = "$CDI", "$IPCA"
+# IPCA's monthly change in percent; 11 is the Selic's daily rate, the same shape
+# as the CDI's. All free and unauthenticated. The Selic is a benchmark only — it
+# is what a Tesouro Selic pays before the market's spread, a few basis points
+# from the CDI, and the ruler an LFT ETF is honestly measured against.
+CDI_SERIES, IPCA_SERIES, SELIC_SERIES = 12, 433, 11
+CDI_TICKER, IPCA_TICKER, SELIC_TICKER = "$CDI", "$IPCA", "$SELIC"
 
 # The whole series is refetched and rewritten on every run, from one fixed date,
 # so a stored level never depends on which window last happened to be asked for.
@@ -89,14 +92,15 @@ def fetch_sgs(series: int, start: datetime.date, end: datetime.date,
 
 
 def build(end: datetime.date, start: datetime.date = INDEX_SERIES_START) -> pd.DataFrame:
-    """Both series in `external_prices` shape, as cumulative levels.
+    """Every series in `external_prices` shape, as cumulative levels.
 
     A partial answer is a usable answer here — a book with only CDI-indexed paper
     does not care that IPCA was unreachable — so each series is fetched
     independently and a failure drops that one rather than both.
     """
     frames = []
-    for ticker, series in ((CDI_TICKER, CDI_SERIES), (IPCA_TICKER, IPCA_SERIES)):
+    for ticker, series in ((CDI_TICKER, CDI_SERIES), (IPCA_TICKER, IPCA_SERIES),
+                           (SELIC_TICKER, SELIC_SERIES)):
         try:
             rates = fetch_sgs(series, start, end)
         except Exception as e:                          # noqa: BLE001

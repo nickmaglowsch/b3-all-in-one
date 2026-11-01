@@ -11,10 +11,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from b3_pipeline import storage
+from b3_pipeline import config, storage
 
 from backtests.core import markets
 from backtests.core.pit import PIT_EXTRA_COLUMNS, latest_period_rows
+from backtests.core.stored_series import download_index_level, rf_etf_series
 # The price-panel loading moved to its own module — it is the part of this file
 # that decides how much memory a backtest takes, and it had outgrown living
 # alongside the fundamentals and the benchmark fetchers. The names stay here so
@@ -208,20 +209,11 @@ def download_benchmark(ticker: str, start: str, end: str, *,
         # index, in points, every session, as `$IBOV` in `external_prices` — see
         # there for why the index and not a fund that tracks it.
         return download_index_level(symbol, start, end)
+    if symbol in config.RENDA_FIXA_ETFS and spec.table == "prices":
+        return rf_etf_series(symbol, start, end)
     return _plane_series(spec.table, "adj_close", symbol, start, end,
                          market=None if spec.table == "prices" else spec.key,
                          symbol_column=spec.symbol_column)
-
-
-def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
-    """A stored index level (`$CDI`, `$IPCA`) out of `external_prices`.
-
-    These are cumulative factors written by b3_pipeline/index_series.py, not
-    prices — the growth between two dates is one division. Reserved `$` tickers,
-    so they can never collide with a B3 code.
-    """
-    return _plane_series("external_prices", "close",
-                         ticker.strip().upper(), start, end)
 
 
 from dateutil.relativedelta import relativedelta

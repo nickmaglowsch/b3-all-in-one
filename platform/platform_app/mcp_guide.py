@@ -158,8 +158,14 @@ sleeve only.
 ```
 
 - validate_strategy refuses a ticker the B3 price plane has never priced, by
-  name, and says why for an index or a renda-fixa ETF (LFTB11, IMAB11: not in
-  the price history the bench reads). One that lists after the history starts
+  name, and says why for an index ($IMAB, ^BVSP: hold the ETF that tracks it).
+  A renda-fixa ETF (IMAB11, IB5M11, B5P211, IRFM11, LFTS11) has its own prices
+  only from mid-2025; before that the backtest follows its ANBIMA index minus
+  the fund's fee, and a warning names the index, the dates and the fee — and
+  says when the index is a stand-in: B5P211 follows IMA-B 5 and IRFM11 follows
+  IRF-M, because their own indexes (the P2 variants) have no public history;
+  LFTS11 follows IMA-S. LFTB11 and FIXA11 have no free index history and are
+  refused. One that lists after the history starts
   (IVVB11: 2014) comes back as a warning with its first price date: until then
   its weight is held in CDI, as the built-ins do — so a backtest from before
   that date is partly a cash one. One that stopped trading comes back with its

@@ -141,7 +141,10 @@ def test_the_catalogue_names_every_ruler_the_bench_offers(plane):
     them, so a rename here is a breaking change and should fail a test."""
     mod = _load_bench_series()
 
-    assert set(mod.BENCHMARKS) == {"ibov", "cdi", "ipca", "sp500", "bitcoin"}
+    assert set(mod.BENCHMARKS) == {
+        "ibov", "cdi", "ipca", "sp500", "bitcoin", "selic",
+        "irfm1", "irfm1p", "irfm", "irfmp2", "imab5", "imab5p", "imab5p2",
+        "imab", "imas", "imageral"}
 
 
 def test_named_benchmarks_read_their_own_plane_rows(plane):

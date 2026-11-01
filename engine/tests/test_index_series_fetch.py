@@ -112,7 +112,8 @@ def test_a_series_with_no_data_at_all_comes_back_empty(monkeypatch):
 def rates_for(monkeypatch, **by_ticker):
     """Replace fetch_sgs so build() sees exactly these rates per series."""
     by_series = {index_series.CDI_SERIES: by_ticker.get("cdi"),
-                 index_series.IPCA_SERIES: by_ticker.get("ipca")}
+                 index_series.IPCA_SERIES: by_ticker.get("ipca"),
+                 index_series.SELIC_SERIES: by_ticker.get("selic")}
 
     def fake(series, start, end):
         got = by_series[series]

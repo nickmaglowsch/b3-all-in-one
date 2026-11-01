@@ -135,10 +135,62 @@ def test_a_delisted_ticker_warns_with_its_last_date(plane):
     assert "GONE3.SA" in warnings[0] and "2010-06-30" in warnings[0] and "0%" in warnings[0]
 
 
-@pytest.mark.parametrize("ticker", ["LFTB11.SA", "IMAB11", "LFTS11.SA"])
-def test_a_renda_fixa_etf_says_why_it_is_refused(plane, ticker):
+@pytest.mark.parametrize("ticker", ["LFTB11.SA", "FIXA11"])
+def test_a_renda_fixa_etf_with_no_index_says_why_it_is_refused(plane, ticker):
     errors, _ = sleeve_tickers.check(_thirds(ticker))
     assert len(errors) == 1 and "renda-fixa ETF" in errors[0] and ticker in errors[0]
+    assert "no free history" in errors[0]
+
+
+def _external(db: str, ticker: str, days: list[str]) -> None:
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        "INSERT INTO external_prices (ticker, isin_code, date, close, volume, source)"
+        " VALUES (?, 'UNKNOWN', ?, 100.0, 0, 'TEST')", [(ticker, d) for d in days])
+    conn.commit()
+    conn.close()
+
+
+def test_a_renda_fixa_etf_is_held_through_its_index_and_says_so(plane):
+    """Accepted, with its span starting where the spliced index does — so the
+    late-listing warning names 2010, not mid-2025 — and a second warning naming
+    the stand-in, the dates and the fee."""
+    _external(plane, "$IMAB5", ["2010-01-04", "2025-06-02"])
+    _external(plane, "B5P211", ["2025-06-02", "2025-06-03"])
+    errors, warnings = sleeve_tickers.check(_thirds("B5P211.SA"))
+    assert errors == []
+    assert any("no price before 2010-01-04" in w for w in warnings)
+    splice = [w for w in warnings if "of its own" in w]
+    assert len(splice) == 1
+    assert "before 2025-06-02" in splice[0] and "IMA-B 5 (ANBIMA)" in splice[0]
+    assert "0.20%/yr" in splice[0] and "stand-in" in splice[0]
+    assert "IMA-B 5 P2, which has no public history" in splice[0]
+
+
+def test_an_index_short_of_the_first_close_is_said_not_bridged(plane):
+    _external(plane, "$IRFM", ["2010-01-04", "2025-05-28"])
+    _external(plane, "IRFM11", ["2025-06-02"])
+    errors, warnings = sleeve_tickers.check(_thirds("IRFM11"))
+    assert errors == []
+    assert any("no level on 2025-06-02" in w and "2025-05-28" in w for w in warnings)
+    assert any("no price before 2025-06-02" in w for w in warnings)
+
+
+def test_a_stand_in_index_is_called_a_stand_in(plane):
+    _external(plane, "$IMAS", ["2010-01-04", "2025-06-02"])
+    _external(plane, "LFTS11", ["2025-06-02"])
+    _, warnings = sleeve_tickers.check(_thirds("LFTS11"))
+    assert any("IMA-S (ANBIMA)" in w and "stand-in" in w and "Teva" in w
+               for w in warnings)
+
+
+@pytest.mark.parametrize("ticker, hint", [
+    ("$IMAB", "IMAB11.SA"), ("$IMAS", "LFTS11.SA"), ("$IRFM", "IRFM11.SA"),
+    ("$SELIC", None), ("$CDI", None)])
+def test_an_index_is_refused_naming_the_etf_that_holds_it_if_any(plane, ticker, hint):
+    errors, _ = sleeve_tickers.check(_thirds(ticker))
+    assert len(errors) == 1 and "is an index" in errors[0]
+    assert (hint in errors[0]) if hint else ("ETF" not in errors[0])
 
 
 def test_specs_without_ticker_sleeves_never_touch_the_plane(monkeypatch):

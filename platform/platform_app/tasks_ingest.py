@@ -55,11 +55,12 @@ async def _record_ingest(kind: str, args: list[str]) -> dict:
 
     The module's output is captured, so this is the only place it can surface.
     A non-zero exit is recorded and then raised. A zero exit can still carry
-    errors: b3_pipeline lets its third-party steps (CDI/IPCA, Ibovespa, Tesouro,
-    external prices) fail alone ("fetch failed, continuing"), and those lines
-    were discarded with the rest of a successful run's output — the series went
-    stale behind a row saying `done`. They are kept in `error` on the done row, and every outcome is
-    printed for `docker compose logs ingest`.
+    errors: b3_pipeline lets its third-party steps (CDI/IPCA/Selic, Ibovespa,
+    Tesouro, ANBIMA, external prices) fail alone ("fetch failed, continuing"),
+    and those lines were discarded with the rest of a successful run's output —
+    the series went stale behind a row saying `done`. They are kept in `error`
+    on the done row, and every outcome is printed for `docker compose logs
+    ingest`.
     """
     async with async_session_maker() as session:
         run = IngestRun(kind=kind, status="running")

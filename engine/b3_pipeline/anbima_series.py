@@ -6,7 +6,7 @@ backtest over a decade cannot hold an instrument it can only see for one year �
 but each of these funds is a passive copy of an ANBIMA index, and ANBIMA
 publishes those indexes, free and unauthenticated, back to 2009. So the index is
 stored, and the engine splices it in front of the ETF's own closes, net of the
-fund's fee (backtests/core/data.py, `_rf_etf_series`). The indexes are also
+fund's fee (backtests/core/stored_series.py, `rf_etf_series`). The indexes are also
 benchmarks in their own right: IMA-B is what a Brazilian bond fund is measured
 against.
 
@@ -45,6 +45,7 @@ import time
 import pandas as pd
 import requests
 
+from . import storage
 from .external_prices import BackfillResult, FetchFailed, _num, level_rows
 
 logger = logging.getLogger(__name__)
@@ -206,3 +207,76 @@ if __name__ == "__main__":
     print(fetch_day(datetime.date(2026, 10, 30)).to_string())
     print(fetch_day(datetime.date(2026, 11, 1)).to_string())
     print(fetch_day(datetime.date(2026, 10, 30), p2=True).to_string())
+
+
+# Days per upsert in the IMA backfill. The first run is ~4,300 requests (half an
+# hour); writing as it goes means a run killed in the middle keeps what it
+# fetched, and the next one resumes after the newest stored day.
+_CHUNK = 100
+
+
+def ingest(conn) -> None:
+    """Pipeline step 5e: the IMA family, then the two P2 indexes, stored as fetched.
+
+    Unlike the other loaders this one writes, because a first run is too long to
+    hand back as one frame: see `_CHUNK`. The caller (level_series) logs a raise
+    as the step's failure and moves on.
+    """
+    today = datetime.date.today()
+    _ingest_ima(conn, today)
+    _ingest_p2(conn, today)
+
+
+def _ingest_ima(conn, today: datetime.date) -> None:
+    """The IMA history does not roll off, so it resumes from the newest stored
+    date — the whole of it on the first run, the last session or two every night
+    after — plus whatever the failure ledger says is still owed: resuming from
+    the max is what steps over a day a network error skipped, and the ledger is
+    what pays it back. A holiday answers "Não há dados" and is settled.
+    """
+    last = storage.max_external_price_date(conn, SOURCE_IMA)
+    pending = storage.pending_external_failures(conn, SOURCE_IMA)
+    start = last + datetime.timedelta(days=1) if last else ANBIMA_START
+    days = sorted(set(weekdays(start, today)) | pending)
+    logger.info(f"ANBIMA IMA: {len(days)} day(s) from {start} ({len(pending)} retried)")
+    failed = 0
+    for i in range(0, len(days), _CHUNK):
+        chunk = days[i:i + _CHUNK]
+        gave_up = None
+        try:
+            result = backfill(chunk)
+        except GaveUp as e:
+            # Store and record what the chunk got before the breaker tripped,
+            # then stop: the caller logs it as this step's failure.
+            result, gave_up = e.result, e
+        _store(conn, chunk, result, pending)
+        failed += len(result.failed)
+        if gave_up:
+            raise gave_up
+    if failed:
+        logger.warning(f"{failed} ANBIMA day(s) failed and are queued for retry")
+
+
+def _store(conn, chunk, result: BackfillResult, pending: set) -> None:
+    if not result.rows.empty:
+        storage.upsert_external_prices(conn, result.rows)
+    for day in chunk:
+        if day in result.failed:
+            storage.record_external_failure(conn, SOURCE_IMA, day, result.failed[day])
+        elif day in pending:
+            storage.clear_external_failure(conn, SOURCE_IMA, day)
+
+
+def _ingest_p2(conn, today: datetime.date) -> None:
+    """The P2 page keeps only its last week, so there is nothing to resume and
+    nothing a ledger could recover past it: each run fetches the trailing window
+    minus what is stored, and a day missed for longer than that is gone.
+    """
+    since = today - datetime.timedelta(days=P2_HEAL_DAYS)
+    stored = storage.stored_external_dates(conn, since, SOURCE_P2)
+    result = backfill([d for d in weekdays(since, today) if d not in stored], p2=True)
+    if not result.rows.empty:
+        storage.upsert_external_prices(conn, result.rows)
+    if result.failed:
+        logger.warning(f"{len(result.failed)} ANBIMA P2 day(s) failed; ANBIMA keeps "
+                       f"about a week of P2, so they are retried until they age out")

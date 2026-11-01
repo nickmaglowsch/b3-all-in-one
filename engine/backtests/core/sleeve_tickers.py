@@ -76,7 +76,7 @@ def price_spans(symbols: list[str]) -> tuple[dict, tuple, dict]:
 
     A renda-fixa ETF is not in `prices` at all. Its span is the one
     `download_benchmark` will hand the backtest: from the first day of its
-    spliced index (data._rf_etf_series) to its own last close. The raw
+    spliced index (stored_series.rf_etf_series) to its own last close. The raw
     `external_prices` spans come back too, for the warning that says where the
     ETF's own closes start and what stands in before them.
     """
@@ -106,9 +106,9 @@ def price_spans(symbols: list[str]) -> tuple[dict, tuple, dict]:
     if rf:
         # The span is read off the very series the backtest will get, so the
         # check and the run cannot disagree about where the splice starts.
-        from backtests.core.data import _rf_etf_series
+        from backtests.core.stored_series import rf_etf_series
         for s in rf:
-            px = _rf_etf_series(s, "1900-01-01", "2999-12-31")
+            px = rf_etf_series(s, "1900-01-01", "2999-12-31")
             if len(px):
                 spans[s] = (px.index[0].date(), px.index[-1].date())
     if not len(plane):
@@ -154,7 +154,7 @@ def _splice_warning(t: str, sym: str, span: tuple, ext: dict) -> str | None:
     fund's own: a backtest that reads IMA-B 5 for an IMA-B 5 P2 fund, or IMA-S
     for a Teva Tesouro Selic one, is close, and is still something else. An
     index that stops short of the ETF's first close is said too — nothing is
-    spliced then (data._rf_etf_series), and the late-listing warning alone
+    spliced then (stored_series.rf_etf_series), and the late-listing warning alone
     would not say why.
     """
     p = config.RF_ETF_INDEX[sym]

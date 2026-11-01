@@ -140,7 +140,6 @@ def test_the_nightly_run_resumes_after_the_newest_day_and_pays_the_ledger(
     run: nothing after the newest stored day is owed yet, so the only IMA
     request is the failed day the ledger remembered."""
     import datetime
-    from b3_pipeline import main
 
     today = datetime.date.today()
     days = anbima_series.weekdays(today - datetime.timedelta(days=14), today)
@@ -162,13 +161,13 @@ def test_the_nightly_run_resumes_after_the_newest_day_and_pays_the_ledger(
     conn = sqlite3.connect(str(tmp_path / "plane.sqlite"))
     storage.init_db(conn)
 
-    main._fetch_anbima_indexes(conn)
+    anbima_series.ingest(conn)
     assert [d for d, p2 in asked if not p2] == days
     assert storage.pending_external_failures(conn, anbima_series.SOURCE_IMA) == {broken}
 
     asked.clear()
     down.clear()
-    main._fetch_anbima_indexes(conn)
+    anbima_series.ingest(conn)
     assert [d for d, p2 in asked if not p2] == [broken]
     assert storage.pending_external_failures(conn, anbima_series.SOURCE_IMA) == set()
 

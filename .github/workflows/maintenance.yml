@@ -28,6 +28,12 @@ on:
         required: false
         type: string
         default: ""
+      runner:
+        description: "github-hosted, or self-hosted for the fallback runner on the VPS (used when hosted minutes are blocked)"
+        required: false
+        type: choice
+        options: [github-hosted, self-hosted]
+        default: github-hosted
 
 # Deploy's group, so a maintenance run and a deploy never overlap: a deploy
 # restarts the worker this execs into, and the restart sweep closes whatever
@@ -44,7 +50,7 @@ permissions:
 jobs:
   run:
     name: Maintenance task on the VPS
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     environment: production
     # command_timeout below plus slack for the SSH handshake.
     timeout-minutes: 320

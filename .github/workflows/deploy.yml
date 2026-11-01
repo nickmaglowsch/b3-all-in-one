@@ -5,7 +5,21 @@ on:
     workflows: [CI]
     branches: [main]
     types: [completed]
+  # runner/sha: set by .github/workflows/runner-fallback.yml when GitHub refuses
+  # hosted jobs (billing), to ship the commit CI passed from the VPS runner.
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "github-hosted, or self-hosted for the fallback runner on the VPS (used when hosted minutes are blocked)"
+        required: false
+        type: choice
+        options: [github-hosted, self-hosted]
+        default: github-hosted
+      sha:
+        description: "Commit on main to deploy (empty = main's head)"
+        required: false
+        type: string
+        default: ""
 
 concurrency:
   group: deploy-b3
@@ -19,7 +33,7 @@ jobs:
   # box kept serving the previous commit. A failed gate is loud instead.
   guard:
     name: Should we deploy?
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     # Deliberately no `environment: production` — this job holds no secrets, so it
     # is safe to run for any triggering event and decide afterwards.
     permissions:
@@ -49,14 +63,21 @@ jobs:
           HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           THIS_REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_SHA: ${{ github.event.inputs.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ "$EVENT" = "workflow_dispatch" ]; then
             # Resolved once, here, so the VPS and Pages ship the same commit even
             # if main moves while the two jobs run.
-            sha=$(gh api "repos/$THIS_REPO/commits/main" --jq .sha)
-            echo "Manual dispatch — deploying origin/main ($sha)."
+            sha=${INPUT_SHA:-$(gh api "repos/$THIS_REPO/commits/main" --jq .sha)}
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::sha input is not a full commit sha ('$sha')"; exit 1; }
+            # The VPS refuses a sha off main, but Pages builds whatever it checks out.
+            case $(gh api "repos/$THIS_REPO/compare/$sha...main" --jq .status) in
+              identical|ahead) ;;
+              *) echo "::error::$sha is not on main — not deploying."; exit 1 ;;
+            esac
+            echo "Manual dispatch — deploying $sha."
             echo "sha=$sha" >> "$GITHUB_OUTPUT"
             echo "deploy=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -77,7 +98,7 @@ jobs:
 
   backend:
     name: API + worker to the VPS
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     environment: production
     needs: guard
     if: needs.guard.outputs.deploy == 'true'
@@ -138,7 +159,7 @@ jobs:
 
   frontend:
     name: Static site to Cloudflare Pages
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.inputs.runner || vars.RUNNER) == 'self-hosted' && fromJSON('["self-hosted","b3-fallback"]') || 'ubuntu-latest' }}
     environment: production
     needs: guard
     if: needs.guard.outputs.deploy == 'true'

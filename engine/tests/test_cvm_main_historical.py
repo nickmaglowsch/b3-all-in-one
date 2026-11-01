@@ -41,7 +41,9 @@ def _make_ipe_zip(year: int = 2008) -> io.BytesIO:
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 def test_run_pipeline_without_historical_skips_ipe_steps():
-    """When include_historical=False, CAD and IPE downloaders are never called."""
+    """When include_historical=False the IPE downloader is never called — but the
+    CAD register still loads (fresh), because sector strategies read its sector
+    and the weekly ingest runs without the flag."""
     with patch("b3_pipeline.cvm_main.storage.get_connection") as mock_get_conn, \
          patch("b3_pipeline.cvm_main.storage.init_db"), \
          patch("b3_pipeline.cvm_main.cvm_downloader.download_dfp_file", return_value=None), \
@@ -60,7 +62,7 @@ def test_run_pipeline_without_historical_skips_ipe_steps():
          patch("b3_pipeline.cvm_main._propagate_fre_shares"), \
          patch("b3_pipeline.cvm_main.compute_net_income_ttm", return_value=0), \
          patch("b3_pipeline.cvm_main.materialize_fundamentals_monthly", return_value=0), \
-         patch("b3_pipeline.cad_downloader.download_cad_file") as mock_cad_dl, \
+         patch("b3_pipeline.cad_downloader.download_cad_file", return_value=None) as mock_cad_dl, \
          patch("b3_pipeline.ipe_downloader.download_ipe_file") as mock_ipe_dl:
 
         mock_conn = _mem_conn()
@@ -74,9 +76,7 @@ def test_run_pipeline_without_historical_skips_ipe_steps():
             skip_monthly=True,
         )
 
-        # Lazy imports only happen inside the include_historical branch,
-        # so the downloaders should never be invoked.
-        mock_cad_dl.assert_not_called()
+        mock_cad_dl.assert_called_once_with(force=True)
         mock_ipe_dl.assert_not_called()
 
 

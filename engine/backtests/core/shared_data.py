@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import functools
 import logging
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -263,16 +262,16 @@ def build_shared_data(
 
     _defer_derived(shared, freq, intervals, sessions, symbols)
 
-    # ── Point-in-time CVM sector classification (survivorship-free, from FCA) ──
-    # Long-format [ticker, ref_date, sector]. Sourced from the FCA zips alongside
-    # the DB (data/cvm). Any strategy can filter its universe by sector via
-    # backtests.core.data.sector_membership. Degrades to empty if unavailable.
+    # ── CVM sector classification (survivorship-free, from the CVM register) ──
+    # Long-format [root, ref_date, sector], read from the plane like everything
+    # else here (see data.load_sector_pit). Any strategy can filter its universe
+    # by sector via backtests.core.data.sector_membership. Degrades to empty if
+    # unreadable; the strategies that need it raise SectorRegistryEmpty then.
     try:
-        fca_dir = Path(db_path).resolve().parent / "data" / "cvm"
-        shared["sector_pit"] = load_sector_pit(fca_dir, db_path)
+        shared["sector_pit"] = load_sector_pit(db_path)
     except Exception as e:
         logger.warning(f"Could not load PIT sector data: {e}")
-        shared["sector_pit"] = pd.DataFrame(columns=["ticker", "ref_date", "sector"])
+        shared["sector_pit"] = pd.DataFrame(columns=["root", "ref_date", "sector"])
 
     # Fundamentals are loaded and attached by their own module — see
     # backtests.core.fundamentals for the PIT semantics and the ratio inputs.

@@ -9,7 +9,7 @@ BESST = the five sectors the index is built from:
   Bancos, Energia elétrica, Seguros, serviços de Telecomunicações, Saneamento.
 
 Rules implemented (quarterly index reconstruction):
-  1. Universe = companies in the five BESST sectors (BESST_SECTORS map below).
+  1. Universe = companies CVM classifies in the five BESST sectors (besst_roots).
   2. Quality: positive point-in-time TTM net income + positive equity (ROE > 0)
      — the `require_earnings` gate in sp500_b3.select_constituents.
   3. Dividend distribution: paid a dividend/JCP in at least `min_div_years` of the
@@ -20,11 +20,10 @@ Rules implemented (quarterly index reconstruction):
 
 Reuses the SP-B3 index machinery (backtests/strategies/sp500_b3.py) for PIT
 fundamentals, split-adjusted per-class share counts and market cap — same as
-top_mcap.py. Requires b3_pipeline.cvm_main to have populated fundamentals_pit.
+top_mcap.py. Requires b3_pipeline.cvm_main to have populated fundamentals_pit
+and cvm_companies.sector (CVM's company register, the universe).
 
-ponytail: two data gaps vs the official methodology, both documented here:
-  - No sector column in the DB → BESST membership is a curated static map
-    (BESST_SECTORS). Upgrade path: a real setor/segment classification table.
+ponytail: one data gap vs the official methodology:
   - No free-float column → we weight by FULL market cap, not free-float-adjusted.
     Overweights closely-held names (e.g. state-controlled utilities) vs the index.
   The market-cap >150M USD and free-float >=10% eligibility screens are likewise
@@ -36,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 from b3_pipeline import storage
+from backtests.core.data import SectorRegistryEmpty
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -51,39 +51,42 @@ from backtests.strategies.sp500_b3 import (
     select_constituents,
 )
 
-# ── The BESST universe: 4-char ticker root -> sector ──────────────────────────
-# Curated because the DB has no sector classification. Grounded on the roots that
-# actually trade on B3 with CVM fundamentals (verified against prices +
-# fundamentals_pit). The PIT quality/liquidity gate drops any root that lacks
-# fundamentals in a given quarter, so listing a name that later delists is safe.
-BESST_SECTORS: dict[str, str] = {
-    # Bancos
-    "ITUB": "banks", "BBDC": "banks", "BBAS": "banks", "SANB": "banks",
-    "BPAC": "banks", "ABCB": "banks", "BRSR": "banks", "BMGB": "banks",
-    "PINE": "banks", "BPAN": "banks", "BEES": "banks", "BAZA": "banks",
-    "BNBR": "banks", "BMEB": "banks", "BMIN": "banks", "BGIP": "banks",
-    "BRIV": "banks", "BSLI": "banks",
-    # Energia elétrica
-    "ELET": "power", "CMIG": "power", "CPLE": "power", "CPFE": "power",
-    "ENGI": "power", "EQTL": "power", "TAEE": "power", "TRPL": "power",
-    "EGIE": "power", "NEOE": "power", "ENEV": "power", "AURE": "power",
-    "CLSC": "power", "COCE": "power", "LIGT": "power", "ALUP": "power",
-    "GEPA": "power", "EKTR": "power", "REDE": "power", "EMAE": "power",
-    "CEBR": "power", "CEEB": "power", "CEED": "power", "CEPE": "power",
-    "AFLT": "power", "ENMT": "power", "GPAR": "power", "RNEW": "power",
-    "OMGE": "power", "CSRN": "power", "ELPL": "power", "SRNA": "power",
-    # Seguros
-    "BBSE": "insurance", "PSSA": "insurance", "SULA": "insurance",
-    "CXSE": "insurance", "IRBR": "insurance", "WIZC": "insurance",
-    "APER": "insurance", "CSAB": "insurance",
-    # Telecomunicações
-    "VIVT": "telecom", "TIMS": "telecom", "OIBR": "telecom", "TELB": "telecom",
-    "FIQE": "telecom", "DESK": "telecom", "BRST": "telecom", "TIMP": "telecom",
-    # Saneamento
-    "SBSP": "sanitation", "SAPR": "sanitation", "CSMG": "sanitation",
-    "CASN": "sanitation",
-}
-BESST_ROOTS = frozenset(BESST_SECTORS)
+# ── The BESST universe: CVM sectors, resolved to ticker roots by CNPJ ───────
+# CVM's SETOR_ATIV values for the five BESST sectors, as its register writes
+# them. Each also appears behind the holding-company prefix
+# ("Emp. Adm. Part. - Bancos"), which counts as the same sector.
+BESST_CVM_SECTORS = frozenset({
+    "Bancos",
+    "Energia Elétrica",
+    "Seguradoras e Corretoras",
+    "Telecomunicações",
+    "Saneamento, Serv. Água e Gás",
+})
+_HOLDING_PREFIX = "Emp. Adm. Part. - "
+
+
+def besst_roots(sector_pit: pd.DataFrame) -> frozenset[str]:
+    """4-char ticker roots of every company CVM classifies in a BESST sector.
+
+    `sector_pit` is shared_data["sector_pit"] (backtests.core.data.load_sector_pit):
+    CVM's register, which lists cancelled companies too, joined by CNPJ to every
+    ticker root the company traded under. So membership is by company — delisted
+    names stay in the history, and a rename (ELET3 -> AXIA3 on 2025-11-07) keeps
+    Eletrobras in without anyone editing a list. The quality/liquidity gate drops
+    any root without prices or PIT fundamentals in a given quarter.
+
+    CVM's classification is used as-is, not hand-trimmed: "Saneamento, Serv.
+    Água e Gás" also holds gas (Comgás, Compass) and waste (Ambipar, Orizon), and
+    "Seguradoras e Corretoras" brokers (Qualicorp, Wiz). Including them or not
+    barely moved results when tested, and as-is is reproducible, not picked.
+
+    Raises when the register has no sectors: an empty universe would be a
+    backtest that never starts, reported as a result.
+    """
+    if sector_pit.empty:
+        raise SectorRegistryEmpty("BESST Quality")
+    sector = sector_pit["sector"].str.strip().str.removeprefix(_HOLDING_PREFIX)
+    return frozenset(sector_pit.loc[sector.isin(BESST_CVM_SECTORS), "root"])
 
 
 def load_dividends(db_path: str) -> dict[str, np.ndarray]:
@@ -210,6 +213,7 @@ class BesstQualityStrategy(StrategyBase):
         min_div_years = int(params.get("min_div_years", 2))
         min_adtv = float(params.get("min_adtv", DEFAULT_MIN_ADTV))
         db_path = str(params.get("db_path", "b3_market_data.sqlite"))
+        roots = besst_roots(shared_data.get("sector_pit", pd.DataFrame()))
 
         fund = load_fundamentals_pit_raw(db_path)
         actions = load_stock_actions(db_path)
@@ -229,7 +233,7 @@ class BesstQualityStrategy(StrategyBase):
                 td, fund, close_px.loc[td], med63.loc[td], actions,
                 min_market_cap=0.0, min_adtv=min_adtv, require_earnings=True,
             )
-            sel = sel[sel["root"].isin(BESST_ROOTS)]
+            sel = sel[sel["root"].isin(roots)]
             # regular dividend payer
             if not sel.empty:
                 keep = [paid_regularly(divs.get(r), pd.Timestamp(td), min_div_years)

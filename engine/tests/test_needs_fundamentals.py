@@ -164,3 +164,26 @@ def test_advise_emits_needs_fundamentals_error(empty_fundamentals_db):
     assert payload["error"] == "needs_fundamentals"
     assert payload["strategy"] == "Two-Leg Value"
     assert "fundamentals" in payload["message"].lower()
+
+
+def test_empty_sector_registry_exits_like_missing_fundamentals(monkeypatch, capsys):
+    """A sector strategy on a plane whose CVM register is not loaded yet exits 3
+    with the needs-fundamentals JSON — the platform's 422 path — not exit 1 (a
+    500 on /portfolio/target for any portfolio holding a BESST or Teva sleeve).
+    The cvm_main ingest that loads fundamentals loads the register too."""
+    from types import SimpleNamespace
+
+    from backtests.core import strategy_registry as sr
+    from backtests.strategies.besst_quality import BesstQualityStrategy
+    from scripts import advise_weights as aw
+
+    reg = sr.StrategyRegistry()
+    reg.register(BesstQualityStrategy())
+    monkeypatch.setattr(sr, "get_registry", lambda: reg)
+    empty = pd.DataFrame(columns=["root", "ref_date", "sector"])
+    monkeypatch.setattr(aw, "_build_shared", lambda *a: {"ret": None, "close_px": None,
+                                                         "fin_vol": None, "sector_pit": empty})
+    with pytest.raises(SystemExit) as exc:
+        aw._advise_from_strategy(SimpleNamespace(strategy="BESST Quality", params=None))
+    assert exc.value.code == aw.NEEDS_FUNDAMENTALS_EXIT
+    assert json.loads(capsys.readouterr().err.strip())["error"] == "needs_fundamentals"

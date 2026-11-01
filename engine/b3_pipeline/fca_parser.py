@@ -34,52 +34,6 @@ _COL_CANDIDATES = {
 _TICKER_RE = re.compile(r"^[A-Z]{4}\d{1,2}$")
 
 
-def parse_fca_sectors(zip_path) -> pd.DataFrame:
-    """Parse the fca_cia_aberta_geral_{year}.csv inside an FCA ZIP.
-
-    Returns point-in-time CVM sector classification (Setor_Atividade) per company,
-    survivorship-free (FCA covers companies that have since delisted).
-
-    Accepts a filesystem path or a BytesIO (for testing).
-
-    Returns a DataFrame with columns: cnpj, ref_date, sector.
-    Rows without a valid 14-digit CNPJ or a sector are dropped.
-    """
-    empty = pd.DataFrame(columns=["cnpj", "ref_date", "sector"])
-
-    if not isinstance(zip_path, (str, Path)):
-        zip_path.seek(0)
-    with zipfile.ZipFile(zip_path, "r") as zf:
-        matches = [
-            n for n in zf.namelist()
-            if "geral" in n.lower() and n.lower().endswith(".csv")
-        ]
-        if not matches:
-            logger.warning(f"No geral CSV found in FCA zip {zip_path}")
-            return empty
-        with zf.open(matches[0]) as f:
-            df = pd.read_csv(f, sep=";", encoding="latin-1", dtype=str, low_memory=False)
-
-    cnpj_col = _find_col(df, ("cnpj_companhia", "cnpj_cia"))
-    if cnpj_col is None or "Setor_Atividade" not in df.columns:
-        raise ValueError(
-            f"FCA geral CSV missing expected columns (need CNPJ + Setor_Atividade); "
-            f"found: {list(df.columns)}"
-        )
-
-    out = pd.DataFrame()
-    out["cnpj"] = df[cnpj_col].apply(lambda x: _clean_cnpj(str(x)))
-    out["ref_date"] = df["Data_Referencia"].apply(_parse_date)
-    out["sector"] = df["Setor_Atividade"].astype(str).str.strip()
-
-    out = out[out["cnpj"].notna() & out["sector"].notna() & (out["sector"] != "")]
-    out = out[out["sector"].str.lower() != "nan"]
-    if out.empty:
-        return empty
-    out = out.drop_duplicates(subset=["cnpj", "ref_date"], keep="last")
-    return out[["cnpj", "ref_date", "sector"]].reset_index(drop=True)
-
-
 def _find_col(df: pd.DataFrame, names: tuple) -> str | None:
     lower = {c.lower().strip(): c for c in df.columns}
     for name in names:

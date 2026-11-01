@@ -2,7 +2,6 @@
 Core utilities for backtesting with B3 data.
 """
 
-import glob
 import hashlib
 import os
 import time
@@ -77,45 +76,46 @@ def _fetch_cached(kind: str, key_parts: tuple, fetch):
     return obj
 
 
-def load_sector_pit(fca_dir, db_path) -> pd.DataFrame:
+class SectorRegistryEmpty(RuntimeError):
+    """Sector strategies raise it rather than hold nothing (as a sleeve: all CDI,
+    how "Teva / IVVB11 / CDI" ran in prod); advise_weights maps it to exit 3."""
+
+    def __init__(self, who: str):
+        super().__init__(f"{who}: no CVM sector classification in the market plane "
+                         "(cvm_companies.sector is empty): load it with `python -m "
+                         "b3_pipeline.cvm_main` (the weekly ingest_fundamentals job)")
+
+
+def load_sector_pit(db_path) -> pd.DataFrame:
     """
-    Load point-in-time CVM sector classification joined to tickers.
+    CVM sector per ticker root, long-format [root, ref_date, sector], from the plane.
 
-    Reads every FCA geral CSV (survivorship-free — includes delisted companies)
-    from `fca_dir` and maps CNPJ -> ticker via company_tickers_pit. Returns
-    long-format [ticker, ref_date, sector]. Returns an empty frame if FCA data
-    is unavailable.
-    """
-    from b3_pipeline.fca_parser import parse_fca_sectors
+    sector is SETOR_ATIV from CVM's register (cvm_companies.sector, loaded by
+    b3_pipeline.cvm_main), which lists every company ever registered, cancelled
+    ones included — no survivorship. Roots join by CNPJ from company_tickers_pit
+    (point-in-time, FCA) and cvm_companies.ticker_root (the B3-API root), so a
+    company keeps every code it traded under: a rename (ELET -> AXIA) stays in
+    its sector. Roots, as cvm_companies has no full ticker; strategies on full
+    tickers match by ticker[:4]. (Not FCA archives on disk: a PG worker has none.)
 
-    zips = sorted(glob.glob(str(Path(fca_dir) / "fca_cia_aberta_*.zip")))
-    if not zips:
-        return pd.DataFrame(columns=["ticker", "ref_date", "sector"])
-
-    frames = []
-    for zp in zips:
-        try:
-            frames.append(parse_fca_sectors(zp))
-        except Exception:
-            continue
-    if not frames:
-        return pd.DataFrame(columns=["ticker", "ref_date", "sector"])
-    sectors = pd.concat(frames, ignore_index=True)
-
+    ponytail: the register has only the current sector, so ref_date is a 1900
+    floor; persist FCA's per-year sector if reclassifications ever matter."""
+    sql = """
+        SELECT DISTINCT t.root, c.sector FROM cvm_companies c
+        JOIN (SELECT cnpj, ticker_root AS root FROM company_tickers_pit UNION
+              SELECT cnpj, ticker_root FROM cvm_companies) t ON t.cnpj = c.cnpj
+        WHERE c.sector IS NOT NULL AND c.sector != '' AND t.root IS NOT NULL"""
     with storage.get_connection(db_path) as conn:
-        cmap = storage.read_sql(
-            "SELECT DISTINCT cnpj, ticker FROM company_tickers_pit", conn
-        )
-    out = sectors.merge(cmap, on="cnpj", how="inner")
-    out["ref_date"] = pd.to_datetime(out["ref_date"], errors="coerce")
-    return out[["ticker", "ref_date", "sector"]].dropna(subset=["ticker", "ref_date"])
+        out = storage.read_sql(sql, conn)
+    out["ref_date"] = pd.Timestamp("1900-01-01")
+    return out[["root", "ref_date", "sector"]]
 
 
 def sector_membership(sector_pit: pd.DataFrame, keywords: list) -> pd.DataFrame:
     """
     Given long-format PIT sector records [ticker, ref_date, sector] and a list of
     sector keywords (case-insensitive substring match), return [ticker,
-    effective_date] — one row per FCA filing where the sector matched. A ticker
+    effective_date] — one row per record where the sector matched. A ticker
     is eligible at rebalance date t if any of its effective_date <= t.
     """
     if sector_pit.empty:

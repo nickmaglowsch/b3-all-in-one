@@ -10,7 +10,7 @@ Usage:
     python -m b3_pipeline.cvm_main --start-year 2020            # From 2020
     python -m b3_pipeline.cvm_main --start-year 2023 --end-year 2023
     python -m b3_pipeline.cvm_main --rebuild                    # Drop and recreate tables
-    python -m b3_pipeline.cvm_main --include-historical         # Also load CAD company registry
+    python -m b3_pipeline.cvm_main --include-historical         # Also load the IPE index
 
 Data coverage:
     CVM's open data portal provides structured bulk financial data only from 2010 onward:
@@ -23,7 +23,6 @@ Data coverage:
     documents per company, not parseable structured data.
 
     --include-historical adds:
-    - CAD company register: listing/delisting dates for survivorship-bias correction
     - IPE document index: company metadata and filing history (NOT financial statements)
 """
 from __future__ import annotations
@@ -451,6 +450,38 @@ def _fetch_ticker_mappings(conn: sqlite3.Connection) -> int:
     return updated
 
 
+def _load_cad_registry(conn: sqlite3.Connection) -> None:
+    """Step 5b': CVM's company register into cvm_companies — every run, not only
+    --include-historical, because its SETOR_ATIV is the sector every sector
+    strategy reads (backtests.core.data.load_sector_pit) and the weekly
+    ingest_fundamentals job runs this module with no flags. Before the ticker
+    fetch, so rows the register adds are matched by codeCVM in the same run.
+
+    Always re-downloaded: one ~1.5 MB file CVM rewrites daily, and a cached copy
+    would freeze new registrations and reclassifications at the first download.
+    A failed download keeps the last load, it does not fail the ingest.
+    """
+    from . import cad_downloader, cad_parser  # noqa: PLC0415
+
+    logger.info("")
+    logger.info("Step 5b'/10: Loading the CVM CAD company register...")
+    cad_path = cad_downloader.download_cad_file(force=True)
+    if cad_path is None:
+        logger.warning("CAD download failed — cvm_companies keeps the last register load")
+        return
+    cad_df = cad_parser.parse_cad_file(cad_path)
+    summary = cad_parser.extract_cad_summary(cad_df)
+    logger.info(f"CAD: {summary['total']:,} companies ({summary['active']:,} active, "
+                f"{summary['delisted']:,} delisted, {int(cad_df['sector'].notna().sum()):,} "
+                "with a sector)")
+    cvm_storage.upsert_cad_company_dates(conn, cad_df)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM cvm_companies WHERE ticker IS NOT NULL AND listing_date IS NULL")
+    missing = cur.fetchone()[0]
+    if missing:  # absent from the register: survivorship filtering may be off for them
+        logger.warning(f"{missing} companies have a B3 ticker but no CAD listing_date")
+
+
 # ── Main orchestration ─────────────────────────────────────────────────────────
 
 def run_fundamentals_pipeline(
@@ -473,6 +504,7 @@ def run_fundamentals_pipeline(
      4. Download ITR ZIPs
      5. Download FRE ZIPs
      5b. Index companies from CVM files (CNPJ + CVM code)
+     5b'. Load the CAD company register (dates + SETOR_ATIV sector)
      5c. Fetch ticker mappings from B3 API (unless skip_ticker_fetch)
      6. Parse and upsert DFP filings
      7. Parse and upsert ITR filings
@@ -480,7 +512,6 @@ def run_fundamentals_pipeline(
      9. [No-op] Valuation ratios are computed dynamically at query time
     10. Log summary statistics
     [When include_historical=True:]
-    11. Download and parse CAD company register (listing/delisting dates)
     12. Download and process IPE document index (pre-2010 company data)
     13. Re-propagate tickers and re-run ratio/monthly materialization for IPE rows
     """
@@ -562,6 +593,8 @@ def run_fundamentals_pipeline(
             except Exception as e:
                 logger.warning(f"Failed to index companies from {zip_path}: {e}")
         logger.info(f"Company index: {len(seen_cnpjs):,} unique CNPJs in cvm_companies")
+
+        _load_cad_registry(conn)
 
         # Step 5c: Fetch ticker mappings from B3 API so cvm_companies.ticker is
         # populated before we build the cnpj_ticker_map used during parsing.
@@ -688,7 +721,7 @@ def run_fundamentals_pipeline(
 
         # ── Historical extension (Steps 11-13) ────────────────────────────────
         if include_historical:
-            from . import cad_downloader, cad_parser, ipe_downloader, ipe_parser  # noqa: PLC0415
+            from . import ipe_downloader, ipe_parser  # noqa: PLC0415
 
             IPE_END_YEAR = 2009  # IPE predates DFP/ITR which starts 2010
             # Use the original user-supplied start_year (not the CVM_START_YEAR default)
@@ -696,41 +729,6 @@ def run_fundamentals_pipeline(
             user_start = _orig_start_year  # captured before Step 2 override
             ipe_start = max(2003, user_start or 2003)
             ipe_end = min(IPE_END_YEAR, end_year or IPE_END_YEAR)
-
-            logger.info("")
-            logger.info("Step 11/13: Downloading and parsing CVM CAD company register...")
-            cad_path = cad_downloader.download_cad_file(force=force_download)
-            if cad_path is None:
-                logger.warning("CAD download failed — skipping company date upsert")
-            else:
-                cad_df = cad_parser.parse_cad_file(cad_path)
-                summary = cad_parser.extract_cad_summary(cad_df)
-                logger.info(
-                    f"CAD: {summary['total']:,} companies "
-                    f"({summary['active']:,} active, {summary['delisted']:,} delisted, "
-                    f"{summary['with_listing_date']:,} with listing date)"
-                )
-                cad_rows = cvm_storage.upsert_cad_company_dates(conn, cad_df)
-                logger.info(f"Upserted {cad_rows:,} CAD company date rows")
-                # Warn about companies with tickers that still have no listing_date —
-                # these are not in the CAD file and may affect survivorship bias filtering.
-                cur = conn.cursor()
-                cur.execute(
-                    "SELECT COUNT(*) FROM cvm_companies WHERE ticker IS NOT NULL AND listing_date IS NULL"
-                )
-                missing_listing = cur.fetchone()[0]
-                if missing_listing:
-                    logger.warning(
-                        f"⚠️  {missing_listing} companies have a B3 ticker but no listing_date "
-                        "after CAD ingestion — they are absent from the CVM CAD file. "
-                        "Survivorship bias filtering may be inaccurate for these companies."
-                    )
-                # Refresh ticker map after CAD adds new CNPJ rows
-                if not skip_ticker_fetch:
-                    logger.info("Re-fetching ticker mappings after CAD upsert...")
-                    _fetch_ticker_mappings(conn)
-                cnpj_ticker_map = cvm_storage.get_cvm_company_map(conn)
-                logger.info(f"Refreshed CNPJ → ticker map: {len(cnpj_ticker_map):,} companies")
 
             # Step 12: IPE download and index
             # IPE (2003-2009) is a document filing index — each entry is a link to a PDF.

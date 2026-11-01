@@ -135,3 +135,17 @@ def test_parse_cad_file_null_listing_date():
     df = parse_cad_file(_cad_csv(rows))
     assert len(df) == 1
     assert df.iloc[0]["listing_date"] is None or pd.isna(df.iloc[0]["listing_date"])
+
+
+def test_parse_cad_keeps_sector():
+    """SETOR_ATIV survives as `sector` (stripped; blank -> None): it is the sector
+    the BESST / Teva universes are built from (cvm_companies.sector)."""
+    rows = [
+        {**_base_row(cnpj="00000000000191"), "SETOR_ATIV": "Bancos"},
+        {**_base_row(cnpj="00000000000272"), "SETOR_ATIV": " Emp. Adm. Part. - Energia Elétrica "},
+        {**_base_row(cnpj="00000000000353"), "SETOR_ATIV": ""},
+    ]
+    df = parse_cad_file(_cad_csv(rows)).set_index("cnpj")
+    assert df.loc["00000000000191", "sector"] == "Bancos"
+    assert df.loc["00000000000272", "sector"] == "Emp. Adm. Part. - Energia Elétrica"
+    assert df.loc["00000000000353", "sector"] is None

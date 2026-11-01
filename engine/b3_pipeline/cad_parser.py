@@ -3,9 +3,13 @@ CVM CAD (company register) parser.
 
 Parses the bulk CSV file cad_cia_aberta.csv from CVM's open data portal.
 This file contains registration metadata for every company that has ever
-filed with CVM, including listing/delisting dates for survivorship bias removal.
+filed with CVM, including listing/delisting dates for survivorship bias removal,
+and CVM's sector classification (SETOR_ATIV) — one per company ever registered,
+cancelled ones included, which is what keeps a sector strategy's universe
+survivorship-free (backtests.core.data.load_sector_pit).
 
-Output columns: cnpj, cvm_code, company_name, listing_date, delisting_date, is_active
+Output columns: cnpj, cvm_code, company_name, listing_date, delisting_date,
+is_active, sector
 """
 from __future__ import annotations
 
@@ -21,6 +25,12 @@ from .cvm_parser import _clean_cnpj, _parse_date
 logger = logging.getLogger(__name__)
 
 
+_CAD_COLS = ("CNPJ_CIA", "CD_CVM", "DENOM_SOCIAL", "DT_REG", "DT_CANCEL", "SIT",
+             "SETOR_ATIV")
+_OUT_COLS = ["cnpj", "cvm_code", "company_name", "listing_date", "delisting_date",
+             "is_active", "sector"]
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def parse_cad_file(file_path: Union[Path, io.StringIO]) -> pd.DataFrame:
@@ -29,12 +39,14 @@ def parse_cad_file(file_path: Union[Path, io.StringIO]) -> pd.DataFrame:
     Accepts either a filesystem Path or an io.StringIO (for testing).
 
     Returns a DataFrame with columns:
-        cnpj, cvm_code, company_name, listing_date, delisting_date, is_active
+        cnpj, cvm_code, company_name, listing_date, delisting_date, is_active, sector
 
     - cnpj: 14-digit string (rows with invalid/empty CNPJ are dropped)
     - listing_date: YYYY-MM-DD string or None
     - delisting_date: YYYY-MM-DD string or None (None for active companies)
     - is_active: bool (True when SIT == 'ATIVO')
+    - sector: SETOR_ATIV as CVM writes it (e.g. 'Bancos', 'Emp. Adm. Part. -
+      Bancos'), or None when blank
     """
     # Read the CSV — supports Path or StringIO
     try:
@@ -44,16 +56,13 @@ def parse_cad_file(file_path: Union[Path, io.StringIO]) -> pd.DataFrame:
             encoding="latin-1",
             dtype=str,
             low_memory=False,
-            usecols=lambda c: c in (
-                "CNPJ_CIA", "CD_CVM", "DENOM_SOCIAL", "DT_REG", "DT_CANCEL", "SIT"
-            ),
+            usecols=lambda c: c in _CAD_COLS,
         )
     except Exception as e:
         logger.error(f"Failed to read CAD CSV: {e}")
-        return pd.DataFrame(columns=["cnpj", "cvm_code", "company_name",
-                                     "listing_date", "delisting_date", "is_active"])
+        return pd.DataFrame(columns=_OUT_COLS)
 
-    for col in ("CNPJ_CIA", "CD_CVM", "DENOM_SOCIAL", "DT_REG", "DT_CANCEL", "SIT"):
+    for col in _CAD_COLS:
         if col not in df.columns:
             df[col] = None
 
@@ -72,8 +81,11 @@ def parse_cad_file(file_path: Union[Path, io.StringIO]) -> pd.DataFrame:
         "CD_CVM": "cvm_code",
         "DENOM_SOCIAL": "company_name",
     })
+    # object dtype, or pandas' inferred string dtype turns the None back into NaN
+    sector = df["SETOR_ATIV"].str.strip().astype(object)
+    df["sector"] = sector.where(sector.notna() & (sector != ""), None)
 
-    result = df[["cnpj", "cvm_code", "company_name", "listing_date", "delisting_date", "is_active"]].copy()
+    result = df[_OUT_COLS].copy()
 
     for col in ("listing_date", "delisting_date"):
         result[col] = result[col].where(result[col].notna(), None)

@@ -294,6 +294,7 @@ CREATE TABLE IF NOT EXISTS cvm_companies (
     b3_trading_name TEXT,
     listing_date DATE,
     delisting_date DATE,
+    sector TEXT,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
@@ -551,6 +552,7 @@ _ADDED_COLUMNS = (
     ("cvm_companies", "listing_date", "DATE"),
     ("cvm_companies", "delisting_date", "DATE"),
     ("cvm_companies", "ticker_root", "TEXT"),
+    ("cvm_companies", "sector", "TEXT"),  # CVM SETOR_ATIV, from cad_parser
     ("fundamentals_pit", "net_income_ttm", "REAL"),
     ("fundamentals_monthly", "net_income_ttm", "REAL"),
     ("fundamentals_pit", "shares_on", "REAL"),
@@ -1107,16 +1109,14 @@ def get_summary_stats(conn: sqlite3.Connection) -> dict:
         ("total_isins", "SELECT COUNT(DISTINCT isin_code) FROM prices"),
     )}
     cursor.execute("SELECT MIN(date), MAX(date) FROM prices")
-    date_range = cursor.fetchone()
-    stats["date_range"] = (date_range[0], date_range[1])
-    for key, sql in (
+    stats["date_range"] = tuple(cursor.fetchone())
+    stats.update({key: count(sql) for key, sql in (
         ("total_corporate_actions", "SELECT COUNT(*) FROM corporate_actions"),
         ("total_detected_splits", "SELECT COUNT(*) FROM detected_splits"),
         ("total_stock_actions", "SELECT COUNT(*) FROM stock_actions"),
         ("total_skipped_events", "SELECT COUNT(*) FROM skipped_events"),
         ("unresolved_fetch_failures", "SELECT COUNT(*) FROM fetch_failures WHERE resolved = 0"),
-    ):
-        stats[key] = count(sql)
+    )})
 
     # CVM fundamentals counts (tables may not exist in very old DBs — default to 0)
     for key, table in (("total_cvm_companies", "cvm_companies"),

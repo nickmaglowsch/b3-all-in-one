@@ -399,7 +399,8 @@ def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
     """Load fundamentals_pit rows needed for selection (dates parsed)."""
     sql = """
         SELECT ticker, period_end, filing_date, filing_version, doc_type,
-               net_income_ttm, equity, shares_outstanding, shares_on, shares_pn
+               net_income_ttm, equity, shares_outstanding, shares_on, shares_pn,
+               shares_asof
         FROM fundamentals_pit
         WHERE ticker IS NOT NULL
     """
@@ -407,12 +408,11 @@ def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
         try:
             df = storage.read_sql(sql, conn)
         except Exception:
-            # DB predates the shares_on/shares_pn migration
+            # DB predates the shares_on/shares_pn/shares_asof migration
             df = storage.read_sql(
-                sql.replace(", shares_on, shares_pn", ""), conn
+                sql.replace(", shares_on, shares_pn,\n               shares_asof", ""), conn
             )
-            df["shares_on"] = float("nan")
-            df["shares_pn"] = float("nan")
+            df["shares_on"] = df["shares_pn"] = float("nan")
     df["period_end"] = pd.to_datetime(df["period_end"])
     df["filing_date"] = pd.to_datetime(df["filing_date"])
     return df

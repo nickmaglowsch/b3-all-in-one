@@ -155,12 +155,17 @@ Two traps live there, both documented at length in `signals.yaml`:
   TevaIAFD's net debt / EBIT); read every "EBITDA" here as EBIT.
 - **`net_debt` = 2.01.04 + 2.02.01 − 1.01.01 − 1.01.02**: short- and long-term
   loans & debêntures minus cash and short-term financial investments
-  (aplicações financeiras). Leases are not debt here. NULL for bank-chart filers.
+  (aplicações financeiras). Leases are not debt here. NULL for banks and
+  insurers (CVM sector Bancos / Seguradoras e Corretoras / Intermediação
+  Financeira and their holdings): there those codes are funding and reserve
+  portfolios. RDOR consolidates an insurer, so its net debt is netted of
+  SulAmérica's portfolio (`cvm_metrics`).
 - **All-zero statements are missing.** A DFP/ITR whose income block (revenue,
   net income, EBIT) or balance block (assets, equity, net debt) is all exactly 0
   is an empty form (TIMS FY2024) and is stored NULL, not 0.
-- **Share counts:** a DFP/ITR count is at its period_end, an FRE count at its
-  filing date (the FRE's period_end is the form's reference year) —
+- **Share counts** are FRE counts, stated at the FRE's filing date (its
+  period_end is the form's reference year); a DFP/ITR row carries the latest
+  FRE's count and that filing date as `shares_asof` —
   `pit.share_count_anchor`, the date splits are applied from.
 
 - **Income is year-to-date.** CVM's ITR income lines (`f_net_income`,

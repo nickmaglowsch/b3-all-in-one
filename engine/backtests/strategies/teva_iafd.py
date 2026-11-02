@@ -39,10 +39,9 @@ use full market cap where Teva uses free-float cap, so controlled companies
 ponytail: one share class per issuer (the most liquid one) where Teva holds every
 eligible class (PETR3+PETR4, ITUB3+ITUB4). The issuer's weight is the same; only
 how it splits across classes differs.
-ponytail: net_debt is loans (BP 2.01.04 + 2.02.01) minus cash (1.01.01) only;
-short-term investments (1.01.02) are not netted, so cash-rich names read more
-levered than Teva's dívida líquida — RDOR (4.3x), CYRE, EZTC fail, though the
-official index holds them. Fix: parse 1.01.02 into the cash leg in cvm_parser.
+ponytail: net_debt nets cash and aplicações financeiras (cvm_metrics) and is
+NULL for banks/insurers (pass the leverage test, like financial_roots). RDOR's
+1.01.02 includes SulAmérica's reserve portfolio, so it reads nearly unlevered.
 ponytail: the yes/no profit-SIGN test over the 4 older years uses a year's first
 later filing when no version was filed by t (ITUB's FY2011/12 DFPs exist only as
 2020 re-filings). A small, deliberate leak: a 3+-year-old annual result's sign
@@ -63,8 +62,8 @@ ponytail: CVM files some manufacturers under "Comércio (Atacado e Varejo)"
 Known data issues outside this module (prod, 2026-11): fixed in code, live
 after the next prices + CVM re-ingest — CIEL's 2015 split counted twice (FRE
 anchor, pit.share_count_anchor), DIRR's 2025 split dropped (B3 data-com /
-percentage factor, split_validation), TIMS's all-zero FY2024/25 DFPs and a
-net debt that ignored aplicações financeiras (cvm_metrics). ABEV's FY2016/17 DFPs exist only as 2018-07 re-filings (stale ->
+percentage factor, split_validation), TIMS's all-zero FY2024/25 DFPs
+(cvm_metrics). ABEV's FY2016/17 DFPs exist only as 2018-07 re-filings (stale ->
 out 2016-18), and reorganisations that changed the CNPJ (AMBV -> ABEV 2013,
 TIMP -> TIMS 2020) are not linked, so their history restarts.
 """

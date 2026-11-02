@@ -50,7 +50,7 @@
   },
   "module_lines": {
     "engine/b3_pipeline/adjustments.py": 773,
-    "engine/b3_pipeline/b3_corporate_actions.py": 680,
+    "engine/b3_pipeline/b3_corporate_actions.py": 668,
     "engine/b3_pipeline/cvm_main.py": 872,
     "engine/b3_pipeline/cvm_parser.py": 641,
     "engine/b3_pipeline/cvm_storage.py": 466,

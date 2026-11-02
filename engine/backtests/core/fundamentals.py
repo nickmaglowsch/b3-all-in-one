@@ -111,13 +111,14 @@ def _attach_b3_derived(shared: dict, db_path: str, start: str, end: str,
     desdobramento in between, close x shares was a tenth of the company — P/E
     and P/B ten times "cheaper", exactly the names a value screen buys, and
     Teva's market-cap floor misapplied. f_shares_outstanding(_m) are multiplied
-    by the stock actions with ex_date in (period_end of the count's filing,
-    rebalance date] — sp500_b3.share_multiplier, as a frame. The anchor is
+    by the stock actions with ex_date in (the count's anchor,
+    pit.share_count_anchor, rebalance date] — sp500_b3.share_multiplier, as a frame. The anchor is
     rebuilt from fundamentals_pit with the same as-of rules; where none is found
     (or the actions cannot be read) the count is left as it was.
     """
     try:
-        long = _query_fundamentals_pit(db_path, ["ebitda", "shares_outstanding"], end, "B3")
+        long = _query_fundamentals_pit(db_path, ["ebitda", "shares_outstanding", "shares_asof"],
+                                       end, "B3")
     except Exception as e:
         logger.warning(f"No TTM EBITDA / split-adjusted shares (PIT read failed): {e}")
         return

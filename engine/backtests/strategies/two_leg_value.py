@@ -196,7 +196,7 @@ def load_fundamentals_full(db_path: str) -> pd.DataFrame:
     sql = """
         SELECT ticker, period_end, filing_date, filing_version, doc_type,
                net_income_ttm, equity, shares_outstanding, shares_on, shares_pn,
-               ebitda, net_debt, revenue
+               shares_asof, ebitda, net_debt, revenue
         FROM fundamentals_pit
         WHERE ticker IS NOT NULL
     """

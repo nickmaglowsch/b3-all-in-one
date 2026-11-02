@@ -331,12 +331,11 @@ CREATE TABLE IF NOT EXISTS fundamentals_pit (
     equity REAL,
     net_debt REAL,
     shares_outstanding REAL,
-    -- Per-class share counts from FRE capital_social (ON / all preferred
-    -- classes). NULL for pre-FRE sources (IAN/DM).
+    -- Per-class FRE capital_social counts (ON / all PN classes); NULL pre-FRE (IAN/DM).
     shares_on REAL,
     shares_pn REAL,
-    -- Trailing-twelve-months net income, computed post-parse (NULL when the
-    -- prior-year values needed for the TTM sum are missing).
+    shares_asof DATE,  -- filing date of the FRE the count came from (pit.share_count_anchor)
+    -- TTM net income, computed post-parse (NULL without the prior-year parts).
     net_income_ttm REAL,
     -- Ratio columns (pe_ratio, pb_ratio, ev_ebitda) intentionally excluded — compute dynamically at query time
     FOREIGN KEY (filing_id) REFERENCES cvm_filings(filing_id)
@@ -557,6 +556,7 @@ _ADDED_COLUMNS = (
     ("fundamentals_monthly", "net_income_ttm", "REAL"),
     ("fundamentals_pit", "shares_on", "REAL"),
     ("fundamentals_pit", "shares_pn", "REAL"),
+    ("fundamentals_pit", "shares_asof", "DATE"),
 )
 
 

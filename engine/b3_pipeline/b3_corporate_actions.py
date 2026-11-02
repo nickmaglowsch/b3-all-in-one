@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -261,6 +262,45 @@ def parse_cash_dividends(
     )
 
 
+_SPLIT_TYPES = (config.EVENT_TYPE_STOCK_SPLIT, config.EVENT_TYPE_REVERSE_SPLIT)
+# B3 real-world splits are at most ~1000:1; junk would pollute stock_actions.
+_MAX_SPLIT_FACTOR = 1000.0
+_MIN_SPLIT_FACTOR = 1.0 / 1000.0
+
+
+def _net_and_bound(events: List[dict]) -> Tuple[List[dict], List[dict]]:
+    """(kept, rejected) stock events: same-day desdobramento + grupamento of one
+    ISIN netted into one factor, then share ratios outside 1000:1 rejected.
+
+    B3 publishes some splits as a huge desdobramento plus a same-day grupamento
+    (VIVT 2025: 7900% = 80x, then 0.025 = net 1:2; CPFE 2011, LEVE 2012, BMEB
+    2021, MNDL 2024). Bounded on the raw percentage, the desdobramento was
+    rejected and the grupamento alone applied; validated apart, each leg reads as
+    a mismatch against the one price jump. The bound is on the share ratio, so
+    after the percentage conversion (a bonificação's is 1 + F/100 too).
+    """
+    if not events:
+        return [], []
+    df = pd.DataFrame(events).drop_duplicates(["isin_code", "ex_date", "action_type", "factor"])
+    split = df["action_type"].isin(_SPLIT_TYPES)
+    net = (df[split].groupby(["isin_code", "ex_date"], as_index=False)
+           .agg(factor=("factor", "prod"), label=("label", "+".join), source=("source", "first")))
+    net = (net[~np.isclose(net["factor"], 1.0)]  # a desdobramento undone the same day
+           .assign(action_type=lambda d: np.where(d["factor"] > 1, *_SPLIT_TYPES)))
+    df = pd.concat([df[~split], net], ignore_index=True)
+    ratio = df["factor"].where(df["action_type"] != config.EVENT_TYPE_BONUS_SHARES,
+                               1.0 + df["factor"] / 100.0)
+    bad = (ratio > _MAX_SPLIT_FACTOR) | (ratio < _MIN_SPLIT_FACTOR)
+    for r in df[bad].itertuples():
+        logger.warning(f"Rejecting extreme factor {r.factor} for {r.isin_code} on "
+                       f"{r.ex_date} (label={r.label!r}) — share ratio outside "
+                       f"[{_MIN_SPLIT_FACTOR}, {_MAX_SPLIT_FACTOR}]")
+    rejected = (df[bad].rename(columns={"ex_date": "event_date"})
+                .drop(columns="action_type").assign(reason="extreme_factor"))
+    return (df[~bad].drop(columns="label").to_dict("records"),
+            rejected.to_dict("records"))
+
+
 def parse_stock_dividends(
     records: List[dict],
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -312,24 +352,6 @@ def parse_stock_dividends(
         if ex_date is None:
             continue
 
-        # B3 real-world splits are at most ~1000:1; junk would pollute stock_actions.
-        _MAX_SPLIT_FACTOR = 1000.0
-        _MIN_SPLIT_FACTOR = 1.0 / 1000.0
-        if factor > _MAX_SPLIT_FACTOR or factor < _MIN_SPLIT_FACTOR:
-            logger.warning(
-                f"Rejecting extreme factor {factor} for {isin_code} on {date_str} "
-                f"(label={label!r}) — outside [{_MIN_SPLIT_FACTOR}, {_MAX_SPLIT_FACTOR}]"
-            )
-            skipped_events.append({
-                "isin_code": isin_code,
-                "event_date": ex_date.date(),
-                "label": label,
-                "factor": factor,
-                "source": "B3",
-                "reason": "extreme_factor",
-            })
-            continue
-
         if label == config.B3_LABEL_DESDOBRAMENTO:
             # B3 quotes the % of new shares (DIRR 1:3 = 200), like a bonificação
             action_type, factor = config.EVENT_TYPE_STOCK_SPLIT, 1.0 + factor / 100.0
@@ -372,56 +394,22 @@ def parse_stock_dividends(
             })
             continue
 
-        stock_events.append(
-            {
-                "isin_code": isin_code,
-                "ex_date": ex_date.date(),
-                "action_type": action_type,
-                "factor": factor,
-                "source": "B3",
-            }
-        )
+        stock_events.append({"isin_code": isin_code, "ex_date": ex_date.date(),
+                             "action_type": action_type, "factor": factor,
+                             "source": "B3", "label": label})
 
-        corp_events.append(
-            {
-                "isin_code": isin_code,
-                "event_date": ex_date.date(),
-                "event_type": action_type,
-                "value": None,
-                "factor": factor,
-                "source": "B3",
-            }
-        )
+    stock_events, extreme = _net_and_bound(stock_events)
+    skipped_events += extreme
+    corp_events = [{"isin_code": e["isin_code"], "event_date": e["ex_date"],
+                    "event_type": e["action_type"], "value": None,
+                    "factor": e["factor"], "source": "B3"} for e in stock_events]
 
-    corp_df = (
-        pd.DataFrame(corp_events)
-        if corp_events
-        else pd.DataFrame(
-            columns=[
-                "isin_code",
-                "event_date",
-                "event_type",
-                "value",
-                "factor",
-                "source",
-            ]
-        )
-    )
-    stock_df = (
-        pd.DataFrame(stock_events)
-        if stock_events
-        else pd.DataFrame(
-            columns=["isin_code", "ex_date", "action_type", "factor", "source"]
-        )
-    )
-    skipped_df = (
-        pd.DataFrame(skipped_events)
-        if skipped_events
-        else pd.DataFrame(
-            columns=["isin_code", "event_date", "label", "factor", "source", "reason"]
-        )
-    )
-
+    corp_df = pd.DataFrame(corp_events, columns=["isin_code", "event_date", "event_type",
+                                                 "value", "factor", "source"])
+    stock_df = pd.DataFrame(stock_events,
+                            columns=["isin_code", "ex_date", "action_type", "factor", "source"])
+    skipped_df = pd.DataFrame(skipped_events, columns=["isin_code", "event_date", "label",
+                                                       "factor", "source", "reason"])
     return corp_df, stock_df, skipped_df
 
 

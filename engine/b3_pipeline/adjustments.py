@@ -204,7 +204,7 @@ def compute_split_adjustment_factors(
     Returns:
         DataFrame with split-adjusted columns added
     """
-    result = prices.copy()
+    result = prices.copy(deep=False)  # whole-column writes only: no 2nd price table
 
     # The OHLC columns as plain arrays. Writing into one of these is the size of
     # one ISIN's rows; writing through a boolean mask was the size of the table.
@@ -284,7 +284,7 @@ def compute_dividend_adjustment_factors(
     Returns:
         DataFrame with adj_close column added
     """
-    result = prices.copy()
+    result = prices.copy(deep=False)  # whole-column writes only: no 2nd price table
     result["adj_close"] = result["split_adj_close"].copy()
 
     if corporate_actions.empty:
@@ -441,15 +441,15 @@ def detect_splits_from_prices(
         )
 
     # Normalize date column (vectorised — this runs over the whole price table)
-    prices = prices.copy()
+    prices = prices.copy(deep=False)  # only `date` is replaced
     prices["date"] = _normalize_date_series(prices["date"])
 
-    existing_keys: set = set()
+    existing: dict = {}  # isin -> ex_dates of the actions already stored
     if not existing_stock_actions.empty:
         for _, row in existing_stock_actions.iterrows():
             ex = _normalize_date(row["ex_date"])
             if ex is not None:
-                existing_keys.add((row["isin_code"], ex))
+                existing.setdefault(row["isin_code"], []).append(ex)
 
     for isin_code, group in prices.groupby("isin_code"):
         group = group.sort_values("date").reset_index(drop=True)
@@ -476,14 +476,11 @@ def detect_splits_from_prices(
 
             jump_date = dates[i]
 
-            # Skip if existing stock_action already covers this date (within 5-day window)
-            already_recorded = False
-            for lookback_i in range(max(0, i - 5), i + 1):
-                candidate_date = dates[lookback_i]
-                if (isin_code, candidate_date) in existing_keys:
-                    already_recorded = True
-                    break
-            if already_recorded:
+            # Skip if a stored action falls in the 5 bars up to the jump. By date,
+            # not bar: B3's date can be a day with no bar (illiquid BDRs), and a
+            # bar-key match missed it and re-detected the jump every run.
+            lo = dates[max(0, i - 5)]
+            if any(lo <= d <= jump_date for d in existing.get(isin_code, ())):
                 continue
 
             # Skip if this is a quotation_factor transition that explains the jump.

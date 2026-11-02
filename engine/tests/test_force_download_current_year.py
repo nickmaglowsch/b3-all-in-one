@@ -30,7 +30,7 @@ def capture_downloads(monkeypatch):
     monkeypatch.setattr(downloader, "download_annual_file", fake_download)
     monkeypatch.setattr(downloader, "detect_available_years", lambda: [2024, 2025, 2026])
     monkeypatch.setattr(config, "get_current_year", lambda: 2026)
-    monkeypatch.setattr(parser, "parse_all_cotahist_files", lambda _d: pd.DataFrame())
+    monkeypatch.setattr(parser, "parse_all_cotahist_files", lambda _d, **_k: pd.DataFrame())
 
     class _Conn:  # run_pipeline closes it in a finally
         def close(self):

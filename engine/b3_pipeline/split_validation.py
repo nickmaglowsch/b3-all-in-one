@@ -151,6 +151,30 @@ def _detected_on(stock_actions: pd.DataFrame, events: set) -> list:
                                .str.startswith("DETECTED")].tolist()
 
 
+def _detected_near_b3(actions: pd.DataFrame, tolerance: float, date_window: int) -> list:
+    """DETECTED rows a B3/B3_CORRECTED row on the same ISIN, at most
+    `date_window` days away and with the same share ratio, already explains.
+
+    The detector only skips a jump with a stored action in the 5 bars before it,
+    and never revisits what it stored. A DETECTED row written while B3's row was
+    missing (dropped as phantom before the data-com fix) survives once B3's row
+    comes back a few days earlier: both applied, the ratio squared for every bar
+    before the event (prod 2026-11: BRBALMACNPR2 B3 2014-04-30 / DETECTED
+    2014-05-02). Dropped here every run, so the store stays clean.
+    """
+    ratio = actions["factor"].astype(float).where(
+        actions["action_type"] != config.EVENT_TYPE_BONUS_SHARES,
+        1.0 + actions["factor"].astype(float) / 100.0)
+    a = actions[["isin_code", "source"]].assign(
+        d=pd.to_datetime(actions["ex_date"]), r=ratio)
+    det = a[a["source"].astype(str).str.startswith("DETECTED")].reset_index()
+    b3 = a.loc[a["source"].isin(["B3", CORRECTED]), ["isin_code", "d", "r"]]
+    pairs = det.merge(b3, on="isin_code", suffixes=("", "_b3"))
+    near = ((pairs["d"] - pairs["d_b3"]).abs() <= pd.Timedelta(days=date_window)) & (
+        np.abs(np.log(pairs["r"] / pairs["r_b3"])) <= np.log(1.0 + tolerance))
+    return pairs.loc[near, "index"].unique().tolist()
+
+
 def _unique_on_table_key(actions: pd.DataFrame) -> pd.DataFrame:
     """One row per stock_actions key, so what is applied is what gets stored:
     two B3 rows on one date can be corrected into the same key."""
@@ -244,6 +268,8 @@ def validate_split_actions_against_prices(
     superseded = _superseded_corrections(stock_actions, corrected_events)
     # the detector's reading of a jump B3 now explains would apply it twice
     superseded += _detected_on(stock_actions, shifted)
+    superseded += _detected_near_b3(result.drop(index=phantom + superseded),
+                                    tolerance, date_window)
     if phantom or n_corrected or shifted:
         logger.info(
             f"Split validation: moved {len(shifted)} to the ex bar after B3's "

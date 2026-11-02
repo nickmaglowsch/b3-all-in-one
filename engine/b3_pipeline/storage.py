@@ -908,42 +908,42 @@ def replace_stock_actions(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
         raise
 
 
+_ADJ_COLS = ["split_adj_open", "split_adj_high", "split_adj_low", "split_adj_close",
+             "adj_close", "volume", "ticker", "isin_code", "date"]
+
+
+def _adjusted_records(df: pd.DataFrame, batch: int = 100_000):
+    """The update rows for `df`, built one slice at a time.
+
+    Building them all at once (frame copy + ``values.tolist()``) boxed every cell
+    of the price table: +2.3 GB on the 3.5M-row prod table, which OOM-killed the
+    4 GiB ingest container in step 9 (2026-11-02). One slice is ~70 MB.
+    """
+    for start in range(0, len(df), batch):
+        part = df.iloc[start:start + batch]
+        part = pd.DataFrame({c: part[c] if c in part else None for c in _ADJ_COLS})
+        part["date"] = pd.to_datetime(part["date"]).dt.strftime("%Y-%m-%d")
+        part["isin_code"] = part["isin_code"].fillna("UNKNOWN")
+        yield from part.values.tolist()
+
+
 def update_adjusted_columns(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
-    """Update adjusted columns for existing price records."""
+    """Update adjusted columns for existing price records, in ONE transaction:
+    a kill mid-way rolls back to the previous adj_close for every row."""
     if df.empty:
         return 0
-
     sql = """
         UPDATE prices
-        SET split_adj_open = ?,
-            split_adj_high = ?,
-            split_adj_low = ?,
-            split_adj_close = ?,
-            adj_close = ?,
-            volume = ?
+        SET split_adj_open = ?, split_adj_high = ?, split_adj_low = ?,
+            split_adj_close = ?, adj_close = ?, volume = ?
         WHERE ticker = ? AND isin_code = ? AND date = ?
     """
-
-    df = df.copy()
-    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y-%m-%d")
-    if "isin_code" not in df.columns:
-        df["isin_code"] = "UNKNOWN"
-    else:
-        df["isin_code"] = df["isin_code"].fillna("UNKNOWN")
-    for col in ["split_adj_open", "split_adj_high", "split_adj_low", "split_adj_close", "adj_close"]:
-        if col not in df.columns:
-            df[col] = None
-    if "volume" not in df.columns:
-        df["volume"] = None
-
-    cols = ["split_adj_open", "split_adj_high", "split_adj_low", "split_adj_close", "adj_close", "volume", "ticker", "isin_code", "date"]
-    records = df[cols].values.tolist()
+    cols, records = _ADJ_COLS, _adjusted_records(df)
 
     if is_postgres(conn):
         # Same story as upsert_prices, and worse: this one UPDATEs essentially
         # every row in the table on every pipeline run — 7.9s for 302k rows.
-        # COPY the batch, then one UPDATE ... FROM.
-        #
+        # COPY the batch (streamed), then one UPDATE ... FROM.
         # No dedup here: an UPDATE ... FROM with duplicate keys picks one matching
         # staged row non-deterministically, but the frame this receives is
         # adjusted prices keyed by (ticker, isin_code, date), which is unique by
@@ -971,11 +971,11 @@ def update_adjusted_columns(conn: sqlite3.Connection, df: pd.DataFrame) -> int:
               AND ({changed})
         """)
     else:
-        executemany(conn, sql, records)
+        conn.cursor().executemany(sql, records)  # sqlite3 takes the generator as is
     conn.commit()
 
-    logger.info(f"Updated adjusted columns for {len(records):,} records")
-    return len(records)
+    logger.info(f"Updated adjusted columns for {len(df):,} records")
+    return len(df)
 
 
 def get_all_tickers(conn: sqlite3.Connection) -> List[str]:

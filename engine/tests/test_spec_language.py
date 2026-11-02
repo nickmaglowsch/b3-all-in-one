@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from backtests.core import dividends, signal_dsl
+from backtests.core.data import SectorRegistryEmpty
+from backtests.core.sectors import ticker_sectors
 from backtests.core.config_strategy import FixedWeight, RankAndHold
 from backtests.core.spec_signal import only_in_months, resolve_factor
 from backtests.core.warmup_size import strategy_months
@@ -28,11 +30,14 @@ def _held(tw: pd.DataFrame) -> pd.DataFrame:
 
 
 def _sectors(cols) -> pd.DataFrame:
-    # Half the names banks, half utilities, one with no sector on file.
+    # Half the names banks, half utilities, one with no sector on file. Keyed by
+    # ticker root, as data.load_sector_pit reads CVM's register; name 0 is a
+    # bank holding ("Emp. Adm. Part. - Bancos"), which counts as a bank.
     return pd.DataFrame({
-        "ticker": cols[:-1],
+        "root": [c[:4] for c in cols[:-1]],
         "ref_date": pd.Timestamp("1900-01-01"),
-        "sector": ["Bancos" if i % 2 == 0 else "Energia Elétrica"
+        "sector": ["Emp. Adm. Part. - Bancos" if i == 0 else
+                   "Bancos" if i % 2 == 0 else "Energia Elétrica"
                    for i in range(len(cols) - 1)],
     })
 
@@ -155,10 +160,21 @@ def test_sector_include_and_exclude_filter_the_universe():
 
 def test_sectors_without_sector_data_fail_loudly_not_silently_flat():
     shared = _synthetic_shared()
-    shared["sector_pit"] = pd.DataFrame(columns=["ticker", "ref_date", "sector"])
-    spec = _rank(universe={"sectors": {"include": ["banc"]}})
-    with pytest.raises(ValueError, match="sector"):
-        RankAndHold(spec).generate_signals(shared, {})
+    shared["sector_pit"] = pd.DataFrame(columns=["root", "ref_date", "sector"])
+    for spec in (_rank(universe={"sectors": {"include": ["banc"]}}),
+                 _rank(signal={"expr": "sector_rank(adtv)"})):
+        with pytest.raises(SectorRegistryEmpty):
+            RankAndHold(spec).generate_signals(shared, {})
+
+
+def test_holding_and_abbreviated_labels_join_their_sector():
+    pit = pd.DataFrame({"root": ["AAAA", "BBBB", "CCCC"], "ref_date": pd.Timestamp("1900"),
+                        "sector": ["Emp. Adm. Part. - Energia Elétrica",
+                                   "Emp. Adm. Part. - Máqs., Equip., Veíc. e Peças", "Bancos"]})
+    out = ticker_sectors(pit, ["AAAA3", "AAAA11", "BBBB4", "ZZZZ3"], "t")
+    assert dict(zip(out["ticker"], out["sector"])) == {
+        "AAAA3": "Energia Elétrica", "AAAA11": "Energia Elétrica",
+        "BBBB4": "Máquinas, Equipamentos, Veículos e Peças"}
 
 
 def test_sector_rank_ranks_within_each_sector():
@@ -291,6 +307,8 @@ def test_validator_accepts_the_new_shapes():
     (_rank(market="US", signal={"factor": "div_yield_12m"}), "B3 only"),
     (_rank(market="US", weight_expr="sector_rank(adtv)", weighting="expr"), "B3 only"),
     (_rank(market="CRYPTO", universe={"sectors": {"include": ["x"]}}), "B3 only"),
+    (_rank(universe={"sectors": {"include": ["Financials"]}}), "Energia Elétrica"),
+    (_rank(universe={"sectors": {"exclude": ["emp. adm"]}}), "unknown CVM sector"),
 ])
 def test_validator_rejects(spec, msg):
     out = validate(spec)

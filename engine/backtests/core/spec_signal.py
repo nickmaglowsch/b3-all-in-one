@@ -20,6 +20,7 @@ import pandas as pd
 
 from backtests.core import signal_dsl
 from backtests.core.data import sector_membership_asof
+from backtests.core.sectors import ticker_sectors
 
 
 # ── Signals as data ───────────────────────────────────────────────────────────
@@ -174,16 +175,15 @@ def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
     CVM sector filed on or before it matches an ``include`` keyword (if any are
     given) and no ``exclude`` keyword. Keywords match case-insensitive substrings
     of CVM's SETOR_ATIV, as data.sector_membership_asof does for the hand-written
-    sector strategies. A name with no sector on file fails ``include``."""
+    sector strategies; a holding counts as its sector (sectors.ticker_sectors). A
+    name with no sector on file fails ``include``; no register at all raises
+    SectorRegistryEmpty."""
     cols = shared["ret"].columns
     ok = pd.DataFrame(True, index=index, columns=cols)
     sectors = sectors or {}
     if not (sectors.get("include") or sectors.get("exclude")):
         return ok
-    pit = shared.get("sector_pit")
-    if pit is None or pit.empty:
-        raise ValueError("universe.sectors needs CVM sector data, and this market "
-                         "plane has none (B3 only)")
+    pit = ticker_sectors(shared.get("sector_pit"), cols, "universe.sectors")
     if sectors.get("include"):
         ok &= sector_membership_asof(pit, sectors["include"], index).reindex(
             columns=cols, fill_value=False)

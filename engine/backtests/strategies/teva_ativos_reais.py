@@ -36,9 +36,10 @@ import numpy as np
 import pandas as pd
 
 from backtests.core.data import (
-    SectorRegistryEmpty, sector_membership, sector_membership_asof,
+    sector_membership, sector_membership_asof,
 )
 from backtests.core import fundamentals
+from backtests.core.sectors import ticker_sectors
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -123,19 +124,10 @@ def blend_weights(mcap: pd.Series, score: pd.Series, cap: float = 0.10) -> pd.Se
 # ── DB-backed dividend-yield matrix ───────────────────────────────────────────
 
 def _ticker_sectors(sector_pit: pd.DataFrame, tickers) -> pd.DataFrame:
-    """The register's [root, ref_date, sector] expanded to the plane's `tickers`
-    by root (ELET -> ELET3, ELET6), giving the [ticker, ...] frame the
-    sector_membership helpers take.
-
-    Raises on an empty register rather than returning no names: an empty book
-    is, inside the "Teva / IVVB11 / CDI" blend, a third of the portfolio parked
-    in CDI and reported as a result — which is how it ran in production.
-    """
-    if sector_pit.empty:
-        raise SectorRegistryEmpty("TevaAtivosReais")
-    t = pd.DataFrame({"ticker": list(tickers)})
-    t["root"] = t["ticker"].str[:4]
-    return t.merge(sector_pit, on="root")
+    """sectors.ticker_sectors with CVM's raw labels. Raises on an empty register:
+    an empty book is, inside the "Teva / IVVB11 / CDI" blend, a third of the
+    portfolio parked in CDI and reported as a result — how it ran in prod."""
+    return ticker_sectors(sector_pit, tickers, "TevaAtivosReais", holdings_as_sector=False)
 
 
 def build_dy_12m(db_path, tickers: list[str]) -> dict[str, pd.Series]:

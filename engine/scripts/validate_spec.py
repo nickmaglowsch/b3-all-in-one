@@ -31,6 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backtests.core import dividends, markets, signal_dsl, sleeve_tickers
+from backtests.core.sectors import CVM_SECTORS
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 from backtests.core.spec_signal import _LEG_TRANSFORMS
 
@@ -85,6 +86,18 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
 
 # What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
 _RULE_KEYS = {"top_pct", "park", "default", "min_true"}
+
+
+def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
+    """A universe.sectors keyword must match some CVM sector: one that matches
+    none (an English or FCA-era name) filters every name in or out silently."""
+    sectors = (spec.get("universe") or {}).get("sectors") or {}
+    lower = [s.lower() for s in CVM_SECTORS]
+    for key in ("include", "exclude"):
+        for kw in sectors.get(key) or []:
+            if isinstance(kw, str) and not any(kw.lower() in s for s in lower):
+                errors.append(f"universe.sectors.{key}: unknown CVM sector {kw!r} (a keyword "
+                              f"matches as a substring); CVM's sectors: {', '.join(sorted(CVM_SECTORS))}")
 
 
 def _validate_regime(regime, errors: list[str]) -> None:
@@ -253,6 +266,7 @@ def validate(spec: dict) -> dict:
         if kind == "rank_and_hold":
             needs_funds = _validate_rank_signal(spec, errors)
             _validate_regime(spec.get("regime"), errors)
+            _validate_sector_keywords(spec, errors)
         else:
             _validate_sleeves(spec, errors)
 

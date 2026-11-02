@@ -30,6 +30,8 @@ import operator
 import numpy as np
 import pandas as pd
 
+from backtests.core.sectors import ticker_sectors
+
 _BINOPS = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
     ast.Div: operator.truediv, ast.Pow: operator.pow,
@@ -78,8 +80,10 @@ _GROUPED = {
 
 def _sector_labels(sector_pit: pd.DataFrame, x: pd.DataFrame) -> pd.DataFrame:
     """Each of x's names' CVM sector as of each of x's dates: the latest filing on
-    or before it (NaN before a name's first)."""
-    wide = (sector_pit.sort_values("ref_date")
+    or before it (NaN before a name's first). The register is keyed by ticker
+    root; sectors.ticker_sectors maps it onto x's tickers, holdings into their sector."""
+    wide = (ticker_sectors(sector_pit, x.columns, "signal expr sector_rank/zscore/demean")
+            .sort_values("ref_date")
             .drop_duplicates(["ref_date", "ticker"], keep="last")
             .pivot(index="ref_date", columns="ticker", values="sector"))
     return (wide.reindex(wide.index.union(x.index)).ffill()
@@ -113,9 +117,6 @@ def _build_funcs(ns: dict) -> dict:
         sector on file comes out NaN (unranked), not pooled with strangers.
         One groupby over the stacked frame, not one pass per sector."""
         def apply(x):
-            if sector_pit is None or sector_pit.empty:
-                raise ValueError("signal expr: sector functions need CVM sector data, "
-                                 "and this market plane has none (B3 only)")
             # Integer codes, not the strings: grouping on objects is the slow part.
             codes = pd.factorize(_sector_labels(sector_pit, x).to_numpy().ravel())[0]
             v = x.to_numpy(dtype=float).ravel()

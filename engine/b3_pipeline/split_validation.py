@@ -91,6 +91,33 @@ def _correction(row, grp: pd.DataFrame | None, tolerance: float,
     return corrected
 
 
+def _ex_bar_after_cum_date(row, grp: pd.DataFrame | None, tolerance: float,
+                           date_window: int):
+    """The bar after `row`'s date when the jump is there instead, else None.
+
+    B3's `lastDatePrior` is the last day the shares trade *with* the right
+    (data-com), so the price jump usually lands on the next bar, not on the
+    stored date (prod audit 2026-11: 380 of ~420 price-confirmed B3 splits).
+    Judged on the stored date those read as "no jump" and were dropped as
+    phantom (DIRR 2025, BBAS 2024, SBSP 2026...).
+    """
+    if grp is None:
+        return None
+    expected = (1.0 + row["factor"] / 100.0
+                if row["action_type"] == config.EVENT_TYPE_BONUS_SHARES else row["factor"])
+    d = pd.to_datetime(row["ex_date"])
+    later = grp[grp["date"] > d]
+    if later.empty or expected <= 0:
+        return None
+    nxt = later.iloc[0]["date"]
+    if (nxt - d).days > date_window:
+        return None
+    observed = _observed_ratio(grp, nxt, date_window)
+    if observed is None or abs(np.log(observed / expected)) > np.log(1.0 + tolerance):
+        return None
+    return nxt.isoformat()[:10] if isinstance(row["ex_date"], str) else nxt.date()
+
+
 def _superseded_corrections(stock_actions: pd.DataFrame, events: set) -> list:
     """Stored B3_CORRECTED rows for an event this pass has just corrected again.
 
@@ -112,6 +139,16 @@ def _superseded_corrections(stock_actions: pd.DataFrame, events: set) -> list:
     hit = [key in events for key in keys]
     stale = (stock_actions["source"] == CORRECTED) & pd.Series(hit, index=stock_actions.index)
     return stock_actions.index[stale].tolist()
+
+
+def _detected_on(stock_actions: pd.DataFrame, events: set) -> list:
+    """Rows the price detector stored for an (isin, ex_date) in `events`."""
+    if not events:
+        return []
+    keys = zip(stock_actions["isin_code"], pd.to_datetime(stock_actions["ex_date"]))
+    hit = pd.Series([key in events for key in keys], index=stock_actions.index)
+    return stock_actions.index[hit & stock_actions["source"].astype(str)
+                               .str.startswith("DETECTED")].tolist()
 
 
 def _unique_on_table_key(actions: pd.DataFrame) -> pd.DataFrame:
@@ -143,6 +180,7 @@ def validate_split_actions_against_prices(
 
     - match within tolerance      -> keep as-is
     - observed ratio ~= 1         -> drop (phantom action; prices never moved)
+    - jump on the next bar instead -> move ex_date there (B3 dates are data-com)
     - observed matches a different
       ratio                       -> replace factor with the observed ratio
                                      (snapped to the nearest simple ratio when
@@ -179,10 +217,16 @@ def validate_split_actions_against_prices(
 
     result = stock_actions.copy()
     phantom, corrected_events, n_corrected = [], set(), 0
+    shifted = set()
     for idx, row in stock_actions[check_mask].iterrows():
-        corrected = _correction(
-            row, prices_by_isin.get(row["isin_code"]), tolerance, date_window)
+        grp = prices_by_isin.get(row["isin_code"])
+        corrected = _correction(row, grp, tolerance, date_window)
         if corrected is None:
+            continue
+        ex_bar = _ex_bar_after_cum_date(row, grp, tolerance, date_window)
+        if ex_bar is not None:
+            result.loc[idx, "ex_date"] = ex_bar
+            shifted.add((row["isin_code"], pd.to_datetime(ex_bar)))
             continue
         if corrected == 0.0:
             phantom.append(idx)
@@ -198,9 +242,12 @@ def validate_split_actions_against_prices(
         n_corrected += 1
 
     superseded = _superseded_corrections(stock_actions, corrected_events)
-    if phantom or n_corrected:
+    # the detector's reading of a jump B3 now explains would apply it twice
+    superseded += _detected_on(stock_actions, shifted)
+    if phantom or n_corrected or shifted:
         logger.info(
-            f"Split validation: dropped {len(phantom)} phantom, corrected "
+            f"Split validation: moved {len(shifted)} to the ex bar after B3's "
+            f"data-com, dropped {len(phantom)} phantom, corrected "
             f"{n_corrected} mismatched actions against observed prices, "
             f"superseded {len(superseded)} stored corrections of the same events"
         )

@@ -106,7 +106,7 @@ class TestLabelHandling:
         WHEN parse_stock_dividends is called
         THEN it should still be recognized as REVERSE_SPLIT
         """
-        records = [self._make_record("GRUPAMENTO", factor="0.5")]
+        records = [self._make_record("GRUPAMENTO", factor="0,5")]
         result = parse_stock_dividends(records)
 
         if len(result) == 3:

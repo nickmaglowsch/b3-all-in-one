@@ -318,6 +318,7 @@ def test_pg_migration_statements():
         "ALTER TABLE fundamentals_monthly ADD COLUMN IF NOT EXISTS net_income_ttm DOUBLE PRECISION",
         "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_on DOUBLE PRECISION",
         "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_pn DOUBLE PRECISION",
+        "ALTER TABLE fundamentals_pit ADD COLUMN IF NOT EXISTS shares_asof DATE",
         "SELECT data_type FROM information_schema.columns WHERE table_name = 'prices'"
         " AND column_name = 'volume' AND table_schema = current_schema()",
         "CREATE INDEX IF NOT EXISTS idx_cvm_companies_ticker_root ON cvm_companies(ticker_root);",

@@ -156,14 +156,41 @@ def ttm_from_ytd(df: pd.DataFrame, metric: str) -> pd.Series:
     return out
 
 
-def period_end_days(df: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """`df` with `metric` replaced by its row's period_end (float days since
-    1970-01-01) wherever the metric is present.
+def share_count_anchor(df: pd.DataFrame) -> pd.Series:
+    """The date a row's share count is stated at: shares_asof where stored (a
+    DFP/ITR's count is the latest FRE's, at that FRE's filing date, see
+    cvm_main._propagate_fre_shares), else the filing date for FRE and
+    period_end for the rest.
 
-    Fed to `data._pit_frame`, the result is the period_end of the very row that
-    supplies each cell of the metric's frame — the anchor a share count needs.
+    The FRE's period_end is the form's reference year (CIEL's FRE "2014" is
+    2014-01-01, filed 2015-03), but its capital section is restated at each
+    re-filing, so the count is the one on the filing date. Anchored at
+    period_end, every split of the year in between was applied to a count that
+    already had it — CIEL's 2014 1:2 twice, a R$144bn Cielo in 2015. Prod audit
+    2026-11: filing_date reconciles the FRE count with the next statement for
+    482 of 521 FREs straddling a split, period_end for 34.
+
+    The DFP/ITR copy is the same count: anchored at its own period_end, DIRR's
+    ITR 2025-09-30 held the pre-split count of an FRE filed before the Aug-2025
+    1:3 split and the split was never applied (and an FRE filed after a split,
+    copied into a statement whose period_end precedes it, applied it twice).
     """
-    days = (pd.to_datetime(df["period_end"]) - _EPOCH) / _DAY
+    anchor = pd.to_datetime(df["period_end"])
+    if {"doc_type", "filing_date"} <= set(df.columns):
+        anchor = anchor.where(df["doc_type"] != "FRE", pd.to_datetime(df["filing_date"]))
+    if "shares_asof" in df.columns:
+        anchor = pd.to_datetime(df["shares_asof"]).fillna(anchor)
+    return anchor
+
+
+def period_end_days(df: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """`df` with `metric` replaced by its row's share-count anchor (float days
+    since 1970-01-01, see share_count_anchor) wherever the metric is present.
+
+    Fed to `data._pit_frame`, the result is the anchor of the very row that
+    supplies each cell of the metric's frame — what a share count needs.
+    """
+    days = (share_count_anchor(df) - _EPOCH) / _DAY
     return df.assign(**{metric: days.where(df[metric].notna())})
 
 

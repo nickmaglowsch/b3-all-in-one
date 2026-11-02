@@ -17,6 +17,8 @@ from typing import Optional, Tuple
 
 import pandas as pd
 
+from . import cvm_metrics
+
 logger = logging.getLogger(__name__)
 
 # ── Account code → metric mapping ─────────────────────────────────────────────
@@ -37,6 +39,7 @@ INCOME_ACCOUNT_MAP = {
 ASSET_ACCOUNT_MAP = {
     "1":       "total_assets",  # Total do Ativo
     "1.01.01": "_cash",          # Caixa e Equivalentes (intermediate for net_debt)
+    "1.01.02": "_st_invest",     # Aplicações Financeiras (CP) — also netted
 }
 
 # Balance sheet liabilities (BPP files — *BPP*con*)
@@ -402,16 +405,7 @@ def _extract_metrics_from_csvs(
     for part in wide_parts[1:]:
         merged = merged.merge(part, on=group_keys, how="outer")
 
-    # Compute derived metrics. Rows where none of the components exist stay
-    # NULL — bank-chart filers report no 1.01.01/2.01.04/2.02.01, and a fake
-    # net_debt of 0 for a bank is a wrong value, not a neutral one.
-    parts = merged.reindex(columns=["_short_debt", "_long_debt", "_cash"])
-    net = parts["_short_debt"].fillna(0) + parts["_long_debt"].fillna(0) - parts["_cash"].fillna(0)
-    merged["net_debt"] = net.where(parts.notna().any(axis=1))
-
-    for col in ["_cash", "_short_debt", "_long_debt"]:
-        if col in merged.columns:
-            merged.drop(columns=[col], inplace=True)
+    cvm_metrics.derive(merged)  # net_debt; all-zero statement blocks -> NULL
 
     merged["filing_id"] = merged.apply(
         lambda r: f"{r['cnpj_clean']}_{doc_type}_{r['period_end_parsed']}_{r['version']}",

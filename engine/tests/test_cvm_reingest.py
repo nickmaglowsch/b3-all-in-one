@@ -69,3 +69,5 @@ def test_propagation_still_follows_the_latest_fre_on_or_before_the_filing(mem_co
     ]))
     cvm_main._propagate_fre_shares(mem_conn)
     assert _get(mem_conn, "DFP_2023", "shares_outstanding") == (2000.0,)
+    # the copied count holds at the FRE's filing, not at the DFP's period_end
+    assert _get(mem_conn, "DFP_2023", "shares_asof") == ("2024-02-01",)

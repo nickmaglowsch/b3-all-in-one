@@ -42,7 +42,7 @@ from b3_pipeline import index_series, storage
 # Lives in core now (fundamentals.attach split-adjusts share counts with it);
 # re-exported because top_mcap, two_leg_value and besst_quality import it here.
 from backtests.core.pit import (  # noqa: F401
-    action_factors, latest_period_rows, load_stock_actions,
+    action_factors, latest_period_rows, load_stock_actions, share_count_anchor,
 )
 from backtests.core.strategy_base import (
     StrategyBase,
@@ -87,8 +87,8 @@ def pit_snapshot(
         matters because filings are sparse by doc_type: an FRE row carries only
         shares_outstanding (earnings NULL), so "latest row wins" would blank
         out earnings for every company right after the May/June FRE wave.
-        `period_end` in the result is the period_end of the row that supplied
-        shares_outstanding (the anchor for split adjustment of share counts).
+        `period_end` in the result is the split-adjustment anchor of the row
+        that supplied shares_outstanding (pit.share_count_anchor).
     """
     t = pd.Timestamp(t)
     cutoff = t - pd.Timedelta(days=staleness_days)
@@ -106,7 +106,7 @@ def pit_snapshot(
         sub = sub[sub["filing_date"] >= cutoff]
         parts[metric] = sub.set_index("ticker")[metric]
         if metric == "shares_outstanding":
-            parts["period_end"] = sub.set_index("ticker")["period_end"]
+            parts["period_end"] = share_count_anchor(sub).set_axis(sub["ticker"].to_numpy())
             parts["filing_date"] = sub.set_index("ticker")["filing_date"]
             # per-class counts ride along from the SAME row as the total so
             # counts and split-adjustment anchor stay in one vintage
@@ -399,7 +399,8 @@ def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
     """Load fundamentals_pit rows needed for selection (dates parsed)."""
     sql = """
         SELECT ticker, period_end, filing_date, filing_version, doc_type,
-               net_income_ttm, equity, shares_outstanding, shares_on, shares_pn
+               net_income_ttm, equity, shares_outstanding, shares_on, shares_pn,
+               shares_asof
         FROM fundamentals_pit
         WHERE ticker IS NOT NULL
     """
@@ -407,12 +408,11 @@ def load_fundamentals_pit_raw(db_path: str) -> pd.DataFrame:
         try:
             df = storage.read_sql(sql, conn)
         except Exception:
-            # DB predates the shares_on/shares_pn migration
+            # DB predates the shares_on/shares_pn/shares_asof migration
             df = storage.read_sql(
-                sql.replace(", shares_on, shares_pn", ""), conn
+                sql.replace(", shares_on, shares_pn,\n               shares_asof", ""), conn
             )
-            df["shares_on"] = float("nan")
-            df["shares_pn"] = float("nan")
+            df["shares_on"] = df["shares_pn"] = float("nan")
     df["period_end"] = pd.to_datetime(df["period_end"])
     df["filing_date"] = pd.to_datetime(df["filing_date"])
     return df

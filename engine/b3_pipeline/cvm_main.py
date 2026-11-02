@@ -38,7 +38,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from . import b3_corporate_actions, config, cvm_downloader, cvm_parser, cvm_storage, fca_parser, free_float, storage
+from . import b3_corporate_actions, config, cvm_downloader, cvm_metrics, cvm_parser, cvm_storage, fca_parser, free_float, storage
 
 logging.basicConfig(
     level=logging.INFO,
@@ -300,16 +300,15 @@ def compute_net_income_ttm(conn: sqlite3.Connection) -> int:
 
 
 def _propagate_fre_shares(conn: sqlite3.Connection) -> None:
-    """
-    Propagate shares_outstanding from FRE filings into DFP/ITR rows.
+    """Propagate shares_outstanding from FRE filings into DFP/ITR rows.
 
-    Every DFP/ITR row (the upsert no longer blanks a stored count, so not only the
-    NULL ones) takes the latest FRE of its company filed on or before its own filing.
+    Every DFP/ITR row (not only NULL ones: the upsert keeps a stored count) takes the
+    latest FRE filed on or before its own filing, and its filing date as shares_asof.
     """
     conn.execute("""
         UPDATE fundamentals_pit
-        SET (shares_outstanding, shares_on, shares_pn) = (
-            SELECT fre.shares_outstanding, fre.shares_on, fre.shares_pn
+        SET (shares_outstanding, shares_on, shares_pn, shares_asof) = (
+            SELECT fre.shares_outstanding, fre.shares_on, fre.shares_pn, fre.filing_date
             FROM fundamentals_pit fre
             WHERE fre.cnpj = fundamentals_pit.cnpj
               AND fre.doc_type = 'FRE'
@@ -688,6 +687,7 @@ def run_fundamentals_pipeline(
         logger.info("Propagating FRE shares_outstanding into DFP/ITR rows...")
         _propagate_fre_shares(conn)
         free_float.ingest(conn, fre_paths)  # free_float_pit; warns, never raises
+        cvm_metrics.blank_financial_net_debt(conn)  # before the monthly snapshot
 
         logger.info("Propagating tickers from cvm_companies into fundamentals_pit...")
         ticker_rows = cvm_storage.populate_tickers_from_cvm_companies(conn)

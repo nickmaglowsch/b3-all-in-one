@@ -36,7 +36,7 @@ def downloads(monkeypatch, tmp_path):
     # Empty parse returns before the corporate-action and adjustment steps, which
     # are the network-bound half and have their own suites.
     monkeypatch.setattr(pipeline.parser, "parse_all_cotahist_files",
-                        lambda _dir: pd.DataFrame())
+                        lambda _dir, **_k: pd.DataFrame())
     monkeypatch.setattr(pipeline.storage, "get_connection",
                         lambda *a, **k: sqlite3.connect(str(tmp_path / "t.sqlite")))
     return calls

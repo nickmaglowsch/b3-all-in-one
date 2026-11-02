@@ -1,7 +1,7 @@
 {
   "complexity": {
     "engine/b3_pipeline/adjustments.py::compute_dividend_adjustment_factors": 13,
-    "engine/b3_pipeline/adjustments.py::detect_splits_from_prices": 24,
+    "engine/b3_pipeline/adjustments.py::detect_splits_from_prices": 22,
     "engine/b3_pipeline/adjustments.py::filter_fatcot_redundant_splits": 16,
     "engine/b3_pipeline/b3_corporate_actions.py::_fetch_one_company": 11,
     "engine/b3_pipeline/b3_corporate_actions.py::parse_cash_dividends": 15,
@@ -49,7 +49,7 @@
     "taxcore/scripts/tlh_plan.py::render_report": 13
   },
   "module_lines": {
-    "engine/b3_pipeline/adjustments.py": 773,
+    "engine/b3_pipeline/adjustments.py": 770,
     "engine/b3_pipeline/b3_corporate_actions.py": 668,
     "engine/b3_pipeline/cvm_main.py": 872,
     "engine/b3_pipeline/cvm_parser.py": 641,

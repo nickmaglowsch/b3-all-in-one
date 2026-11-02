@@ -144,17 +144,21 @@ def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
 # Public API
 # ---------------------------------------------------------------------------
 
-def parse_all_cotahist_files(directory: Path) -> pd.DataFrame:
+def parse_all_cotahist_files(directory: Path, years=None) -> pd.DataFrame:
     """
     Parse all COTAHIST ZIP files in a directory.
 
     Args:
         directory: Path to directory containing COTAHIST_*.ZIP files
+        years: only these years' files. The directory is a persistent volume:
+            one all-years run leaves 1994+ there, and a `--start-year 2005` job
+            parsing everything re-inserted 617k pre-2005 rows (prod 2026-11-02).
 
     Returns:
         Combined DataFrame with all price records, deduplicated and sorted.
     """
-    zip_files = sorted(directory.glob("COTAHIST_*.ZIP"))
+    zip_files = sorted(f for f in directory.glob("COTAHIST_*.ZIP")
+                       if years is None or f.stem[-4:] in {str(y) for y in years})
 
     if not zip_files:
         logger.warning(f"No COTAHIST ZIP files found in {directory}")

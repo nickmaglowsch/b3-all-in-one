@@ -21,6 +21,8 @@ import sys
 from datetime import datetime
 from typing import Optional
 
+import pandas as pd
+
 from . import (adjustments, b3_corporate_actions, config, downloader,
                external_prices, level_series, parser, storage)
 
@@ -118,7 +120,7 @@ def run_pipeline(
 
         logger.info("")
         logger.info("Step 4/9: Parsing COTAHIST files...")
-        prices = parser.parse_all_cotahist_files(config.DATA_DIR)
+        prices = parser.parse_all_cotahist_files(config.DATA_DIR, years=years_to_process)
 
         if prices.empty:
             logger.error("No price data parsed. Exiting.")
@@ -127,6 +129,7 @@ def run_pipeline(
         logger.info("")
         logger.info("Step 5/9: Upserting raw prices to database...")
         storage.upsert_prices(conn, prices)
+        del prices  # the parsed table would otherwise live through steps 7-9
 
         # Instruments B3 keeps out of COTAHIST (listed fixed-income ETFs), from
         # B3's own daily file. Runs here — after prices, before corporate actions —
@@ -259,13 +262,10 @@ def run_pipeline(
             detect_nonstandard=detect_nonstandard_splits,
         )
         if not detected_splits.empty:
-            logger.info(
-                f"Detected {len(detected_splits)} new splits from price data -- "
-                "storing with source='DETECTED'"
-            )
-            storage.upsert_stock_actions(conn, detected_splits)
-            # Reload stock_actions to include newly detected splits
-            stock_actions = storage.get_all_stock_actions(conn)
+            logger.info(f"Detected {len(detected_splits)} new splits from price data")
+            # Stored only by replace_stock_actions below, after validation drops
+            # the ones a B3 row explains: a killed run leaves no stray rows.
+            stock_actions = pd.concat([stock_actions, detected_splits], ignore_index=True)
         else:
             logger.info("No new splits detected from price data")
 

@@ -11,8 +11,8 @@ rebalance date t (last trading day of Mar/Jun/Sep/Dec):
 3. Positive trailing-12-month net income (net_income_ttm from fundamentals_pit).
 4. ROE > 0: net_income_ttm / equity > 0 AND equity > 0 (negative/negative
    must NOT pass).
-5. Free float >= 10% (S&P's IWF >= 0.10) and float-adjusted cap weights, CVM's
-   FRE free float as known at t (`float_adjusted`; backtests.core.free_float).
+5. Opt-in `float_adjusted`: free float >= 10% (S&P IWF >= 0.10), float cap
+   weights (CVM FRE at t). Off by default; on: CAGR 6.52% -> 5.96% (2026-11).
 
 Point-in-time rule: at rebalance date t, among rows with filing_date <= t, use
 the newest period_end, in its latest filing (a late restatement of an older
@@ -463,8 +463,8 @@ class SP500B3Strategy(StrategyBase):
         "S&P 500-methodology index on B3, point-in-time and survivorship-"
         "bias-free. Quarterly rebalance; filters: market cap > R$2bn, 63d "
         "median financial volume > R$2M, positive TTM net income, ROE > 0 "
-        "with equity > 0, free float >= 10%. Float-adjusted cap or equal "
-        "weighting. Requires b3_pipeline.cvm_main to have populated "
+        "with equity > 0. Market-cap or equal weighting; free float "
+        "(CVM FRE) opt-in. Requires b3_pipeline.cvm_main to have populated "
         "fundamentals_pit (net_income_ttm column)."
     )
 
@@ -502,9 +502,9 @@ class SP500B3Strategy(StrategyBase):
                 choices=["No", "Yes"],
             ),
             ParameterSpec(
-                "float_adjusted", "Free-float Adjusted", "choice", "Yes",
+                "float_adjusted", "Free-float Adjusted", "choice", "No",
                 description="Yes = free float >= 10% and float-adjusted cap weights "
-                            "(S&P); No = full market cap", choices=["Yes", "No"]),
+                            "(S&P); No = full cap, no screen", choices=["No", "Yes"]),
             ParameterSpec(
                 "db_path", "Database Path", "str", "b3_market_data.sqlite",
                 description="Path to the B3 SQLite database (for fundamentals_pit / stock_actions)",
@@ -524,7 +524,7 @@ class SP500B3Strategy(StrategyBase):
         ipca_deflate = str(params.get("ipca_deflate", "No")) == "Yes"
         db_path = str(params.get("db_path", "b3_market_data.sqlite"))
         min_constituents = int(params.get("min_constituents", DEFAULT_MIN_CONSTITUENTS))
-        float_adj = str(params.get("float_adjusted", "Yes")) in ("Yes", "True")
+        float_adj = str(params.get("float_adjusted", "No")) in ("Yes", "True")
 
         fund = load_fundamentals_pit_raw(db_path)
         actions = load_stock_actions(db_path)

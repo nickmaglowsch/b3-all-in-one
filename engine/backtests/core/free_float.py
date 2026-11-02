@@ -43,9 +43,16 @@ WEIGHTING — float_adjusted(sel, ff, t, min_pct) is the one entry point the
 cap-weighted replicas (sp500_b3, top_mcap, besst_quality, teva_iafd) use:
 float_cap = market_cap x free_float_pct/100 as known on t, the company-level
 value applied to the company-level cap (units included). Unknown free float
-(no FRE yet, or ff empty when the table is unreadable) falls back to the full
-cap, PASSES the min_pct screen and is logged: the gap is ours, not the
-company's, and dropping it would change the index for a data reason.
+(no FRE yet) PASSES the min_pct screen, takes the MEDIAN free float of that
+date's known candidates and is logged: the gap is ours, not the company's, so
+dropping it would change the index for a data reason, and a full cap would
+inflate it against float-cut peers (TIMS3 14.5% -> 24.7% of SP-B3, 2020-12).
+No known value at all (ff empty or unreadable) -> full cap for everyone.
+
+Opt-in everywhere (float_adjusted=No by default): measured on clean prod
+(2026-11), float weights made every replica's after-tax CAGR lower and
+TevaIAFD's fit to the official yearly returns worse, though its 2026 book
+matched better — see each strategy's docstring.
 """
 from __future__ import annotations
 
@@ -89,15 +96,17 @@ def float_adjusted(sel: pd.DataFrame, ff: pd.DataFrame | None, when,
                    min_pct: float = 0.0) -> pd.DataFrame:
     """`sel` (select_constituents output: root, market_cap) plus free_float_pct
     (NaN = unknown) and float_cap, minus companies KNOWN to float < min_pct.
-    Unknown -> float_cap = market_cap, kept and logged (see WEIGHTING above)."""
+    Unknown -> the candidates' median free float, kept and logged (WEIGHTING)."""
     pct = (asof(ff, when)["free_float_pct"] if ff is not None and not ff.empty
            else pd.Series(dtype=float))
     out = sel.assign(free_float_pct=pct.reindex(sel["root"]).to_numpy())
     out = out[~(out["free_float_pct"] < min_pct)]
+    fill = out["free_float_pct"].median()
+    fill = 100.0 if pd.isna(fill) else float(fill)   # nothing known: full cap
     out = out.assign(float_cap=out["market_cap"]
-                     * out["free_float_pct"].fillna(100.0).clip(0.0, 100.0) / 100.0)
+                     * out["free_float_pct"].fillna(fill).clip(0.0, 100.0) / 100.0)
     missing = sorted(out.loc[out["free_float_pct"].isna(), "root"])
     if missing:
-        logger.info("free float unknown at %s, full cap for %d of %d candidates: %s",
-                    pd.Timestamp(when).date(), len(missing), len(out), ",".join(missing))
+        logger.info("free float unknown at %s, median %.1f%% for %d of %d candidates: %s",
+                    pd.Timestamp(when).date(), fill, len(missing), len(out), ",".join(missing))
     return out

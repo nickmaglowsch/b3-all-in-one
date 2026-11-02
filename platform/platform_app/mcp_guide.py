@@ -161,8 +161,11 @@ sub-factors, each put on a common scale first.
   (B3) keeps names whose latest CVM sector (SETOR_ATIV) contains an `include`
   keyword and none of the `exclude` ones, case-insensitive. CVM's sectors
   include "Bancos", "Energia Elétrica", "Saneamento, Serv. Água e Gás",
-  "Telecomunicações", "Seguradoras e Corretoras". A name with no sector on file
-  fails `include`. A run fails, rather than sitting in cash, when the plane has
+  "Telecomunicações", "Seguradoras e Corretoras", "Comércio (Atacado e Varejo)",
+  "Intermediação Financeira" (Portuguese, as CVM writes them; validate_strategy
+  lists them all and refuses a keyword matching none). A holding company
+  ("Emp. Adm. Part. - Energia Elétrica") counts as its sector, here and in
+  `sector_rank` and co. A name with no sector on file fails `include`. A run fails, rather than sitting in cash, when the plane has
   no sector data.
 - `"rebalance_months": [6, 12]` trades only on the first grid row of those
   calendar months and holds (lets the book drift, no trades, no tax) on every

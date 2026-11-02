@@ -220,6 +220,10 @@ universe:
     include: [banc]        #   case-insensitive substring (sector_membership_asof).
     exclude: []            #   No sector on file fails `include`. No sector data
                            #   on the plane at all is an error, not a flat book.
+                           #   Labels are CVM's (backtests.core.sectors.CVM_SECTORS: "Bancos",
+                           #   "Energia Elétrica", "Comércio (Atacado e Varejo)"…);
+                           #   a holding ("Emp. Adm. Part. - Bancos") counts as
+                           #   its sector. A keyword matching none fails validation.
 
 signal:
   # The factor is DATA. Reference a named signal from signals.yaml...
@@ -344,7 +348,7 @@ are rejected.
 | masking | `mask_glitch(x)` (NaN-out `has_glitch` cells), `where(x, cond)` (keep where `cond`, else NaN) |
 | combining | `nan_add(a, b)` (sum two legs; NaN only where **both** are NaN) |
 | calendar | `at_rebalance(x)` (daily frame → the rebalance grid: last obs per period, columns aligned to the traded universe) |
-| sector (B3) | `sector_rank(x)`, `sector_zscore(x)`, `sector_demean(x)` — the cross-sectional three, within each CVM sector as of the date; a name with no sector comes out NaN |
+| sector (B3) | `sector_rank(x)`, `sector_zscore(x)`, `sector_demean(x)` — the cross-sectional three, within each CVM sector as of the date (a holding in its sector, as for `universe.sectors`); a name with no sector comes out NaN |
 
 Dividend frames (B3, `backtests.core.dividends`, built on first read from
 `corporate_actions`): `div_yield_12m` (trailing-12-month cash per share, each

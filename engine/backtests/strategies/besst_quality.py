@@ -43,6 +43,7 @@ import pandas as pd
 
 from b3_pipeline import storage
 from backtests.core.data import SectorRegistryEmpty
+from backtests.core.sectors import HOLDING_PREFIX
 from backtests.core.free_float import float_adjusted
 from backtests.core.strategy_base import (
     StrategyBase,
@@ -70,7 +71,6 @@ BESST_CVM_SECTORS = frozenset({
     "Telecomunicações",
     "Saneamento, Serv. Água e Gás",
 })
-_HOLDING_PREFIX = "Emp. Adm. Part. - "
 
 
 def besst_roots(sector_pit: pd.DataFrame) -> frozenset[str]:
@@ -93,7 +93,7 @@ def besst_roots(sector_pit: pd.DataFrame) -> frozenset[str]:
     """
     if sector_pit.empty:
         raise SectorRegistryEmpty("BESST Quality")
-    sector = sector_pit["sector"].str.strip().str.removeprefix(_HOLDING_PREFIX)
+    sector = sector_pit["sector"].str.strip().str.removeprefix(HOLDING_PREFIX)
     return frozenset(sector_pit.loc[sector.isin(BESST_CVM_SECTORS), "root"])
 
 

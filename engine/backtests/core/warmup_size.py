@@ -47,6 +47,8 @@ _LEAF_COST = {
                      "ibov_vol_20d_daily", "ibov_ret_20d_daily"), (0, 22)),
     **dict.fromkeys(("autocorr_60d", "rolling_vol_60d_daily", "cdi_cumul_63d"),
                     (0, 64)),
+    # Prices a year back, to put each dividend over the price it was paid at.
+    "div_yield_12m": (0, 252),
 }
 
 # DSL functions whose second argument is a look-back: how many rows a window of
@@ -67,10 +69,22 @@ def strategy_months(strat, params: dict, freq: str) -> float:
 
 def _months(strat, params: dict, mpp: float) -> float:
     if isinstance(strat, FixedWeight):
-        return _blend_months(strat.spec, params, mpp)
-    if isinstance(strat, RankAndHold):
-        return _ranker_months(strat.spec, params, mpp)
-    return _code_months(params, mpp)
+        need = _blend_months(strat.spec, params, mpp)
+    elif isinstance(strat, RankAndHold):
+        need = _ranker_months(strat.spec, params, mpp)
+    else:
+        return _code_months(params, mpp)
+    return need + _month_gap(strat.spec.get("rebalance_months"))
+
+
+def _month_gap(months) -> float:
+    """A `rebalance_months` book on `start` is the one bought in the listed month
+    before it — up to a year back — so the pre-roll has to reach that month too,
+    or the run opens in cash where a longer one is invested."""
+    if not months:
+        return 0.0
+    m = sorted(set(months))
+    return float(max((b - a) % 12 or 12 for a, b in zip(m, m[1:] + m[:1])))
 
 
 def _code_months(params: dict, mpp: float) -> float:
@@ -127,6 +141,10 @@ def _ranker_months(spec: dict, params: dict, mpp: float) -> float:
     flags = [_leaf(ic.get("flag"), mpp) + int(ic.get("offset", 1)) * mpp
              for ic in regime.values()]
     signal = _expr_months(sig, lookback, params, mpp)
+    if spec.get("weight_expr"):
+        wsig = {k: v for k, v in sig.items() if k not in ("legs", "factor")}
+        signal = max(signal, _expr_months({**wsig, "expr": spec["weight_expr"]},
+                                          lookback, params, mpp))
     if sig.get("apply_glitch", True):
         signal = max(signal, _leaf("has_glitch", mpp))
     return max(periods * mpp, *flags, signal + mpp)
@@ -138,17 +156,36 @@ def _expr_months(sig: dict, lookback: int, params: dict, mpp: float) -> float:
     Resolved with the scalars `config_strategy.resolve_factor` evaluates it with,
     so `roll_sum(x, lookback)` reads the lookback the run will use. A factor that
     is neither an expression nor a named signal is a bundle key, costed as one.
+    A ``vars`` name costs what its expression does; ``legs`` cost their longest.
     """
+    var_months: dict = {}
+    for name, expr in (sig.get("vars") or {}).items():
+        var_months[name] = _parsed_months(expr, {**sig, "lookback": lookback, **params},
+                                          mpp, var_months)
+    if "legs" in sig:
+        base = {k: v for k, v in sig.items() if k not in ("legs", "vars", "expr", "factor")}
+        return max((_one_months({**base, **leg}, lookback, params, mpp, var_months)
+                    for leg in sig["legs"]), default=0.0)
+    return _one_months(sig, lookback, params, mpp, var_months)
+
+
+def _one_months(sig: dict, lookback: int, params: dict, mpp: float,
+                var_months: dict) -> float:
     entry = _signal_defs().get(sig.get("factor"), {}) if "expr" not in sig else {}
     expr = sig.get("expr") or entry.get("expr")
     if not expr:
-        return _leaf(sig.get("factor"), mpp)
+        name = sig.get("factor")
+        return var_months[name] if name in var_months else _leaf(name, mpp)
+    return _parsed_months(expr, {**entry, **sig, "lookback": lookback, **params},
+                          mpp, var_months)
+
+
+def _parsed_months(expr: str, scalars: dict, mpp: float, var_months: dict) -> float:
     try:
         tree = ast.parse(expr, mode="eval")
     except SyntaxError:
         return 0.0          # the run itself fails on it, with the parse error
-    scalars = {**entry, **sig, "lookback": lookback, **params}
-    return _Span(scalars, mpp).months(tree.body, mpp)
+    return _Span(scalars, mpp, var_months).months(tree.body, mpp)
 
 
 def _leaf(name, mpp: float) -> float:
@@ -164,11 +201,13 @@ class _Span:
     `at_rebalance(...)`, where the frames are daily and a row is a session.
     """
 
-    def __init__(self, scalars: dict, mpp: float) -> None:
-        self.scalars, self.mpp = scalars, mpp
+    def __init__(self, scalars: dict, mpp: float, var_months: dict | None = None) -> None:
+        self.scalars, self.mpp, self.var_months = scalars, mpp, var_months or {}
 
     def months(self, node, unit: float) -> float:
         if isinstance(node, ast.Name):
+            if node.id in self.var_months:
+                return self.var_months[node.id]
             return _leaf(node.id, self.mpp)
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
             return max((self.months(c, unit) for c in ast.iter_child_nodes(node)),

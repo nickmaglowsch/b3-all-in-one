@@ -27,7 +27,7 @@ import numpy as np
 import pandas as pd
 
 from backtests.core import (
-    fundamentals, markets, mean_rev_helpers, memory, regimes, universe,
+    dividends, fundamentals, markets, mean_rev_helpers, memory, regimes, universe,
 )
 from backtests.core import plane
 from backtests.core.data import (
@@ -272,6 +272,11 @@ def build_shared_data(
     except Exception as e:
         logger.warning(f"Could not load PIT sector data: {e}")
         shared["sector_pit"] = pd.DataFrame(columns=["root", "ref_date", "sector"])
+
+    # Dividend frames (div_yield_12m, ...), read off corporate_actions on first
+    # use — B3 is the only plane that records dividends.
+    if spec.key == "B3":
+        dividends.attach(shared, db_path)
 
     # Fundamentals are loaded and attached by their own module — see
     # backtests.core.fundamentals for the PIT semantics and the ratio inputs.

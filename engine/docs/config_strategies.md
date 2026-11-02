@@ -178,6 +178,16 @@ name: <str>                # required, unique
 description: <str>
 kind: rank_and_hold        # required
 rebalance: ME              # ME | QE | W-FRI
+rebalance_months: [6, 12]  # optional: trade only on the first grid row of these
+                           #   calendar months; every other row is all-zero, which
+                           #   run_simulation holds (drift, no trades). [6, 12] on
+                           #   ME = semiannual, [12] = annual. Also on fixed_weight.
+                           #   A grid with no row in a month trades on the next row.
+                           #   Contributions wait (uninvested) for the next listed
+                           #   month; a never-funded run (initial_capital 0) buys
+                           #   its first book on the first row cash arrives. As a
+                           #   nested sleeve, the book is carried forward and the
+                           #   blend rebalances back to it on its own grid.
 needs_fundamentals: false  # set true to load CVM fundamentals (f_* shared keys)
 warmup_pad: 1              # rows skipped at the start = max_lookback + warmup_pad
                            #   (use 2 when the signal has shift:1; see Gotchas)
@@ -186,6 +196,10 @@ universe:
   min_adtv: 1000000
   min_price: 1.0
   smallcap_below_median: false   # keep only below-median-ADTV names (small caps)
+  sectors:                 # optional, B3: CVM SETOR_ATIV, as of each date, by
+    include: [banc]        #   case-insensitive substring (sector_membership_asof).
+    exclude: []            #   No sector on file fails `include`. No sector data
+                           #   on the plane at all is an error, not a flat book.
 
 signal:
   # The factor is DATA. Reference a named signal from signals.yaml...
@@ -197,6 +211,18 @@ signal:
   # expr: "0.5*rank(mask_glitch(roll_sum(shift(log_ret,1),lookback)))
   #        + 0.5*rank(mask_glitch(-roll_std(shift(ret,1),lookback)))"
   # apply_glitch: false    # set false when the expr masks glitches itself
+  # ...or blend legs, each a factor or expr of its own, put on one scale first:
+  # legs:
+  #   - {factor: momentum, weight: 0.6}                  # transform: rank (default)
+  #   - {expr: "f_net_income_ttm / f_equity", weight: 0.4, transform: zscore}
+  # coverage: all          # all: score names every leg covers; any: a leg a name
+  #                        #   lacks counts as that leg's row average (legs from
+  #                        #   different tables). A leg must read market data.
+  # vars:                  # named sub-expressions, in order; expr, legs and
+  #   mom: "roll_sum(shift(log_ret, 1), lookback)"     # weight_expr read them by name.
+  #                        # A var name may not shadow a function, a signals.yaml
+  #                        # name, a data key (f_/div_/bench_/ibov_/cdi_/sector_…),
+  #                        # a signal key or lookback (validate_spec refuses it).
 
 selection:
   top_pct: 0.10            # fraction of eligible universe... OR:
@@ -213,7 +239,13 @@ selection:
   sticky: false            # when < min_names qualify, hold the previous book
                            #   instead of going flat (volume_breakout).
 
-weighting: equal           # equal | adtv  (adtv = weight by liquidity, this
+weight_expr: "1 / vol_60d" # with weighting: expr — each held name's weight is
+                           #   proportional to this, read at the signal's row
+                           #   (NaN/<=0 get nothing; none > 0 falls back to equal)
+max_weight: 0.10           # optional per-name cap, excess redistributed pro rata
+                           #   (strategy_base.cap_and_renormalize); fewer than
+                           #   1/max_weight names held = equal weight
+weighting: equal           # equal | adtv | expr  (adtv = weight by liquidity, this
                            #   engine's only size measure — it has no share
                            #   counts. `market_cap` is a deprecated alias for
                            #   `adtv`; the built-in sp500_b3/top_mcap strategies
@@ -292,6 +324,13 @@ are rejected.
 | masking | `mask_glitch(x)` (NaN-out `has_glitch` cells), `where(x, cond)` (keep where `cond`, else NaN) |
 | combining | `nan_add(a, b)` (sum two legs; NaN only where **both** are NaN) |
 | calendar | `at_rebalance(x)` (daily frame → the rebalance grid: last obs per period, columns aligned to the traded universe) |
+| sector (B3) | `sector_rank(x)`, `sector_zscore(x)`, `sector_demean(x)` — the cross-sectional three, within each CVM sector as of the date; a name with no sector comes out NaN |
+
+Dividend frames (B3, `backtests.core.dividends`, built on first read from
+`corporate_actions`): `div_yield_12m` (trailing-12-month cash per share, each
+payment over the grid price on/before it — split-proof), `div_count_12m`
+(distinct data-com dates — `event_date`, the last day with rights — in the last 12 months) and `div_years_3y` (how many of the last
+three 12-month windows had one; `>= 2` is besst_quality's `paid_regularly`).
 
 The evaluator is **safe**: expressions are parsed with `ast` and only this
 whitelist runs — no attribute access, subscripts, lambdas, or arbitrary calls,
@@ -464,8 +503,8 @@ table in `backtests/core/signal_dsl.py`. That's rare; factors are data.
 
 The config engines deliberately cover the homogeneous cases. Write a normal
 `StrategyBase` subclass in `backtests/strategies/` when the strategy needs any
-of: iterative or inverse-vol weighting, any other weighting the two schemes
-(`equal` / `adtv`) do not cover, index reconstruction (market-cap constituent
+of: iterative weighting (inverse-vol and capped weights are `weight_expr` and
+`max_weight` now), index reconstruction (market-cap constituent
 selection), vol-targeting, long/short books, a rolling-IC stability guard, pure
 asset-switch rotation, or an embedded sub-strategy. Forcing those into YAML makes
 a worse language, not less code. Examples kept as code:

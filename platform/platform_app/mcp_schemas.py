@@ -26,10 +26,12 @@ _SPEC = {
     "type": "object",
     "description": (
         "A strategy spec. kind=rank_and_hold: {kind, name, description, market, "
-        "rebalance, weighting, universe{min_adtv,min_price,smallcap_below_median}, "
-        "signal{factor|expr, lookback, ...}, selection{top_pct|top_n, min_names, "
-        "dedup_roots, min_hold, sticky}, regime?}. kind=fixed_weight: {kind, name, "
-        "description, rebalance, sleeves[...]} with target_pct summing to 100, each "
+        "rebalance, rebalance_months?, weighting, weight_expr?, max_weight?, "
+        "universe{min_adtv,min_price,smallcap_below_median,sectors?{include,exclude}}, "
+        "signal{factor|expr|legs[{factor|expr, weight, transform}], coverage?, vars?, "
+        "lookback, ...}, selection{top_pct|top_n, min_names, dedup_roots, min_hold, "
+        "sticky}, regime?}. kind=fixed_weight: {kind, name, description, rebalance, "
+        "rebalance_months?, sleeves[...]} with target_pct summing to 100, each "
         "sleeve exactly one of {strategy_ref, target_pct} (a gallery strategy or "
         "CASH_CDI) or {ticker, target_pct} (a listed B3 instrument, e.g. IVVB11.SA). "
         "Full reference: get_authoring_guide."),
@@ -39,7 +41,11 @@ _SPEC = {
         "description": {"type": "string", "maxLength": 2000},
         "market": {"type": "string", "enum": ["B3", "US", "CRYPTO"]},
         "rebalance": {"type": "string", "enum": ["ME", "QE", "W-FRI"]},
-        "weighting": {"type": "string", "enum": ["equal", "adtv"]},
+        "rebalance_months": {"type": "array", "items": {"type": "integer", "minimum": 1,
+                                                        "maximum": 12}},
+        "weighting": {"type": "string", "enum": ["equal", "adtv", "expr"]},
+        "weight_expr": {"type": "string", "maxLength": 2000},
+        "max_weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
         "universe": {"type": "object"},
         "signal": {"type": "object"},
         "selection": {"type": "object"},

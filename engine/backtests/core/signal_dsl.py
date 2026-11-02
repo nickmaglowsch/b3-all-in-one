@@ -67,9 +67,29 @@ def _zscore(x: pd.DataFrame) -> pd.DataFrame:
     return x.sub(m, axis=0).div(s, axis=0)
 
 
+# The cross-sectional three, per (date, sector) group; same semantics as rank /
+# zscore / demean over a row (pct ranks, ddof=1, a zero spread is NaN).
+_GROUPED = {
+    "rank": lambda g, v: g.rank(pct=True),
+    "demean": lambda g, v: v - g.transform("mean"),
+    "zscore": lambda g, v: (v - g.transform("mean")) / g.transform("std").replace(0, np.nan),
+}
+
+
+def _sector_labels(sector_pit: pd.DataFrame, x: pd.DataFrame) -> pd.DataFrame:
+    """Each of x's names' CVM sector as of each of x's dates: the latest filing on
+    or before it (NaN before a name's first)."""
+    wide = (sector_pit.sort_values("ref_date")
+            .drop_duplicates(["ref_date", "ticker"], keep="last")
+            .pivot(index="ref_date", columns="ticker", values="sector"))
+    return (wide.reindex(wide.index.union(x.index)).ffill()
+            .reindex(index=x.index, columns=x.columns))
+
+
 def _build_funcs(ns: dict) -> dict:
     glitch = ns.get("has_glitch")
     rebal = ns.get("ret")          # the strategy's rebalance grid (rows x tickers)
+    sector_pit = ns.get("sector_pit")
 
     def mask_glitch(x):
         return x.where(glitch != 1) if glitch is not None else x
@@ -86,6 +106,27 @@ def _build_funcs(ns: dict) -> dict:
         freq = rebal.index.freq or pd.infer_freq(rebal.index)
         out = x.resample(freq).last() if freq is not None else x
         return out.reindex(columns=rebal.columns).reindex(rebal.index, method="ffill")
+
+    def by_sector(how):
+        """A cross-sectional op applied within each CVM sector instead of across
+        the whole row — sector-neutral ranks and z-scores. A name with no
+        sector on file comes out NaN (unranked), not pooled with strangers.
+        One groupby over the stacked frame, not one pass per sector."""
+        def apply(x):
+            if sector_pit is None or sector_pit.empty:
+                raise ValueError("signal expr: sector functions need CVM sector data, "
+                                 "and this market plane has none (B3 only)")
+            # Integer codes, not the strings: grouping on objects is the slow part.
+            codes = pd.factorize(_sector_labels(sector_pit, x).to_numpy().ravel())[0]
+            v = x.to_numpy(dtype=float).ravel()
+            long = pd.DataFrame({"d": np.repeat(np.arange(len(x)), x.shape[1]),
+                                 "s": codes, "v": v})
+            long = long[long["s"] >= 0]                      # -1 = no sector on file
+            g = long.groupby(["d", "s"])["v"]
+            out = np.full(v.shape, np.nan)
+            out[long.index] = _GROUPED[how](g, long["v"]).to_numpy()
+            return pd.DataFrame(out.reshape(x.shape), index=x.index, columns=x.columns)
+        return apply
 
     return {
         # time-series (operate per column, along time)
@@ -112,6 +153,10 @@ def _build_funcs(ns: dict) -> dict:
         "rank": lambda x: x.rank(axis=1, pct=True),   # pandas semantics (parity)
         "zscore": _zscore,
         "demean": lambda x: x.sub(x.mean(axis=1), axis=0),
+        # the same, within each CVM sector (B3)
+        "sector_rank": by_sector("rank"),
+        "sector_zscore": by_sector("zscore"),
+        "sector_demean": by_sector("demean"),
         # data-quality / shaping
         "mask_glitch": mask_glitch,
         "where": lambda x, cond: x.where(cond),          # keep where cond, else NaN

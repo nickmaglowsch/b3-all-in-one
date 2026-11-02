@@ -108,6 +108,7 @@ def test_teva_blend_without_sectors_raises_instead_of_holding_cdi(monkeypatch):
                         lambda *a, **k: pd.Series(100.0, index=idx))
     shared = {"ret": pd.DataFrame(0.0, index=idx, columns=["AAAA3"]),
               "cdi_monthly": pd.Series(0.01, index=idx),
+              "f_shares_outstanding_m": pd.DataFrame(index=idx),
               "sector_pit": pd.DataFrame(columns=["root", "ref_date", "sector"])}
     with pytest.raises(RuntimeError, match="TevaAtivosReais: no CVM sector"):
         FixedWeight(yaml.safe_load(SPEC.read_text())).generate_signals(shared, {})

@@ -12,6 +12,8 @@ which queries B3 directly as the single source of truth.
 """
 
 import logging
+import os
+import zipfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -49,8 +51,11 @@ def download_file(url: str, filepath: Path, force: bool = False) -> Optional[Pat
     Stream `url` into `filepath`.
 
     Skips the download if the file already exists and force=False.
-    On failure, cleans up the partial file — a truncated ZIP left on disk would
-    be skipped as "already downloaded" on every later run — and returns None.
+    Streams into `<file>.part` and only replaces `filepath` once the payload is
+    complete and (for .zip) opens as a ZIP. On any failure — refused connection,
+    dropped stream, a 200 maintenance page — the previous copy stays untouched,
+    the .part is removed and None is returned. A truncated file is never left
+    where a later run would skip it as "already downloaded".
 
     Returns the local Path on success, None on failure.
     """
@@ -59,33 +64,28 @@ def download_file(url: str, filepath: Path, force: bool = False) -> Optional[Pat
         return filepath
 
     logger.info(f"Downloading {url}...")
+    part = filepath.with_name(filepath.name + ".part")
 
     try:
         resp = requests.get(url, headers=config.B3_HEADERS, timeout=300, stream=True)
         resp.raise_for_status()
 
-        total_size = int(resp.headers.get("content-length", 0))
         downloaded = 0
-
-        with open(filepath, "wb") as f:
+        with open(part, "wb") as f:
             for chunk in resp.iter_content(chunk_size=8192):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total_size > 0:
-                        pct = (downloaded / total_size) * 100
-                        if downloaded % (10 * 1024 * 1024) < 8192:
-                            logger.debug(
-                                f"Downloaded {downloaded:,}/{total_size:,} bytes ({pct:.1f}%)"
-                            )
 
+        if filepath.suffix.lower() == ".zip" and not zipfile.is_zipfile(part):
+            raise ValueError("payload is not a ZIP")
+        os.replace(part, filepath)
         logger.info(f"Downloaded {filepath} ({downloaded:,} bytes)")
         return filepath
 
-    except requests.RequestException as e:
+    except (requests.RequestException, OSError, ValueError) as e:
         logger.error(f"Failed to download {url}: {e}")
-        if filepath.exists():
-            filepath.unlink()
+        part.unlink(missing_ok=True)
         return None
 
 

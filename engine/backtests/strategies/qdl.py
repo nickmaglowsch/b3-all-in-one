@@ -60,6 +60,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from backtests.core import fundamentals
 from backtests.core.strategy_base import (
     StrategyBase, ParameterSpec,
     COMMON_RUN_SPECS, COMMON_MIN_ADTV,
@@ -135,8 +136,8 @@ class QDLStrategy(StrategyBase):
         cdi_monthly = shared_data["cdi_monthly"]
         ibov_ret = shared_data["ibov_ret"]
         has_glitch = shared_data["has_glitch"]
-        f_ni_ttm = shared_data.get("f_net_income_ttm_m", pd.DataFrame())
-        f_equity = shared_data.get("f_equity_m", pd.DataFrame())
+        f_ni_ttm = fundamentals.require(shared_data, "f_net_income_ttm_m", self.name)
+        f_equity = fundamentals.require(shared_data, "f_equity_m", self.name)
 
         min_adtv = float(params.get("min_adtv", 1_000_000))
         min_price = float(params.get("min_price", 1.0))

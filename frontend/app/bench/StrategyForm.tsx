@@ -17,6 +17,7 @@ import {
   type RegimeValue,
 } from "./RegimeEditor";
 import { Field, inputCls } from "./Field";
+import { ExprWeightingOption, LegsNote, obj, signalError, signalSource, specExtras, topFor, weightingOf, type Weighting } from "./specExtras";
 
 type SelMode = "top_pct" | "top_n";
 
@@ -35,7 +36,7 @@ interface FormState {
   topN: string;
   minNames: string;
   dedupRoots: boolean;
-  weighting: "equal" | "market_cap";
+  weighting: Weighting;
   rebalance: "ME" | "QE" | "W-FRI";
 }
 
@@ -61,13 +62,9 @@ const DEFAULTS: FormState = {
 // f_* shared-data keys are CVM fundamentals; \bf_ won't match fin_vol / has_glitch.
 const isFundExpr = (s: string) => /\bf_/.test(s);
 
-const obj = (v: unknown): Record<string, unknown> =>
-  v && typeof v === "object" ? (v as Record<string, unknown>) : {};
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 const numStr = (v: unknown, fallback = "") =>
   v == null || v === "" ? fallback : String(v);
-const pick = (o: Record<string, unknown>, keys: string[]) =>
-  Object.fromEntries(keys.filter((k) => o[k] != null).map((k) => [k, o[k]]));
 
 function fromSpec(spec: Record<string, unknown>): FormState {
   const sig = obj(spec.signal);
@@ -89,7 +86,7 @@ function fromSpec(spec: Record<string, unknown>): FormState {
     topN: numStr(sel.top_n, "20"),
     minNames: numStr(sel.min_names, "5"),
     dedupRoots: Boolean(sel.dedup_roots),
-    weighting: spec.weighting === "market_cap" ? "market_cap" : "equal",
+    weighting: weightingOf(spec.weighting),
     rebalance:
       spec.rebalance === "QE" || spec.rebalance === "W-FRI"
         ? spec.rebalance
@@ -118,13 +115,10 @@ function fromClone(s: Strategy): FormState {
   };
 }
 
-function validate(f: FormState): string | null {
+function validate(f: FormState, legs: boolean): string | null {
   if (!f.name.trim()) return "Dê um nome à estratégia.";
-  if (f.advanced) {
-    if (!f.expr.trim()) return "A expressão não pode ficar vazia.";
-  } else if (!f.factor) {
-    return "Escolha um fator.";
-  }
+  const sigErr = signalError(f, legs);
+  if (sigErr) return sigErr;
   if (!(Number(f.minAdtv) >= 0)) return "ADTV mínimo deve ser ≥ 0.";
   if (!(Number(f.minPrice) >= 0)) return "Preço mínimo deve ser ≥ 0.";
   if (f.lookback !== "" && !(Number(f.lookback) >= 1))
@@ -194,13 +188,9 @@ function StrategyFormInner({
           ? fromClone(clone)
           : DEFAULTS,
   );
-  // Optional signal/top-level fields the form doesn't expose — preserved so an
-  // edit or full clone round-trips instead of silently dropping
-  // range/shift/warmup_pad, or an AI-authored spec's market/min_hold/sticky.
+  // Fields the form doesn't expose, carried through a save (specExtras.ts).
   const [preserved] = useState(() => ({
-    signal: srcSpec ? pick(obj(srcSpec.signal), ["range", "shift", "apply_glitch"]) : {},
-    selection: srcSpec ? pick(obj(srcSpec.selection), ["min_hold", "sticky"]) : {},
-    top: srcSpec ? pick(srcSpec, ["warmup_pad", "market"]) : {},
+    ...specExtras(srcSpec),
     fundLocked: Boolean(srcSpec?.needs_fundamentals ?? clone?.needs_fundamentals),
   }));
   // Regime overlay: parsed from the source spec (edit/full clone), else empty.
@@ -228,15 +218,14 @@ function StrategyFormInner({
     ? isFundExpr(f.expr)
     : isFundExpr(factorExpr) || preserved.fundLocked;
 
-  const error = validate(f);
+  const legs = preserved.legs;
+  const error = validate(f, legs);
   const apiMsg = save.error ? errorText(save.error, "Falha ao salvar a estratégia.") : null;
 
   function submit() {
     setTried(true);
     if (error) return;
-    const signal: Record<string, unknown> = f.advanced
-      ? { expr: f.expr.trim() }
-      : { factor: f.factor };
+    const signal = signalSource(f, legs);
     if (f.lookback !== "") signal.lookback = Number(f.lookback);
     Object.assign(signal, preserved.signal);
 
@@ -257,10 +246,11 @@ function StrategyFormInner({
         min_adtv: Number(f.minAdtv),
         min_price: Number(f.minPrice),
         smallcap_below_median: f.smallcap || undefined,
+        ...preserved.universe,
       },
       signal,
       selection,
-      ...preserved.top,
+      ...topFor(preserved.top, f.weighting),
     };
     if (!isEmptyRegime(regime)) body.regime = compileRegime(regime);
 
@@ -317,6 +307,8 @@ function StrategyFormInner({
             {f.advanced ? "Usar catálogo" : "Modo avançado"}
           </button>
         </legend>
+
+        <LegsNote show={legs} />
 
         {f.advanced ? (
           <div className="space-y-2">
@@ -488,6 +480,7 @@ function StrategyFormInner({
           >
             <option value="equal">Igual</option>
             <option value="market_cap">Por tamanho (ADTV)</option>
+            <ExprWeightingOption show={"weight_expr" in preserved.top} />
           </select>
         </Field>
         <Field label="Rebalance">

@@ -128,6 +128,7 @@ renames don't fragment a company's history.
 | `cvm_companies` | `cnpj` | CNPJ ↔ ticker, CVM code, listing/delisting dates |
 | `company_isin_map` | `(cnpj, isin_code)` | CNPJ ↔ ISIN ↔ ticker ↔ share class |
 | `company_tickers_pit` | `(cnpj, ticker, start_date)` | Point-in-time ticker map from CVM FCA (covers delisted names) |
+| `free_float_pit` | `(cnpj, ref_date, version)` | Free float (FRE ações em circulação, % and shares per class), every version with its receipt date; loader `backtests.core.free_float` |
 
 All CVM financial values are stored in **thousands of BRL**, as reported.
 

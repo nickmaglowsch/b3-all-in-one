@@ -37,6 +37,7 @@ import pandas as pd
 from backtests.core.data import (
     SectorRegistryEmpty, sector_membership, sector_membership_asof,
 )
+from backtests.core import fundamentals
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -244,7 +245,7 @@ class TevaAtivosReaisStrategy(StrategyBase):
         ret = shared_data["ret"]
         adtv = shared_data.get("adtv", pd.DataFrame())
         raw_close = shared_data.get("raw_close", pd.DataFrame())
-        shares = shared_data.get("f_shares_outstanding_m", pd.DataFrame())
+        shares = fundamentals.require(shared_data, "f_shares_outstanding_m", self.name)
 
         min_mcap = float(params.get("min_market_cap", 500_000_000.0))
         min_adtv = float(params.get("min_adtv", 9_500_000.0))

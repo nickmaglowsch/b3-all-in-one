@@ -7,12 +7,24 @@ that each doc type resolves to the right URL and cached path.
 """
 from __future__ import annotations
 
+import io
+import zipfile
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
 from b3_pipeline import cvm_downloader
+
+
+def _zip_bytes() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("x.csv", "a;b\n")
+    return buf.getvalue()
+
+
+_ZIP = _zip_bytes()
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -49,8 +61,8 @@ def test_download_dfp_force_redownloads(tmp_cvm_dir):
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.headers = {"content-length": "5"}
-    mock_resp.iter_content = MagicMock(return_value=[b"hello"])
+    mock_resp.headers = {}
+    mock_resp.iter_content = MagicMock(return_value=[_ZIP])
     mock_resp.raise_for_status = MagicMock()
 
     with patch("requests.get", return_value=mock_resp) as mock_get:
@@ -58,6 +70,7 @@ def test_download_dfp_force_redownloads(tmp_cvm_dir):
         mock_get.assert_called_once()
 
     assert result == expected
+    assert expected.read_bytes() == _ZIP
 
 
 # ── 3. Cleanup on failure ─────────────────────────────────────────────────────
@@ -92,3 +105,30 @@ def test_doc_type_resolves_to_its_own_url_and_path(tmp_cvm_dir, fn, stem, base_a
     url, path = mock_dl.call_args.args
     assert url == f"{getattr(_cfg, base_attr)}{stem}_cia_aberta_2023.zip"
     assert path == tmp_cvm_dir / f"{stem}_cia_aberta_2023.zip"
+
+
+# ── 5. A failed refresh keeps the cached copy ─────────────────────────────────
+
+def _cached(tmp_cvm_dir):
+    path = tmp_cvm_dir / "fre_cia_aberta_2023.zip"
+    path.write_bytes(_ZIP)
+    return path
+
+
+def test_failed_refresh_keeps_the_cached_file(tmp_cvm_dir):
+    """CVM outage on a forced re-download: old ZIP intact, no .part left."""
+    path = _cached(tmp_cvm_dir)
+    with patch("requests.get", side_effect=requests.ConnectionError("refused")):
+        assert cvm_downloader.download_fre_file(2023, force=True) is None
+    assert path.read_bytes() == _ZIP
+    assert list(tmp_cvm_dir.iterdir()) == [path]
+
+
+def test_non_zip_payload_does_not_overwrite(tmp_cvm_dir):
+    """A 200 maintenance page is not a ZIP: rejected, cached copy kept."""
+    path = _cached(tmp_cvm_dir)
+    resp = MagicMock(headers={}, iter_content=MagicMock(return_value=[b"<html>manutencao</html>"]))
+    with patch("requests.get", return_value=resp):
+        assert cvm_downloader.download_fre_file(2023, force=True) is None
+    assert path.read_bytes() == _ZIP
+    assert list(tmp_cvm_dir.iterdir()) == [path]

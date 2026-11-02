@@ -8,11 +8,17 @@ monthly, quarterly) and weighting is market-cap or equal.
 Reuses the SP-B3 machinery (backtests/strategies/sp500_b3.py): PIT
 fundamentals snapshot, split-adjusted share counts, most-liquid share class
 per company. Requires b3_pipeline.cvm_main to have populated fundamentals_pit.
+
+Full market cap by default: this is "top by size", not a replica of a
+float-adjusted index. float_adjusted=Yes keeps the ranking by full cap and
+weights by free-float-adjusted cap (CVM FRE as known at t, unknown -> full cap;
+see backtests.core.free_float for staleness and the government-stake caveat).
 """
 from __future__ import annotations
 
 import pandas as pd
 
+from backtests.core.free_float import float_adjusted
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -60,6 +66,12 @@ class TopMarketCapStrategy(StrategyBase):
                 choices=["market_cap", "equal"],
             ),
             ParameterSpec(
+                "float_adjusted", "Free-float Weights", "choice", "No",
+                description="Yes = cap weights use free-float-adjusted market cap "
+                            "(ranking stays by full cap)",
+                choices=["No", "Yes"],
+            ),
+            ParameterSpec(
                 "min_adtv", "Min Median Volume (BRL)", "float", DEFAULT_MIN_ADTV,
                 description="Minimum 63-trading-day median daily financial volume",
                 min_value=0.0, step=1e5,
@@ -81,6 +93,7 @@ class TopMarketCapStrategy(StrategyBase):
         weighting = str(params.get("weighting", "market_cap"))
         min_adtv = float(params.get("min_adtv", DEFAULT_MIN_ADTV))
         db_path = str(params.get("db_path", "b3_market_data.sqlite"))
+        float_adj = str(params.get("float_adjusted", "No")) in ("Yes", "True")
 
         fund = load_fundamentals_pit_raw(db_path)
         actions = load_stock_actions(db_path)
@@ -108,7 +121,10 @@ class TopMarketCapStrategy(StrategyBase):
             if sel.empty:
                 continue
             sel = sel.nlargest(top_n, "market_cap")
-            w = compute_weights(sel.set_index("ticker")["market_cap"], weighting)
+            if float_adj:
+                sel = float_adjusted(sel, shared_data.get("free_float_pit"), td)
+            w = compute_weights(
+                sel.set_index("ticker")["float_cap" if float_adj else "market_cap"], weighting)
             cols = w.index.intersection(tw.columns)
             if len(cols) == 0:
                 continue

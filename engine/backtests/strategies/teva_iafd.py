@@ -28,14 +28,22 @@ Rules implemented, all point-in-time at the rebalance date t:
     stale book (the simulator's all-zero-row rule) would be a silent wrong answer.
   - Weight = market cap / sum of market caps. No cap (the official 2026
     portfolio has Petrobras at 27%).
+  - float_adjusted=Yes (opt-in): free float >= 15% (`min_free_float`; CVM FRE
+    as known at t, unknown passes) and free-float-adjusted cap weights. Teva
+    likely weights by float: its 2026 book has BTG (BPAC, ~34% float) at ~5%,
+    full cap gives ~10%, float ~6%. Still off by default: on clean prod
+    (2026-11, after-tax) it cut CAGR 8.45% -> 8.26% and worsened the fit to the
+    official yearly returns (mean abs error 4.7 -> 5.3 pp; 2016 off by 11.2).
   - Annual rebalance at the close of the last trading day of March (data known
     by then), held with drift for the year.
 
 ponytail: rebalances at the March close, not on April 1. The difference is one
 session. Change rebalance_month if Teva's calendar turns out to be different.
-ponytail: no free-float data. The 15%-free-float filter is skipped, and weights
-use full market cap where Teva uses free-float cap, so controlled companies
-(BPAC, ABEV, WEGE) are overweight. Add free_float scaling when there is a source.
+ponytail: free float is CVM's FRE (backtests.core.free_float), received ~May
+of the following year, so the March read is mostly ~2 years old; and CVM counts
+NON-controlling government stakes as float (AXIA ~98%, SBSP 100%) where Teva
+likely haircuts them. Taken as filed, no overrides. A June rebalance_month reads
+the prior year.
 ponytail: one share class per issuer (the most liquid one) where Teva holds every
 eligible class (PETR3+PETR4, ITUB3+ITUB4). The issuer's weight is the same; only
 how it splits across classes differs.
@@ -73,6 +81,7 @@ import pandas as pd
 
 from b3_pipeline import storage
 from backtests.core.data import SectorRegistryEmpty
+from backtests.core.free_float import float_adjusted
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -187,14 +196,15 @@ def company_first_trade(first: pd.Series, companies: pd.DataFrame) -> pd.Series:
 
 
 def iafd_weights(sel: pd.DataFrame, passed: pd.Index, excluded: set,
-                 listed: pd.Index) -> pd.Series:
-    """Market-cap weights over the selected tickers whose root passed every
-    screen. `sel` is select_constituents output (root, ticker, market_cap)."""
+                 listed: pd.Index, cap: str = "market_cap") -> pd.Series:
+    """Cap weights (column `cap`) over the selected tickers whose root passed
+    every screen. `sel` is select_constituents output (root, ticker, market_cap),
+    plus float_cap after free_float.float_adjusted."""
     keep = sel[sel["root"].isin(passed) & sel["root"].isin(listed)
                & ~sel["root"].isin(excluded)]
     if keep.empty:
         return pd.Series(dtype=float)
-    mc = keep.set_index("ticker")["market_cap"]
+    mc = keep.set_index("ticker")[cap]
     return mc / mc.sum()
 
 
@@ -246,7 +256,7 @@ class TevaIAFDStrategy(StrategyBase):
         "lucro, ROE > 10%, margem líquida > 8%, dívida líquida < 3x EBIT "
         "(bancos e seguradoras isentos); exclui varejo, proteína animal e "
         "aéreas. Rebalanceamento anual inferido (abril); pesos por valor de "
-        "mercado total (sem free float). É uma aproximação: nos backtests ficou "
+        "mercado total (free float da CVM opcional). É uma aproximação: nos backtests ficou "
         "~4 p.p./ano abaixo do índice oficial na média, com diferenças grandes "
         "em anos isolados."
     )
@@ -278,6 +288,18 @@ class TevaIAFDStrategy(StrategyBase):
                 min_value=0.0, step=1e7,
             ),
             ParameterSpec(
+                "float_adjusted", "Free-float Weights", "choice", "No",
+                description="Yes = free float >= Min Free Float and float-adjusted "
+                            "cap weights; No = full cap, no screen",
+                choices=["No", "Yes"],
+            ),
+            ParameterSpec(
+                "min_free_float", "Min Free Float (%)", "float", 15.0,
+                description="Only with Free-float Weights = Yes. Methodology: 15% "
+                            "(CVM FRE as known at t; unknown passes)",
+                min_value=0.0, max_value=100.0, step=1.0,
+            ),
+            ParameterSpec(
                 "excluded_roots", "Excluded Issuers", "str", DEFAULT_EXCLUDED_ROOTS,
                 description="Comma-separated 4-char roots excluded on top of CVM retail "
                             "(default: animal protein and airlines)",
@@ -298,6 +320,8 @@ class TevaIAFDStrategy(StrategyBase):
         month = int(params.get("rebalance_month", 3))
         min_mcap = float(params.get("min_market_cap", 3e9))
         min_vol = float(params.get("min_monthly_volume", 1e8))
+        float_adj = str(params.get("float_adjusted", "No")) in ("Yes", "True")
+        min_ff = float(params.get("min_free_float", 15.0))
         roots = {r.strip().upper() for r in
                  str(params.get("excluded_roots", DEFAULT_EXCLUDED_ROOTS)).split(",")}
 
@@ -312,6 +336,7 @@ class TevaIAFDStrategy(StrategyBase):
         excluded = roots | sector_roots(sector_pit, RETAIL_SECTORS)
         fin_roots = sector_roots(sector_pit, FINANCIAL_SECTORS)
 
+        ff = shared_data.get("free_float_pit")
         tw = pd.DataFrame(0.0, index=ret.index, columns=ret.columns)
         started = False
         for t_cal in ret.index[ret.index.month == month]:
@@ -325,7 +350,10 @@ class TevaIAFDStrategy(StrategyBase):
             )
             passed = fundamental_pass(annual_snapshot(dfp, td), fin_roots)
             listed = first.index[first <= td - pd.DateOffset(years=5)]
-            w = iafd_weights(sel, passed, excluded, listed)
+            if float_adj:
+                sel = float_adjusted(sel, ff, td, min_ff)
+            w = iafd_weights(sel, passed, excluded, listed,
+                             "float_cap" if float_adj else "market_cap")
             cols = w.index.intersection(tw.columns)
             if not len(cols):
                 if started:

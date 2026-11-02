@@ -11,6 +11,8 @@ rebalance date t (last trading day of Mar/Jun/Sep/Dec):
 3. Positive trailing-12-month net income (net_income_ttm from fundamentals_pit).
 4. ROE > 0: net_income_ttm / equity > 0 AND equity > 0 (negative/negative
    must NOT pass).
+5. Free float >= 10% (S&P's IWF >= 0.10) and float-adjusted cap weights, CVM's
+   FRE free float as known at t (`float_adjusted`; backtests.core.free_float).
 
 Point-in-time rule: at rebalance date t, among rows with filing_date <= t, use
 the newest period_end, in its latest filing (a late restatement of an older
@@ -44,6 +46,7 @@ from b3_pipeline import index_series, storage
 from backtests.core.pit import (  # noqa: F401
     action_factors, latest_period_rows, load_stock_actions, share_count_anchor,
 )
+from backtests.core.free_float import float_adjusted
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -173,10 +176,8 @@ def select_constituents(
         roe] — one row per passing company, ticker = most liquid share class.
     """
     t = pd.Timestamp(t)
-    empty = pd.DataFrame(
-        columns=["root", "ticker", "market_cap", "med_vol",
-                 "net_income_ttm", "equity", "roe"]
-    )
+    empty = pd.DataFrame(columns=["root", "ticker", "market_cap", "med_vol",
+                                  "net_income_ttm", "equity", "roe"])
 
     # ── most liquid share class per 4-char root ───────────────────────────────
     vol = med_vol_row.fillna(0.0)
@@ -375,20 +376,12 @@ def build_index_series(
 def liquidity_median(fin_vol: pd.DataFrame, window: int = LIQUIDITY_WINDOW) -> pd.DataFrame:
     """Rolling median daily financial volume, in reais — what `min_adtv` screens.
 
-    No unit sniffing. This used to be `infer_volume_scale`, which multiplied by
-    100 when the universe's busiest name traded under R$50M/day, guarding a
-    convention where core/data.py divided VOLTOT's implied decimals a second
-    time. The parser now does that division on write and core/data.py passes the
-    column through (see its "already in reais" note), so the sniffer had nothing
-    left to correct and one way to be wrong: a legitimately quiet universe — a
-    handful of small caps, a sector sleeve — reads as double-divided and has its
-    ADTV inflated 100x, which is exactly the screen it was there to protect.
-
-    A DB predating the parser fix now reads 100x low instead, so its names fail
-    `min_adtv` and the backtest comes back empty — loud, and fixed by a rebuild.
-
-    NaN is no trading, not a gap: a name that printed nothing that session
-    traded R$0, and dropping it would flatter an intermittently-traded ticker.
+    No unit sniffing: the parser divides VOLTOT's implied decimals on write and
+    core/data.py passes the column through, so the old `infer_volume_scale` (x100
+    when the busiest name traded < R$50M/day) could only misfire, inflating a
+    quiet universe's ADTV 100x. A DB predating the parser fix reads 100x low:
+    its names fail `min_adtv` and the backtest comes back empty — rebuild it.
+    NaN is no trading (R$0 that session), not a gap to drop.
     """
     return fin_vol.fillna(0.0).rolling(window).median()
 
@@ -470,9 +463,9 @@ class SP500B3Strategy(StrategyBase):
         "S&P 500-methodology index on B3, point-in-time and survivorship-"
         "bias-free. Quarterly rebalance; filters: market cap > R$2bn, 63d "
         "median financial volume > R$2M, positive TTM net income, ROE > 0 "
-        "with equity > 0. Market-cap or equal weighting. Requires "
-        "b3_pipeline.cvm_main to have populated fundamentals_pit "
-        "(net_income_ttm column)."
+        "with equity > 0, free float >= 10%. Float-adjusted cap or equal "
+        "weighting. Requires b3_pipeline.cvm_main to have populated "
+        "fundamentals_pit (net_income_ttm column)."
     )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
@@ -495,7 +488,6 @@ class SP500B3Strategy(StrategyBase):
                 description="Minimum 63-trading-day median daily financial volume",
                 min_value=0.0, step=1e5,
             ),
-            # Rebalance frequency is fixed quarterly by methodology.
             ParameterSpec(
                 "rebalance_freq", "Rebalance Frequency", "choice", "QE",
                 description="Fixed quarterly (S&P methodology)",
@@ -509,6 +501,10 @@ class SP500B3Strategy(StrategyBase):
                 ),
                 choices=["No", "Yes"],
             ),
+            ParameterSpec(
+                "float_adjusted", "Free-float Adjusted", "choice", "Yes",
+                description="Yes = free float >= 10% and float-adjusted cap weights "
+                            "(S&P); No = full market cap", choices=["Yes", "No"]),
             ParameterSpec(
                 "db_path", "Database Path", "str", "b3_market_data.sqlite",
                 description="Path to the B3 SQLite database (for fundamentals_pit / stock_actions)",
@@ -528,6 +524,7 @@ class SP500B3Strategy(StrategyBase):
         ipca_deflate = str(params.get("ipca_deflate", "No")) == "Yes"
         db_path = str(params.get("db_path", "b3_market_data.sqlite"))
         min_constituents = int(params.get("min_constituents", DEFAULT_MIN_CONSTITUENTS))
+        float_adj = str(params.get("float_adjusted", "Yes")) in ("Yes", "True")
 
         fund = load_fundamentals_pit_raw(db_path)
         actions = load_stock_actions(db_path)
@@ -553,13 +550,16 @@ class SP500B3Strategy(StrategyBase):
                 td, fund, close_px.loc[td], med63.loc[td], actions,
                 min_market_cap=thr, min_adtv=min_adtv,
             )
+            if float_adj:
+                sel = float_adjusted(sel, shared_data.get("free_float_pit"), td, 10.0)
             if not started:
                 if len(sel) < min_constituents:
                     continue
                 started = True
             if sel.empty:
                 continue
-            w = compute_weights(sel.set_index("ticker")["market_cap"], weighting)
+            w = compute_weights(
+                sel.set_index("ticker")["float_cap" if float_adj else "market_cap"], weighting)
             cols = w.index.intersection(tw.columns)
             if len(cols) == 0:
                 continue

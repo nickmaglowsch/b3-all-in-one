@@ -15,7 +15,8 @@ Rules implemented (quarterly index reconstruction):
   3. Dividend distribution: paid a dividend/JCP in at least `min_div_years` of the
      last 3 trailing years ("regular dividend payer").
   4. Liquidity: 63d median daily financial volume >= min_adtv.
-  5. Weight by market cap, capped at `max_weight` (default 8%) per company.
+  5. Free float >= `min_free_float` (default 10%), weight by free-float-adjusted
+     market cap (`float_adjusted`, default Yes), capped at `max_weight` (8%).
   6. Rebalance quarterly; require >= `min_names` (default 15) names to start.
 
 Reuses the SP-B3 index machinery (backtests/strategies/sp500_b3.py) for PIT
@@ -23,11 +24,14 @@ fundamentals, split-adjusted per-class share counts and market cap — same as
 top_mcap.py. Requires b3_pipeline.cvm_main to have populated fundamentals_pit
 and cvm_companies.sector (CVM's company register, the universe).
 
-ponytail: one data gap vs the official methodology:
-  - No free-float column → we weight by FULL market cap, not free-float-adjusted.
-    Overweights closely-held names (e.g. state-controlled utilities) vs the index.
-  The market-cap >150M USD and free-float >=10% eligibility screens are likewise
-  approximated by the min_adtv liquidity floor (no USD FX / float data on hand).
+Free float is CVM's FRE "ações em circulação" as known at t
+(backtests.core.free_float.float_adjusted; unknown -> full cap, logged).
+ponytail: two gaps vs the official methodology remain:
+  - CVM's free float is stale (the FRE lands ~May of the following year, so a
+    March read is ~2 years old) and counts NON-controlling government stakes as
+    float (AXIA ~98%, SBSP 100%) where MarketVector would haircut them.
+  - The market-cap >150M USD screen is approximated by the min_adtv liquidity
+    floor (no USD FX on hand).
 """
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ import pandas as pd
 
 from b3_pipeline import storage
 from backtests.core.data import SectorRegistryEmpty
+from backtests.core.free_float import float_adjusted
 from backtests.core.strategy_base import (
     StrategyBase,
     ParameterSpec,
@@ -161,8 +166,9 @@ class BesstQualityStrategy(StrategyBase):
         "Replica of the MarketVector Brazil BESST Quality index (BEST11 ETF): "
         "companies in banking, electric power, insurance, telecom and "
         "sanitation with positive PIT earnings and a regular dividend history, "
-        "market-cap weighted with an 8% per-name cap, rebalanced quarterly. "
-        "Requires fundamentals_pit. Weights use full (not free-float) market cap."
+        "free-float-adjusted market-cap weighted (free float >= 10%) with an 8% "
+        "per-name cap, rebalanced quarterly. Requires fundamentals_pit; free "
+        "float is CVM's FRE figure as known at each rebalance."
     )
 
     def get_parameter_specs(self) -> list[ParameterSpec]:
@@ -179,6 +185,18 @@ class BesstQualityStrategy(StrategyBase):
                 "max_weight", "Max Weight per Name", "float", 0.08,
                 description="Per-company weight cap (index caps at 8%)",
                 min_value=0.01, max_value=1.0, step=0.01,
+            ),
+            ParameterSpec(
+                "float_adjusted", "Free-float Weights", "choice", "Yes",
+                description="Yes = weight by free-float-adjusted cap (methodology); "
+                            "No = full market cap",
+                choices=["Yes", "No"],
+            ),
+            ParameterSpec(
+                "min_free_float", "Min Free Float (%)", "float", 10.0,
+                description="Drop companies whose known free float is below this "
+                            "(methodology: 10%; unknown passes)",
+                min_value=0.0, max_value=100.0, step=1.0,
             ),
             ParameterSpec(
                 "min_names", "Min Constituents", "int", 15,
@@ -213,6 +231,10 @@ class BesstQualityStrategy(StrategyBase):
         min_div_years = int(params.get("min_div_years", 2))
         min_adtv = float(params.get("min_adtv", DEFAULT_MIN_ADTV))
         db_path = str(params.get("db_path", "b3_market_data.sqlite"))
+        cap_col = ("float_cap" if str(params.get("float_adjusted", "Yes")) in ("Yes", "True")
+                   else "market_cap")
+        min_ff = float(params.get("min_free_float", 10.0))
+        ff = shared_data.get("free_float_pit")
         roots = besst_roots(shared_data.get("sector_pit", pd.DataFrame()))
 
         fund = load_fundamentals_pit_raw(db_path)
@@ -233,7 +255,7 @@ class BesstQualityStrategy(StrategyBase):
                 td, fund, close_px.loc[td], med63.loc[td], actions,
                 min_market_cap=0.0, min_adtv=min_adtv, require_earnings=True,
             )
-            sel = sel[sel["root"].isin(roots)]
+            sel = float_adjusted(sel[sel["root"].isin(roots)], ff, td, min_ff)
             # regular dividend payer
             if not sel.empty:
                 keep = [paid_regularly(divs.get(r), pd.Timestamp(td), min_div_years)
@@ -247,7 +269,7 @@ class BesstQualityStrategy(StrategyBase):
             if sel.empty:
                 continue
 
-            w = compute_weights(sel.set_index("ticker")["market_cap"], "market_cap")
+            w = compute_weights(sel.set_index("ticker")[cap_col], "market_cap")
             w = cap_weights(w, max_weight)
             cols = w.index.intersection(tw.columns)
             if len(cols) == 0:

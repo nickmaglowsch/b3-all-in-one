@@ -27,7 +27,8 @@ import numpy as np
 import pandas as pd
 
 from backtests.core import (
-    dividends, fundamentals, markets, mean_rev_helpers, memory, regimes, universe,
+    dividends, free_float, fundamentals, markets, mean_rev_helpers, memory, regimes,
+    universe,
 )
 from backtests.core import plane
 from backtests.core.data import (
@@ -272,6 +273,14 @@ def build_shared_data(
     except Exception as e:
         logger.warning(f"Could not load PIT sector data: {e}")
         shared["sector_pit"] = pd.DataFrame(columns=["root", "ref_date", "sector"])
+    # Free float per root (CVM FRE, every version with its receipt date) for the
+    # float-adjusted cap weights — see backtests.core.free_float.float_adjusted.
+    # Unreadable -> None, and every company falls back to its full cap.
+    if include_fundamentals and spec.key == "B3":
+        try:
+            shared["free_float_pit"] = free_float.load_free_float_pit(db_path)
+        except Exception as e:
+            logger.warning(f"Could not load PIT free float: {e}")
 
     # Dividend frames (div_yield_12m, ...), read off corporate_actions on first
     # use — B3 is the only plane that records dividends.

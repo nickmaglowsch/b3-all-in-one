@@ -22,8 +22,9 @@ Replicates the Teva Dividendos Ativos Reais index methodology:
 Requires CVM fundamentals (needs_fundamentals=True) for shares outstanding and
 reads dividends directly from the corporate_actions table.
 
-ponytail: free-float weighting is approximated by full market cap — B3 has no
-free-float series here. Add free_float scaling when a source exists.
+ponytail: free-float weighting is approximated by full market cap. CVM free
+float exists now (backtests.core.free_float.float_adjusted, used by TevaIAFD);
+not wired here yet.
 ponytail: DY uses split-adjusted per-share dividends / split-adjusted price;
 faithful enough for stable payers, revisit if a name splits mid-window often.
 """

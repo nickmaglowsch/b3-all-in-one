@@ -37,9 +37,16 @@ from backtests.core.data import (
 
 logger = logging.getLogger(__name__)
 
-# Where bench_drawdown looks for the benchmark's peak: before any plane's first
-# row, so the running max is over the whole of the benchmark's history.
-_PEAK_HISTORY_FROM = "1990-01-01"
+# Where bench_drawdown / ath_drawdown look for a peak: before any plane's first
+# row, so the running max is over the whole of the history — except on B3, whose
+# 1994 prints before the Plano Real (1 July, CR$ 2,750 = R$ 1) are in another
+# currency and would stand as an all-time high nothing since could reach.
+_PEAK_HISTORY_FROM = {"B3": "1994-07-01"}
+_PEAK_HISTORY_DEFAULT = "1990-01-01"
+
+
+def _peak_from(key: str) -> str:
+    return _PEAK_HISTORY_FROM.get(key, _PEAK_HISTORY_DEFAULT)
 
 
 def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
@@ -102,7 +109,7 @@ def _ath_drawdown(db_path: str, end: str, spec, freq: str, px: pd.DataFrame) -> 
     """`1 - close / running max` per name at each grid date, 0 on a new high,
     the running max taken over the name's full history on the plane rather than
     over the load window. NaN before a name's first price."""
-    full = plane.MarketView(db_path, _PEAK_HISTORY_FROM, end, spec)
+    full = plane.MarketView(db_path, _peak_from(spec.key), end, spec)
     have = set(full.symbols)
     frames = list(full.stream(
         "adj_close", columns=[c for c in px.columns if c in have],
@@ -286,7 +293,7 @@ def build_shared_data(
     # Its own read of the benchmark from the start of the plane instead — one
     # series, deferred so only a spec that gates on it pays for the query.
     shared.defer("bench_drawdown", lambda: regimes.drawdown_from_peak(
-        download_benchmark(spec.benchmark, _PEAK_HISTORY_FROM, end, market=spec.key),
+        download_benchmark(spec.benchmark, _peak_from(spec.key), end, market=spec.key),
         freq))
     # The same, per name: each one's drawdown from its own all-time high. Its peak
     # needs the name's whole history, so it streams the run's names over a view

@@ -236,7 +236,9 @@ class RankAndHold(_SpecStrategy):
                 # `sticky`: carry the previous book through a thin month rather
                 # than going flat (volume_breakout's prev_sel fallback).
                 if not (sticky and prev_sel):
-                    if cash and park_few:
+                    # Only a regime parks a thin month: an exposure_expr alone adds
+                    # the CDI column but leaves "too few names" as it always was.
+                    if regime and park_few:
                         tw.iloc[i, cash_loc] = 1.0
                     continue
                 selected = prev_sel

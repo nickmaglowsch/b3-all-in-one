@@ -111,7 +111,7 @@ def test_bench_drawdown_reads_the_peak_from_before_the_load_window(tmp_path, mon
     shared = build_shared_data(db, "2022-01-01", "2022-03-31", "ME", market="CRYPTO")
     assert calls == ["2022-01-01"]                      # deferred: not fetched yet
     assert shared["bench_drawdown"].loc["2022-02-28"] == pytest.approx(0.6)
-    assert calls[-1] == sd._PEAK_HISTORY_FROM
+    assert calls[-1] == sd._peak_from("CRYPTO") == "1990-01-01"
 
 
 # ── exposure ──────────────────────────────────────────────────────────────────

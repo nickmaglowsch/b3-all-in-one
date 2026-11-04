@@ -244,6 +244,15 @@ its weight and the rest sits in CDI (NaN keeps nothing). It stacks with a rule's
 indicator's own mapping, deploy fraction = depth below the high. On B3,
 `"tickers": ["PETR4"]` or `["BOVA11"]`; on US, any listed name.)
 
+Both drawdowns are **in BRL**, like every price here — the holder's price: on
+US and CRYPTO a weakening real lifts a name toward a new BRL high while its
+dollar price is still well below its peak, so they read shallower than a
+dollar chart of the same asset. On B3 the peak history starts at the Plano
+Real (1994-07). `ath_drawdown` is a frame (one value per name) — not a
+regime flag; `bench_drawdown` is a flag — not readable in an expression.
+Reading `ath_drawdown` streams the full price history of the run's market,
+so on US it noticeably lengthens a run.
+
 Exposure is rebalanced to on every row the book trades (all of them, or only the
 `rebalance_months` ones): when the holding rallies the book
 sells back down to its exposure, and the sale is taxed (crypto: 15%, R$35k

@@ -30,7 +30,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backtests.core import dividends, markets, signal_dsl, sleeve_tickers
+from backtests.core import dividends, markets, regimes, signal_dsl, sleeve_tickers
 from backtests.core.sectors import CVM_SECTORS
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 from backtests.core.spec_signal import _LEG_TRANSFORMS
@@ -77,6 +77,9 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
     except ValueError as e:
         errors.append(str(e))
         return False
+    if flags := sorted(_expr_names(expr) & regimes.REGIME_ONLY):
+        errors.append(f"{flags}: a regime flag (one number per date), not data an "
+                      "expression can read — per name, use ath_drawdown")
     tree = ast.parse(expr, mode="eval")
     called = {n.func.id for n in ast.walk(tree)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
@@ -89,9 +92,6 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
 # What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
 _RULE_KEYS = {"top_pct", "exposure", "park", "default", "min_true"}
 
-# Regime flags that are numbers, not booleans: an input reads them through `gt`.
-_NUMERIC_FLAGS = {"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
-                  "bench_vol_monthly", "ibov_vol_monthly"}
 
 
 
@@ -121,7 +121,11 @@ def _validate_regime(regime, errors: list[str]) -> None:
         if not isinstance(cfg, dict) or not isinstance(cfg.get("flag"), str):
             errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
                           "series (e.g. bench_above)")
-        elif cfg["flag"] in _NUMERIC_FLAGS and "gt" not in cfg:
+        elif cfg["flag"] in SHARED_DATA_KEYS - {"bench_ret", "bench_px"}:
+            errors.append(f"regime input {name!r}: {cfg['flag']} is a per-name frame, not "
+                          "a regime flag (it would never read true) — use it in an "
+                          "expression such as exposure_expr")
+        elif cfg["flag"] in regimes.NUMERIC_FLAGS and "gt" not in cfg:
             # Read bare, a number is truthy whenever it is not 0: "below its high
             # at all", which is every day but a new high — never the zone meant.
             errors.append(f"regime input {name!r}: {cfg['flag']} is a number — give "

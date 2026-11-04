@@ -13,6 +13,14 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# Regime flags that are numbers, not booleans: an input reads them through `gt`
+# (validate_spec refuses one without it — read bare, a drawdown is "true" on
+# every day but a new high). The first is also one number per *date*, which an
+# expression (a date x name frame) cannot read; per name it is ath_drawdown.
+REGIME_ONLY = frozenset({"bench_drawdown"})
+NUMERIC_FLAGS = frozenset({"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
+                           "bench_vol_monthly", "ibov_vol_monthly"})
+
 
 def _expanding_pctrank(s: pd.Series) -> pd.Series:
     """Where each observation sits in the distribution of everything before it.

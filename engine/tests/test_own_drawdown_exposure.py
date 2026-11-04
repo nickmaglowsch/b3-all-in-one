@@ -155,6 +155,31 @@ def test_a_spec_without_it_has_no_cdi_column_as_before():
     assert tw.iloc[2]["ETHUSDT"] == 1.0
 
 
+def test_a_weight_with_no_number_goes_to_cash_not_out_of_the_nav():
+    """sticky + adtv weighting: a carried name with no prints last month has a
+    NaN weight. Its share must sit in CDI, or the row sums to less than 1."""
+    from backtests.core.spec_signal import place
+    tw = pd.DataFrame(0.0, index=range(2), columns=["AAA3", "BBB3", "CDI_ASSET"])
+    place(tw, 1, {"AAA3": np.nan, "BBB3": 0.5}, 1.0, "CDI_ASSET")
+    assert tw.iloc[1].tolist() == [0.0, 0.5, 0.5]
+
+
+def test_a_thin_month_without_a_regime_is_not_parked_by_exposure_expr():
+    """exposure_expr adds the CDI column; it does not turn "too few names" into
+    a park — only a regime's park_when_too_few does that."""
+    idx = pd.date_range("2022-01-31", periods=3, freq="ME")
+    shared = _book(pd.DataFrame({"ETHUSDT": [0.5, 0.5, 0.5]}, index=idx))
+    shared["adtv"].iloc[1] = np.nan                     # nothing to rank at row 2
+    _, tw = RankAndHold(_own()).generate_signals(shared, {})
+    assert tw.iloc[2].sum() == 0.0
+
+
+def test_the_b3_peak_starts_at_the_plano_real():
+    import backtests.core.shared_data as sd
+    assert sd._peak_from("B3") == "1994-07-01"
+    assert sd._peak_from("US") == sd._peak_from("CRYPTO") == "1990-01-01"
+
+
 # ── validation and warm-up ────────────────────────────────────────────────────
 
 def test_the_own_drawdown_tilt_validates():
@@ -171,6 +196,19 @@ def test_the_own_drawdown_tilt_validates():
 def test_a_bad_exposure_expr_is_refused(bad, msg):
     r = validate(_own(exposure_expr=bad))
     assert not r["ok"] and any(msg in e for e in r["errors"]), r["errors"]
+
+
+def test_a_per_name_frame_is_refused_as_a_regime_flag():
+    spec = _own(regime={"inputs": {"dd": {"flag": "ath_drawdown", "offset": 1, "gt": 0.3}},
+                        "rules": [{"dd": True, "exposure": 1.0},
+                                  {"default": True, "exposure": 0.3}]})
+    r = validate(spec)
+    assert not r["ok"] and any("per-name frame, not a regime flag" in e for e in r["errors"])
+
+
+def test_the_benchmark_drawdown_is_refused_inside_an_expression():
+    r = validate(_own(exposure_expr="clip(0.2 + bench_drawdown, 0, 1)"))
+    assert not r["ok"] and any("use ath_drawdown" in e for e in r["errors"])
 
 
 def test_a_var_may_not_take_the_frames_name():

@@ -444,8 +444,14 @@ keeps `clip(·, 0, 1)` of its weight; the rest goes to `CDI_ASSET` (a NaN or
 infinite value keeps nothing). It multiplies with a rule's `exposure` and needs
 no regime. `ath_drawdown` is the frame it is usually built on: per name,
 `1 - close / running max` at each grid date, the running max over the name's
-whole history on the plane (daily, split-corrected closes, streamed lazily for
-the run's names only — a spec that does not read it does not pay for it).
+whole history on the plane (daily, split-corrected closes, streamed lazily over
+the market's names — a spec that does not read it does not pay for it, one that
+does reads that history once more, which on US is a noticeably longer run).
+Like every price here it is **in BRL**: on US and crypto a weakening real lifts a
+name toward a new BRL high while its dollar price is still below its peak. On B3
+both drawdowns read their peak from the Plano Real on (1994-07-01): the
+cruzeiro-real prints before it are another currency. A thin month (too few
+names) is parked in CDI only by a regime's `park_when_too_few`, as before.
 
 ```yaml
 universe: {min_adtv: 0, min_price: 0, tickers: [ETHUSDT]}

@@ -200,6 +200,11 @@ def place(tw: pd.DataFrame, i: int, w: dict, exposure: float, cash, scale=None) 
     for t, wt in w.items():
         if t in tw.columns:
             x = wt * exposure * (1.0 if scale is None else float(scale.get(t, 0.0)))
+            if not np.isfinite(x):
+                # A weight with no number (a sticky name with no prints, under
+                # adtv weighting) holds nothing; its share goes to cash, never
+                # out of the NAV.
+                x = 0.0
             tw.iloc[i, tw.columns.get_loc(t)] = x
             invested += x
     # A tolerance, not `< 1.0`: a fully invested book sums to 1 only up to float

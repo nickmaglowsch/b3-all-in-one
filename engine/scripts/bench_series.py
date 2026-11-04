@@ -38,8 +38,9 @@ sys.path.insert(0, str(ROOT))
 # and the bench UI both spell them, so treat a rename as a breaking change.
 #
 # The `$` symbols are stored index levels in `external_prices` and belong to no
-# market — download_benchmark routes them to download_index_level and ignores the
-# `market` argument, so B3 there is inert, not a claim. Bitcoin is the one real
+# market — download_benchmark routes them to download_index_level, so B3 there is
+# inert, not a claim. `$SPX` is the exception: read through US, so an empty
+# stored series falls back to SPY off the US plane (MarketSpec.benchmark_proxy). Bitcoin is the one real
 # ticker in the list, and it is read through CRYPTO precisely so the projection
 # is `adj_close_brl`: the numeraire is reais for every market on this plane, and
 # a ruler quoted in USDT would credit the dollar's move to the strategy.
@@ -47,7 +48,7 @@ BENCHMARKS = {
     "ibov": ("$IBOV", "B3"),        # B3's published index, points
     "cdi": ("$CDI", "B3"),          # BCB SGS 12, cumulative factor
     "ipca": ("$IPCA", "B3"),        # BCB SGS 433, cumulative factor
-    "sp500": ("$SPX", "B3"),        # SPY total return in BRL (a named proxy)
+    "sp500": ("$SPX", "US"),        # SPY total return in BRL (a named proxy)
     "bitcoin": ("BTCUSDT", "CRYPTO"),
     "selic": ("$SELIC", "B3"),      # BCB SGS 11, cumulative factor
     # ANBIMA's fixed-income indexes (b3_pipeline/anbima_series.py), index

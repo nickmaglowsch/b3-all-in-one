@@ -72,3 +72,21 @@ def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
 
     return _plane_series("external_prices", "close",
                          ticker.strip().upper(), start, end)
+
+
+def or_proxy(level: pd.Series, spec, symbol: str, start: str, end: str) -> pd.Series:
+    """`level`, or — when it is empty and `symbol` is the market's own benchmark —
+    that market's proxy read off its own plane (MarketSpec.benchmark_proxy; US:
+    SPY for `$SPX`). Marked with `attrs["proxy_for"]`, so shared_data can say which
+    ruler the run used. Without it a failed `$SPX` job left every bench_* flag on
+    US reading False and every gated US book in CDI, silently."""
+    from backtests.core import markets
+    from backtests.core.data import _plane_series
+
+    if not level.empty or not spec.benchmark_proxy or symbol != markets.plane_symbol(
+            spec.benchmark, spec.key):
+        return level
+    proxy = _plane_series(spec.table, "adj_close", spec.benchmark_proxy, start, end,
+                          market=spec.key, symbol_column=spec.symbol_column)
+    proxy.attrs["proxy_for"] = symbol
+    return proxy

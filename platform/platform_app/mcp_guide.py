@@ -351,6 +351,12 @@ falls inside the window: `invested_from` is later and `data_warnings` has
 was empty anyway (too few names passed the filters). Either way the book sat in
 cash or CDI until `invested_from`, so judge the run from there.
 
+`benchmark_missing` (`{market, ticker}`) means the run had no benchmark data in
+its window: every `bench_*`/`ibov_*` regime flag read False, so a gated book sat
+in CDI — a plane problem, not a calm strategy. `benchmark_proxy_from_plane`
+(`{market, ticker, proxy}`) means the stored series was empty and the run used
+the market's proxy off its own plane instead (US: `$SPX` from SPY, in BRL).
+
 - Compare against built-ins over the **same window** (list_backtests).
 - Every variant you try is a hypothesis test; many tries on one window find
   noise. Confirm a candidate on a second, non-overlapping window (e.g. design

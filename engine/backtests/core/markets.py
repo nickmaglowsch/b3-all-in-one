@@ -76,6 +76,13 @@ class MarketSpec:
     # and week-ends alike — and reads correctly as a regime flag
     # (regimes.regime_flags). On B3 or US a month-end Saturday has no print.
     benchmark_every_day: bool = False
+    # A ticker on this market's own plane that stands in for `benchmark` when the
+    # stored series is empty. US: `$SPX` *is* SPY's total return in reais
+    # (us_pipeline/spx_series.py), built by a job that needs AlphaVantage; the
+    # plane carries SPY in reais from its own price ingests. Without a fallback a
+    # failed `$SPX` job left every bench_* flag on US reading False and every
+    # bench-gated US book in CDI for the whole run, with nothing saying so.
+    benchmark_proxy: str | None = None
 
 
 # Character-for-character the predicate the two B3 loaders and
@@ -107,6 +114,7 @@ MARKETS = {
     "US": MarketSpec(
         key="US", currency="USD", table="market_prices", symbol_column="symbol",
         ticker_sql="", benchmark="$SPX", aliases={"^GSPC": "$SPX", "SPX": "$SPX"},
+        benchmark_proxy="SPY",
         suffix_strip=None,
         glitch_up=1.0, glitch_down=-0.45, detect_splits=False, root_len=None,
         # In BRL, like every threshold on this plane. ~US$200k/day of turnover

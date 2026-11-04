@@ -105,6 +105,22 @@ def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
                  lambda: universe.tradable_mask(intervals, sessions, symbols))
 
 
+def _benchmark_notes(spec, bench_px: pd.Series, start: str, end: str) -> list:
+    """What the run's benchmark could not be. Empty over the window means every
+    bench_*/ibov_* regime flag reads False and a gated book sits in CDI for the
+    whole run — which looks like a calm strategy, not a missing ruler, unless
+    the run says so. A proxy read off the plane is said too."""
+    inside = bench_px.loc[str(start)[:10]:str(end)[:10]] if len(bench_px) else bench_px
+    if inside.dropna().empty:
+        return [{"code": "benchmark_missing",
+                 "detail": {"market": spec.key, "ticker": spec.benchmark}}]
+    if bench_px.attrs.get("proxy_for"):
+        return [{"code": "benchmark_proxy_from_plane",
+                 "detail": {"market": spec.key, "ticker": bench_px.attrs["proxy_for"],
+                            "proxy": spec.benchmark_proxy}}]
+    return []
+
+
 def _ath_drawdown(db_path: str, end: str, spec, freq: str, px: pd.DataFrame) -> pd.DataFrame:
     """`1 - close / running max` per name at each grid date, 0 on a new high,
     the running max taken over the name's full history on the plane rather than
@@ -282,7 +298,8 @@ def build_shared_data(
             intervals, sessions, symbols, dense=False),
         # What this window's data cannot support, as codes. Every branch lives
         # inside coverage_notes, which degrades to [] rather than failing a run.
-        "data_warnings": universe.coverage_notes(db_path, spec.key, window_start, end),
+        "data_warnings": universe.coverage_notes(db_path, spec.key, window_start, end)
+        + _benchmark_notes(spec, ibov_px, window_start, end),
     })
 
     _defer_derived(shared, freq, intervals, sessions, symbols)

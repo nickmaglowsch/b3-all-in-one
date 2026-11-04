@@ -1,16 +1,15 @@
-// The macro flags the bench's regime picker offers (app/bench/RegimeEditor.tsx).
-//
-// Each must be a market-wide series — one value per rebalance date — on the
-// engine's list, engine/backtests/core/regimes.py REGIME_FLAGS, which
-// validate_spec enforces at save. A per-ticker frame does not belong here:
-// `above_ma200` (dates x tickers) used to be offered, read False on every date
-// and parked the book in CDI for the whole run; it stays usable in a signal
-// expression. The *_vol_pctrank flags are 0..1 percentiles → usually paired with
-// `gt`; the rest read as booleans. `bench_*` are the market-neutral aliases of
-// `ibov_*` (the same series, computed off the market's own benchmark): a US or
-// crypto spec says `bench_above` rather than gating on "IBOV".
-//
-// Pure and import-free, because `npm test` runs this file straight under node --test.
+// A rank_and_hold spec's `regime` block, as the bench form edits it
+// (engine/docs/config_strategies.md · "Regime overlay"): the wire format, and the
+// pure parse/compile between it and the form's state. Kept out of
+// app/bench/RegimeEditor.tsx so `npm test` (lib/**/*.test.ts) covers the part
+// that can silently lose a field on a round trip.
+
+// The macro flags the bench's regime picker offers. Each must be a market-wide
+// series — one value per rebalance date — on the engine's list,
+// engine/backtests/core/regimes.py REGIME_FLAGS, which validate_spec enforces at
+// save (lib/regime.test.ts parses it so the two cannot drift). A per-ticker frame
+// (above_ma200, ath_drawdown) read False on every date there; it belongs in an
+// expression. `bench_*` are the market-neutral aliases of `ibov_*`.
 export const REGIME_FLAGS = [
   "is_easing",
   "ibov_above",
@@ -21,6 +20,7 @@ export const REGIME_FLAGS = [
   "bench_calm",
   "bench_uptrend",
   "bench_vol_pctrank",
+  "bench_drawdown",
 ] as const;
 
 /** The picker's options for an input currently reading `current`. A stored spec
@@ -31,4 +31,139 @@ export function flagOptions(current: string): readonly string[] {
   return (REGIME_FLAGS as readonly string[]).includes(current)
     ? REGIME_FLAGS
     : [current, ...REGIME_FLAGS];
+}
+
+// Flags that are numbers, not booleans: the engine's validate_spec refuses an
+// input on one of these without a `gt` threshold (regimes.NUMERIC_FLAGS; read
+// bare, a drawdown or a return is "true" on almost every date).
+export const NUMERIC_FLAGS: ReadonlySet<string> = new Set([
+  "ibov_vol_pctrank",
+  "bench_vol_pctrank",
+  "ibov_vol_monthly",
+  "bench_vol_monthly",
+  "bench_drawdown",
+  "cdi_monthly",
+  "ibov_ret",
+  "bench_ret",
+  "ibov_ret_20d_daily",
+  "ibov_vol_20d_daily",
+]);
+
+export interface RegimeInput {
+  name: string;
+  flag: string;
+  offset: 0 | 1;
+  gt: string; // "" = no threshold (boolean read)
+}
+
+export type RuleKind = "cond" | "vote" | "default";
+export type RuleAction = "invest" | "park";
+
+export interface RegimeRule {
+  kind: RuleKind;
+  conds: Record<string, boolean>; // cond: inputName -> required truth; absent = ignore
+  minTrue: string; // vote: N-of-M
+  action: RuleAction;
+  topPct: string; // invest override; "" = fall back to selection.top_pct
+  exposure: string; // invest: fraction of the book, rest in CDI; "" = all of it
+}
+
+export interface RegimeValue {
+  addIbov: boolean;
+  parkWhenTooFew: boolean;
+  inputs: RegimeInput[];
+  rules: RegimeRule[];
+}
+
+const obj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+
+// Non-empty = worth sending. StrategyForm omits the `regime` key when this is
+// false so we never POST an empty overlay.
+export const isEmptyRegime = (v: RegimeValue) =>
+  v.inputs.length === 0 && v.rules.length === 0;
+
+// Mirrors config_strategy.py's top_pct-suppression: if every rule overrides
+// top_pct (or parks / is the default), selection.top_pct is a dead knob.
+export const topPctInert = (v: RegimeValue) =>
+  v.rules.length > 0 &&
+  v.rules.every(
+    (r) => r.action === "park" || r.kind === "default" || r.topPct.trim() !== "",
+  );
+
+// A rule's action keys — everything else on a cond rule is an input it matches.
+// `exposure` must be here: read as a condition it would be pruned on compile and
+// an AI-made partial book would come back from the form fully invested.
+const RESERVED = new Set(["top_pct", "exposure", "park", "default", "min_true"]);
+
+export function parseRegime(raw: unknown): RegimeValue {
+  const r = obj(raw);
+  const inputs: RegimeInput[] = Object.entries(obj(r.inputs)).map(([name, v]) => {
+    const ic = obj(v);
+    return {
+      name,
+      flag: typeof ic.flag === "string" ? ic.flag : REGIME_FLAGS[0],
+      offset: Number(ic.offset) === 0 ? 0 : 1,
+      gt: ic.gt == null ? "" : String(ic.gt),
+    };
+  });
+  const rulesRaw = Array.isArray(r.rules) ? r.rules : [];
+  const rules: RegimeRule[] = rulesRaw.map((rr) => {
+    const rule = obj(rr);
+    const kind: RuleKind = rule.default
+      ? "default"
+      : "min_true" in rule
+        ? "vote"
+        : "cond";
+    const conds: Record<string, boolean> = {};
+    if (kind === "cond")
+      for (const [k, v] of Object.entries(rule))
+        if (!RESERVED.has(k)) conds[k] = Boolean(v);
+    return {
+      kind,
+      conds,
+      minTrue: rule.min_true == null ? "2" : String(rule.min_true),
+      action: rule.park ? "park" : "invest",
+      topPct: rule.top_pct == null ? "" : String(rule.top_pct),
+      exposure: rule.exposure == null ? "" : String(rule.exposure),
+    };
+  });
+  return {
+    addIbov: r.add_ibov !== false, // default true
+    parkWhenTooFew: r.park_when_too_few !== false,
+    inputs,
+    rules,
+  };
+}
+
+export function compileRegime(v: RegimeValue): Record<string, unknown> {
+  const names = new Set(v.inputs.map((i) => i.name.trim()).filter(Boolean));
+  const inputs: Record<string, unknown> = {};
+  for (const inp of v.inputs) {
+    const nm = inp.name.trim();
+    if (!nm) continue;
+    const one: Record<string, unknown> = { flag: inp.flag, offset: inp.offset };
+    if (inp.gt.trim() !== "") one.gt = Number(inp.gt);
+    inputs[nm] = one;
+  }
+  const rules = v.rules.map((rule) => {
+    const out: Record<string, unknown> = {};
+    if (rule.kind === "default") out.default = true;
+    else if (rule.kind === "vote") out.min_true = Number(rule.minTrue);
+    else
+      for (const [k, val] of Object.entries(rule.conds))
+        if (names.has(k)) out[k] = val; // prune stale refs to removed inputs
+    if (rule.action === "park") out.park = true;
+    else {
+      if (rule.topPct.trim() !== "") out.top_pct = Number(rule.topPct);
+      if (rule.exposure.trim() !== "") out.exposure = Number(rule.exposure);
+    }
+    return out;
+  });
+  return {
+    add_ibov: v.addIbov,
+    park_when_too_few: v.parkWhenTooFew,
+    inputs,
+    rules,
+  };
 }

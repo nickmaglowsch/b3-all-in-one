@@ -27,6 +27,8 @@ REGIME_FLAGS = (
     "bench_above", "bench_calm", "bench_uptrend", "bench_vol_monthly", "bench_vol_pctrank",
     # Monthly returns, for a `gt` threshold ("CDI above 1% a month").
     "cdi_monthly", "ibov_ret", "bench_ret",
+    # How far the benchmark is below its all-time high (full history), 0..1.
+    "bench_drawdown",
 )
 
 # Daily benchmark series. They sit on the benchmark's own print dates, so they
@@ -39,6 +41,18 @@ DAILY_REGIME_FLAGS = ("ibov_ret_20d_daily", "ibov_vol_20d_daily")
 def regime_flags(spec) -> tuple[str, ...]:
     """The flags a regime input may read on market `spec` (a MarketSpec)."""
     return REGIME_FLAGS + (DAILY_REGIME_FLAGS if spec.benchmark_every_day else ())
+
+# One-per-date Series an expression (a date x name frame) cannot read: pandas
+# aligns a Series' dates against the frame's *tickers*, so the result is all NaN
+# and the book silently sits in cash. bench_ret / ibov_ret / bench_px are
+# documented expression data names that predate this list and stay readable.
+PER_DATE = frozenset(REGIME_FLAGS + DAILY_REGIME_FLAGS) - {"bench_ret", "ibov_ret"} | {
+    "cdi_daily", "cdi_cumul_63d"}
+# Regime flags that are numbers, not booleans: an input reads them through `gt`
+# (read bare, a drawdown or a return is "true" on almost every date).
+NUMERIC_FLAGS = frozenset({"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
+                           "bench_vol_monthly", "ibov_vol_monthly", "cdi_monthly",
+                           "ibov_ret", "bench_ret", *DAILY_REGIME_FLAGS})
 
 
 def _expanding_pctrank(s: pd.Series) -> pd.Series:
@@ -87,3 +101,24 @@ def benchmark_signals(bench_px: pd.Series, freq: str) -> dict:
         "uptrend": bench_px.pct_change(20).resample(freq).last() > 0,
         "above": bench_m > bench_m.rolling(10).mean(),
     }
+
+
+def drawdown_from_peak(bench_px: pd.Series, freq: str) -> pd.Series:
+    """How far the benchmark sits below its all-time high, on the rebalance grid:
+    ``1 - price / running max`` at each period's last session, in [0, 1].
+
+    0 on a new high, 0.5 at half the peak. The running max is causal — the peak
+    on a date is the highest close up to that date — and it is only an all-time
+    high if `bench_px` starts at the start of history: shared_data feeds it the
+    benchmark's full series, not the backtest's load window, so two runs of one
+    spec over different windows read the same drawdown on the dates they share.
+
+    Closes, not intraday highs: the plane carries `adj_close` for every
+    benchmark and that is the price the rest of the bundle reads.
+    """
+    px = bench_px.dropna()
+    px = px[px > 0]
+    if px.empty:
+        return pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+    dd = (1.0 - px / px.cummax()).clip(lower=0.0)
+    return dd.resample(freq).last()

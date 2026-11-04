@@ -16,7 +16,7 @@ import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
 import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
-import { fromSelect, portfolioBody, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
+import { fromSelect, pickerRefs, portfolioBody, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -152,15 +152,15 @@ function SleevesEditor() {
   // Split the merged gallery: platform built-ins vs the tenant's own rule
   // strategies (source:"user", minus fixed_weight portfolios) — grouped in the
   // picker via <optgroup>.
-  const { builtinRefs, userRefs } = useMemo(() => {
-    const b: string[] = [];
-    const u: string[] = [];
-    for (const s of strategies.data ?? []) {
-      if (fixedWeightNames.has(s.name)) continue;
-      (s.source === "user" ? u : b).push(s.name);
-    }
-    return { builtinRefs: b, userRefs: u };
-  }, [strategies.data, fixedWeightNames]);
+  //
+  // B3 strategies only: a carteira and the live target run on the B3 plane, and
+  // the API refuses a US or crypto strategy as a sleeve (strategy_specs
+  // off_b3_refs / check_live_refs), so the picker does not offer one to be
+  // refused. The split lives in lib/portfolioSleeves.ts, under `npm test`.
+  const { builtinRefs, userRefs } = useMemo(
+    () => pickerRefs(strategies.data ?? [], fixedWeightNames),
+    [strategies.data, fixedWeightNames],
+  );
 
   // Strategies that read CVM fundamentals — flag them in the picker so the choice
   // is informed (native <option> can't hold a badge, so the label carries a marker).

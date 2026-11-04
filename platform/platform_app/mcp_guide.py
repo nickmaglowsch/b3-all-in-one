@@ -58,6 +58,10 @@ rebalance.
   Optional: `shift` (>=0), `range: [lo, hi]` (keep factor values in the band),
   `apply_glitch` (default true: NaN-out bad prints before ranking; set false
   when your expr calls `mask_glitch` itself).
+- `universe.tickers` (optional, 1..50 codes) makes the universe exactly those
+  names: `["BTCUSDT"]` on CRYPTO for a Bitcoin-only book (the top pair by `adtv`
+  is often a stablecoin pair), `["IVVB11", "BOVA11"]` on B3. Spelled for the
+  spec's market; a code the plane never priced is refused on save.
 - `selection` needs exactly one of `top_pct` (0 < x <= 1) or `top_n` (>= 1).
   `min_names`: fewer candidates than this => stay out. `min_hold`: floor on names
   held. `sticky: true`: keep the previous book instead of going flat.
@@ -195,10 +199,67 @@ Gate or scale the book on a macro flag; when "off", the book parks in CDI.
 ```
 
 Flags: `bench_above` (benchmark above its 10-month MA), `bench_calm`,
-`bench_uptrend`, `bench_vol_pctrank` (numeric — use `gt`), `is_easing` (COPOM
-cutting rates, B3). Rules match first to last; a rule may set its own `top_pct`;
-`{"min_true": 2}` is an N-of-M vote over the inputs. `offset: 1` reads the
-previous period (no look-ahead); `offset: 0` the current row.
+`bench_uptrend`, `bench_vol_pctrank` (numeric — use `gt`), `bench_drawdown`
+(numeric, 0..1 — use `gt`: how far the benchmark is below its all-time high,
+read off its whole history; on CRYPTO the benchmark is BTC, in BRL), `is_easing`
+(COPOM cutting rates, B3). Rules match first to last; a rule may set its own
+`top_pct`, or `exposure` (0..1: invest that fraction of the book, the rest in
+CDI; not beside `park`); `{"min_true": 2}` is an N-of-M vote over the inputs.
+`offset: 1` reads the previous period (no look-ahead); `offset: 0` the current row.
+
+Accumulation tilt — hold more Bitcoin the further it is below its high:
+
+```json
+{"kind": "rank_and_hold", "name": "BTC drawdown tilt", "market": "CRYPTO",
+ "rebalance": "ME",
+ "universe": {"min_adtv": 0, "min_price": 0, "tickers": ["BTCUSDT"]},
+ "signal": {"factor": "adtv", "apply_glitch": false},
+ "selection": {"top_n": 1, "min_names": 1},
+ "regime": {"add_ibov": false,
+   "inputs": {"deep":    {"flag": "bench_drawdown", "offset": 1, "gt": 0.50},
+              "cheap":   {"flag": "bench_drawdown", "offset": 1, "gt": 0.25},
+              "neutral": {"flag": "bench_drawdown", "offset": 1, "gt": 0.10}},
+   "rules": [{"deep": true, "exposure": 1.0}, {"cheap": true, "exposure": 0.6},
+             {"neutral": true, "exposure": 0.35}, {"default": true, "exposure": 0.2}]}}
+```
+
+That gates on the **market's benchmark** (BTC on CRYPTO, the Ibovespa on B3, the
+S&P on US). To size a book by **each asset's own** drawdown, use the data name
+`ath_drawdown` (per name: `1 - close / its all-time high`, 0 at a new high, read
+off its whole history) and `exposure_expr`: an expression like `weight_expr`
+(same vars and scalars) after which each held name keeps `clip(value, 0, 1)` of
+its weight and the rest sits in CDI (NaN keeps nothing). It stacks with a rule's
+`exposure` (they multiply) and works without a regime. Any asset, any market:
+
+```json
+{"kind": "rank_and_hold", "name": "ETH own-drawdown tilt", "market": "CRYPTO",
+ "rebalance": "ME",
+ "universe": {"min_adtv": 0, "min_price": 0, "tickers": ["ETHUSDT"]},
+ "signal": {"factor": "adtv", "apply_glitch": false},
+ "selection": {"top_n": 1, "min_names": 1},
+ "exposure_expr": "clip(0.2 + ath_drawdown, 0, 1)"}
+```
+
+(20% at the high, all in 80% below it; `"ath_drawdown"` alone is the
+indicator's own mapping, deploy fraction = depth below the high. On B3,
+`"tickers": ["PETR4"]` or `["BOVA11"]`; on US, any listed name.)
+
+Both drawdowns are **in BRL**, like every price here — the holder's price: on
+US and CRYPTO a weakening real lifts a name toward a new BRL high while its
+dollar price is still well below its peak, so they read shallower than a
+dollar chart of the same asset. On B3 the peak history starts at the Plano
+Real (1994-07). `ath_drawdown` is a frame (one value per name) — not a
+regime flag; `bench_drawdown` is a flag — not readable in an expression.
+Reading `ath_drawdown` streams the full price history of the run's market,
+so on US it noticeably lengthens a run.
+
+Exposure is rebalanced to on every row the book trades (all of them, or only the
+`rebalance_months` ones): when the holding rallies the book
+sells back down to its exposure, and the sale is taxed (crypto: 15%, R$35k
+monthly isenção, no loss carry). Compare it with a constant-exposure twin (one
+`default` rule at the average exposure) on the same window: the difference is
+the timing, the rest is just holding less BTC. Weekly (`W-FRI`) rebalancing
+multiplies the turnover.
 
 ## 2. Portfolio (`kind: "fixed_weight"`)
 

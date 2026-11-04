@@ -27,10 +27,16 @@ _SPEC = {
     "description": (
         "A strategy spec. kind=rank_and_hold: {kind, name, description, market, "
         "rebalance, rebalance_months?, weighting, weight_expr?, max_weight?, "
-        "universe{min_adtv,min_price,smallcap_below_median,sectors?{include,exclude}}, "
+        "exposure_expr? (each held name keeps clip(value,0,1) of its weight, rest in "
+        "CDI; e.g. ath_drawdown = depth below its own all-time high), "
+        "universe{min_adtv,min_price,smallcap_below_median,sectors?{include,exclude},"
+        "tickers?[codes: the universe is exactly these]}, "
         "signal{factor|expr|legs[{factor|expr, weight, transform}], coverage?, vars?, "
         "lookback, ...}, selection{top_pct|top_n, min_names, dedup_roots, min_hold, "
-        "sticky}, regime?}. kind=fixed_weight: {kind, name, description, rebalance, "
+        "sticky}, regime?{inputs{name:{flag,offset,gt?}}, rules[{<input>:bool, "
+        "top_pct?|exposure?(0..1, rest in CDI)|park?}]} (flags include bench_above "
+        "and the numeric bench_drawdown, below the benchmark's all-time high)}. "
+        "kind=fixed_weight: {kind, name, description, rebalance, "
         "rebalance_months?, sleeves[...]} with target_pct summing to 100, each "
         "sleeve exactly one of {strategy_ref, target_pct} (a gallery strategy or "
         "CASH_CDI) or {ticker, target_pct} (a listed B3 instrument, e.g. IVVB11.SA). "
@@ -96,7 +102,8 @@ TOOLS = [
           "(\"mcp\" = created by an AI)."),
     _tool("validate_strategy",
           "Check a spec without saving it: schema, expression syntax, factor names, "
-          "market/fundamentals compatibility, portfolio sleeve refs, and that each "
+          "market/fundamentals compatibility, portfolio sleeve refs, that each "
+          "universe.tickers code is priced on the spec's market plane, and that each "
           "ticker sleeve is priced on the B3 plane (an unknown ticker is an error "
           "naming it; one listed after history starts is a warning with its first "
           "price date). Returns the compiled spec and warnings.",

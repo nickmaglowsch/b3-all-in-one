@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtests.core import signal_dsl
+from backtests.core import markets, signal_dsl
 from backtests.core.data import sector_membership_asof
 from backtests.core.sectors import ticker_sectors
 
@@ -169,6 +169,50 @@ def _weight_frame(spec: dict, params: dict, shared: dict) -> pd.DataFrame | None
                   "weight_expr")
 
 
+def _exposure_frame(spec: dict, params: dict, shared: dict) -> pd.DataFrame | None:
+    """``exposure_expr`` evaluated like weight_expr — same scalars, same ``vars``
+    — to the frame each held name's share of its weight is read from; None when
+    the spec has none."""
+    if not spec.get("exposure_expr"):
+        return None
+    cfg = {k: v for k, v in _signal_cfg(spec, params).items()
+           if k not in ("factor", "expr", "legs")}
+    return _frame(resolve_factor({**cfg, "expr": spec["exposure_expr"]}, shared, params),
+                  "exposure_expr")
+
+
+def exposure_scale(xframe: pd.DataFrame | None, i: int, names) -> pd.Series | None:
+    """Each held name's exposure at row i, read at the signal's row (i - 1) and
+    clipped to [0, 1]: the fraction of its weight it keeps, the rest in CDI. A
+    name the expression scores NaN or infinite keeps nothing — no number, no
+    position. None without an exposure_expr (everything kept)."""
+    if xframe is None:
+        return None
+    row = xframe.iloc[i - 1].reindex(list(names))
+    return row.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.0).fillna(0.0)
+
+
+def place(tw: pd.DataFrame, i: int, w: dict, exposure: float, cash, scale=None) -> None:
+    """Write row i's book: each name's weight times the rule's `exposure` and its
+    own `scale` (exposure_expr); what that leaves uninvested goes to `cash`, the
+    CDI column a regime or an exposure_expr adds."""
+    invested = 0.0
+    for t, wt in w.items():
+        if t in tw.columns:
+            x = wt * exposure * (1.0 if scale is None else float(scale.get(t, 0.0)))
+            if not np.isfinite(x):
+                # A weight with no number (a sticky name with no prints, under
+                # adtv weighting) holds nothing; its share goes to cash, never
+                # out of the NAV.
+                x = 0.0
+            tw.iloc[i, tw.columns.get_loc(t)] = x
+            invested += x
+    # A tolerance, not `< 1.0`: a fully invested book sums to 1 only up to float
+    # rounding, and a 1e-16 CDI weight is a trade (and a tax lot) nobody meant.
+    if cash is not None and invested < 1.0 - 1e-9:
+        tw.iloc[i, tw.columns.get_loc(cash)] = 1.0 - invested
+
+
 def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
     """Which names the universe's ``sectors`` admits on each grid date (all of
     them when it names no keyword): the latest
@@ -190,6 +234,29 @@ def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
     if sectors.get("exclude"):
         ok &= ~sector_membership_asof(pit, sectors["exclude"], index).reindex(
             columns=cols, fill_value=False)
+    return ok
+
+
+def allow_list(ok: pd.DataFrame, tickers, market: str) -> pd.DataFrame:
+    """`universe.tickers`: the universe is these names and nothing else (one coin,
+    a basket of ETFs). Spelled as the caller writes them and resolved the way a
+    backtest resolves a benchmark — BTC is BTCUSDT, IVVB11.SA is IVVB11 — so the
+    filter and the plane agree on the name."""
+    if not tickers:
+        return ok
+    names = [markets.plane_symbol(t, market) for t in tickers]
+    if not ok.columns.isin(names).any():
+        # Not a flat book: the data is another market's (a CRYPTO spec nested in a
+        # B3 portfolio, or run with a `market` override), or none of the codes
+        # traded in the window. Either way an all-CDI run under the coin's name
+        # is the one result nobody would think to question.
+        raise ValueError(
+            f"universe.tickers {list(tickers)}: none of them is in this run's "
+            f"universe ({market} plane, {len(ok.columns)} names) — a {market} spec "
+            "cannot run on another market's data (as a portfolio sleeve, or with a "
+            "market override), and the codes must have prices in the window")
+    ok = ok.copy()
+    ok.loc[:, ~ok.columns.isin(names)] = False
     return ok
 
 

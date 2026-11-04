@@ -252,6 +252,76 @@ async def test_regime_and_market_survive_the_save(client):
     assert r.status_code == 422
 
 
+async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
+    """A drawdown-zoned BTC tilt: `exposure` rules on `bench_drawdown` save as
+    written; `universe.tickers` survives the request model and reaches the
+    engine's plane check on save. The code is one no plane carries, so this holds
+    on an empty plane (unreadable: refused) and a loaded one (unknown: refused);
+    the lookup itself is pinned in engine/tests/test_cheapness_regime.py."""
+    h = await auth(client, "mcp-exposure@example.com", modules=["bench"])
+    regime = {"add_ibov": False,
+              "inputs": {"deep": {"flag": "bench_drawdown", "offset": 1, "gt": 0.5}},
+              "rules": [{"deep": True, "exposure": 1.0},
+                        {"default": True, "exposure": 0.25}]}
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "BTC tilt", market="CRYPTO", regime=regime,
+        universe={"min_adtv": 1000000, "min_price": 0}))
+    assert r.status_code == 200, r.text
+    assert r.json()["spec"]["regime"] == regime
+
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "BTC only", market="CRYPTO", regime=regime,
+        universe={"min_adtv": 0, "min_price": 0, "tickers": ["NOSUCHCOINUSDT"]}))
+    assert r.status_code == 422 and "universe.tickers" in r.json()["detail"], r.text
+
+    # A portfolio and the live target run on B3: a crypto strategy cannot sit in
+    # either, whether it is the user's own or a built-in.
+    for ref in ("BTC tilt", "CryptoBTCRegime"):
+        r = await client.post("/strategies/user", headers=h, json={
+            "kind": "fixed_weight", "name": f"Blend {ref}", "rebalance": "QE",
+            "sleeves": [{"strategy_ref": ref, "target_pct": 40},
+                        {"strategy_ref": "CASH_CDI", "target_pct": 60}]})
+        assert r.status_code == 422 and "runs on the CRYPTO plane" in r.json()["detail"], r.text
+    h_live = await auth(client, "mcp-exposure-live@example.com", modules=["bench", "mercado"])
+    r = await client.put("/portfolio/sleeves", headers=h_live, json=[
+        {"strategy_ref": "CryptoBTCRegime", "target_pct": 50},
+        {"strategy_ref": "CASH_CDI", "target_pct": 50}])
+    assert r.status_code == 422 and "runs on the CRYPTO plane" in r.json()["detail"], r.text
+
+    # ...nor move onto another market after it was chosen: an edit that would
+    # leave a live sleeve or a portfolio holding a CRYPTO book is refused.
+    r = await client.post("/strategies/user", headers=h_live, json=_rank("Mine"))
+    assert r.status_code == 200, r.text
+    mine = r.json()["id"]
+    r = await client.put("/portfolio/sleeves", headers=h_live, json=[
+        {"strategy_ref": "Mine", "target_pct": 50}, {"strategy_ref": "CASH_CDI", "target_pct": 50}])
+    assert r.status_code == 200, r.text
+    r = await client.put(f"/strategies/user/{mine}", headers=h_live, json=_rank(
+        "Mine", market="CRYPTO", universe={"min_adtv": 1000000, "min_price": 0}))
+    assert r.status_code == 409 and "cannot run on CRYPTO" in r.json()["detail"], r.text
+    r = await client.put(f"/strategies/user/{mine}", headers=h_live,
+                         json=_rank("Mine", description="still B3"))
+    assert r.status_code == 200, r.text
+
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "Too much", market="CRYPTO",
+        regime={"inputs": {}, "rules": [{"default": True, "exposure": 1.5}]}))
+    assert r.status_code == 422 and "exposure" in r.json()["detail"], r.text
+
+
+async def test_an_own_drawdown_tilt_saves_with_its_exposure_expr(client):
+    """Any asset sized by its own drawdown: exposure_expr survives the request
+    model and the engine's check; one that reads no data is refused."""
+    h = await auth(client, "mcp-own-dd@example.com", modules=["bench"])
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "PETR4 own tilt", exposure_expr="clip(0.2 + ath_drawdown, 0, 1)"))
+    assert r.status_code == 200, r.text
+    assert r.json()["spec"]["exposure_expr"] == "clip(0.2 + ath_drawdown, 0, 1)"
+    r = await client.post("/strategies/user", headers=h,
+                          json=_rank("Flat", exposure_expr="0.5"))
+    assert r.status_code == 422 and "exposure_expr" in r.json()["detail"], r.text
+
+
 async def _seed_done_run(session_maker, tid, strategy, sharpe, ann, tmp: Path) -> str:
     from platform_app.models import BacktestRun
 

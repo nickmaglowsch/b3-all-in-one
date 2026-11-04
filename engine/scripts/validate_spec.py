@@ -31,8 +31,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backtests.core import dividends, markets, signal_dsl, sleeve_tickers
-from backtests.core.regimes import REGIME_FLAGS, regime_flags
+from backtests.core import dividends, markets, regimes, signal_dsl, sleeve_tickers
+# _validate_regime is re-exported: tests import it from here, where it lived.
+from backtests.core.regime_checks import _market_regime_flags, _validate_regime  # noqa: F401
 from backtests.core.sectors import CVM_SECTORS
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 from backtests.core.spec_signal import _LEG_TRANSFORMS
@@ -45,6 +46,8 @@ SHARED_DATA_KEYS = {
     "fin_vol", "vol_60d", "vol_20d", "atr_m", "mf_composite",
     # Market-neutral aliases for the benchmark frames; see shared_data.
     "bench_ret", "bench_px",
+    # Each name's drawdown from its own all-time high (shared_data, full history).
+    "ath_drawdown",
     # Dividends (backtests.core.dividends) — B3 only, see _B3_ONLY_NAMES.
     *dividends.KEYS,
 }
@@ -77,6 +80,10 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
     except ValueError as e:
         errors.append(str(e))
         return False
+    if flags := sorted(_expr_names(expr) & regimes.PER_DATE):
+        errors.append(f"{flags}: one number per date (a regime flag or a CDI/benchmark "
+                      "series), not data an expression can read — gate on it in "
+                      "`regime`; per name, use ath_drawdown")
     tree = ast.parse(expr, mode="eval")
     called = {n.func.id for n in ast.walk(tree)
               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
@@ -84,10 +91,6 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
         errors.append(f"signal expr: unknown function(s) {unknown}; available: "
                       f"{sorted(signal_dsl.FUNCTION_NAMES)}")
     return any(n.startswith("f_") for n in _expr_names(expr))
-
-
-# What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
-_RULE_KEYS = {"top_pct", "park", "default", "min_true"}
 
 
 def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
@@ -100,48 +103,6 @@ def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
             if isinstance(kw, str) and not any(kw.lower() in s for s in lower):
                 errors.append(f"universe.sectors.{key}: unknown CVM sector {kw!r} (a keyword "
                               f"matches as a substring); CVM's sectors: {', '.join(sorted(CVM_SECTORS))}")
-
-
-def _market_regime_flags(market) -> tuple[str, ...]:
-    """The regime flags `market` offers; the base list when the market is unknown
-    (validate() reports that on its own)."""
-    try:
-        return regime_flags(markets.get(market))
-    except ValueError:
-        return REGIME_FLAGS
-
-
-def _check_regime_flag(name: str, cfg, errors: list[str], flags=REGIME_FLAGS) -> None:
-    """A regime input's `flag` must be one of the market series the overlay reads
-    by date. A per-ticker frame like above_ma200 has no one value per date: it
-    read False on every rebalance and the book parked in CDI for the whole run."""
-    flag = cfg.get("flag") if isinstance(cfg, dict) else None
-    if not isinstance(flag, str):
-        errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
-                      "series (e.g. bench_above)")
-    elif flag not in flags:
-        errors.append(f"regime input {name!r}: {flag!r} is not a regime flag — a regime "
-                      "reads one market-wide value per date, so a per-ticker frame "
-                      "(above_ma200, f_*, …) belongs in the signal instead; regime flags: "
-                      f"{', '.join(flags)}")
-
-
-def _validate_regime(regime, errors: list[str], flags=REGIME_FLAGS) -> None:
-    """The overlay's structure: every input reads a flag, every rule conditions
-    only on inputs it declares. A rule keyed on a misspelt input otherwise never
-    matches and the book silently parks in CDI for the whole run."""
-    if not regime:
-        return
-    inputs = regime.get("inputs", {}) if isinstance(regime, dict) else None
-    if not isinstance(inputs, dict) or not isinstance(regime.get("rules"), list):
-        errors.append("regime: needs an `inputs` mapping and a `rules` list")
-        return
-    for name, cfg in inputs.items():
-        _check_regime_flag(name, cfg, errors, flags)
-    for rule in regime["rules"]:
-        extra = set(rule) - set(inputs) - _RULE_KEYS if isinstance(rule, dict) else {"?"}
-        if extra:
-            errors.append(f"regime rule {rule!r}: {sorted(extra)} is not a declared input")
 
 
 def _validate_sleeves(spec: dict, errors: list[str]) -> None:
@@ -184,6 +145,13 @@ def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
             _reads_data(spec["weight_expr"], "weight_expr", sig, local, errors)
         else:
             errors.append("weighting `expr` needs a `weight_expr` expression")
+    if "exposure_expr" in spec:
+        x = spec["exposure_expr"]
+        if isinstance(x, str) and x.strip():
+            funds |= _check_expr(x, errors)
+            _reads_data(x, "exposure_expr", sig, local, errors)
+        else:
+            errors.append("exposure_expr must be an expression string")
     return funds
 
 
@@ -292,6 +260,7 @@ def validate(spec: dict) -> dict:
             _validate_regime(spec.get("regime"), errors,
                              _market_regime_flags(spec.get("market")))
             _validate_sector_keywords(spec, errors)
+            sleeve_tickers.check_universe_shape(spec, errors)
         else:
             _validate_sleeves(spec, errors)
 
@@ -329,8 +298,7 @@ def _b3_only(spec: dict) -> list[str]:
     local = sig.get("vars") if isinstance(sig.get("vars"), dict) else {}
     exprs = [x for x in local.values() if isinstance(x, str)]
     exprs += [src["expr"] for src in sources if isinstance(src.get("expr"), str)]
-    if isinstance(spec.get("weight_expr"), str):
-        exprs.append(spec["weight_expr"])
+    exprs += [spec[k] for k in ("weight_expr", "exposure_expr") if isinstance(spec.get(k), str)]
     names = {src.get("factor") for src in sources}
     for expr in exprs:
         try:
@@ -354,6 +322,9 @@ def report(spec: dict) -> dict:
     if out["ok"] and spec.get("kind") == "fixed_weight":
         errors, out["warnings"] = sleeve_tickers.check(spec)
         out["errors"] += errors
+        out["ok"] = not out["errors"]
+    elif out["ok"] and (spec.get("universe") or {}).get("tickers"):
+        out["errors"] += sleeve_tickers.check_universe(spec)
         out["ok"] = not out["errors"]
     return out
 

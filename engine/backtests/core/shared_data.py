@@ -37,6 +37,17 @@ from backtests.core.data import (
 
 logger = logging.getLogger(__name__)
 
+# Where bench_drawdown / ath_drawdown look for a peak: before any plane's first
+# row, so the running max is over the whole of the history — except on B3, whose
+# 1994 prints before the Plano Real (1 July, CR$ 2,750 = R$ 1) are in another
+# currency and would stand as an all-time high nothing since could reach.
+_PEAK_HISTORY_FROM = {"B3": "1994-07-01"}
+_PEAK_HISTORY_DEFAULT = "1990-01-01"
+
+
+def _peak_from(key: str) -> str:
+    return _PEAK_HISTORY_FROM.get(key, _PEAK_HISTORY_DEFAULT)
+
 
 def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
     """Register what the bundle derives from daily bars — none of it built yet.
@@ -92,6 +103,19 @@ def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
     # fill at a delisting — but it is part of the bundle's published shape.
     shared.defer("tradable",
                  lambda: universe.tradable_mask(intervals, sessions, symbols))
+
+
+def _ath_drawdown(db_path: str, end: str, spec, freq: str, px: pd.DataFrame) -> pd.DataFrame:
+    """`1 - close / running max` per name at each grid date, 0 on a new high,
+    the running max taken over the name's full history on the plane rather than
+    over the load window. NaN before a name's first price."""
+    full = plane.MarketView(db_path, _peak_from(spec.key), end, spec)
+    have = set(full.symbols)
+    frames = list(full.stream(
+        "adj_close", columns=[c for c in px.columns if c in have],
+        reduce=lambda d: (1.0 - d / d.cummax()).clip(lower=0.0).resample(freq).last()))
+    out = pd.concat(frames, axis=1) if frames else pd.DataFrame(index=px.index)
+    return out.reindex(index=px.index, columns=px.columns)
 
 
 def build_shared_data(
@@ -262,6 +286,20 @@ def build_shared_data(
     })
 
     _defer_derived(shared, freq, intervals, sessions, symbols)
+
+    # Drawdown from the benchmark's all-time high. Not off `ibov_px`, which starts
+    # at the load window: a peak read from there is "the high since the pre-roll
+    # began", and a run starting in 2022 would call BTC's 2022 low a new high.
+    # Its own read of the benchmark from the start of the plane instead — one
+    # series, deferred so only a spec that gates on it pays for the query.
+    shared.defer("bench_drawdown", lambda: regimes.drawdown_from_peak(
+        download_benchmark(spec.benchmark, _peak_from(spec.key), end, market=spec.key),
+        freq))
+    # The same, per name: each one's drawdown from its own all-time high. Its peak
+    # needs the name's whole history, so it streams the run's names over a view
+    # of the plane from the start — daily closes, split-corrected as the grid's
+    # are — and keeps only the grid-shaped answer of each batch.
+    shared.defer("ath_drawdown", lambda: _ath_drawdown(db_path, end, spec, freq, px))
 
     # ── CVM sector classification (survivorship-free, from the CVM register) ──
     # Long-format [root, ref_date, sector], read from the plane like everything

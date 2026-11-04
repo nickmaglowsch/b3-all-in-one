@@ -32,6 +32,7 @@ _VARS_MAX, _LEGS_MAX, _KEYWORDS_MAX, _KEYWORD_LEN = 16, 8, 20, 80
 # yfinance era. `^BVSP` and `$IBOV` fail it on purpose: indices are not tradable,
 # and the plane's `$` namespace is stored series (CDI, IPCA), not instruments.
 _TICKER_MAX = 16
+_UNIVERSE_TICKERS_MAX = 50    # engine/scripts/validate_spec.py says the same
 _TICKER = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}(\.SA)?")
 _FRACTIONAL = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}F")
 # /estrategia's sleeve picker gives ticker options this value prefix
@@ -71,6 +72,11 @@ class _RankUniverse(_Finite):
     min_price: float = Field(default=1.0, ge=0)
     smallcap_below_median: bool = False
     sectors: _Sectors | None = None
+    # An allow-list: the universe is these codes only (["BTCUSDT"], a basket of
+    # ETFs). Spelled for the spec's market; whether that plane prices each one is
+    # the engine's to say on save (validate_spec), as for a ticker sleeve.
+    tickers: Annotated[list[Annotated[str, Field(min_length=1, max_length=_TICKER_MAX)]],
+                       Field(min_length=1, max_length=_UNIVERSE_TICKERS_MAX)] | None = None
 
 
 class _RankLeg(_Finite):
@@ -151,6 +157,9 @@ class RankStrategyIn(_Finite):
     weighting: Literal["equal", "adtv", "market_cap", "expr"] = "equal"
     weight_expr: str | None = Field(default=None, max_length=_TEXT_MAX)
     max_weight: float | None = Field(default=None, gt=0, le=1)
+    # Each held name keeps clip(value, 0, 1) of its weight, the rest in CDI — e.g.
+    # "ath_drawdown" for "hold more the further it is below its own high".
+    exposure_expr: str | None = Field(default=None, min_length=1, max_length=_TEXT_MAX)
     # None = B3. Unknown planes are refused here, never silently run as B3.
     market: _MARKET | None = None
     universe: _RankUniverse = Field(default_factory=_RankUniverse)
@@ -258,7 +267,7 @@ def _compile_rank(m: RankStrategyIn) -> dict:
         spec["regime"] = m.regime
     if m.warmup_pad is not None:
         spec["warmup_pad"] = m.warmup_pad
-    for key in ("weight_expr", "max_weight", "rebalance_months"):
+    for key in ("weight_expr", "exposure_expr", "max_weight", "rebalance_months"):
         if getattr(m, key) is not None:
             spec[key] = getattr(m, key)
     return spec
@@ -287,10 +296,39 @@ def _compile_portfolio(m: PortfolioStrategyIn) -> dict:
     }
 
 
+def off_b3_refusal(ref: str, market: str) -> HTTPException:
+    """A portfolio and the live target run on the B3 plane (FixedWeight, and
+    advise_weights, load B3), so a US or crypto strategy inside one would be fed
+    another market's names: an empty book — or, with universe.tickers, a run
+    that fails. Refused where it is chosen, not discovered at run time."""
+    return HTTPException(422, f"sleeve {ref!r} runs on the {market} plane; portfolios "
+                              "and the live target run on B3 — backtest it on its own")
+
+
+def off_b3_refs(builtins: list[dict], rows) -> dict[str, str]:
+    """{name: market} of the built-ins and user rank strategies that do not run
+    on B3 — the refs a portfolio sleeve may not take."""
+    out = {s["name"]: s["market"] for s in builtins if (s.get("market") or "B3") != "B3"}
+    return out | {r.name: r.spec["market"] for r in rows
+                  if r.kind == "rank_and_hold" and (r.spec or {}).get("market", "B3") != "B3"}
+
+
+def check_live_refs(refs: list[str], gallery: dict[str, dict]) -> None:
+    """The live target's sleeves: CASH_CDI or a gallery strategy that runs on B3
+    (advise_weights loads the B3 plane, as a portfolio does)."""
+    for ref in refs:
+        if ref != "CASH_CDI" and ref not in gallery:
+            raise HTTPException(422, f"unknown strategy_ref: {ref}")
+        if (market := gallery.get(ref, {}).get("market") or "B3") != "B3":
+            raise off_b3_refusal(ref, market)
+
+
 def check_sleeve_refs(m: PortfolioStrategyIn, *, resolvable: set[str],
-                      user_portfolios: set[str]) -> None:
-    """Every strategy_ref names something the gallery can run, and never another
-    user portfolio (or this one): portfolios do not nest, so no cycle can form.
+                      user_portfolios: set[str],
+                      off_b3: dict[str, str] | None = None) -> None:
+    """Every strategy_ref names something the gallery can run, on B3 (`off_b3`:
+    {name: market} of the ones that run elsewhere), and never another user
+    portfolio (or this one): portfolios do not nest, so no cycle can form.
     Ticker sleeves are not refs — the engine checks those against the plane."""
     for s in m.sleeves:
         ref = s.strategy_ref
@@ -299,6 +337,8 @@ def check_sleeve_refs(m: PortfolioStrategyIn, *, resolvable: set[str],
         if ref in user_portfolios or ref == m.name.strip():
             raise HTTPException(422, f"sleeve {ref!r}: a portfolio cannot reference "
                                      f"another user portfolio (would recurse)")
+        if off_b3 and ref in off_b3:
+            raise off_b3_refusal(ref, off_b3[ref])
         if ref not in resolvable:
             hint = (" (a listed instrument goes in `ticker`, not `strategy_ref`)"
                     if _TICKER.fullmatch(ref.strip().upper()) else "")

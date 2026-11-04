@@ -18,7 +18,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,8 +36,10 @@ from platform_app.models import (
 )
 from platform_app.routes_portfolio_index import bounded, current_rf_marks
 from platform_app.routes_portfolio_settings import _settings_dict
+from platform_app.strategy_refs import _cascade_rename, _refuse_if_used
 from platform_app.strategy_specs import (
-    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank, check_sleeve_refs, live_sleeves,
+    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank, check_live_refs,
+    check_sleeve_refs, live_sleeves, off_b3_refs,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant, get_owned
 
@@ -435,10 +437,7 @@ async def put_sleeves(
     # CASH_CDI is the risk-free sleeve; anything else must be a real gallery spec
     # (built-ins + this tenant's user strategies).
     gallery = {s["name"]: s for s in await _gallery(session, tid)}
-    known = set(gallery) | {"CASH_CDI"}
-    for ref in refs:
-        if ref not in known:
-            raise HTTPException(422, f"unknown strategy_ref: {ref}")
+    check_live_refs(refs, gallery)
 
     await xact_lock(session, "sleeves", tid)
     await session.execute(delete(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid))
@@ -1449,7 +1448,8 @@ async def _compile_and_validate(
         user_rank = {r.name for r in rows if r.kind == "rank_and_hold"}
         check_sleeve_refs(body, resolvable=builtin_names | user_rank | {"CASH_CDI"},
                           user_portfolios={r.name for r in rows if r.kind == "fixed_weight"
-                                           and r.id != exclude_id})
+                                           and r.id != exclude_id},
+                          off_b3=off_b3_refs(await _builtins(), rows))
         spec = _compile_portfolio(body)
 
     report = await _validate_spec_engine(spec)
@@ -1507,38 +1507,6 @@ async def create_user_strategy(
     return {**_user_strategy_dict(row), "warnings": warnings}
 
 
-async def _other_portfolios(
-    session: AsyncSession, tid: uuid.UUID, exclude_id: uuid.UUID
-) -> list[UserStrategy]:
-    """The tenant's user portfolios (fixed_weight) other than ``exclude_id`` —
-    the only specs that can name another strategy in a sleeve."""
-    return list(await session.scalars(
-        select(UserStrategy).where(
-            UserStrategy.tenant_id == tid, UserStrategy.kind == "fixed_weight",
-            UserStrategy.id != exclude_id,
-        )
-    ))
-
-
-async def _cascade_rename(
-    session: AsyncSession, tid: uuid.UUID, old: str, new: str, exclude_id: uuid.UUID
-) -> None:
-    """Rename old→new across the tenant's live sleeves and other user portfolios
-    that reference it (keeps the registry key consistent)."""
-    await session.execute(
-        update(PortfolioSleeve)
-        .where(PortfolioSleeve.tenant_id == tid, PortfolioSleeve.strategy_ref == old)
-        .values(strategy_ref=new)
-    )
-    for o in await _other_portfolios(session, tid, exclude_id):
-        sleeves = o.spec.get("sleeves", [])
-        if any(sl.get("strategy") == old for sl in sleeves):
-            o.spec = {**o.spec, "sleeves": [
-                {**sl, "strategy": new} if sl.get("strategy") == old else sl
-                for sl in sleeves
-            ]}
-
-
 @strategies_router.put("/user/{sid}")
 async def update_user_strategy(
     sid: str,
@@ -1550,6 +1518,9 @@ async def update_user_strategy(
     row = await _get_user_strategy(sid, tid, session)
     if body.kind != row.kind:
         raise HTTPException(422, "cannot change a strategy's kind — delete and recreate")
+    # Portfolios and the live target run on B3: a sleeve may not move off it.
+    if body.kind == "rank_and_hold" and (body.market or "B3") != "B3":
+        await _refuse_if_used(session, tid, row, f" — it cannot run on {body.market}")
     spec, warnings = await _compile_and_validate(body, session, tid, exclude_id=row.id)
     old_name, new_name = row.name, body.name.strip()
     row.name = new_name
@@ -1574,15 +1545,7 @@ async def delete_user_strategy(
 ) -> dict:
     _user, tid = tenant
     row = await _get_user_strategy(sid, tid, session)
-    n = await session.scalar(
-        select(func.count()).select_from(PortfolioSleeve)
-        .where(PortfolioSleeve.tenant_id == tid, PortfolioSleeve.strategy_ref == row.name)
-    )
-    if n:
-        raise HTTPException(409, f"{row.name!r} is a live sleeve — remove it from /portfolio/sleeves first")
-    for o in await _other_portfolios(session, tid, row.id):
-        if any(sl.get("strategy") == row.name for sl in o.spec.get("sleeves", [])):
-            raise HTTPException(409, f"{row.name!r} is referenced by portfolio {o.name!r}")
+    await _refuse_if_used(session, tid, row)
     await session.delete(row)
     await session.commit()
     _TENANT_GALLERY.pop(tid, None)

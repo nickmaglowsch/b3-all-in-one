@@ -19,7 +19,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-
 from b3_pipeline import anbima_series, config, storage
 from backtests.core import markets
 
@@ -229,3 +228,83 @@ def check(spec: dict) -> tuple[list[str], list[str]]:
             if note:
                 warnings.append(note)
     return errors, warnings
+
+
+# How many names a universe.tickers allow-list may hold: a hand-picked list, not
+# a way to restate the market. platform strategy_specs says the same.
+_UNIVERSE_TICKERS_MAX = 50
+
+
+def check_universe_shape(spec: dict, errors: list[str]) -> None:
+    """universe.tickers, when given, is a short non-empty list of codes. Whether
+    the plane prices them is report()'s to say; this is the shape."""
+    uni = spec.get("universe") or {}
+    if "tickers" not in uni:
+        return
+    t = uni["tickers"]
+    if (not isinstance(t, list) or not t or len(t) > _UNIVERSE_TICKERS_MAX
+            or not all(isinstance(x, str) and x.strip() for x in t)):
+        errors.append(f"universe.tickers: a list of 1..{_UNIVERSE_TICKERS_MAX} ticker "
+                      "codes (e.g. [\"BTCUSDT\"] on CRYPTO, [\"IVVB11\"] on B3)")
+        return
+    # Distinct names as the run will see them: BTC and BTCUSDT are one coin, and
+    # with dedup_roots PETR3/PETR4 are one company. (min_hold is a floor on the
+    # held count, not a gate — it never stops a book from investing.)
+    try:
+        spec_market = markets.get(spec.get("market"))
+    except ValueError:
+        return                                          # validate() reports it
+    names = {markets.plane_symbol(x, spec_market.key) for x in t}
+    sel = spec.get("selection") or {}
+    if sel.get("dedup_roots") and spec_market.root_len:
+        names = {n[:spec_market.root_len] for n in names}
+    need = sel.get("min_names", 5)                      # RankAndHold's default
+    if isinstance(need, int) and need > len(names):
+        errors.append(f"selection.min_names = {need} but universe.tickers holds "
+                      f"{len(names)} distinct name(s): the book could never invest "
+                      "— lower min_names")
+
+
+def _universe_symbols_found(symbols: list[str], key: str) -> set[str]:
+    """Which of `symbols` the market's universe query can see: priced on the
+    market's table, and of the shape `MarketSpec.ticker_sql` admits — so a
+    BTCFDUSD on the crypto plane, outside the `%USDT` universe, is not found."""
+    spec = markets.get(key)
+    col, table = spec.symbol_column, spec.table
+    params = {f"s{i}": s for i, s in enumerate(symbols)}
+    marks = ", ".join(f":{k}" for k in params)
+    price = "adj_close" if table == "prices" else "adj_close_brl"
+    scope = " AND market = :market" if table != "prices" else ""
+    shape = f" AND {spec.ticker_sql}" if spec.ticker_sql else ""
+    if scope:
+        params["market"] = spec.key
+    with _connect() as conn:
+        found = storage.read_sql(
+            f"SELECT DISTINCT {col} AS symbol FROM {table} "
+            f"WHERE {col} IN ({marks}) AND {price} IS NOT NULL{scope}{shape}",
+            conn, params=params)
+    return set(found["symbol"])
+
+
+def check_universe(spec: dict) -> list[str]:
+    """Errors for a rank spec's `universe.tickers` allow-list; [] when it has none.
+
+    The same failure check() exists for, one step removed: a code the plane never
+    priced leaves the universe empty, the book parks in CDI on every date, and the
+    run reports a calm, cash-like strategy under the name of the coin. Each code
+    is resolved as the backtest resolves it (markets.plane_symbol) and looked up
+    on the spec's own market. A plane that cannot be read is an error, as there.
+    """
+    tickers = (spec.get("universe") or {}).get("tickers") or []
+    if not tickers:
+        return []
+    key = markets.get(spec.get("market")).key
+    symbols = {t: markets.plane_symbol(t, key) for t in tickers}
+    try:
+        found = _universe_symbols_found(sorted(set(symbols.values())), key)
+    except Exception as e:  # noqa: BLE001 — any driver error means "not checked"
+        print(f"sleeve_tickers: plane read failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return [f"could not check universe.tickers: the {key} price plane could not be read"]
+    return [f"universe.tickers: unknown ticker {t!r} — the {key} price plane has no "
+            f"prices for it{' (crypto pairs are quoted in USDT, e.g. BTCUSDT)' if key == 'CRYPTO' else ''}"
+            for t, sym in symbols.items() if sym not in found]

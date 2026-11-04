@@ -224,6 +224,12 @@ universe:
                            #   "Energia Elétrica", "Comércio (Atacado e Varejo)"…);
                            #   a holding ("Emp. Adm. Part. - Bancos") counts as
                            #   its sector. A keyword matching none fails validation.
+  tickers: [BTCUSDT]       # optional allow-list: the universe is these codes only
+                           #   (1..50), spelled for the market (BTC → BTCUSDT,
+                           #   IVVB11.SA → IVVB11). Checked on save against the
+                           #   market's plane and its universe shape: an unpriced
+                           #   code — or BTCFDUSD, outside crypto's %USDT pairs — is
+                           #   an error, not a book that parks in CDI forever.
 
 signal:
   # The factor is DATA. Reference a named signal from signals.yaml...
@@ -414,11 +420,61 @@ An **N-of-M vote** — "invest when at least 2 of these 3 signals are on" — is
     - {default: true, park: true}
 ```
 
+A **partial book** — invest some of it, hold the rest in CDI — is `exposure` on
+the rule, a number in [0, 1]. Each held name's weight is scaled by it and
+`CDI_ASSET` takes `1 - exposure`; `exposure: 0` is `park`, and a rule without it
+invests everything, as before. The two may not appear on one rule.
+
+```yaml
+regime:
+  add_ibov: false
+  inputs:
+    deep:  {flag: bench_drawdown, offset: 1, gt: 0.50}
+    cheap: {flag: bench_drawdown, offset: 1, gt: 0.25}
+  rules:
+    - {deep: true,  exposure: 1.0}
+    - {cheap: true, exposure: 0.6}
+    - {default: true, exposure: 0.2}
+```
+
+`bench_drawdown` is the *market's benchmark*; to size each asset by **its own**
+drawdown, `exposure_expr` (top level, beside `weight_expr`) is an expression —
+same language, `vars` and scalars — whose value at the signal row each held name
+keeps `clip(·, 0, 1)` of its weight; the rest goes to `CDI_ASSET` (a NaN or
+infinite value keeps nothing). It multiplies with a rule's `exposure` and needs
+no regime. `ath_drawdown` is the frame it is usually built on: per name,
+`1 - close / running max` at each grid date, the running max over the name's
+whole history on the plane (daily, split-corrected closes, streamed lazily over
+the market's names — a spec that does not read it does not pay for it, one that
+does reads that history once more, which on US is a noticeably longer run).
+Like every price here it is **in BRL**: on US and crypto a weakening real lifts a
+name toward a new BRL high while its dollar price is still below its peak. On B3
+both drawdowns read their peak from the Plano Real on (1994-07-01): the
+cruzeiro-real prints before it are another currency. A thin month (too few
+names) is parked in CDI only by a regime's `park_when_too_few`, as before.
+
+```yaml
+universe: {min_adtv: 0, min_price: 0, tickers: [ETHUSDT]}
+exposure_expr: "clip(0.2 + ath_drawdown, 0, 1)"   # 20% at the high, all in 80% below
+```
+
+Exposure is a target the book is rebalanced back to on every row it trades (every
+grid row, or only the `rebalance_months` ones, between which it drifts), so a 20%
+book whose holding doubles *sells* to get back to 20% — and pays tax on it. It
+models "hold more when cheap", not "never sell and deploy a cash pile".
+
 Regime flags in `shared_data` — market-wide series, one value per rebalance date
 (`backtests.core.regimes.REGIME_FLAGS`): `is_easing`, `ibov_above`, `ibov_calm`,
 `ibov_uptrend`, `ibov_vol_monthly`, `ibov_vol_pctrank`, their market-neutral
 `bench_*` aliases (`bench_above`, …), and the monthly returns `cdi_monthly`,
-`ibov_ret`, `bench_ret` (with `gt`). On CRYPTO, whose benchmark prints every
+`ibov_ret`, `bench_ret` (with `gt`), and `bench_drawdown` (with `gt`): how far
+the market's benchmark is below its all-time high, `1 - close / running max` at
+each period end, 0 on a new high, the peak read off the benchmark's whole history
+(not the run's load window), in BRL like every price here. A numeric flag without
+`gt` is refused (read bare it is true on almost every date), and no flag — nor
+`cdi_daily`/`cdi_cumul_63d` — may be read inside an expression: one value per
+date aligned against a date x ticker frame is NaN everywhere (per name, use
+`ath_drawdown`). On CRYPTO, whose benchmark prints every
 calendar day, the daily `ibov_ret_20d_daily` and `ibov_vol_20d_daily` count too
 (`regimes.regime_flags`); elsewhere a month-end weekend has no print and they
 would read False. `validate_spec` refuses any other `flag` at save, and a

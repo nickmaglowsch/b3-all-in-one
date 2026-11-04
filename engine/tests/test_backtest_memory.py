@@ -548,7 +548,10 @@ def test_every_regime_flag_is_a_series_on_the_grid(bundle):
     for key in REGIME_FLAGS:
         flag = bundle[key]
         assert isinstance(flag, pd.Series), key
-        assert flag.index.isin(grid).all(), key
+        # What the read needs: every grid date the flag covers is on its index.
+        # (Not the converse: CDI may run past the equity grid, harmlessly.)
+        covered = grid[(grid >= flag.index.min()) & (grid <= flag.index.max())]
+        assert len(covered) and covered.isin(flag.index).all(), key
     assert isinstance(bundle["above_ma200"], pd.DataFrame)
     assert "above_ma200" not in REGIME_FLAGS
 

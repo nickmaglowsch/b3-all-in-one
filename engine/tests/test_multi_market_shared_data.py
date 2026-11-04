@@ -138,3 +138,26 @@ def test_b3_is_the_default_and_unchanged(plane):
     default = build_shared_data(plane, "2020-01-01", "2020-03-30", "ME")
     assert set(default["ret"].columns) == {"PETR4", "VALE3"}
     assert default["market"] == "B3"
+
+
+@pytest.mark.parametrize("market", ["B3", "US", "CRYPTO"])
+@pytest.mark.parametrize("freq", ["ME", "W-FRI", "QE"])
+def test_every_regime_flag_reads_on_every_grid_date_it_covers(plane, market, freq):
+    """_eval_regime reads a flag as `flag.get(grid_date)`, so each flag the
+    validator admits on a market must be a Series holding every rebalance date
+    it covers — at every cadence. On CRYPTO that includes the daily benchmark
+    series: the benchmark prints every calendar day, weekends included."""
+    from backtests.core.regimes import regime_flags
+
+    shared = build_shared_data(plane, "2020-01-01", "2020-03-30", freq, market=market)
+    grid = shared["ret"].index
+    checked = 0
+    for key in regime_flags(markets.get(market)):
+        flag = shared[key]
+        assert isinstance(flag, pd.Series), key
+        covered = grid[(grid >= flag.index.min()) & (grid <= flag.index.max())]
+        assert covered.isin(flag.index).all(), (key, list(covered))
+        checked += len(covered) > 0
+    # Not vacuous: at QE this 90-day plane has one label, past the daily data's
+    # last print and before ibov_ret's first return, but the monthly flags hold it.
+    assert checked

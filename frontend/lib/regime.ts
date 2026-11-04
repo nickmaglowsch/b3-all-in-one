@@ -5,8 +5,10 @@
 // validate_spec enforces at save. A per-ticker frame does not belong here:
 // `above_ma200` (dates x tickers) used to be offered, read False on every date
 // and parked the book in CDI for the whole run; it stays usable in a signal
-// expression. ibov_vol_pctrank is a 0..1 percentile → usually paired with `gt`;
-// the rest read as booleans.
+// expression. The *_vol_pctrank flags are 0..1 percentiles → usually paired with
+// `gt`; the rest read as booleans. `bench_*` are the market-neutral aliases of
+// `ibov_*` (the same series, computed off the market's own benchmark): a US or
+// crypto spec says `bench_above` rather than gating on "IBOV".
 //
 // Pure and import-free, because `npm test` runs this file straight under node --test.
 export const REGIME_FLAGS = [
@@ -15,6 +17,10 @@ export const REGIME_FLAGS = [
   "ibov_calm",
   "ibov_uptrend",
   "ibov_vol_pctrank",
+  "bench_above",
+  "bench_calm",
+  "bench_uptrend",
+  "bench_vol_pctrank",
 ] as const;
 
 /** The picker's options for an input currently reading `current`. A stored spec

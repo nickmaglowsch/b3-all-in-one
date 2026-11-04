@@ -71,6 +71,11 @@ class MarketSpec:
     # (tax.b3_rules, taxcore `apuracao.REGRAS`). The rate and isenção above are
     # then the ações line's. None: one line for every sale, as US and crypto have.
     asset_classes: str | None = None
+    # Whether the benchmark prints every calendar day (crypto). Then a *daily*
+    # benchmark series has a value on every rebalance label — month-, quarter-
+    # and week-ends alike — and reads correctly as a regime flag
+    # (regimes.regime_flags). On B3 or US a month-end Saturday has no print.
+    benchmark_every_day: bool = False
 
 
 # Character-for-character the predicate the two B3 loaders and
@@ -121,6 +126,7 @@ MARKETS = {
         # a "universe" would hold BTCUSDT, BTCFDUSD and BTCTRY as three names.
         ticker_sql="symbol LIKE '%USDT'",
         benchmark="BTCUSDT", aliases={"BTC": "BTCUSDT"}, suffix_strip=None,
+        benchmark_every_day=True,
         # A -45% day is not a glitch here and a +100% day is not either.
         glitch_up=5.0, glitch_down=-0.90, detect_splits=False, root_len=None,
         default_min_adtv=1_000_000.0, default_min_price=0.0,

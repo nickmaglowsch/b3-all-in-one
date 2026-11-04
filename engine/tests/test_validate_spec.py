@@ -183,3 +183,13 @@ def test_every_built_in_regime_validates():
         errors: list[str] = []
         _validate_regime(regime, errors)
         assert errors == [], name
+
+
+def test_a_daily_benchmark_flag_is_a_regime_flag_only_where_it_prints_daily():
+    # On crypto the benchmark prints every calendar day, so a daily series has a
+    # value on every rebalance label; on B3 a month-end weekend reads False.
+    regime = {**_GATE, "inputs": {"trend": {"flag": "ibov_ret_20d_daily", "gt": 0}}}
+    assert validate(_rank({"factor": "momentum"}, regime=regime, market="CRYPTO"))["ok"]
+    r = validate(_rank({"factor": "momentum"}, regime=regime))
+    assert not r["ok"] and any("'ibov_ret_20d_daily' is not a regime flag" in e
+                               for e in r["errors"])

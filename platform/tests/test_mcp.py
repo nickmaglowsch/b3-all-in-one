@@ -252,6 +252,33 @@ async def test_regime_and_market_survive_the_save(client):
     assert r.status_code == 422
 
 
+async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
+    """A drawdown-zoned BTC tilt: `exposure` rules on `bench_drawdown` save as
+    written; `universe.tickers` survives the request model and is checked against
+    the plane on save — here an empty one, so it is refused, naming the field,
+    rather than saved as a book that would sit in CDI for its whole history."""
+    h = await auth(client, "mcp-exposure@example.com", modules=["bench"])
+    regime = {"add_ibov": False,
+              "inputs": {"deep": {"flag": "bench_drawdown", "offset": 1, "gt": 0.5}},
+              "rules": [{"deep": True, "exposure": 1.0},
+                        {"default": True, "exposure": 0.25}]}
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "BTC tilt", market="CRYPTO", regime=regime,
+        universe={"min_adtv": 1000000, "min_price": 0}))
+    assert r.status_code == 200, r.text
+    assert r.json()["spec"]["regime"] == regime
+
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "BTC only", market="CRYPTO", regime=regime,
+        universe={"min_adtv": 0, "min_price": 0, "tickers": ["BTCUSDT"]}))
+    assert r.status_code == 422 and "universe.tickers" in r.json()["detail"], r.text
+
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "Too much", market="CRYPTO",
+        regime={"inputs": {}, "rules": [{"default": True, "exposure": 1.5}]}))
+    assert r.status_code == 422 and "exposure" in r.json()["detail"], r.text
+
+
 async def _seed_done_run(session_maker, tid, strategy, sharpe, ann, tmp: Path) -> str:
     from platform_app.models import BacktestRun
 

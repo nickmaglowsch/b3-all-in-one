@@ -37,6 +37,10 @@ from backtests.core.data import (
 
 logger = logging.getLogger(__name__)
 
+# Where bench_drawdown looks for the benchmark's peak: before any plane's first
+# row, so the running max is over the whole of the benchmark's history.
+_PEAK_HISTORY_FROM = "1990-01-01"
+
 
 def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
     """Register what the bundle derives from daily bars — none of it built yet.
@@ -262,6 +266,15 @@ def build_shared_data(
     })
 
     _defer_derived(shared, freq, intervals, sessions, symbols)
+
+    # Drawdown from the benchmark's all-time high. Not off `ibov_px`, which starts
+    # at the load window: a peak read from there is "the high since the pre-roll
+    # began", and a run starting in 2022 would call BTC's 2022 low a new high.
+    # Its own read of the benchmark from the start of the plane instead — one
+    # series, deferred so only a spec that gates on it pays for the query.
+    shared.defer("bench_drawdown", lambda: regimes.drawdown_from_peak(
+        download_benchmark(spec.benchmark, _PEAK_HISTORY_FROM, end, market=spec.key),
+        freq))
 
     # ── CVM sector classification (survivorship-free, from the CVM register) ──
     # Long-format [root, ref_date, sector], read from the plane like everything

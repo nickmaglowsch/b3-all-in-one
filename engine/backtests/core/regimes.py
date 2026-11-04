@@ -60,3 +60,24 @@ def benchmark_signals(bench_px: pd.Series, freq: str) -> dict:
         "uptrend": bench_px.pct_change(20).resample(freq).last() > 0,
         "above": bench_m > bench_m.rolling(10).mean(),
     }
+
+
+def drawdown_from_peak(bench_px: pd.Series, freq: str) -> pd.Series:
+    """How far the benchmark sits below its all-time high, on the rebalance grid:
+    ``1 - price / running max`` at each period's last session, in [0, 1].
+
+    0 on a new high, 0.5 at half the peak. The running max is causal — the peak
+    on a date is the highest close up to that date — and it is only an all-time
+    high if `bench_px` starts at the start of history: shared_data feeds it the
+    benchmark's full series, not the backtest's load window, so two runs of one
+    spec over different windows read the same drawdown on the dates they share.
+
+    Closes, not intraday highs: the plane carries `adj_close` for every
+    benchmark and that is the price the rest of the bundle reads.
+    """
+    px = bench_px.dropna()
+    px = px[px > 0]
+    if px.empty:
+        return pd.Series(dtype=float, index=pd.DatetimeIndex([]))
+    dd = (1.0 - px / px.cummax()).clip(lower=0.0)
+    return dd.resample(freq).last()

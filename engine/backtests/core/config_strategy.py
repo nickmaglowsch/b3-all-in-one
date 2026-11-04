@@ -27,8 +27,8 @@ from backtests.core import markets
 # resolve_factor and _signal_defs are re-exported: scripts and tests import them
 # from here, where they lived before spec_signal.
 from backtests.core.spec_signal import (  # noqa: F401
-    _build_signal, _signal_defs, _weight_frame, only_in_months, resolve_factor,
-    sector_filter,
+    _build_signal, _signal_defs, _weight_frame, allow_list, only_in_months,
+    resolve_factor, sector_filter,
 )
 from backtests.core.strategy_base import (
     market_param, cap_and_renormalize,
@@ -37,11 +37,16 @@ from backtests.core.strategy_base import (
 )
 
 
+# What a regime rule may say besides the inputs it conditions on.
+_RULE_ACTIONS = ("top_pct", "exposure", "park", "default")
+
+
 def _eval_regime(regime: dict, shared: dict, i: int, index=None):
     """Evaluate the regime rules at rebalance row i. Each input is a boolean read
     of a shared_data flag at the date `index[i - offset]` (optionally `> gt`);
     `index` is the rebalance grid, ``shared["ret"].index`` by default. Returns the
-    first matching rule dict (carries `top_pct` or `park`), or None (=> cash).
+    first matching rule dict (carries `top_pct`, `exposure` or `park`), or None
+    (=> cash).
 
     By date, not position: the flags live on the benchmark's / CDI's own index,
     which can start later than the price grid (SPY via AlphaVantage ~1999-11, a
@@ -70,10 +75,33 @@ def _eval_regime(regime: dict, shared: dict, i: int, index=None):
             if sum(vals.values()) >= int(rule["min_true"]):
                 return rule
             continue
-        conds = {k: v for k, v in rule.items() if k not in ("top_pct", "park", "default")}
+        conds = {k: v for k, v in rule.items() if k not in _RULE_ACTIONS}
         if all(vals.get(k) == v for k, v in conds.items()):
             return rule
     return None
+
+
+def _regime_action(regime: dict, shared: dict, i: int, index, top_pct):
+    """What the regime says to do at row i: None to park the whole book in CDI,
+    else ``(top_pct, exposure)`` — the selection cut and the fraction of the book
+    to invest, the rest in CDI. ``exposure: 0`` is a park by another name."""
+    action = _eval_regime(regime, shared, i, index)
+    if action is None or action.get("park"):
+        return None
+    exposure = float(action.get("exposure", 1.0))
+    if exposure <= 0.0:
+        return None
+    return action.get("top_pct", top_pct), exposure
+
+
+def _place(tw: pd.DataFrame, i: int, w: dict, exposure: float, cash) -> None:
+    """Write row i's book, scaled to `exposure`; the remainder goes to `cash`
+    (only ever below 1 under a regime, which is what adds the cash column)."""
+    for t, wt in w.items():
+        if t in tw.columns:
+            tw.iloc[i, tw.columns.get_loc(t)] = wt * exposure
+    if exposure < 1.0:
+        tw.iloc[i, tw.columns.get_loc(cash)] = 1.0 - exposure
 
 
 class _SpecStrategy(StrategyBase):
@@ -160,7 +188,8 @@ class RankAndHold(_SpecStrategy):
         smallcap = bool(uni.get("smallcap_below_median", False))
         weighting = spec.get("weighting", "equal")
         wframe = _weight_frame(spec, params, shared_data)
-        sector_ok = sector_filter(uni.get("sectors"), shared_data, ret.index)
+        sector_ok = allow_list(sector_filter(uni.get("sectors"), shared_data, ret.index),
+                                uni.get("tickers"), self.market)
 
         signal, max_lb = _build_signal(spec, params, shared_data)
         start = int(spec.get("warmup", max_lb + int(spec.get("warmup_pad", 1))))
@@ -184,13 +213,13 @@ class RankAndHold(_SpecStrategy):
 
         prev_sel: list = []
         for i in range(start, len(ret)):
-            eff_top_pct = top_pct
+            eff_top_pct, exposure = top_pct, 1.0
             if regime:
-                action = _eval_regime(regime, shared_data, i, ret.index)
-                if action is None or action.get("park"):
+                action = _regime_action(regime, shared_data, i, ret.index, top_pct)
+                if action is None:
                     tw.iloc[i, cash_loc] = 1.0
                     continue
-                eff_top_pct = action.get("top_pct", top_pct)
+                eff_top_pct, exposure = action
 
             adtv_r = adtv.iloc[i - 1]
             raw_r = raw_close.iloc[i - 1]
@@ -224,9 +253,7 @@ class RankAndHold(_SpecStrategy):
                 selected = valid.nlargest(n).index.tolist()
             prev_sel = selected
             w = self._weights(selected, adtv_r, wframe, i, weighting, spec.get("max_weight"))
-            for t, wt in w.items():
-                if t in tw.columns:
-                    tw.iloc[i, tw.columns.get_loc(t)] = wt
+            _place(tw, i, w, exposure, cash)
 
         return r, only_in_months(tw, spec.get("rebalance_months"))
 

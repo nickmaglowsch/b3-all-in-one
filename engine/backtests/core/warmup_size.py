@@ -37,6 +37,9 @@ _LEAF_COST = {
     **dict.fromkeys(("vol_5m", "vol_60d"), (5, 0)),
     **dict.fromkeys(("vol_2m", "vol_20d"), (2, 0)),
     **dict.fromkeys(("ibov_above", "bench_above"), (10, 0)),
+    # Off its own full-history read of the benchmark (shared_data), so the load
+    # window lends it nothing and it needs nothing from it.
+    "bench_drawdown": (0, 0),
     **dict.fromkeys(("ibov_uptrend", "bench_uptrend", "ibov_vol_monthly",
                      "bench_vol_monthly"), (1, 21)),
     **dict.fromkeys(("ibov_vol_pctrank", "bench_vol_pctrank", "ibov_calm",

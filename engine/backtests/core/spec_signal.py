@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from backtests.core import signal_dsl
+from backtests.core import markets, signal_dsl
 from backtests.core.data import sector_membership_asof
 from backtests.core.sectors import ticker_sectors
 
@@ -190,6 +190,19 @@ def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
     if sectors.get("exclude"):
         ok &= ~sector_membership_asof(pit, sectors["exclude"], index).reindex(
             columns=cols, fill_value=False)
+    return ok
+
+
+def allow_list(ok: pd.DataFrame, tickers, market: str) -> pd.DataFrame:
+    """`universe.tickers`: the universe is these names and nothing else (one coin,
+    a basket of ETFs). Spelled as the caller writes them and resolved the way a
+    backtest resolves a benchmark — BTC is BTCUSDT, IVVB11.SA is IVVB11 — so the
+    filter and the plane agree on the name."""
+    if not tickers:
+        return ok
+    names = [markets.plane_symbol(t, market) for t in tickers]
+    ok = ok.copy()
+    ok.loc[:, ~ok.columns.isin(names)] = False
     return ok
 
 

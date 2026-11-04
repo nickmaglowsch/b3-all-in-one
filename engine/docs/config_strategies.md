@@ -224,6 +224,12 @@ universe:
                            #   "Energia Elétrica", "Comércio (Atacado e Varejo)"…);
                            #   a holding ("Emp. Adm. Part. - Bancos") counts as
                            #   its sector. A keyword matching none fails validation.
+  tickers: [BTCUSDT]       # optional allow-list: the universe is these codes only
+                           #   (1..50), spelled for the market (BTC → BTCUSDT,
+                           #   IVVB11.SA → IVVB11). Checked on save against the
+                           #   market's plane and its universe shape: an unpriced
+                           #   code — or BTCFDUSD, outside crypto's %USDT pairs — is
+                           #   an error, not a book that parks in CDI forever.
 
 signal:
   # The factor is DATA. Reference a named signal from signals.yaml...
@@ -414,8 +420,34 @@ An **N-of-M vote** — "invest when at least 2 of these 3 signals are on" — is
     - {default: true, park: true}
 ```
 
+A **partial book** — invest some of it, hold the rest in CDI — is `exposure` on
+the rule, a number in [0, 1]. Each held name's weight is scaled by it and
+`CDI_ASSET` takes `1 - exposure`; `exposure: 0` is `park`, and a rule without it
+invests everything, as before. The two may not appear on one rule.
+
+```yaml
+regime:
+  add_ibov: false
+  inputs:
+    deep:  {flag: bench_drawdown, offset: 1, gt: 0.50}
+    cheap: {flag: bench_drawdown, offset: 1, gt: 0.25}
+  rules:
+    - {deep: true,  exposure: 1.0}
+    - {cheap: true, exposure: 0.6}
+    - {default: true, exposure: 0.2}
+```
+
+Exposure is a target the book is rebalanced back to on every grid row, so a 20%
+book whose holding doubles *sells* to get back to 20% — and pays tax on it. It
+models "hold more when cheap", not "never sell and deploy a cash pile".
+
 Common regime flags in `shared_data`: `is_easing`, `above_ma200`, `ibov_above`,
-`ibov_calm`, `ibov_uptrend`, `ibov_vol_pctrank`.
+`ibov_calm`, `ibov_uptrend`, `ibov_vol_pctrank`, and `bench_drawdown` (numeric,
+use `gt`): how far the market's benchmark is below its all-time high,
+`1 - close / running max` at each period end, 0 on a new high. The peak is read
+off the benchmark's whole history, not the run's load window, so a run starting
+mid-crash still knows the high before it. It is in BRL, like every price here —
+BTC's drawdown in reais is shallower than in dollars when the real weakens.
 
 ---
 

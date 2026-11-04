@@ -67,6 +67,16 @@ AI client ──POST /mcp (JSON-RPC, Bearer qtx_mcp_…)──▶ mcp_server
   the B3 plane never priced, by name, and warns with the first price date of a
   late listing; the guide's section 2 and the create/validate descriptions say so.
 
+- Partial exposure, for the accumulation tilt of a drawdown/MVRV indicator
+  (hold more BTC the further it is below its high): a regime rule's `exposure`
+  (0..1, the rest in CDI), the numeric flag `bench_drawdown` (drawdown from the
+  benchmark's all-time high, read off its whole history), and
+  `universe.tickers` (an allow-list — "just BTCUSDT" — checked against the
+  spec's market plane on save). The guide's section 1 carries the recipe. MVRV
+  is not on the plane; exposure is rebalanced to, so it sells (and pays tax)
+  when the holding rallies — a never-sell reserve-deployment DCA would be a
+  simulator mode of its own.
+
 ## Not done (yet)
 
 - OAuth 2.1 authorization (needed for claude.ai's remote connectors, which do

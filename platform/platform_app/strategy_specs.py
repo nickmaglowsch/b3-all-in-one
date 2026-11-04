@@ -32,6 +32,7 @@ _VARS_MAX, _LEGS_MAX, _KEYWORDS_MAX, _KEYWORD_LEN = 16, 8, 20, 80
 # yfinance era. `^BVSP` and `$IBOV` fail it on purpose: indices are not tradable,
 # and the plane's `$` namespace is stored series (CDI, IPCA), not instruments.
 _TICKER_MAX = 16
+_UNIVERSE_TICKERS_MAX = 50    # engine/scripts/validate_spec.py says the same
 _TICKER = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}(\.SA)?")
 _FRACTIONAL = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}F")
 # /estrategia's sleeve picker gives ticker options this value prefix
@@ -71,6 +72,11 @@ class _RankUniverse(_Finite):
     min_price: float = Field(default=1.0, ge=0)
     smallcap_below_median: bool = False
     sectors: _Sectors | None = None
+    # An allow-list: the universe is these codes only (["BTCUSDT"], a basket of
+    # ETFs). Spelled for the spec's market; whether that plane prices each one is
+    # the engine's to say on save (validate_spec), as for a ticker sleeve.
+    tickers: Annotated[list[Annotated[str, Field(min_length=1, max_length=_TICKER_MAX)]],
+                       Field(min_length=1, max_length=_UNIVERSE_TICKERS_MAX)] | None = None
 
 
 class _RankLeg(_Finite):

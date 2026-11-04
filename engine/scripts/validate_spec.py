@@ -85,7 +85,11 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
 
 
 # What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
-_RULE_KEYS = {"top_pct", "park", "default", "min_true"}
+_RULE_KEYS = {"top_pct", "exposure", "park", "default", "min_true"}
+
+# How many names a universe.tickers allow-list may hold: a hand-picked list, not
+# a way to restate the market.
+_UNIVERSE_TICKERS_MAX = 50
 
 
 def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
@@ -118,6 +122,34 @@ def _validate_regime(regime, errors: list[str]) -> None:
         extra = set(rule) - set(inputs) - _RULE_KEYS if isinstance(rule, dict) else {"?"}
         if extra:
             errors.append(f"regime rule {rule!r}: {sorted(extra)} is not a declared input")
+        elif "exposure" in rule:
+            _validate_exposure(rule, errors)
+
+
+def _validate_exposure(rule: dict, errors: list[str]) -> None:
+    """`exposure` is the fraction of the book a rule invests, the rest in CDI. A
+    bool is refused (True would read as 1.0, all in, which is no knob at all), and
+    so is one beside `park`, which parks whatever the exposure says."""
+    x = rule["exposure"]
+    if isinstance(x, bool) or not isinstance(x, (int, float)) or not 0.0 <= x <= 1.0:
+        errors.append(f"regime rule {rule!r}: exposure must be a number in [0, 1] "
+                      "(the fraction invested; the rest sits in CDI)")
+    elif rule.get("park"):
+        errors.append(f"regime rule {rule!r}: exposure and park contradict each other "
+                      "— park is exposure 0")
+
+
+def _validate_universe_tickers(spec: dict, errors: list[str]) -> None:
+    """universe.tickers, when given, is a short non-empty list of codes. Whether
+    the plane prices them is report()'s to say; this is the shape."""
+    uni = spec.get("universe") or {}
+    if "tickers" not in uni:
+        return
+    t = uni["tickers"]
+    if (not isinstance(t, list) or not t or len(t) > _UNIVERSE_TICKERS_MAX
+            or not all(isinstance(x, str) and x.strip() for x in t)):
+        errors.append(f"universe.tickers: a list of 1..{_UNIVERSE_TICKERS_MAX} ticker "
+                      "codes (e.g. [\"BTCUSDT\"] on CRYPTO, [\"IVVB11\"] on B3)")
 
 
 def _validate_sleeves(spec: dict, errors: list[str]) -> None:
@@ -267,6 +299,7 @@ def validate(spec: dict) -> dict:
             needs_funds = _validate_rank_signal(spec, errors)
             _validate_regime(spec.get("regime"), errors)
             _validate_sector_keywords(spec, errors)
+            _validate_universe_tickers(spec, errors)
         else:
             _validate_sleeves(spec, errors)
 
@@ -329,6 +362,9 @@ def report(spec: dict) -> dict:
     if out["ok"] and spec.get("kind") == "fixed_weight":
         errors, out["warnings"] = sleeve_tickers.check(spec)
         out["errors"] += errors
+        out["ok"] = not out["errors"]
+    elif out["ok"] and (spec.get("universe") or {}).get("tickers"):
+        out["errors"] += sleeve_tickers.check_universe(spec)
         out["ok"] = not out["errors"]
     return out
 

@@ -10,6 +10,7 @@ FixedWeight), runs get_parameter_specs(), and — for a rank_and_hold signal —
 validates the factor: check_syntax on an inline expr:, resolves a factor:
 reference against signals.yaml or the whitelisted shared_data keys, rejects
 store:<id>, and flags needs_fundamentals when any f_* key is referenced.
+A regime input's `flag` must be one of regimes.regime_flags(market) (market series).
 
 For a fixed_weight spec it checks each sleeve's shape, and — the one step that
 reads the market plane (ENGINE_DATABASE_URL) — that every `ticker` sleeve names
@@ -31,6 +32,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backtests.core import dividends, markets, regimes, signal_dsl, sleeve_tickers
+# _validate_regime is re-exported: tests import it from here, where it lived.
+from backtests.core.regime_checks import _market_regime_flags, _validate_regime  # noqa: F401
 from backtests.core.sectors import CVM_SECTORS
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 from backtests.core.spec_signal import _LEG_TRANSFORMS
@@ -90,12 +93,6 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
     return any(n.startswith("f_") for n in _expr_names(expr))
 
 
-# What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
-_RULE_KEYS = {"top_pct", "exposure", "park", "default", "min_true"}
-
-
-
-
 def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
     """A universe.sectors keyword must match some CVM sector: one that matches
     none (an English or FCA-era name) filters every name in or out silently."""
@@ -106,50 +103,6 @@ def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
             if isinstance(kw, str) and not any(kw.lower() in s for s in lower):
                 errors.append(f"universe.sectors.{key}: unknown CVM sector {kw!r} (a keyword "
                               f"matches as a substring); CVM's sectors: {', '.join(sorted(CVM_SECTORS))}")
-
-
-def _validate_regime(regime, errors: list[str]) -> None:
-    """The overlay's structure: every input reads a flag, every rule conditions
-    only on inputs it declares. A rule keyed on a misspelt input otherwise never
-    matches and the book silently parks in CDI for the whole run."""
-    if not regime:
-        return
-    inputs = regime.get("inputs", {}) if isinstance(regime, dict) else None
-    if not isinstance(inputs, dict) or not isinstance(regime.get("rules"), list):
-        errors.append("regime: needs an `inputs` mapping and a `rules` list")
-        return
-    for name, cfg in inputs.items():
-        if not isinstance(cfg, dict) or not isinstance(cfg.get("flag"), str):
-            errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
-                          "series (e.g. bench_above)")
-        elif cfg["flag"] not in regimes.REGIME_FLAGS:
-            errors.append(f"regime input {name!r}: {cfg['flag']!r} is not a regime flag "
-                          "(a per-name frame never reads true there — use it in an "
-                          f"expression); flags: {', '.join(sorted(regimes.REGIME_FLAGS))}")
-        elif cfg["flag"] in regimes.NUMERIC_FLAGS and "gt" not in cfg:
-            # Read bare, a number is truthy whenever it is not 0: "below its high
-            # at all", which is every day but a new high — never the zone meant.
-            errors.append(f"regime input {name!r}: {cfg['flag']} is a number — give "
-                          "it a threshold with `gt` (e.g. gt: 0.25)")
-    for rule in regime["rules"]:
-        extra = set(rule) - set(inputs) - _RULE_KEYS if isinstance(rule, dict) else {"?"}
-        if extra:
-            errors.append(f"regime rule {rule!r}: {sorted(extra)} is not a declared input")
-        elif "exposure" in rule:
-            _validate_exposure(rule, errors)
-
-
-def _validate_exposure(rule: dict, errors: list[str]) -> None:
-    """`exposure` is the fraction of the book a rule invests, the rest in CDI. A
-    bool is refused (True would read as 1.0, all in, which is no knob at all), and
-    so is one beside `park`, which parks whatever the exposure says."""
-    x = rule["exposure"]
-    if isinstance(x, bool) or not isinstance(x, (int, float)) or not 0.0 <= x <= 1.0:
-        errors.append(f"regime rule {rule!r}: exposure must be a number in [0, 1] "
-                      "(the fraction invested; the rest sits in CDI)")
-    elif rule.get("park"):
-        errors.append(f"regime rule {rule!r}: exposure and park contradict each other "
-                      "— park is exposure 0")
 
 
 def _validate_sleeves(spec: dict, errors: list[str]) -> None:
@@ -304,7 +257,8 @@ def validate(spec: dict) -> dict:
             errors.append(f"invalid spec: {e}")
         if kind == "rank_and_hold":
             needs_funds = _validate_rank_signal(spec, errors)
-            _validate_regime(spec.get("regime"), errors)
+            _validate_regime(spec.get("regime"), errors,
+                             _market_regime_flags(spec.get("market")))
             _validate_sector_keywords(spec, errors)
             sleeve_tickers.check_universe_shape(spec, errors)
         else:

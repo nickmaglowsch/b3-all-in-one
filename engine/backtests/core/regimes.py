@@ -13,25 +13,46 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# The regime flags: one value per *date*, which is what `_eval_regime` reads
-# (`flag.get(date)`). A per-name frame there (above_ma200, ath_drawdown) looks up a
-# column called that date, gets None, and never reads true — so validate_spec
-# accepts these names as inputs and nothing else.
-REGIME_FLAGS = frozenset({
-    "is_easing", "ibov_above", "ibov_calm", "ibov_uptrend", "ibov_vol_monthly",
-    "ibov_vol_pctrank", "bench_above", "bench_calm", "bench_uptrend",
-    "bench_vol_monthly", "bench_vol_pctrank", "bench_drawdown",
-})
+# The shared_data keys a regime input may name as its `flag`: one value per
+# rebalance date, read by config_strategy._eval_regime as `flag.get(date)`. All
+# are Series on the grid. A per-ticker frame (above_ma200, dist_ma200, any f_*)
+# has no single value per date — `DataFrame.get(date)` looks up a *column* and
+# returns None, so the input reads False forever and the book parks in CDI — and
+# a daily series only hits on grid labels that are sessions (see
+# DAILY_REGIME_FLAGS). scripts/validate_spec.py refuses anything else at save, and
+# the bench's regime picker (frontend/lib/regime.ts) offers a subset of these.
+REGIME_FLAGS = (
+    "is_easing",
+    "ibov_above", "ibov_calm", "ibov_uptrend", "ibov_vol_monthly", "ibov_vol_pctrank",
+    "bench_above", "bench_calm", "bench_uptrend", "bench_vol_monthly", "bench_vol_pctrank",
+    # Monthly returns, for a `gt` threshold ("CDI above 1% a month").
+    "cdi_monthly", "ibov_ret", "bench_ret",
+    # How far the benchmark is below its all-time high (full history), 0..1.
+    "bench_drawdown",
+)
+
+# Daily benchmark series. They sit on the benchmark's own print dates, so they
+# read correctly only on a market whose benchmark prints every calendar day
+# (MarketSpec.benchmark_every_day: crypto). On B3 a month-end weekend reads
+# False. cdi_cumul_63d is on BCB business days on every market, so never.
+DAILY_REGIME_FLAGS = ("ibov_ret_20d_daily", "ibov_vol_20d_daily")
+
+
+def regime_flags(spec) -> tuple[str, ...]:
+    """The flags a regime input may read on market `spec` (a MarketSpec)."""
+    return REGIME_FLAGS + (DAILY_REGIME_FLAGS if spec.benchmark_every_day else ())
+
 # One-per-date Series an expression (a date x name frame) cannot read: pandas
 # aligns a Series' dates against the frame's *tickers*, so the result is all NaN
-# and the book silently sits in cash. (bench_ret / bench_px are documented data
-# names that predate this list; they are left alone.)
-PER_DATE = REGIME_FLAGS | {"cdi_monthly", "cdi_daily", "cdi_cumul_63d",
-                           "ibov_vol_20d_daily", "ibov_ret_20d_daily"}
+# and the book silently sits in cash. bench_ret / ibov_ret / bench_px are
+# documented expression data names that predate this list and stay readable.
+PER_DATE = frozenset(REGIME_FLAGS + DAILY_REGIME_FLAGS) - {"bench_ret", "ibov_ret"} | {
+    "cdi_daily", "cdi_cumul_63d"}
 # Regime flags that are numbers, not booleans: an input reads them through `gt`
-# (read bare, a drawdown is "true" on every day but a new high).
+# (read bare, a drawdown or a return is "true" on almost every date).
 NUMERIC_FLAGS = frozenset({"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
-                           "bench_vol_monthly", "ibov_vol_monthly"})
+                           "bench_vol_monthly", "ibov_vol_monthly", "cdi_monthly",
+                           "ibov_ret", "bench_ret", *DAILY_REGIME_FLAGS})
 
 
 def _expanding_pctrank(s: pd.Series) -> pd.Series:

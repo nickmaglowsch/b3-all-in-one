@@ -4,10 +4,12 @@
 // app/bench/RegimeEditor.tsx so `npm test` (lib/**/*.test.ts) covers the part
 // that can silently lose a field on a round trip.
 
-// Common macro flags in shared_data (documented list). The bench_* names are the
-// market-neutral aliases (IBOV on B3, the S&P on US, BTC on crypto).
-// Only one-value-per-date series: a per-name frame (above_ma200) never reads true
-// as an input, and engine validate_spec refuses it (regimes.REGIME_FLAGS).
+// The macro flags the bench's regime picker offers. Each must be a market-wide
+// series — one value per rebalance date — on the engine's list,
+// engine/backtests/core/regimes.py REGIME_FLAGS, which validate_spec enforces at
+// save (lib/regime.test.ts parses it so the two cannot drift). A per-ticker frame
+// (above_ma200, ath_drawdown) read False on every date there; it belongs in an
+// expression. `bench_*` are the market-neutral aliases of `ibov_*`.
 export const REGIME_FLAGS = [
   "is_easing",
   "ibov_above",
@@ -21,15 +23,30 @@ export const REGIME_FLAGS = [
   "bench_drawdown",
 ] as const;
 
+/** The picker's options for an input currently reading `current`. A stored spec
+ *  can name a flag off the list (above_ma200, before it was dropped); it is kept
+ *  as the first option so the select shows what will be saved — and what the
+ *  save then refuses — instead of silently displaying is_easing. */
+export function flagOptions(current: string): readonly string[] {
+  return (REGIME_FLAGS as readonly string[]).includes(current)
+    ? REGIME_FLAGS
+    : [current, ...REGIME_FLAGS];
+}
+
 // Flags that are numbers, not booleans: the engine's validate_spec refuses an
-// input on one of these without a `gt` threshold (read bare, a drawdown is
-// "true" on every day but a new high).
+// input on one of these without a `gt` threshold (regimes.NUMERIC_FLAGS; read
+// bare, a drawdown or a return is "true" on almost every date).
 export const NUMERIC_FLAGS: ReadonlySet<string> = new Set([
   "ibov_vol_pctrank",
   "bench_vol_pctrank",
   "ibov_vol_monthly",
   "bench_vol_monthly",
   "bench_drawdown",
+  "cdi_monthly",
+  "ibov_ret",
+  "bench_ret",
+  "ibov_ret_20d_daily",
+  "ibov_vol_20d_daily",
 ]);
 
 export interface RegimeInput {

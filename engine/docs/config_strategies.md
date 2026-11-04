@@ -463,16 +463,26 @@ grid row, or only the `rebalance_months` ones, between which it drifts), so a 20
 book whose holding doubles *sells* to get back to 20% — and pays tax on it. It
 models "hold more when cheap", not "never sell and deploy a cash pile".
 
-Regime flags — the whole list, one value per date (validate_spec refuses any
-other name, a per-name frame such as `above_ma200` included: it would never read
-true), and none of them readable inside an expression: `is_easing`,
-`ibov_above`/`bench_above`, `ibov_calm`/`bench_calm`, `ibov_uptrend`/`bench_uptrend`,
-`ibov_vol_pctrank`/`bench_vol_pctrank` and `ibov_vol_monthly`/`bench_vol_monthly`
-(numeric, use `gt`), and `bench_drawdown` (numeric, use `gt`): how far the market's benchmark is below its all-time high,
-`1 - close / running max` at each period end, 0 on a new high. The peak is read
-off the benchmark's whole history, not the run's load window, so a run starting
-mid-crash still knows the high before it. It is in BRL, like every price here —
-BTC's drawdown in reais is shallower than in dollars when the real weakens.
+Regime flags in `shared_data` — market-wide series, one value per rebalance date
+(`backtests.core.regimes.REGIME_FLAGS`): `is_easing`, `ibov_above`, `ibov_calm`,
+`ibov_uptrend`, `ibov_vol_monthly`, `ibov_vol_pctrank`, their market-neutral
+`bench_*` aliases (`bench_above`, …), and the monthly returns `cdi_monthly`,
+`ibov_ret`, `bench_ret` (with `gt`), and `bench_drawdown` (with `gt`): how far
+the market's benchmark is below its all-time high, `1 - close / running max` at
+each period end, 0 on a new high, the peak read off the benchmark's whole history
+(not the run's load window), in BRL like every price here. A numeric flag without
+`gt` is refused (read bare it is true on almost every date), and no flag — nor
+`cdi_daily`/`cdi_cumul_63d` — may be read inside an expression: one value per
+date aligned against a date x ticker frame is NaN everywhere (per name, use
+`ath_drawdown`). On CRYPTO, whose benchmark prints every
+calendar day, the daily `ibov_ret_20d_daily` and `ibov_vol_20d_daily` count too
+(`regimes.regime_flags`); elsewhere a month-end weekend has no print and they
+would read False. `validate_spec` refuses any other `flag` at save, and a
+backtest refuses a per-ticker one at run time. A per-ticker frame
+such as `above_ma200` (dates × tickers) is not a regime flag: the overlay reads
+`flag.get(date)`, which on a frame is a column lookup, so the input would read
+False on every date and the book would sit in CDI. Use it in the signal instead
+(`specs/cdi_ma200.yaml`).
 
 ---
 

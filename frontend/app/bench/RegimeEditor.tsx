@@ -19,8 +19,9 @@ export {
 } from "@/lib/regime";
 export type { RegimeInput, RegimeRule, RegimeValue, RuleKind, RuleAction } from "@/lib/regime";
 import {
-  REGIME_FLAGS,
   NUMERIC_FLAGS,
+  REGIME_FLAGS,
+  flagOptions,
   topPctInert,
   type RegimeInput,
   type RegimeRule,
@@ -146,9 +147,7 @@ export function RegimeEditor({
                     onChange={(e) => setInput(i, { flag: e.target.value })}
                     className={`${smallCls} w-full`}
                   >
-                    {/* A flag outside the list (an AI-written spec) stays selectable
-                        rather than showing as the first option while saving another. */}
-                    {[...REGIME_FLAGS, ...((REGIME_FLAGS as readonly string[]).includes(inp.flag) ? [] : [inp.flag])].map((fl) => (
+                    {flagOptions(inp.flag).map((fl) => (
                       <option key={fl} value={fl}>
                         {fl}
                       </option>

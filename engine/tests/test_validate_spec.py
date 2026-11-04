@@ -147,3 +147,49 @@ def test_a_regime_without_rules_is_rejected():
     for regime in ({"inputs": {}}, ["not", "a", "mapping"]):
         r = validate(_rank({"factor": "momentum"}, regime=regime))
         assert not r["ok"] and any("`rules` list" in e for e in r["errors"])
+
+
+def test_a_regime_on_a_per_ticker_frame_is_rejected():
+    # above_ma200 is dates x tickers: _eval_regime's `flag.get(date)` looks up a
+    # column, reads None -> False on every rebalance, and the book parks in CDI
+    # for the whole run. It was offered in the bench's regime picker.
+    regime = {**_GATE, "inputs": {"trend": {"flag": "above_ma200", "offset": 1}}}
+    r = validate(_rank({"factor": "momentum"}, regime=regime))
+    assert not r["ok"]
+    assert any("'above_ma200' is not a regime flag" in e and "bench_above" in e
+               for e in r["errors"])
+
+
+def test_a_regime_on_an_unknown_flag_is_rejected():
+    regime = {**_GATE, "inputs": {"trend": {"flag": "bench_abvoe", "offset": 1}}}
+    r = validate(_rank({"factor": "momentum"}, regime=regime))
+    assert not r["ok"] and any("'bench_abvoe' is not a regime flag" in e for e in r["errors"])
+
+
+def test_every_built_in_regime_validates():
+    """The built-in specs gate only on market series — none reads a per-ticker
+    frame (cdi_ma200 names above_ma200 in its signal, not its regime)."""
+    from pathlib import Path
+
+    import yaml
+    from scripts.validate_spec import _validate_regime
+
+    specs = Path(__file__).resolve().parents[1] / "backtests/strategies/specs"
+    regimes = {p.name: yaml.safe_load(p.read_text()).get("regime")
+               for p in sorted(specs.glob("*.yaml"))}
+    regimes = {k: v for k, v in regimes.items() if v}
+    assert regimes, "no built-in spec carries a regime"
+    for name, regime in regimes.items():
+        errors: list[str] = []
+        _validate_regime(regime, errors)
+        assert errors == [], name
+
+
+def test_a_daily_benchmark_flag_is_a_regime_flag_only_where_it_prints_daily():
+    # On crypto the benchmark prints every calendar day, so a daily series has a
+    # value on every rebalance label; on B3 a month-end weekend reads False.
+    regime = {**_GATE, "inputs": {"trend": {"flag": "ibov_ret_20d_daily", "gt": 0}}}
+    assert validate(_rank({"factor": "momentum"}, regime=regime, market="CRYPTO"))["ok"]
+    r = validate(_rank({"factor": "momentum"}, regime=regime))
+    assert not r["ok"] and any("'ibov_ret_20d_daily' is not a regime flag" in e
+                               for e in r["errors"])

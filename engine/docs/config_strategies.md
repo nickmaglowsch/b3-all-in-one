@@ -437,7 +437,8 @@ regime:
     - {default: true, exposure: 0.2}
 ```
 
-Exposure is a target the book is rebalanced back to on every grid row, so a 20%
+Exposure is a target the book is rebalanced back to on every row it trades (every
+grid row, or only the `rebalance_months` ones, between which it drifts), so a 20%
 book whose holding doubles *sells* to get back to 20% — and pays tax on it. It
 models "hold more when cheap", not "never sell and deploy a cash pile".
 

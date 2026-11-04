@@ -223,7 +223,8 @@ Accumulation tilt — hold more Bitcoin the further it is below its high:
              {"neutral": true, "exposure": 0.35}, {"default": true, "exposure": 0.2}]}}
 ```
 
-Exposure is rebalanced to on every grid row: when the holding rallies the book
+Exposure is rebalanced to on every row the book trades (all of them, or only the
+`rebalance_months` ones): when the holding rallies the book
 sells back down to its exposure, and the sale is taxed (crypto: 15%, R$35k
 monthly isenção, no loss carry). Compare it with a constant-exposure twin (one
 `default` rule at the average exposure) on the same window: the difference is

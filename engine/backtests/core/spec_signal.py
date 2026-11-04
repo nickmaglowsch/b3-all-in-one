@@ -201,6 +201,16 @@ def allow_list(ok: pd.DataFrame, tickers, market: str) -> pd.DataFrame:
     if not tickers:
         return ok
     names = [markets.plane_symbol(t, market) for t in tickers]
+    if not ok.columns.isin(names).any():
+        # Not a flat book: the data is another market's (a CRYPTO spec nested in a
+        # B3 portfolio, or run with a `market` override), or none of the codes
+        # traded in the window. Either way an all-CDI run under the coin's name
+        # is the one result nobody would think to question.
+        raise ValueError(
+            f"universe.tickers {list(tickers)}: none of them is in this run's "
+            f"universe ({market} plane, {len(ok.columns)} names) — a {market} spec "
+            "cannot run on another market's data (as a portfolio sleeve, or with a "
+            "market override), and the codes must have prices in the window")
     ok = ok.copy()
     ok.loc[:, ~ok.columns.isin(names)] = False
     return ok

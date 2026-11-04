@@ -254,9 +254,10 @@ async def test_regime_and_market_survive_the_save(client):
 
 async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
     """A drawdown-zoned BTC tilt: `exposure` rules on `bench_drawdown` save as
-    written; `universe.tickers` survives the request model and is checked against
-    the plane on save — here an empty one, so it is refused, naming the field,
-    rather than saved as a book that would sit in CDI for its whole history."""
+    written; `universe.tickers` survives the request model and reaches the
+    engine's plane check on save. The code is one no plane carries, so this holds
+    on an empty plane (unreadable: refused) and a loaded one (unknown: refused);
+    the lookup itself is pinned in engine/tests/test_cheapness_regime.py."""
     h = await auth(client, "mcp-exposure@example.com", modules=["bench"])
     regime = {"add_ibov": False,
               "inputs": {"deep": {"flag": "bench_drawdown", "offset": 1, "gt": 0.5}},
@@ -270,7 +271,7 @@ async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
 
     r = await client.post("/strategies/user", headers=h, json=_rank(
         "BTC only", market="CRYPTO", regime=regime,
-        universe={"min_adtv": 0, "min_price": 0, "tickers": ["BTCUSDT"]}))
+        universe={"min_adtv": 0, "min_price": 0, "tickers": ["NOSUCHCOINUSDT"]}))
     assert r.status_code == 422 and "universe.tickers" in r.json()["detail"], r.text
 
     r = await client.post("/strategies/user", headers=h, json=_rank(

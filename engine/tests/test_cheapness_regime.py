@@ -318,3 +318,30 @@ def test_a_partly_invested_btc_book_runs_end_to_end(btc_plane, tmp_path):
     vol = lambda c: c["pretax"].pct_change().std()
     assert (part["pretax"] > 0).all()
     assert vol(part) < 0.5 * vol(full)
+
+
+# ── review follow-ups: the two ways an allow-list could sit in CDI unseen ─────
+
+def test_an_allow_list_on_another_markets_data_fails_loudly():
+    """A CRYPTO spec nested in a (B3) portfolio, or run with market=US, gets a
+    bundle without its coin. That used to be a 100% CDI book under the coin's
+    name; now the run says why it cannot hold it."""
+    idx = pd.date_range("2021-01-31", periods=4, freq="ME")
+    b3 = _one_coin_shared(pd.Series(0.0, index=idx))
+    for k in ("ret", "log_ret", "adtv", "raw_close", "has_glitch"):
+        b3[k] = b3[k].set_axis(["PETR4", "VALE3"], axis=1)
+    with pytest.raises(ValueError, match=r"universe.tickers \['BTCUSDT'\]: none of them"):
+        RankAndHold(_tilt()).generate_signals(b3, {})
+
+
+def test_min_names_above_the_allow_list_is_rejected():
+    spec = _tilt(universe={"min_adtv": 0, "min_price": 0, "tickers": ["BTCUSDT", "ETHUSDT"]},
+                 selection={"top_n": 2, "min_names": 5})
+    r = validate(spec)
+    assert not r["ok"] and any("selection.min_names = 5" in e for e in r["errors"])
+    # The engine's own default (5) counts when the spec leaves min_names out.
+    spec["selection"] = {"top_n": 1}
+    assert not validate(spec)["ok"]
+    spec["selection"] = {"top_n": 1, "min_names": 2, "min_hold": 3}
+    r = validate(spec)
+    assert not r["ok"] and any("selection.min_hold = 3" in e for e in r["errors"])

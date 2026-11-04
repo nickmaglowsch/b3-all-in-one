@@ -150,6 +150,13 @@ def _validate_universe_tickers(spec: dict, errors: list[str]) -> None:
             or not all(isinstance(x, str) and x.strip() for x in t)):
         errors.append(f"universe.tickers: a list of 1..{_UNIVERSE_TICKERS_MAX} ticker "
                       "codes (e.g. [\"BTCUSDT\"] on CRYPTO, [\"IVVB11\"] on B3)")
+        return
+    sel = spec.get("selection") or {}
+    for key in ("min_names", "min_hold"):
+        need = sel.get(key, 5 if key == "min_names" else None)
+        if isinstance(need, int) and need > len(set(t)):
+            errors.append(f"selection.{key} = {need} but universe.tickers holds "
+                          f"{len(set(t))}: the book could never invest — lower {key}")
 
 
 def _validate_sleeves(spec: dict, errors: list[str]) -> None:

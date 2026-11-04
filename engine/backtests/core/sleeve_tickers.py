@@ -230,6 +230,41 @@ def check(spec: dict) -> tuple[list[str], list[str]]:
     return errors, warnings
 
 
+# How many names a universe.tickers allow-list may hold: a hand-picked list, not
+# a way to restate the market. platform strategy_specs says the same.
+_UNIVERSE_TICKERS_MAX = 50
+
+
+def check_universe_shape(spec: dict, errors: list[str]) -> None:
+    """universe.tickers, when given, is a short non-empty list of codes. Whether
+    the plane prices them is report()'s to say; this is the shape."""
+    uni = spec.get("universe") or {}
+    if "tickers" not in uni:
+        return
+    t = uni["tickers"]
+    if (not isinstance(t, list) or not t or len(t) > _UNIVERSE_TICKERS_MAX
+            or not all(isinstance(x, str) and x.strip() for x in t)):
+        errors.append(f"universe.tickers: a list of 1..{_UNIVERSE_TICKERS_MAX} ticker "
+                      "codes (e.g. [\"BTCUSDT\"] on CRYPTO, [\"IVVB11\"] on B3)")
+        return
+    # Distinct names as the run will see them: BTC and BTCUSDT are one coin, and
+    # with dedup_roots PETR3/PETR4 are one company. (min_hold is a floor on the
+    # held count, not a gate — it never stops a book from investing.)
+    try:
+        spec_market = markets.get(spec.get("market"))
+    except ValueError:
+        return                                          # validate() reports it
+    names = {markets.plane_symbol(x, spec_market.key) for x in t}
+    sel = spec.get("selection") or {}
+    if sel.get("dedup_roots") and spec_market.root_len:
+        names = {n[:spec_market.root_len] for n in names}
+    need = sel.get("min_names", 5)                      # RankAndHold's default
+    if isinstance(need, int) and need > len(names):
+        errors.append(f"selection.min_names = {need} but universe.tickers holds "
+                      f"{len(names)} distinct name(s): the book could never invest "
+                      "— lower min_names")
+
+
 def _universe_symbols_found(symbols: list[str], key: str) -> set[str]:
     """Which of `symbols` the market's universe query can see: priced on the
     market's table, and of the shape `MarketSpec.ticker_sql` admits — so a

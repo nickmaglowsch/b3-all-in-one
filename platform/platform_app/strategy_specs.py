@@ -293,10 +293,39 @@ def _compile_portfolio(m: PortfolioStrategyIn) -> dict:
     }
 
 
+def off_b3_refusal(ref: str, market: str) -> HTTPException:
+    """A portfolio and the live target run on the B3 plane (FixedWeight, and
+    advise_weights, load B3), so a US or crypto strategy inside one would be fed
+    another market's names: an empty book — or, with universe.tickers, a run
+    that fails. Refused where it is chosen, not discovered at run time."""
+    return HTTPException(422, f"sleeve {ref!r} runs on the {market} plane; portfolios "
+                              "and the live target run on B3 — backtest it on its own")
+
+
+def off_b3_refs(builtins: list[dict], rows) -> dict[str, str]:
+    """{name: market} of the built-ins and user rank strategies that do not run
+    on B3 — the refs a portfolio sleeve may not take."""
+    out = {s["name"]: s["market"] for s in builtins if (s.get("market") or "B3") != "B3"}
+    return out | {r.name: r.spec["market"] for r in rows
+                  if r.kind == "rank_and_hold" and (r.spec or {}).get("market", "B3") != "B3"}
+
+
+def check_live_refs(refs: list[str], gallery: dict[str, dict]) -> None:
+    """The live target's sleeves: CASH_CDI or a gallery strategy that runs on B3
+    (advise_weights loads the B3 plane, as a portfolio does)."""
+    for ref in refs:
+        if ref != "CASH_CDI" and ref not in gallery:
+            raise HTTPException(422, f"unknown strategy_ref: {ref}")
+        if (market := gallery.get(ref, {}).get("market") or "B3") != "B3":
+            raise off_b3_refusal(ref, market)
+
+
 def check_sleeve_refs(m: PortfolioStrategyIn, *, resolvable: set[str],
-                      user_portfolios: set[str]) -> None:
-    """Every strategy_ref names something the gallery can run, and never another
-    user portfolio (or this one): portfolios do not nest, so no cycle can form.
+                      user_portfolios: set[str],
+                      off_b3: dict[str, str] | None = None) -> None:
+    """Every strategy_ref names something the gallery can run, on B3 (`off_b3`:
+    {name: market} of the ones that run elsewhere), and never another user
+    portfolio (or this one): portfolios do not nest, so no cycle can form.
     Ticker sleeves are not refs — the engine checks those against the plane."""
     for s in m.sleeves:
         ref = s.strategy_ref
@@ -305,6 +334,8 @@ def check_sleeve_refs(m: PortfolioStrategyIn, *, resolvable: set[str],
         if ref in user_portfolios or ref == m.name.strip():
             raise HTTPException(422, f"sleeve {ref!r}: a portfolio cannot reference "
                                      f"another user portfolio (would recurse)")
+        if off_b3 and ref in off_b3:
+            raise off_b3_refusal(ref, off_b3[ref])
         if ref not in resolvable:
             hint = (" (a listed instrument goes in `ticker`, not `strategy_ref`)"
                     if _TICKER.fullmatch(ref.strip().upper()) else "")

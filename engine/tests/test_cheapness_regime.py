@@ -342,6 +342,34 @@ def test_min_names_above_the_allow_list_is_rejected():
     # The engine's own default (5) counts when the spec leaves min_names out.
     spec["selection"] = {"top_n": 1}
     assert not validate(spec)["ok"]
-    spec["selection"] = {"top_n": 1, "min_names": 2, "min_hold": 3}
+    # min_hold is a floor on the held count, not a gate: this book does invest.
+    spec["selection"] = {"top_pct": 0.5, "min_names": 1, "min_hold": 3}
+    assert validate(spec)["ok"]
+
+
+@pytest.mark.parametrize("tickers,market,dedup", [
+    (["BTC", "BTCUSDT"], "CRYPTO", False),        # an alias and its pair: one coin
+    (["btcusdt", "BTCUSDT"], "CRYPTO", False),    # two spellings: one coin
+    (["PETR3", "PETR4"], "B3", True),             # one company once roots dedup
+])
+def test_min_names_counts_names_as_the_run_sees_them(tickers, market, dedup):
+    spec = _tilt(market=market, universe={"min_adtv": 0, "min_price": 0, "tickers": tickers},
+                 selection={"top_n": 2, "min_names": 2, "dedup_roots": dedup})
     r = validate(spec)
-    assert not r["ok"] and any("selection.min_hold = 3" in e for e in r["errors"])
+    assert not r["ok"] and any("1 distinct name(s)" in e for e in r["errors"]), r
+
+
+def test_two_b3_share_classes_count_twice_without_root_dedup():
+    spec = _tilt(market="B3", universe={"min_adtv": 0, "min_price": 0,
+                                        "tickers": ["PETR3", "PETR4"]},
+                 selection={"top_n": 2, "min_names": 2})
+    assert validate(spec)["ok"]
+
+
+def test_a_numeric_flag_needs_a_threshold():
+    """Read bare, a drawdown is "true" on every day that is not a new high."""
+    spec = _tilt(regime={"inputs": {"dd": {"flag": "bench_drawdown", "offset": 1}},
+                         "rules": [{"dd": True, "exposure": 1.0},
+                                   {"default": True, "exposure": 0.2}]})
+    r = validate(spec)
+    assert not r["ok"] and any("give it a threshold with `gt`" in e for e in r["errors"])

@@ -37,7 +37,8 @@ from platform_app.models import (
 from platform_app.routes_portfolio_index import bounded, current_rf_marks
 from platform_app.routes_portfolio_settings import _settings_dict
 from platform_app.strategy_specs import (
-    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank, check_sleeve_refs, live_sleeves,
+    _REBALANCE, StrategyIn, _compile_portfolio, _compile_rank, check_live_refs,
+    check_sleeve_refs, live_sleeves, off_b3_refs,
 )
 from platform_app.tenancy import get_current_tenant, get_optional_tenant, get_owned
 
@@ -435,10 +436,7 @@ async def put_sleeves(
     # CASH_CDI is the risk-free sleeve; anything else must be a real gallery spec
     # (built-ins + this tenant's user strategies).
     gallery = {s["name"]: s for s in await _gallery(session, tid)}
-    known = set(gallery) | {"CASH_CDI"}
-    for ref in refs:
-        if ref not in known:
-            raise HTTPException(422, f"unknown strategy_ref: {ref}")
+    check_live_refs(refs, gallery)
 
     await xact_lock(session, "sleeves", tid)
     await session.execute(delete(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid))
@@ -1449,7 +1447,8 @@ async def _compile_and_validate(
         user_rank = {r.name for r in rows if r.kind == "rank_and_hold"}
         check_sleeve_refs(body, resolvable=builtin_names | user_rank | {"CASH_CDI"},
                           user_portfolios={r.name for r in rows if r.kind == "fixed_weight"
-                                           and r.id != exclude_id})
+                                           and r.id != exclude_id},
+                          off_b3=off_b3_refs(await _builtins(), rows))
         spec = _compile_portfolio(body)
 
     report = await _validate_spec_engine(spec)

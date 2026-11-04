@@ -274,6 +274,20 @@ async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
         universe={"min_adtv": 0, "min_price": 0, "tickers": ["NOSUCHCOINUSDT"]}))
     assert r.status_code == 422 and "universe.tickers" in r.json()["detail"], r.text
 
+    # A portfolio and the live target run on B3: a crypto strategy cannot sit in
+    # either, whether it is the user's own or a built-in.
+    for ref in ("BTC tilt", "CryptoBTCRegime"):
+        r = await client.post("/strategies/user", headers=h, json={
+            "kind": "fixed_weight", "name": f"Blend {ref}", "rebalance": "QE",
+            "sleeves": [{"strategy_ref": ref, "target_pct": 40},
+                        {"strategy_ref": "CASH_CDI", "target_pct": 60}]})
+        assert r.status_code == 422 and "runs on the CRYPTO plane" in r.json()["detail"], r.text
+    h_live = await auth(client, "mcp-exposure-live@example.com", modules=["bench", "mercado"])
+    r = await client.put("/portfolio/sleeves", headers=h_live, json=[
+        {"strategy_ref": "CryptoBTCRegime", "target_pct": 50},
+        {"strategy_ref": "CASH_CDI", "target_pct": 50}])
+    assert r.status_code == 422 and "runs on the CRYPTO plane" in r.json()["detail"], r.text
+
     r = await client.post("/strategies/user", headers=h, json=_rank(
         "Too much", market="CRYPTO",
         regime={"inputs": {}, "rules": [{"default": True, "exposure": 1.5}]}))

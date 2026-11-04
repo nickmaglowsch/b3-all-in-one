@@ -87,9 +87,9 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
 # What a regime rule may say besides naming its inputs (config_strategy._eval_regime).
 _RULE_KEYS = {"top_pct", "exposure", "park", "default", "min_true"}
 
-# How many names a universe.tickers allow-list may hold: a hand-picked list, not
-# a way to restate the market.
-_UNIVERSE_TICKERS_MAX = 50
+# Regime flags that are numbers, not booleans: an input reads them through `gt`.
+_NUMERIC_FLAGS = {"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank"}
+
 
 
 def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
@@ -118,6 +118,11 @@ def _validate_regime(regime, errors: list[str]) -> None:
         if not isinstance(cfg, dict) or not isinstance(cfg.get("flag"), str):
             errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
                           "series (e.g. bench_above)")
+        elif cfg["flag"] in _NUMERIC_FLAGS and "gt" not in cfg:
+            # Read bare, a number is truthy whenever it is not 0: "below its high
+            # at all", which is every day but a new high — never the zone meant.
+            errors.append(f"regime input {name!r}: {cfg['flag']} is a number — give "
+                          "it a threshold with `gt` (e.g. gt: 0.25)")
     for rule in regime["rules"]:
         extra = set(rule) - set(inputs) - _RULE_KEYS if isinstance(rule, dict) else {"?"}
         if extra:
@@ -137,26 +142,6 @@ def _validate_exposure(rule: dict, errors: list[str]) -> None:
     elif rule.get("park"):
         errors.append(f"regime rule {rule!r}: exposure and park contradict each other "
                       "— park is exposure 0")
-
-
-def _validate_universe_tickers(spec: dict, errors: list[str]) -> None:
-    """universe.tickers, when given, is a short non-empty list of codes. Whether
-    the plane prices them is report()'s to say; this is the shape."""
-    uni = spec.get("universe") or {}
-    if "tickers" not in uni:
-        return
-    t = uni["tickers"]
-    if (not isinstance(t, list) or not t or len(t) > _UNIVERSE_TICKERS_MAX
-            or not all(isinstance(x, str) and x.strip() for x in t)):
-        errors.append(f"universe.tickers: a list of 1..{_UNIVERSE_TICKERS_MAX} ticker "
-                      "codes (e.g. [\"BTCUSDT\"] on CRYPTO, [\"IVVB11\"] on B3)")
-        return
-    sel = spec.get("selection") or {}
-    for key in ("min_names", "min_hold"):
-        need = sel.get(key, 5 if key == "min_names" else None)
-        if isinstance(need, int) and need > len(set(t)):
-            errors.append(f"selection.{key} = {need} but universe.tickers holds "
-                          f"{len(set(t))}: the book could never invest — lower {key}")
 
 
 def _validate_sleeves(spec: dict, errors: list[str]) -> None:
@@ -306,7 +291,7 @@ def validate(spec: dict) -> dict:
             needs_funds = _validate_rank_signal(spec, errors)
             _validate_regime(spec.get("regime"), errors)
             _validate_sector_keywords(spec, errors)
-            _validate_universe_tickers(spec, errors)
+            sleeve_tickers.check_universe_shape(spec, errors)
         else:
             _validate_sleeves(spec, errors)
 

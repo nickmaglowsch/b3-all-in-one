@@ -366,9 +366,12 @@ def test_two_b3_share_classes_count_twice_without_root_dedup():
     assert validate(spec)["ok"]
 
 
-def test_a_numeric_flag_needs_a_threshold():
-    """Read bare, a drawdown is "true" on every day that is not a new high."""
-    spec = _tilt(regime={"inputs": {"dd": {"flag": "bench_drawdown", "offset": 1}},
+@pytest.mark.parametrize("flag", ["bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
+                                  "bench_vol_monthly", "ibov_vol_monthly"])
+def test_a_numeric_flag_needs_a_threshold(flag):
+    """Read bare, a drawdown is "true" on every day that is not a new high (and a
+    volatility on every day at all)."""
+    spec = _tilt(regime={"inputs": {"dd": {"flag": flag, "offset": 1}},
                          "rules": [{"dd": True, "exposure": 1.0},
                                    {"default": True, "exposure": 0.2}]})
     r = validate(spec)

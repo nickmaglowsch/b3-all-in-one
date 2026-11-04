@@ -88,7 +88,8 @@ def _check_expr(expr: str, errors: list[str]) -> bool:
 _RULE_KEYS = {"top_pct", "exposure", "park", "default", "min_true"}
 
 # Regime flags that are numbers, not booleans: an input reads them through `gt`.
-_NUMERIC_FLAGS = {"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank"}
+_NUMERIC_FLAGS = {"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
+                  "bench_vol_monthly", "ibov_vol_monthly"}
 
 
 

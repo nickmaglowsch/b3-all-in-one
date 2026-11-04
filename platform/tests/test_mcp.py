@@ -288,6 +288,21 @@ async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
         {"strategy_ref": "CASH_CDI", "target_pct": 50}])
     assert r.status_code == 422 and "runs on the CRYPTO plane" in r.json()["detail"], r.text
 
+    # ...nor move onto another market after it was chosen: an edit that would
+    # leave a live sleeve or a portfolio holding a CRYPTO book is refused.
+    r = await client.post("/strategies/user", headers=h_live, json=_rank("Mine"))
+    assert r.status_code == 200, r.text
+    mine = r.json()["id"]
+    r = await client.put("/portfolio/sleeves", headers=h_live, json=[
+        {"strategy_ref": "Mine", "target_pct": 50}, {"strategy_ref": "CASH_CDI", "target_pct": 50}])
+    assert r.status_code == 200, r.text
+    r = await client.put(f"/strategies/user/{mine}", headers=h_live, json=_rank(
+        "Mine", market="CRYPTO", universe={"min_adtv": 1000000, "min_price": 0}))
+    assert r.status_code == 409 and "cannot move to CRYPTO" in r.json()["detail"], r.text
+    r = await client.put(f"/strategies/user/{mine}", headers=h_live,
+                         json=_rank("Mine", description="still B3"))
+    assert r.status_code == 200, r.text
+
     r = await client.post("/strategies/user", headers=h, json=_rank(
         "Too much", market="CRYPTO",
         regime={"inputs": {}, "rules": [{"default": True, "exposure": 1.5}]}))

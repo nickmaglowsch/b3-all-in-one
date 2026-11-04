@@ -10,6 +10,29 @@
 
 export const CASH_REF = "CASH_CDI";
 
+// The plane a carteira and the live target run on (engine FixedWeight and
+// advise_weights load B3); a strategy that names no market runs there too.
+const SLEEVE_MARKET = "B3";
+
+/**
+ * The sleeve picker's strategy options, split into built-ins and the tenant's
+ * own rule strategies: never a user portfolio (portfolios do not nest), and
+ * never a US or crypto strategy, which the API refuses as a sleeve.
+ */
+export function pickerRefs(
+  gallery: readonly { name: string; source?: string; market?: string | null }[],
+  fixedWeightNames: ReadonlySet<string>,
+): { builtinRefs: string[]; userRefs: string[] } {
+  const builtinRefs: string[] = [];
+  const userRefs: string[] = [];
+  for (const s of gallery) {
+    if (fixedWeightNames.has(s.name)) continue;
+    if ((s.market ?? SLEEVE_MARKET) !== SLEEVE_MARKET) continue;
+    (s.source === "user" ? userRefs : builtinRefs).push(s.name);
+  }
+  return { builtinRefs, userRefs };
+}
+
 export interface SleeveRow {
   strategy_ref: string; // "" on a ticker row
   ticker?: string;

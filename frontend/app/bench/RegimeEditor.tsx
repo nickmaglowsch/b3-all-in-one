@@ -7,127 +7,27 @@
 // live here (next to the shape they serialize) so StrategyForm stays the
 // orchestrator without knowing the regime wire format.
 
-// Common macro flags in shared_data (documented list). ibov_vol_pctrank is a
-// 0..1 percentile → usually paired with `gt`; the rest read as booleans.
-export const REGIME_FLAGS = [
-  "is_easing",
-  "above_ma200",
-  "ibov_above",
-  "ibov_calm",
-  "ibov_uptrend",
-  "ibov_vol_pctrank",
-] as const;
-
-export interface RegimeInput {
-  name: string;
-  flag: string;
-  offset: 0 | 1;
-  gt: string; // "" = no threshold (boolean read)
-}
-
-export type RuleKind = "cond" | "vote" | "default";
-export type RuleAction = "invest" | "park";
-
-export interface RegimeRule {
-  kind: RuleKind;
-  conds: Record<string, boolean>; // cond: inputName -> required truth; absent = ignore
-  minTrue: string; // vote: N-of-M
-  action: RuleAction;
-  topPct: string; // invest override; "" = fall back to selection.top_pct
-}
-
-export interface RegimeValue {
-  addIbov: boolean;
-  parkWhenTooFew: boolean;
-  inputs: RegimeInput[];
-  rules: RegimeRule[];
-}
-
-const obj = (v: unknown): Record<string, unknown> =>
-  v && typeof v === "object" ? (v as Record<string, unknown>) : {};
-
-// Non-empty = worth sending. StrategyForm omits the `regime` key when this is
-// false so we never POST an empty overlay.
-export const isEmptyRegime = (v: RegimeValue) =>
-  v.inputs.length === 0 && v.rules.length === 0;
-
-// Mirrors config_strategy.py's top_pct-suppression: if every rule overrides
-// top_pct (or parks / is the default), selection.top_pct is a dead knob.
-export const topPctInert = (v: RegimeValue) =>
-  v.rules.length > 0 &&
-  v.rules.every(
-    (r) => r.action === "park" || r.kind === "default" || r.topPct.trim() !== "",
-  );
-
-const RESERVED = new Set(["top_pct", "park", "default", "min_true"]);
-
-export function parseRegime(raw: unknown): RegimeValue {
-  const r = obj(raw);
-  const inputs: RegimeInput[] = Object.entries(obj(r.inputs)).map(([name, v]) => {
-    const ic = obj(v);
-    return {
-      name,
-      flag: typeof ic.flag === "string" ? ic.flag : REGIME_FLAGS[0],
-      offset: Number(ic.offset) === 0 ? 0 : 1,
-      gt: ic.gt == null ? "" : String(ic.gt),
-    };
-  });
-  const rulesRaw = Array.isArray(r.rules) ? r.rules : [];
-  const rules: RegimeRule[] = rulesRaw.map((rr) => {
-    const rule = obj(rr);
-    const kind: RuleKind = rule.default
-      ? "default"
-      : "min_true" in rule
-        ? "vote"
-        : "cond";
-    const conds: Record<string, boolean> = {};
-    if (kind === "cond")
-      for (const [k, v] of Object.entries(rule))
-        if (!RESERVED.has(k)) conds[k] = Boolean(v);
-    return {
-      kind,
-      conds,
-      minTrue: rule.min_true == null ? "2" : String(rule.min_true),
-      action: rule.park ? "park" : "invest",
-      topPct: rule.top_pct == null ? "" : String(rule.top_pct),
-    };
-  });
-  return {
-    addIbov: r.add_ibov !== false, // default true
-    parkWhenTooFew: r.park_when_too_few !== false,
-    inputs,
-    rules,
-  };
-}
-
-export function compileRegime(v: RegimeValue): Record<string, unknown> {
-  const names = new Set(v.inputs.map((i) => i.name.trim()).filter(Boolean));
-  const inputs: Record<string, unknown> = {};
-  for (const inp of v.inputs) {
-    const nm = inp.name.trim();
-    if (!nm) continue;
-    const one: Record<string, unknown> = { flag: inp.flag, offset: inp.offset };
-    if (inp.gt.trim() !== "") one.gt = Number(inp.gt);
-    inputs[nm] = one;
-  }
-  const rules = v.rules.map((rule) => {
-    const out: Record<string, unknown> = {};
-    if (rule.kind === "default") out.default = true;
-    else if (rule.kind === "vote") out.min_true = Number(rule.minTrue);
-    else
-      for (const [k, val] of Object.entries(rule.conds))
-        if (names.has(k)) out[k] = val; // prune stale refs to removed inputs
-    if (rule.action === "park") out.park = true;
-    else if (rule.topPct.trim() !== "") out.top_pct = Number(rule.topPct);
-    return out;
-  });
-  return {
-    add_ibov: v.addIbov,
-    park_when_too_few: v.parkWhenTooFew,
-    inputs,
-    rules,
-  };
-}
+// The pure parse/compile helpers and the wire types live in lib/regime.ts, where
+// `npm test` covers them; re-exported so StrategyForm's imports stay put.
+export {
+  REGIME_FLAGS,
+  NUMERIC_FLAGS,
+  isEmptyRegime,
+  topPctInert,
+  parseRegime,
+  compileRegime,
+} from "@/lib/regime";
+export type { RegimeInput, RegimeRule, RegimeValue, RuleKind, RuleAction } from "@/lib/regime";
+import {
+  REGIME_FLAGS,
+  NUMERIC_FLAGS,
+  topPctInert,
+  type RegimeInput,
+  type RegimeRule,
+  type RegimeValue,
+  type RuleAction,
+  type RuleKind,
+} from "@/lib/regime";
 
 // ── UI ────────────────────────────────────────────────────────────────────────
 
@@ -164,7 +64,7 @@ export function RegimeEditor({
     set({
       rules: [
         ...value.rules,
-        { kind: "cond", conds: {}, minTrue: "2", action: "invest", topPct: "" },
+        { kind: "cond", conds: {}, minTrue: "2", action: "invest", topPct: "", exposure: "" },
       ],
     });
   const setRule = (i: number, patch: Partial<RegimeRule>) =>
@@ -246,7 +146,9 @@ export function RegimeEditor({
                     onChange={(e) => setInput(i, { flag: e.target.value })}
                     className={`${smallCls} w-full`}
                   >
-                    {REGIME_FLAGS.map((fl) => (
+                    {/* A flag outside the list (an AI-written spec) stays selectable
+                        rather than showing as the first option while saving another. */}
+                    {[...REGIME_FLAGS, ...((REGIME_FLAGS as readonly string[]).includes(inp.flag) ? [] : [inp.flag])].map((fl) => (
                       <option key={fl} value={fl}>
                         {fl}
                       </option>
@@ -265,7 +167,7 @@ export function RegimeEditor({
                     <option value={1}>1 (i-1)</option>
                   </select>
                 </Labeled>
-                <Labeled label="gt" hint="opcional">
+                <Labeled label="gt" hint={NUMERIC_FLAGS.has(inp.flag) ? "obrigatório" : "opcional"}>
                   <input
                     type="number"
                     step="any"
@@ -349,6 +251,24 @@ export function RegimeEditor({
                         onChange={(e) => setRule(i, { topPct: e.target.value })}
                         placeholder="seleção"
                         className={`${smallCls} w-24`}
+                      />
+                    </label>
+                  )}
+                  {rule.action === "invest" && (
+                    <label
+                      className="flex items-center gap-1.5 text-[11px] text-muted"
+                      title="Fração da carteira investida (0..1); o resto fica no CDI"
+                    >
+                      exposição
+                      <input
+                        type="number"
+                        step="any"
+                        min={0}
+                        max={1}
+                        value={rule.exposure}
+                        onChange={(e) => setRule(i, { exposure: e.target.value })}
+                        placeholder="1"
+                        className={`${smallCls} w-20`}
                       />
                     </label>
                   )}

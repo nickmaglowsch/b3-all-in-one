@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   CASH_REF,
   fromSelect,
+  pickerRefs,
   portfolioBody,
   rowToSleeve,
   selectValue,
@@ -91,4 +92,20 @@ test("portfolioBody keeps the edited spec's grid, and a new carteira has none", 
   assert.equal(body.rebalance, "ME");
   assert.deepEqual(body.rebalance_months, [6, 12]);
   assert.equal("rebalance_months" in portfolioBody("New", "", rows, {}), false);
+});
+
+test("the sleeve picker offers B3 strategies only, and never a user portfolio", () => {
+  const gallery = [
+    { name: "MomSharpe", source: "builtin", market: "B3" },
+    { name: "Legacy", source: "builtin" }, // no market: the B3 default
+    { name: "CryptoBTCRegime", source: "builtin", market: "CRYPTO" },
+    { name: "USLowVol", source: "builtin", market: "US" },
+    { name: "My momentum", source: "user", market: "B3" },
+    { name: "BTC tilt", source: "user", market: "CRYPTO" },
+    { name: "My blend", source: "user" },
+  ];
+  assert.deepEqual(pickerRefs(gallery, new Set(["My blend"])), {
+    builtinRefs: ["MomSharpe", "Legacy"],
+    userRefs: ["My momentum"],
+  });
 });

@@ -537,6 +537,22 @@ def test_the_ma200_flags_agree_with_the_daily_rolling_mean(bundle):
     pd.testing.assert_frame_equal(bundle["dist_ma200"], bundle["px"] / ma200_m - 1)
 
 
+
+def test_every_regime_flag_is_a_series_on_the_grid(bundle):
+    """_eval_regime reads a flag as `flag.get(date)`: one value per rebalance
+    date. On a dates x tickers frame that is a column lookup and reads None ->
+    False forever, so validate_spec admits only these as a regime `flag`."""
+    from backtests.core.regimes import REGIME_FLAGS
+
+    grid = bundle["ret"].index
+    for key in REGIME_FLAGS:
+        flag = bundle[key]
+        assert isinstance(flag, pd.Series), key
+        assert flag.index.isin(grid).all(), key
+    assert isinstance(bundle["above_ma200"], pd.DataFrame)
+    assert "above_ma200" not in REGIME_FLAGS
+
+
 def test_the_atr_frames_agree_with_the_ewm_proxy(bundle):
     daily = bundle["adj_close"].pct_change().abs().ewm(span=14, min_periods=14).mean()
     pd.testing.assert_frame_equal(bundle["atr_20d_daily"], daily)

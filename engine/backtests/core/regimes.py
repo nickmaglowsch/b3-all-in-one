@@ -13,6 +13,22 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# The shared_data keys a regime input may name as its `flag`: one value per
+# rebalance date, read by config_strategy._eval_regime as `flag.get(date)`. All
+# are Series on the grid. A per-ticker frame (above_ma200, dist_ma200, any f_*)
+# has no single value per date — `DataFrame.get(date)` looks up a *column* and
+# returns None, so the input reads False forever and the book parks in CDI — and
+# a daily series (cdi_cumul_63d, ibov_vol_20d_daily) only hits on month-ends that
+# are sessions. scripts/validate_spec.py refuses anything else at save, and the
+# bench's regime picker (frontend/lib/regime.ts) offers a subset of these.
+REGIME_FLAGS = (
+    "is_easing",
+    "ibov_above", "ibov_calm", "ibov_uptrend", "ibov_vol_monthly", "ibov_vol_pctrank",
+    "bench_above", "bench_calm", "bench_uptrend", "bench_vol_monthly", "bench_vol_pctrank",
+    # Monthly returns, for a `gt` threshold ("CDI above 1% a month").
+    "cdi_monthly", "ibov_ret", "bench_ret",
+)
+
 
 def _expanding_pctrank(s: pd.Series) -> pd.Series:
     """Where each observation sits in the distribution of everything before it.

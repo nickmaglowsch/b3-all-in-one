@@ -10,6 +10,7 @@ FixedWeight), runs get_parameter_specs(), and — for a rank_and_hold signal —
 validates the factor: check_syntax on an inline expr:, resolves a factor:
 reference against signals.yaml or the whitelisted shared_data keys, rejects
 store:<id>, and flags needs_fundamentals when any f_* key is referenced.
+A regime input's `flag` must be one of regimes.REGIME_FLAGS (market series).
 
 For a fixed_weight spec it checks each sleeve's shape, and — the one step that
 reads the market plane (ENGINE_DATABASE_URL) — that every `ticker` sleeve names
@@ -31,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from backtests.core import dividends, markets, signal_dsl, sleeve_tickers
+from backtests.core.regimes import REGIME_FLAGS
 from backtests.core.sectors import CVM_SECTORS
 from backtests.core.config_strategy import RankAndHold, FixedWeight, _signal_defs
 from backtests.core.spec_signal import _LEG_TRANSFORMS
@@ -100,6 +102,21 @@ def _validate_sector_keywords(spec: dict, errors: list[str]) -> None:
                               f"matches as a substring); CVM's sectors: {', '.join(sorted(CVM_SECTORS))}")
 
 
+def _check_regime_flag(name: str, cfg, errors: list[str]) -> None:
+    """A regime input's `flag` must be one of the market series the overlay reads
+    by date. A per-ticker frame like above_ma200 has no one value per date: it
+    read False on every rebalance and the book parked in CDI for the whole run."""
+    flag = cfg.get("flag") if isinstance(cfg, dict) else None
+    if not isinstance(flag, str):
+        errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
+                      "series (e.g. bench_above)")
+    elif flag not in REGIME_FLAGS:
+        errors.append(f"regime input {name!r}: {flag!r} is not a regime flag — a regime "
+                      "reads one market-wide value per date, so a per-ticker frame "
+                      "(above_ma200, f_*, …) belongs in the signal instead; regime flags: "
+                      f"{', '.join(REGIME_FLAGS)}")
+
+
 def _validate_regime(regime, errors: list[str]) -> None:
     """The overlay's structure: every input reads a flag, every rule conditions
     only on inputs it declares. A rule keyed on a misspelt input otherwise never
@@ -111,9 +128,7 @@ def _validate_regime(regime, errors: list[str]) -> None:
         errors.append("regime: needs an `inputs` mapping and a `rules` list")
         return
     for name, cfg in inputs.items():
-        if not isinstance(cfg, dict) or not isinstance(cfg.get("flag"), str):
-            errors.append(f"regime input {name!r}: needs a `flag` naming a shared_data "
-                          "series (e.g. bench_above)")
+        _check_regime_flag(name, cfg, errors)
     for rule in regime["rules"]:
         extra = set(rule) - set(inputs) - _RULE_KEYS if isinstance(rule, dict) else {"?"}
         if extra:

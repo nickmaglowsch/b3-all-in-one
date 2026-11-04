@@ -1520,7 +1520,7 @@ async def update_user_strategy(
         raise HTTPException(422, "cannot change a strategy's kind — delete and recreate")
     # Portfolios and the live target run on B3: a sleeve may not move off it.
     if body.kind == "rank_and_hold" and (body.market or "B3") != "B3":
-        await _refuse_if_used(session, tid, row, f" — it cannot move to {body.market}")
+        await _refuse_if_used(session, tid, row, f" — it cannot run on {body.market}")
     spec, warnings = await _compile_and_validate(body, session, tid, exclude_id=row.id)
     old_name, new_name = row.name, body.name.strip()
     row.name = new_name

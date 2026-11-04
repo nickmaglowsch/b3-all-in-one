@@ -298,7 +298,7 @@ async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
     assert r.status_code == 200, r.text
     r = await client.put(f"/strategies/user/{mine}", headers=h_live, json=_rank(
         "Mine", market="CRYPTO", universe={"min_adtv": 1000000, "min_price": 0}))
-    assert r.status_code == 409 and "cannot move to CRYPTO" in r.json()["detail"], r.text
+    assert r.status_code == 409 and "cannot run on CRYPTO" in r.json()["detail"], r.text
     r = await client.put(f"/strategies/user/{mine}", headers=h_live,
                          json=_rank("Mine", description="still B3"))
     assert r.status_code == 200, r.text

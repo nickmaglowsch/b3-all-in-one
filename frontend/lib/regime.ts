@@ -6,9 +6,10 @@
 
 // Common macro flags in shared_data (documented list). The bench_* names are the
 // market-neutral aliases (IBOV on B3, the S&P on US, BTC on crypto).
+// Only one-value-per-date series: a per-name frame (above_ma200) never reads true
+// as an input, and engine validate_spec refuses it (regimes.REGIME_FLAGS).
 export const REGIME_FLAGS = [
   "is_easing",
-  "above_ma200",
   "ibov_above",
   "ibov_calm",
   "ibov_uptrend",

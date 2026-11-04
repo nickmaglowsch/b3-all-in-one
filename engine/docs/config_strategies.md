@@ -463,9 +463,12 @@ grid row, or only the `rebalance_months` ones, between which it drifts), so a 20
 book whose holding doubles *sells* to get back to 20% — and pays tax on it. It
 models "hold more when cheap", not "never sell and deploy a cash pile".
 
-Common regime flags in `shared_data`: `is_easing`, `above_ma200`, `ibov_above`,
-`ibov_calm`, `ibov_uptrend`, `ibov_vol_pctrank`, and `bench_drawdown` (numeric,
-use `gt`): how far the market's benchmark is below its all-time high,
+Regime flags — the whole list, one value per date (validate_spec refuses any
+other name, a per-name frame such as `above_ma200` included: it would never read
+true), and none of them readable inside an expression: `is_easing`,
+`ibov_above`/`bench_above`, `ibov_calm`/`bench_calm`, `ibov_uptrend`/`bench_uptrend`,
+`ibov_vol_pctrank`/`bench_vol_pctrank` and `ibov_vol_monthly`/`bench_vol_monthly`
+(numeric, use `gt`), and `bench_drawdown` (numeric, use `gt`): how far the market's benchmark is below its all-time high,
 `1 - close / running max` at each period end, 0 on a new high. The peak is read
 off the benchmark's whole history, not the run's load window, so a run starting
 mid-crash still knows the high before it. It is in BRL, like every price here —

@@ -13,11 +13,23 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# The regime flags: one value per *date*, which is what `_eval_regime` reads
+# (`flag.get(date)`). A per-name frame there (above_ma200, ath_drawdown) looks up a
+# column called that date, gets None, and never reads true — so validate_spec
+# accepts these names as inputs and nothing else.
+REGIME_FLAGS = frozenset({
+    "is_easing", "ibov_above", "ibov_calm", "ibov_uptrend", "ibov_vol_monthly",
+    "ibov_vol_pctrank", "bench_above", "bench_calm", "bench_uptrend",
+    "bench_vol_monthly", "bench_vol_pctrank", "bench_drawdown",
+})
+# One-per-date Series an expression (a date x name frame) cannot read: pandas
+# aligns a Series' dates against the frame's *tickers*, so the result is all NaN
+# and the book silently sits in cash. (bench_ret / bench_px are documented data
+# names that predate this list; they are left alone.)
+PER_DATE = REGIME_FLAGS | {"cdi_monthly", "cdi_daily", "cdi_cumul_63d",
+                           "ibov_vol_20d_daily", "ibov_ret_20d_daily"}
 # Regime flags that are numbers, not booleans: an input reads them through `gt`
-# (validate_spec refuses one without it — read bare, a drawdown is "true" on
-# every day but a new high). The first is also one number per *date*, which an
-# expression (a date x name frame) cannot read; per name it is ath_drawdown.
-REGIME_ONLY = frozenset({"bench_drawdown"})
+# (read bare, a drawdown is "true" on every day but a new high).
 NUMERIC_FLAGS = frozenset({"bench_drawdown", "bench_vol_pctrank", "ibov_vol_pctrank",
                            "bench_vol_monthly", "ibov_vol_monthly"})
 

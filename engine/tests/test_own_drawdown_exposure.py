@@ -203,7 +203,23 @@ def test_a_per_name_frame_is_refused_as_a_regime_flag():
                         "rules": [{"dd": True, "exposure": 1.0},
                                   {"default": True, "exposure": 0.3}]})
     r = validate(spec)
-    assert not r["ok"] and any("per-name frame, not a regime flag" in e for e in r["errors"])
+    assert not r["ok"] and any("is not a regime flag" in e for e in r["errors"])
+
+
+@pytest.mark.parametrize("flag", ["above_ma200", "dist_ma200", "momentum", "nope"])
+def test_only_a_one_per_date_series_is_a_regime_flag(flag):
+    spec = _own(regime={"inputs": {"x": {"flag": flag, "offset": 1, "gt": 0}},
+                        "rules": [{"x": True}, {"default": True, "park": True}]})
+    assert not validate(spec)["ok"]
+
+
+@pytest.mark.parametrize("name", ["bench_vol_pctrank", "bench_above", "is_easing",
+                                  "cdi_monthly"])
+def test_no_per_date_series_is_read_inside_an_expression(name):
+    """Aligned against the tickers, it makes the whole expression NaN: the book
+    would sit in CDI on every row, with no error."""
+    r = validate(_own(exposure_expr=f"clip(ath_drawdown + {name}, 0, 1)"))
+    assert not r["ok"] and any("one number per date" in e for e in r["errors"])
 
 
 def test_the_benchmark_drawdown_is_refused_inside_an_expression():

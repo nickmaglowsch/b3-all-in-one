@@ -437,3 +437,17 @@ def test_copom_easing_aligns_the_cdi_flag_by_date():
     assert tw.loc[pd.Timestamp("2011-08-31"), "IBOV"] == 1.0
     # Late 2012, rising for months -> CDI.
     assert tw.loc[pd.Timestamp("2012-10-31"), "CDI_ASSET"] == 1.0
+
+
+def test_a_regime_on_a_per_ticker_frame_fails_loudly():
+    # `DataFrame.get(date)` is a column lookup: above_ma200 read None -> False on
+    # every date, so a rule on it never matched and the book sat in CDI with no
+    # error. A spec stored before validate_spec refused it must fail, not park.
+    from backtests.core.config_strategy import _eval_regime
+    grid = pd.date_range("2020-01-31", periods=12, freq="ME")
+    above = pd.DataFrame(True, index=grid, columns=["PETR4", "VALE3"])
+    shared = {"above_ma200": above, "ret": pd.DataFrame(index=grid)}
+    regime = {"inputs": {"up": {"flag": "above_ma200", "offset": 1}},
+              "rules": [{"up": True, "top_pct": 0.1}, {"default": True, "park": True}]}
+    with pytest.raises(ValueError, match="per-ticker frame"):
+        _eval_regime(regime, shared, 5)

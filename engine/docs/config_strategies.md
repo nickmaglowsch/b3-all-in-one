@@ -414,8 +414,19 @@ An **N-of-M vote** — "invest when at least 2 of these 3 signals are on" — is
     - {default: true, park: true}
 ```
 
-Common regime flags in `shared_data`: `is_easing`, `above_ma200`, `ibov_above`,
-`ibov_calm`, `ibov_uptrend`, `ibov_vol_pctrank`.
+Regime flags in `shared_data` — market-wide series, one value per rebalance date
+(`backtests.core.regimes.REGIME_FLAGS`): `is_easing`, `ibov_above`, `ibov_calm`,
+`ibov_uptrend`, `ibov_vol_monthly`, `ibov_vol_pctrank`, their market-neutral
+`bench_*` aliases (`bench_above`, …), and the monthly returns `cdi_monthly`,
+`ibov_ret`, `bench_ret` (with `gt`). On CRYPTO, whose benchmark prints every
+calendar day, the daily `ibov_ret_20d_daily` and `ibov_vol_20d_daily` count too
+(`regimes.regime_flags`); elsewhere a month-end weekend has no print and they
+would read False. `validate_spec` refuses any other `flag` at save, and a
+backtest refuses a per-ticker one at run time. A per-ticker frame
+such as `above_ma200` (dates × tickers) is not a regime flag: the overlay reads
+`flag.get(date)`, which on a frame is a column lookup, so the input would read
+False on every date and the book would sit in CDI. Use it in the signal instead
+(`specs/cdi_ma200.yaml`).
 
 ---
 

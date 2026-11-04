@@ -7,16 +7,7 @@
 // live here (next to the shape they serialize) so StrategyForm stays the
 // orchestrator without knowing the regime wire format.
 
-// Common macro flags in shared_data (documented list). ibov_vol_pctrank is a
-// 0..1 percentile → usually paired with `gt`; the rest read as booleans.
-export const REGIME_FLAGS = [
-  "is_easing",
-  "above_ma200",
-  "ibov_above",
-  "ibov_calm",
-  "ibov_uptrend",
-  "ibov_vol_pctrank",
-] as const;
+import { REGIME_FLAGS, flagOptions } from "@/lib/regime";
 
 export interface RegimeInput {
   name: string;
@@ -246,7 +237,7 @@ export function RegimeEditor({
                     onChange={(e) => setInput(i, { flag: e.target.value })}
                     className={`${smallCls} w-full`}
                   >
-                    {REGIME_FLAGS.map((fl) => (
+                    {flagOptions(inp.flag).map((fl) => (
                       <option key={fl} value={fl}>
                         {fl}
                       </option>

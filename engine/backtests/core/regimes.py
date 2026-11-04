@@ -13,6 +13,33 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+# The shared_data keys a regime input may name as its `flag`: one value per
+# rebalance date, read by config_strategy._eval_regime as `flag.get(date)`. All
+# are Series on the grid. A per-ticker frame (above_ma200, dist_ma200, any f_*)
+# has no single value per date — `DataFrame.get(date)` looks up a *column* and
+# returns None, so the input reads False forever and the book parks in CDI — and
+# a daily series only hits on grid labels that are sessions (see
+# DAILY_REGIME_FLAGS). scripts/validate_spec.py refuses anything else at save, and
+# the bench's regime picker (frontend/lib/regime.ts) offers a subset of these.
+REGIME_FLAGS = (
+    "is_easing",
+    "ibov_above", "ibov_calm", "ibov_uptrend", "ibov_vol_monthly", "ibov_vol_pctrank",
+    "bench_above", "bench_calm", "bench_uptrend", "bench_vol_monthly", "bench_vol_pctrank",
+    # Monthly returns, for a `gt` threshold ("CDI above 1% a month").
+    "cdi_monthly", "ibov_ret", "bench_ret",
+)
+
+# Daily benchmark series. They sit on the benchmark's own print dates, so they
+# read correctly only on a market whose benchmark prints every calendar day
+# (MarketSpec.benchmark_every_day: crypto). On B3 a month-end weekend reads
+# False. cdi_cumul_63d is on BCB business days on every market, so never.
+DAILY_REGIME_FLAGS = ("ibov_ret_20d_daily", "ibov_vol_20d_daily")
+
+
+def regime_flags(spec) -> tuple[str, ...]:
+    """The flags a regime input may read on market `spec` (a MarketSpec)."""
+    return REGIME_FLAGS + (DAILY_REGIME_FLAGS if spec.benchmark_every_day else ())
+
 
 def _expanding_pctrank(s: pd.Series) -> pd.Series:
     """Where each observation sits in the distribution of everything before it.

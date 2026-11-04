@@ -37,6 +37,27 @@ from backtests.core.strategy_base import (
 )
 
 
+def _read_flag(shared: dict, name: str, ic: dict, index, i: int) -> bool:
+    """One regime input at rebalance row i: the flag's value at `index[i - offset]`,
+    thresholded by `gt` when given. A date the flag does not cover reads False."""
+    flag = shared[ic["flag"]]
+    if isinstance(flag, pd.DataFrame):
+        # `DataFrame.get(date)` looks up a column and returns None, so a per-ticker
+        # frame (above_ma200) read False on every date and the book parked in CDI
+        # for the whole run with no error. validate_spec refuses it at save; this
+        # catches a spec stored before that, or one never shelled through it.
+        raise ValueError(
+            f"regime input {name!r}: flag {ic['flag']!r} is a per-ticker frame, not a "
+            "market series — a regime reads one value per date (see regimes.REGIME_FLAGS)")
+    j = i - int(ic.get("offset", 1))
+    raw = flag.get(index[j]) if 0 <= j < len(index) else None
+    if raw is None or pd.isna(raw):
+        return False
+    if "gt" in ic:
+        return bool(float(raw) > ic["gt"])
+    return bool(raw)
+
+
 def _eval_regime(regime: dict, shared: dict, i: int, index=None):
     """Evaluate the regime rules at rebalance row i. Each input is a boolean read
     of a shared_data flag at the date `index[i - offset]` (optionally `> gt`);
@@ -50,17 +71,8 @@ def _eval_regime(regime: dict, shared: dict, i: int, index=None):
     """
     if index is None:
         index = shared["ret"].index
-    vals = {}
-    for nm, ic in regime.get("inputs", {}).items():
-        flag = shared[ic["flag"]]
-        j = i - int(ic.get("offset", 1))
-        raw = flag.get(index[j]) if 0 <= j < len(index) else None
-        if raw is None or pd.isna(raw):
-            vals[nm] = False
-        elif "gt" in ic:
-            vals[nm] = bool(float(raw) > ic["gt"])
-        else:
-            vals[nm] = bool(raw)
+    vals = {nm: _read_flag(shared, nm, ic, index, i)
+            for nm, ic in regime.get("inputs", {}).items()}
     for rule in regime.get("rules", []):
         if rule.get("default"):
             return rule

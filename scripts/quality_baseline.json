@@ -58,7 +58,7 @@
     "engine/b3_pipeline/storage.py": 1129,
     "engine/backtests/core/data.py": 710,
     "engine/backtests/strategies/sp500_b3.py": 573,
-    "frontend/app/bench/RegimeEditor.tsx": 466,
+    "frontend/app/bench/RegimeEditor.tsx": 457,
     "frontend/app/bench/StrategyForm.tsx": 613,
     "frontend/app/estrategia/page.tsx": 886,
     "frontend/app/page.tsx": 977,

@@ -309,6 +309,19 @@ async def test_exposure_zones_and_a_ticker_allow_list_reach_the_engine(client):
     assert r.status_code == 422 and "exposure" in r.json()["detail"], r.text
 
 
+async def test_an_own_drawdown_tilt_saves_with_its_exposure_expr(client):
+    """Any asset sized by its own drawdown: exposure_expr survives the request
+    model and the engine's check; one that reads no data is refused."""
+    h = await auth(client, "mcp-own-dd@example.com", modules=["bench"])
+    r = await client.post("/strategies/user", headers=h, json=_rank(
+        "PETR4 own tilt", exposure_expr="clip(0.2 + ath_drawdown, 0, 1)"))
+    assert r.status_code == 200, r.text
+    assert r.json()["spec"]["exposure_expr"] == "clip(0.2 + ath_drawdown, 0, 1)"
+    r = await client.post("/strategies/user", headers=h,
+                          json=_rank("Flat", exposure_expr="0.5"))
+    assert r.status_code == 422 and "exposure_expr" in r.json()["detail"], r.text
+
+
 async def _seed_done_run(session_maker, tid, strategy, sharpe, ann, tmp: Path) -> str:
     from platform_app.models import BacktestRun
 

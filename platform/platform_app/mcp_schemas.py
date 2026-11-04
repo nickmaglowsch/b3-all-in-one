@@ -27,6 +27,8 @@ _SPEC = {
     "description": (
         "A strategy spec. kind=rank_and_hold: {kind, name, description, market, "
         "rebalance, rebalance_months?, weighting, weight_expr?, max_weight?, "
+        "exposure_expr? (each held name keeps clip(value,0,1) of its weight, rest in "
+        "CDI; e.g. ath_drawdown = depth below its own all-time high), "
         "universe{min_adtv,min_price,smallcap_below_median,sectors?{include,exclude},"
         "tickers?[codes: the universe is exactly these]}, "
         "signal{factor|expr|legs[{factor|expr, weight, transform}], coverage?, vars?, "

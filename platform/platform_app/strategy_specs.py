@@ -157,6 +157,9 @@ class RankStrategyIn(_Finite):
     weighting: Literal["equal", "adtv", "market_cap", "expr"] = "equal"
     weight_expr: str | None = Field(default=None, max_length=_TEXT_MAX)
     max_weight: float | None = Field(default=None, gt=0, le=1)
+    # Each held name keeps clip(value, 0, 1) of its weight, the rest in CDI — e.g.
+    # "ath_drawdown" for "hold more the further it is below its own high".
+    exposure_expr: str | None = Field(default=None, min_length=1, max_length=_TEXT_MAX)
     # None = B3. Unknown planes are refused here, never silently run as B3.
     market: _MARKET | None = None
     universe: _RankUniverse = Field(default_factory=_RankUniverse)
@@ -264,7 +267,7 @@ def _compile_rank(m: RankStrategyIn) -> dict:
         spec["regime"] = m.regime
     if m.warmup_pad is not None:
         spec["warmup_pad"] = m.warmup_pad
-    for key in ("weight_expr", "max_weight", "rebalance_months"):
+    for key in ("weight_expr", "exposure_expr", "max_weight", "rebalance_months"):
         if getattr(m, key) is not None:
             spec[key] = getattr(m, key)
     return spec

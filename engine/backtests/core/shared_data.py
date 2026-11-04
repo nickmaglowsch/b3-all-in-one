@@ -98,6 +98,19 @@ def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
                  lambda: universe.tradable_mask(intervals, sessions, symbols))
 
 
+def _ath_drawdown(db_path: str, end: str, spec, freq: str, px: pd.DataFrame) -> pd.DataFrame:
+    """`1 - close / running max` per name at each grid date, 0 on a new high,
+    the running max taken over the name's full history on the plane rather than
+    over the load window. NaN before a name's first price."""
+    full = plane.MarketView(db_path, _PEAK_HISTORY_FROM, end, spec)
+    have = set(full.symbols)
+    frames = list(full.stream(
+        "adj_close", columns=[c for c in px.columns if c in have],
+        reduce=lambda d: (1.0 - d / d.cummax()).clip(lower=0.0).resample(freq).last()))
+    out = pd.concat(frames, axis=1) if frames else pd.DataFrame(index=px.index)
+    return out.reindex(index=px.index, columns=px.columns)
+
+
 def build_shared_data(
     db_path: str,
     start: str,
@@ -275,6 +288,11 @@ def build_shared_data(
     shared.defer("bench_drawdown", lambda: regimes.drawdown_from_peak(
         download_benchmark(spec.benchmark, _PEAK_HISTORY_FROM, end, market=spec.key),
         freq))
+    # The same, per name: each one's drawdown from its own all-time high. Its peak
+    # needs the name's whole history, so it streams the run's names over a view
+    # of the plane from the start — daily closes, split-corrected as the grid's
+    # are — and keeps only the grid-shaped answer of each batch.
+    shared.defer("ath_drawdown", lambda: _ath_drawdown(db_path, end, spec, freq, px))
 
     # ── CVM sector classification (survivorship-free, from the CVM register) ──
     # Long-format [root, ref_date, sector], read from the plane like everything

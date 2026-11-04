@@ -437,6 +437,21 @@ regime:
     - {default: true, exposure: 0.2}
 ```
 
+`bench_drawdown` is the *market's benchmark*; to size each asset by **its own**
+drawdown, `exposure_expr` (top level, beside `weight_expr`) is an expression —
+same language, `vars` and scalars — whose value at the signal row each held name
+keeps `clip(·, 0, 1)` of its weight; the rest goes to `CDI_ASSET` (a NaN or
+infinite value keeps nothing). It multiplies with a rule's `exposure` and needs
+no regime. `ath_drawdown` is the frame it is usually built on: per name,
+`1 - close / running max` at each grid date, the running max over the name's
+whole history on the plane (daily, split-corrected closes, streamed lazily for
+the run's names only — a spec that does not read it does not pay for it).
+
+```yaml
+universe: {min_adtv: 0, min_price: 0, tickers: [ETHUSDT]}
+exposure_expr: "clip(0.2 + ath_drawdown, 0, 1)"   # 20% at the high, all in 80% below
+```
+
 Exposure is a target the book is rebalanced back to on every row it trades (every
 grid row, or only the `rebalance_months` ones, between which it drifts), so a 20%
 book whose holding doubles *sells* to get back to 20% — and pays tax on it. It

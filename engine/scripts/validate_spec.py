@@ -43,6 +43,8 @@ SHARED_DATA_KEYS = {
     "fin_vol", "vol_60d", "vol_20d", "atr_m", "mf_composite",
     # Market-neutral aliases for the benchmark frames; see shared_data.
     "bench_ret", "bench_px",
+    # Each name's drawdown from its own all-time high (shared_data, full history).
+    "ath_drawdown",
     # Dividends (backtests.core.dividends) — B3 only, see _B3_ONLY_NAMES.
     *dividends.KEYS,
 }
@@ -185,6 +187,13 @@ def _validate_rank_signal(spec: dict, errors: list[str]) -> bool:
             _reads_data(spec["weight_expr"], "weight_expr", sig, local, errors)
         else:
             errors.append("weighting `expr` needs a `weight_expr` expression")
+    if "exposure_expr" in spec:
+        x = spec["exposure_expr"]
+        if isinstance(x, str) and x.strip():
+            funds |= _check_expr(x, errors)
+            _reads_data(x, "exposure_expr", sig, local, errors)
+        else:
+            errors.append("exposure_expr must be an expression string")
     return funds
 
 
@@ -330,8 +339,7 @@ def _b3_only(spec: dict) -> list[str]:
     local = sig.get("vars") if isinstance(sig.get("vars"), dict) else {}
     exprs = [x for x in local.values() if isinstance(x, str)]
     exprs += [src["expr"] for src in sources if isinstance(src.get("expr"), str)]
-    if isinstance(spec.get("weight_expr"), str):
-        exprs.append(spec["weight_expr"])
+    exprs += [spec[k] for k in ("weight_expr", "exposure_expr") if isinstance(spec.get(k), str)]
     names = {src.get("factor") for src in sources}
     for expr in exprs:
         try:

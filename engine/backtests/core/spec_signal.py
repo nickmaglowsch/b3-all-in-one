@@ -169,6 +169,45 @@ def _weight_frame(spec: dict, params: dict, shared: dict) -> pd.DataFrame | None
                   "weight_expr")
 
 
+def _exposure_frame(spec: dict, params: dict, shared: dict) -> pd.DataFrame | None:
+    """``exposure_expr`` evaluated like weight_expr — same scalars, same ``vars``
+    — to the frame each held name's share of its weight is read from; None when
+    the spec has none."""
+    if not spec.get("exposure_expr"):
+        return None
+    cfg = {k: v for k, v in _signal_cfg(spec, params).items()
+           if k not in ("factor", "expr", "legs")}
+    return _frame(resolve_factor({**cfg, "expr": spec["exposure_expr"]}, shared, params),
+                  "exposure_expr")
+
+
+def exposure_scale(xframe: pd.DataFrame | None, i: int, names) -> pd.Series | None:
+    """Each held name's exposure at row i, read at the signal's row (i - 1) and
+    clipped to [0, 1]: the fraction of its weight it keeps, the rest in CDI. A
+    name the expression scores NaN or infinite keeps nothing — no number, no
+    position. None without an exposure_expr (everything kept)."""
+    if xframe is None:
+        return None
+    row = xframe.iloc[i - 1].reindex(list(names))
+    return row.replace([np.inf, -np.inf], np.nan).clip(0.0, 1.0).fillna(0.0)
+
+
+def place(tw: pd.DataFrame, i: int, w: dict, exposure: float, cash, scale=None) -> None:
+    """Write row i's book: each name's weight times the rule's `exposure` and its
+    own `scale` (exposure_expr); what that leaves uninvested goes to `cash`, the
+    CDI column a regime or an exposure_expr adds."""
+    invested = 0.0
+    for t, wt in w.items():
+        if t in tw.columns:
+            x = wt * exposure * (1.0 if scale is None else float(scale.get(t, 0.0)))
+            tw.iloc[i, tw.columns.get_loc(t)] = x
+            invested += x
+    # A tolerance, not `< 1.0`: a fully invested book sums to 1 only up to float
+    # rounding, and a 1e-16 CDI weight is a trade (and a tax lot) nobody meant.
+    if cash is not None and invested < 1.0 - 1e-9:
+        tw.iloc[i, tw.columns.get_loc(cash)] = 1.0 - invested
+
+
 def sector_filter(sectors: dict | None, shared: dict, index) -> pd.DataFrame:
     """Which names the universe's ``sectors`` admits on each grid date (all of
     them when it names no keyword): the latest

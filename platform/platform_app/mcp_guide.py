@@ -223,6 +223,27 @@ Accumulation tilt — hold more Bitcoin the further it is below its high:
              {"neutral": true, "exposure": 0.35}, {"default": true, "exposure": 0.2}]}}
 ```
 
+That gates on the **market's benchmark** (BTC on CRYPTO, the Ibovespa on B3, the
+S&P on US). To size a book by **each asset's own** drawdown, use the data name
+`ath_drawdown` (per name: `1 - close / its all-time high`, 0 at a new high, read
+off its whole history) and `exposure_expr`: an expression like `weight_expr`
+(same vars and scalars) after which each held name keeps `clip(value, 0, 1)` of
+its weight and the rest sits in CDI (NaN keeps nothing). It stacks with a rule's
+`exposure` (they multiply) and works without a regime. Any asset, any market:
+
+```json
+{"kind": "rank_and_hold", "name": "ETH own-drawdown tilt", "market": "CRYPTO",
+ "rebalance": "ME",
+ "universe": {"min_adtv": 0, "min_price": 0, "tickers": ["ETHUSDT"]},
+ "signal": {"factor": "adtv", "apply_glitch": false},
+ "selection": {"top_n": 1, "min_names": 1},
+ "exposure_expr": "clip(0.2 + ath_drawdown, 0, 1)"}
+```
+
+(20% at the high, all in 80% below it; `"ath_drawdown"` alone is the
+indicator's own mapping, deploy fraction = depth below the high. On B3,
+`"tickers": ["PETR4"]` or `["BOVA11"]`; on US, any listed name.)
+
 Exposure is rebalanced to on every row the book trades (all of them, or only the
 `rebalance_months` ones): when the holding rallies the book
 sells back down to its exposure, and the sale is taxed (crypto: 15%, R$35k

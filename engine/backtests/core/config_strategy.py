@@ -27,8 +27,8 @@ from backtests.core import markets
 # resolve_factor and _signal_defs are re-exported: scripts and tests import them
 # from here, where they lived before spec_signal.
 from backtests.core.spec_signal import (  # noqa: F401
-    _build_signal, _signal_defs, _weight_frame, allow_list, only_in_months,
-    resolve_factor, sector_filter,
+    _build_signal, _exposure_frame, _signal_defs, _weight_frame, allow_list,
+    exposure_scale, only_in_months, place, resolve_factor, sector_filter,
 )
 from backtests.core.strategy_base import (
     market_param, cap_and_renormalize,
@@ -92,16 +92,6 @@ def _regime_action(regime: dict, shared: dict, i: int, index, top_pct):
     if exposure <= 0.0:
         return None
     return action.get("top_pct", top_pct), exposure
-
-
-def _place(tw: pd.DataFrame, i: int, w: dict, exposure: float, cash) -> None:
-    """Write row i's book, scaled to `exposure`; the remainder goes to `cash`
-    (only ever below 1 under a regime, which is what adds the cash column)."""
-    for t, wt in w.items():
-        if t in tw.columns:
-            tw.iloc[i, tw.columns.get_loc(t)] = wt * exposure
-    if exposure < 1.0:
-        tw.iloc[i, tw.columns.get_loc(cash)] = 1.0 - exposure
 
 
 class _SpecStrategy(StrategyBase):
@@ -188,6 +178,7 @@ class RankAndHold(_SpecStrategy):
         smallcap = bool(uni.get("smallcap_below_median", False))
         weighting = spec.get("weighting", "equal")
         wframe = _weight_frame(spec, params, shared_data)
+        xframe = _exposure_frame(spec, params, shared_data)
         sector_ok = allow_list(sector_filter(uni.get("sectors"), shared_data, ret.index),
                                 uni.get("tickers"), self.market)
 
@@ -200,15 +191,16 @@ class RankAndHold(_SpecStrategy):
 
         # Optional macro-regime overlay: gate the equity book on a regime flag,
         # parking in CDI (and holding IBOV as an available asset) when "off".
+        # An exposure_expr needs the same CDI column for what it leaves uninvested.
         regime = spec.get("regime")
         cash = None
-        if regime:
+        if regime or xframe is not None:
             cash = "CDI_ASSET"
             r[cash] = shared_data["cdi_monthly"]
-            if regime.get("add_ibov", True):
+            if regime and regime.get("add_ibov", True):
                 r["IBOV"] = shared_data["ibov_ret"]
             tw[cash] = 0.0
-            park_few = bool(regime.get("park_when_too_few", True))
+            park_few = bool((regime or {}).get("park_when_too_few", True))
             cash_loc = tw.columns.get_loc(cash)
 
         prev_sel: list = []
@@ -244,7 +236,7 @@ class RankAndHold(_SpecStrategy):
                 # `sticky`: carry the previous book through a thin month rather
                 # than going flat (volume_breakout's prev_sel fallback).
                 if not (sticky and prev_sel):
-                    if regime and park_few:
+                    if cash and park_few:
                         tw.iloc[i, cash_loc] = 1.0
                     continue
                 selected = prev_sel
@@ -253,7 +245,7 @@ class RankAndHold(_SpecStrategy):
                 selected = valid.nlargest(n).index.tolist()
             prev_sel = selected
             w = self._weights(selected, adtv_r, wframe, i, weighting, spec.get("max_weight"))
-            _place(tw, i, w, exposure, cash)
+            place(tw, i, w, exposure, cash, exposure_scale(xframe, i, w))
 
         return r, only_in_months(tw, spec.get("rebalance_months"))
 

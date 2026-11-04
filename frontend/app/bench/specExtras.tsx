@@ -1,7 +1,7 @@
 // Spec fields the bench form has no control for, kept from the source spec so an
 // edit or full clone round-trips instead of silently dropping them: range/shift/
 // warmup_pad, an AI-authored spec's market/min_hold/sticky, and the MCP-only
-// legs/vars/weight_expr/max_weight/rebalance_months/sectors.
+// legs/vars/weight_expr/exposure_expr/max_weight/rebalance_months/sectors/tickers.
 
 type Obj = Record<string, unknown>;
 
@@ -24,8 +24,9 @@ export function specExtras(spec: Obj | null): SpecExtras {
   return {
     signal,
     selection: pick(obj(s.selection), ["min_hold", "sticky"]),
-    universe: pick(obj(s.universe), ["sectors"]),
-    top: pick(s, ["warmup_pad", "market", "weight_expr", "max_weight", "rebalance_months"]),
+    universe: pick(obj(s.universe), ["sectors", "tickers"]),
+    top: pick(s, ["warmup_pad", "market", "weight_expr", "exposure_expr", "max_weight",
+                  "rebalance_months"]),
     legs: Array.isArray(signal.legs),
   };
 }

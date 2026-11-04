@@ -72,7 +72,10 @@ AI client ──POST /mcp (JSON-RPC, Bearer qtx_mcp_…)──▶ mcp_server
   (0..1, the rest in CDI), the numeric flag `bench_drawdown` (drawdown from the
   benchmark's all-time high, read off its whole history), and
   `universe.tickers` (an allow-list — "just BTCUSDT" — checked against the
-  spec's market plane on save). The guide's section 1 carries the recipe. MVRV
+  spec's market plane on save). The guide's section 1 carries the recipe.
+  For any asset by its *own* drawdown: the frame `ath_drawdown` (per name, from
+  its full-history high) and `exposure_expr` (each held name keeps
+  `clip(value, 0, 1)` of its weight, the rest in CDI). MVRV
   is not on the plane; exposure is rebalanced to, so it sells (and pays tax)
   when the holding rallies — a never-sell reserve-deployment DCA would be a
   simulator mode of its own.

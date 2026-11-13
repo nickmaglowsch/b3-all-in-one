@@ -683,27 +683,6 @@ def _freeze_target(
     return target
 
 
-def _cap_buys(buys: list[dict], budget: float) -> list[dict]:
-    """Greedy top-up: deploy `budget` BRL into buys, biggest gap first, trimming the
-    last one to whole shares. Used by buy_only_laggards so the plan only spends the
-    cash actually available (new_cash + harvest proceeds), never phantom trim proceeds."""
-    kept: list[dict] = []
-    for b in sorted(buys, key=lambda x: -float(x.get("est_brl", 0.0))):
-        if budget <= 0:
-            break
-        brl = float(b.get("est_brl", 0.0))
-        price = float(b.get("est_price", 0.0))
-        if brl <= budget:
-            kept.append(b)
-            budget -= brl
-        elif price > 0:
-            qty = math.floor(budget / price)
-            if qty > 0:
-                kept.append({**b, "qty": qty, "est_brl": qty * price})
-                budget -= qty * price
-    return kept
-
-
 @portfolio_router.post("/rebalance-plans")
 async def create_rebalance_plan(
     body: RebalanceRequest,
@@ -773,9 +752,10 @@ async def create_rebalance_plan(
 
     # Feature 4 — buy behavior. buy_only_laggards deploys only new_cash + surviving
     # sell proceeds into the underweight names advise already picked.
+    unfunded: list[str] = []  # a top-up the budget left short of one unit
     if buy_only:
         budget = float(body.new_cash) + sum(float(s.get("est_brl", 0.0)) for s in sells)
-        buys = _cap_buys(buys, budget)
+        buys, unfunded = portfolio_sleeves.cap_buys(buys, budget, off_b3)
 
     # Tax overlay: run the plan's sells (only B3 tickers actually held) through
     # tlh_plan; an off-B3 sale is not apurated by B3 rules (plan_notes says so).
@@ -786,7 +766,9 @@ async def create_rebalance_plan(
                                              s["ticker"] in held and s["ticker"] not in off_b3]
                               ) if has_book else {}
 
-    notes = portfolio_sleeves.plan_notes(off_b3, {**trades, "buys": buys})
+    notes = portfolio_sleeves.plan_notes(off_b3, {
+        **trades, "buys": buys,
+        "below_one_lot": sorted({*trades.get("below_one_lot", []), *unfunded})})
     acao = (tax.get("buckets") or {}).get("AÇÃO") or {}
     limit = float(tax.get("isencao_limit", 20_000.0))
     if float(acao.get("gross_after", 0.0)) > limit:

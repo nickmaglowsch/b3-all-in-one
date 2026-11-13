@@ -60,6 +60,7 @@ rows("INSERT INTO instruments (market, symbol, currency, kind, name, delisting_d
         ("US", "LEHMQ", "USD", "EQUITY", "Lehman Brothers", day(5000), 0),
         ("US", "ZVZZT", "USD", "EQUITY", "NASDAQ TEST STOCK", None, 1),
         ("US", "BAC$K", "USD", "EQUITY", "Bank of America Preferred K", None, 0),
+        ("US", "BACKX", "USD", "EQUITY", "Backx Corp", None, 0),
         ("CRYPTO", "BTCUSDT", "USDT", "SPOT_PAIR", None, None, 0)])
 rows("INSERT INTO cvm_companies (cnpj, ticker, company_name, b3_trading_name)"
      " VALUES (?, ?, ?, ?)",
@@ -124,9 +125,14 @@ async def test_search_finds_assets_of_every_market_by_ticker_or_name(client, pla
     assert petr == {"ticker": "PETR4", "market": "B3", "name": "PETROBRAS",
                     "asset_class": "STOCK", "price_brl": 40.0,
                     "price_date": petr["price_date"]}
-    # A test issue, and a symbol no sleeve could hold, are on the plane but not offered.
+    # A test issue, and a symbol no sleeve could hold, are on the plane but not
+    # offered — and filtered before the limit: BAC$K ranks above BACKX, and the
+    # one-result page is still BACKX, not empty.
     assert await _search(client, h, q="ZVZZT") == []
-    assert await _search(client, h, q="BAC") == []
+    assert [r["ticker"] for r in await _search(client, h, q="BAC")] == ["BACKX"]
+    assert [r["ticker"] for r in await _search(client, h, q="BAC", limit=1)] == ["BACKX"]
+    # A B3 code is found by its company's name too, through its CVM root.
+    assert [r["ticker"] for r in await _search(client, h, q="petrobras")] == ["PETR4"]
 
     apple = await _search(client, h, q="apple")
     assert [(r["ticker"], r["market"], r["asset_class"]) for r in apple] == [
@@ -214,10 +220,15 @@ async def test_ticker_sleeves_of_every_market_are_stored_canonical(client, plane
     ([{"ticker": "PETR4", "strategy_ref": "CASH_CDI", "target_pct": 100}], 422,
      "exactly one of strategy_ref / ticker"),
     ([{"strategy_ref": "CASH_CDI", "market": "US", "target_pct": 100}], 422,
-     "market goes with a ticker"),
+     "market só acompanha um sleeve de ticker"),
     ([{"ticker": "SPY", "market": "NYSE", "target_pct": 100}], 422, "market"),
-    ([{"ticker": "SPY", "target_pct": 100}], 422, "not a B3 trading code"),
-    ([{"ticker": "^BVSP", "target_pct": 100}], 422, "is an index"),
+    ([{"ticker": "SPY", "target_pct": 100}], 422, "não é um código da B3"),
+    ([{"ticker": "^BVSP", "target_pct": 100}], 422, "é um índice"),
+    # One symbol on two markets would be one weight priced on one plane.
+    # (A US symbol may have a B3 code's shape; a crypto pair never does.)
+    ([{"ticker": "AAPL34", "target_pct": 50},
+      {"ticker": "AAPL34", "market": "US", "target_pct": 50}], 422,
+     "AAPL34 aparece em dois mercados (B3 e EUA)"),
 ])
 async def test_a_ticker_sleeve_the_plane_cannot_price_is_refused(
         client, plane, body, status, needle):
@@ -229,6 +240,25 @@ async def test_a_ticker_sleeve_the_plane_cannot_price_is_refused(
     # A refused save leaves the stored set as it was.
     assert (await client.get("/portfolio/sleeves", headers=h)).json() == [
         {"ticker": "PETR4", "market": "B3", "target_pct": 100.0}]
+
+
+@pytest.mark.parametrize("row", [
+    {"ticker": "PETR4", "market": None},          # a ticker without its market
+    {"ticker": "PETR4", "market": "NYSE"},        # a market no plane has
+    {"strategy_ref": "CASH_CDI", "market": "B3"},  # a market without a ticker
+    {"strategy_ref": "CASH_CDI", "ticker": "PETR4", "market": "B3"},
+    {},                                            # neither
+])
+async def test_the_table_itself_holds_a_sleeve_to_one_source(row):
+    """The CHECK behind the API's validation: a row written by anything else is
+    still exactly one of strategy_ref / ticker, a ticker with a known market."""
+    from sqlalchemy.exc import IntegrityError
+
+    from platform_app.models import PortfolioSleeve
+    async with async_session_maker() as s:
+        s.add(PortfolioSleeve(tenant_id=uuid.uuid4(), target_pct=100, **row))
+        with pytest.raises(IntegrityError, match="ck_sleeves_one_source"):
+            await s.commit()
 
 
 async def test_a_stale_close_is_saved_with_a_warning(client, plane):
@@ -321,6 +351,40 @@ async def test_a_new_position_below_one_unit_is_named_in_the_plan(client, plane)
     assert any("não chega a uma unidade de: SPY" in n for n in plan["notes"])
     # No B3 history at all: no apuração to overlay, and no 500 for want of one.
     assert plan["tax"] == {}
+
+
+async def test_buy_only_laggards_trims_a_coin_in_fractions_and_names_the_unfunded(
+        client, plane):
+    """The budget-capped top-up sizes a crypto buy in fractions of a coin as
+    advise_weights does: a whole-unit floor turned R$1k of BTC into nothing."""
+    h = await _user(client, "plan-buy-only")
+    await _seed_petr4(client, h)                              # R$4k of PETR4
+    body = [{"ticker": "BTCUSDT", "market": "CRYPTO", "target_pct": 60},
+            {"ticker": "IVVB11", "target_pct": 30}, {"ticker": "PETR4", "target_pct": 10}]
+    assert (await client.put("/portfolio/sleeves", json=body, headers=h)).status_code == 200
+    r = await client.put("/portfolio/settings/rebalance", headers=h, json={
+        "buy_only_laggards": True, "sell_only_for_harvest": False, "cadence": "ME"})
+    assert r.status_code == 200, r.text
+
+    r = await client.post("/portfolio/rebalance-plans", json={"new_cash": 1000}, headers=h)
+    assert r.status_code == 200, r.text
+    plan = r.json()
+    assert plan["trades"]["sells"] == []                      # pure top-up
+    [btc] = plan["trades"]["buys"]                            # R$1k reaches BTC only
+    assert btc["ticker"] == "BTCUSDT"
+    assert btc["qty"] == pytest.approx(0.00185185, abs=1e-8)  # floor(1000/540000, 1e-8)
+    assert btc["est_brl"] <= 1000
+    # What was left (a cent) reached IVVB11 and bought none of it: said, not dropped.
+    assert any("não chega a uma unidade de: IVVB11" in n for n in plan["notes"])
+
+    # Excluded (or pinned), the coin is held where it is — here, at nothing — and
+    # the budget goes to what is left.
+    for key in ("exclude", "pins"):
+        r = await client.post("/portfolio/rebalance-plans", headers=h,
+                              json={"new_cash": 1000, key: ["BTCUSDT"]})
+        assert r.status_code == 200, r.text
+        buys = {b["ticker"]: b for b in r.json()["trades"]["buys"]}
+        assert "BTCUSDT" not in buys and buys["IVVB11"]["qty"] == 2   # floor(1000/350)
 
 
 # ── saved carteiras: B3 tickers activate; US / crypto are refused ─────────────

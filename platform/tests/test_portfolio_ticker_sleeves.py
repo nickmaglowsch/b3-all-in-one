@@ -108,8 +108,8 @@ async def test_mcp_rejects_an_unknown_ticker_by_name(client, plane):
 
 
 @pytest.mark.parametrize("sleeves, needle", [
-    ([_t("^BVSP", 100)], "is an index"),
-    ([_t("PETRO4", 100)], "not a B3 trading code"),
+    ([_t("^BVSP", 100)], "é um índice"),
+    ([_t("PETRO4", 100)], "não é um código da B3"),
     ([{"ticker": "IVVB11", "strategy_ref": "MomSharpe", "target_pct": 100}],
      "exactly one of strategy_ref / ticker"),
     ([{"target_pct": 100}], "exactly one of strategy_ref / ticker"),

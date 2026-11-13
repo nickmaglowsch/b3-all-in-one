@@ -28,7 +28,9 @@ def plane(tmp_path, monkeypatch) -> str:
         " VALUES (?, 'X', ?, ?, ?, 1e6)",
         [("PETR4", "2026-10-29", 39.0, 39.0), ("PETR4", "2026-10-30", 40.0, 40.0),
          # A BDR: outside the standard-lot universe the strategies trade.
-         ("AAPL34", "2026-10-29", 60.0, 60.0), ("AAPL34", "2026-10-30", 61.5, 61.5)])
+         ("AAPL34", "2026-10-29", 60.0, 60.0), ("AAPL34", "2026-10-30", 61.5, 61.5),
+         # A zero close is no price: the last real one stands.
+         ("AAPL34", "2026-10-31", 0.0, 0.0)])
     conn.executemany(
         "INSERT INTO external_prices (ticker, isin_code, date, close, volume, source)"
         " VALUES (?, 'X', ?, ?, 0, 'T')",
@@ -41,6 +43,7 @@ def plane(tmp_path, monkeypatch) -> str:
          # The newest bar had no PTAX yet: no BRL close, so the previous one counts.
          ("US", "SPY", "2026-10-31", 612.0, None, None),
          ("CRYPTO", "BTCUSDT", "2026-10-30", 100_000.0, 540_000.0, 5.4),
+         ("CRYPTO", "BTCUSDT", "2026-10-31", 0.0, 0.0, 5.4),
          # Same symbol on another market is another instrument.
          ("CRYPTO", "SPY", "2026-10-30", 1.0, 5.4, 5.4)])
     conn.commit()

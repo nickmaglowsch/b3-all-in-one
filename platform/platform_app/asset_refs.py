@@ -29,8 +29,9 @@ MARKET_LABEL = {"B3": "B3", "US": "EUA", "CRYPTO": "cripto"}
 B3_TICKER = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}")
 _FRACTIONAL = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}F")
 # The US directory's symbols: letters first, then letters, digits and the class
-# separators (BRK.B). Whether the plane prices one is the plane's to say.
-_US_SYMBOL = re.compile(r"[A-Z][A-Z0-9.\-]{0,9}")
+# separators (BRK.B). Whether the plane prices one is the plane's to say. The
+# hyphen goes last in the class so the pattern reads the same in Postgres.
+_US_SYMBOL = re.compile(r"[A-Z][A-Z0-9.-]{0,9}")
 # The crypto plane holds Binance spot pairs quoted in USDT and nothing else
 # (markets.CRYPTO.ticker_sql), so a bare coin means its USDT pair.
 CRYPTO_QUOTE = "USDT"
@@ -39,8 +40,8 @@ _CRYPTO_PAIR = re.compile(rf"[A-Z0-9]{{2,20}}{CRYPTO_QUOTE}")
 
 def b3_code(raw: str) -> str:
     """A B3 trading code, bare: case, the `.SA` suffix and the fractional
-    market's F folded away. Raises ValueError (English, as the strategy API's
-    validation messages are) for an index or anything not shaped like a code."""
+    market's F folded away. Raises ValueError for an index or anything not
+    shaped like a code."""
     t = raw.strip().upper().removesuffix(".SA")
     # PETR4F is the fractional market's code for the PETR4 share. The plane
     # keeps only the round-lot market (the parser drops TPMERC 020), and a
@@ -48,12 +49,12 @@ def b3_code(raw: str) -> str:
     if _FRACTIONAL.fullmatch(t):
         t = t[:-1]
     if t.startswith(("^", "$")):
-        raise ValueError(f"ticker {raw!r} is an index, not a listed instrument — "
-                         "hold it through its ETF (BOVA11.SA tracks the Ibovespa)")
+        raise ValueError(f"ticker {raw!r} é um índice, não um ativo negociável — "
+                         "use o ETF que o acompanha (BOVA11 acompanha o Ibovespa)")
     if not B3_TICKER.fullmatch(t):
-        raise ValueError(f"ticker {raw!r} is not a B3 trading code: four characters "
-                         "and a one- or two-digit class, like PETR4 or IVVB11.SA "
-                         "(a US or crypto asset needs `market`: US or CRYPTO)")
+        raise ValueError(f"ticker {raw!r} não é um código da B3: quatro caracteres e "
+                         "uma classe de um ou dois dígitos, como PETR4 ou IVVB11 (um "
+                         "ativo dos EUA ou cripto leva `market`: US ou CRYPTO)")
     return t
 
 
@@ -75,6 +76,12 @@ def _crypto_pair(raw: str) -> str:
 
 
 _CANONICAL = {"B3": b3_code, "US": _us_symbol, "CRYPTO": _crypto_pair}
+
+# Each market's canonical symbol shape, anchored, as a regex Python and Postgres
+# read alike: the search filters the plane by it in SQL (market_assets), before
+# its LIMIT, so a page is never cut short by names no sleeve could hold.
+SYMBOL_PATTERN = {m: f"^({rx.pattern})$" for m, rx in
+                  (("B3", B3_TICKER), ("US", _US_SYMBOL), ("CRYPTO", _CRYPTO_PAIR))}
 
 
 def canonical(raw: str, market: str = "B3") -> str:

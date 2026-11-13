@@ -87,9 +87,11 @@ def latest_plane_close(
     return as_of, _closes(rows)
 
 
-def _latest_in(db_path: str, table: str, tickers: list[str], end: str,
-               extra: str = "") -> dict[str, float]:
-    """{ticker: latest close} of exactly `tickers` in a ticker-keyed table."""
+def _latest_in(db_path: str, table: str, tickers: list[str], end: str) -> dict[str, float]:
+    """{ticker: latest positive close} of exactly `tickers` in a ticker-keyed
+    table. A zero close is skipped *before* picking the newest row, so it falls
+    back to the last real price — as platform_app/market_assets.py does — rather
+    than leaving the name unpriced."""
     from b3_pipeline import storage
 
     if not tickers:
@@ -100,7 +102,7 @@ def _latest_in(db_path: str, table: str, tickers: list[str], end: str,
             SELECT ticker, close,
                    ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
             FROM {table}
-            WHERE date <= ? AND close IS NOT NULL AND ticker IN ({marks}){extra}
+            WHERE date <= ? AND close > 0 AND ticker IN ({marks})
         ) latest
         WHERE rn = 1
     """
@@ -140,7 +142,8 @@ def b3_ticker_closes(db_path: str, tickers: list[str], end: str) -> dict[str, fl
 def market_closes_brl(db_path: str, symbols: dict[str, str], end: str) -> dict[str, float]:
     """{symbol: latest close in BRL} for US / crypto symbols ({symbol: market}),
     from `market_prices.close_brl`. A bar with no PTAX for its date has no BRL
-    close and is skipped for the previous one, never priced in dollars."""
+    close (and a zero one is no price): either is skipped for the previous bar,
+    never priced in dollars."""
     from b3_pipeline import storage
 
     out: dict[str, float] = {}
@@ -152,7 +155,7 @@ def market_closes_brl(db_path: str, symbols: dict[str, str], end: str) -> dict[s
                 SELECT symbol, close_brl,
                        ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY date DESC) AS rn
                 FROM market_prices
-                WHERE market = ? AND date <= ? AND close_brl IS NOT NULL
+                WHERE market = ? AND date <= ? AND close_brl > 0
                   AND symbol IN ({marks})
             ) latest
             WHERE rn = 1

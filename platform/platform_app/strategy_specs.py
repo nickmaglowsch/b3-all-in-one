@@ -202,7 +202,7 @@ class PortfolioSleeveIn(_Finite):
         if (self.strategy_ref is None) == (self.ticker is None):
             raise ValueError("a sleeve needs exactly one of strategy_ref / ticker")
         if self.market and not self.ticker:
-            raise ValueError("market goes with a ticker sleeve, and only with it")
+            raise ValueError("market só acompanha um sleeve de ticker")
         if self.ticker:
             self.ticker = _b3_sleeve_ticker(self.ticker, self.market or "B3")
             self.market = None

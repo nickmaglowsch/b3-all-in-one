@@ -18,6 +18,7 @@ Two things a US or crypto sleeve cannot have, said rather than glossed over:
 from __future__ import annotations
 
 import datetime
+import math
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -47,7 +48,7 @@ class SleeveIn(BaseModel):
         if (self.strategy_ref is None) == (self.ticker is None):
             raise ValueError("a sleeve needs exactly one of strategy_ref / ticker")
         if self.market and not self.ticker:
-            raise ValueError("market goes with a ticker sleeve, and only with it")
+            raise ValueError("market só acompanha um sleeve de ticker")
         if self.ticker:
             self.market = self.market or "B3"
             self.ticker = asset_refs.canonical(self.ticker, self.market)
@@ -73,6 +74,7 @@ async def check_tickers(body: list[SleeveIn]) -> list[str]:
     refs = [(s.ticker, s.market) for s in body if s.ticker]
     if not refs:
         return []
+    one_market_per_symbol(refs)
     try:
         prices = await market_assets.latest_closes(await get_engine_pool(), refs)
     except Exception as e:  # noqa: BLE001 — unchecked is not saved
@@ -90,6 +92,22 @@ async def check_tickers(body: list[SleeveIn]) -> list[str]:
     return warnings
 
 
+def one_market_per_symbol(refs) -> None:
+    """422 when one symbol is a sleeve on two markets. The combined target, the
+    position book and advise_weights --markets all key an asset by its symbol
+    alone — a B3 code and a US symbol of the same letters would be blended into
+    one weight and priced on one plane. The planes' shapes keep this from
+    happening in practice (a B3 code ends in digits, a crypto pair in USDT);
+    this makes it a refusal rather than an assumption."""
+    seen: dict[str, str] = {}
+    for ticker, market in refs:
+        if seen.setdefault(ticker, market) != market:
+            raise HTTPException(422, (
+                f"{ticker} aparece em dois mercados ({asset_refs.MARKET_LABEL[seen[ticker]]}"
+                f" e {asset_refs.MARKET_LABEL[market]}): o alvo identifica o ativo só pelo "
+                "código — mantenha um deles."))
+
+
 def off_b3_note(labels: list[str]) -> str:
     return (f"{', '.join(labels)}: a posição atual não vem dos seus extratos da B3, "
             "então o alvo x atual e o plano a tratam como zero.")
@@ -97,7 +115,9 @@ def off_b3_note(labels: list[str]) -> str:
 
 def split_sleeves(sleeves) -> tuple[float, list, dict[str, float], dict[str, str]]:
     """Stored sleeves → (cash weight, strategy sleeves, {ticker: weight},
-    {ticker: market} of the off-B3 tickers advise_weights must price elsewhere)."""
+    {ticker: market} of the off-B3 tickers advise_weights must price elsewhere).
+    Keyed by symbol alone, which the save guarantees is unambiguous."""
+    one_market_per_symbol([(s.ticker, s.market) for s in sleeves if s.ticker])
     cash, strategies, tickers, off_b3 = 0.0, [], {}, {}
     for s in sleeves:
         w = float(s.target_pct) / 100.0
@@ -110,6 +130,49 @@ def split_sleeves(sleeves) -> tuple[float, list, dict[str, float], dict[str, str
         else:
             strategies.append((s.strategy_ref, w))
     return cash, strategies, tickers, off_b3
+
+
+# A crypto pair trades in fractions of a coin, as advise_weights sizes it
+# (_FRACTION_STEP there): a whole-unit floor would turn any top-up smaller than
+# one BTC into nothing.
+_CRYPTO_STEP = 1e-8
+
+
+def units(brl: float, price: float, crypto: bool) -> float:
+    """BRL → the most units it buys: whole ones, or 1e-8 of a coin. Rounded
+    before the floor so float noise (0.3 / 1e-8 = 29999999.99…) costs no step."""
+    if not crypto:
+        return math.floor(brl / price)
+    return round(math.floor(round(brl / price / _CRYPTO_STEP, 6)) * _CRYPTO_STEP, 8)
+
+
+def cap_buys(buys: list[dict], budget: float,
+             off_b3: dict[str, str]) -> tuple[list[dict], list[str]]:
+    """Greedy top-up: deploy `budget` BRL into buys, biggest gap first, trimming the
+    last one to whole units (fractions of a coin for crypto). Used by
+    buy_only_laggards so the plan only spends the cash actually available
+    (new_cash + harvest proceeds), never phantom trim proceeds.
+
+    Returns (kept, unfunded): `unfunded` names a buy the leftover budget reached
+    but could not pay one unit of, so the plan can say so instead of dropping it."""
+    kept: list[dict] = []
+    unfunded: list[str] = []
+    for b in sorted(buys, key=lambda x: -float(x.get("est_brl", 0.0))):
+        if budget <= 0:
+            break
+        brl = float(b.get("est_brl", 0.0))
+        price = float(b.get("est_price", 0.0))
+        if brl <= budget:
+            kept.append(b)
+            budget -= brl
+        elif price > 0:
+            qty = units(budget, price, off_b3.get(b["ticker"]) == "CRYPTO")
+            if qty > 0:
+                kept.append({**b, "qty": qty, "est_brl": qty * price})
+                budget -= qty * price
+            else:
+                unfunded.append(b["ticker"])
+    return kept, unfunded
 
 
 def target_warnings(off_b3: dict[str, str], trades: dict) -> list[str]:

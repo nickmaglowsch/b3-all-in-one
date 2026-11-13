@@ -93,6 +93,29 @@ export function onKey(
   return (KEYS.get(key) ?? ignore)(state, options);
 }
 
+/**
+ * The query an edit of the field means. Open, the field holds the query itself.
+ * Closed, it shows the current choice ("PETR4"), so a keystroke there must
+ * start a fresh search for what was typed — "V", not "PETR4V". The typed text
+ * is what the edit inserted: whatever is left once the prefix and suffix it
+ * shares with the shown choice are taken off. A deletion inserts nothing, and
+ * so clears the search; typing over a selection gives the new text.
+ */
+export function typedQuery(open: boolean, shown: string, next: string): string {
+  if (open || !shown) return next;
+  let head = 0;
+  while (head < shown.length && head < next.length && shown[head] === next[head]) head++;
+  let tail = 0;
+  while (
+    tail < shown.length - head &&
+    tail < next.length - head &&
+    shown[shown.length - 1 - tail] === next[next.length - 1 - tail]
+  ) {
+    tail++;
+  }
+  return next.slice(head, next.length - tail);
+}
+
 /** The active option after the list changed under it (a new query, new search
  *  results): kept when it is still there, else the first enabled one. */
 export function reconcile(

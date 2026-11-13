@@ -205,13 +205,14 @@ class BacktestRun(Base):
 
 
 class PortfolioSleeve(Base):
-    # spec/05 Feature 3: replaced atomically per tenant on PUT, percentages sum to
-    # 100. A strategy (or CASH_CDI) or one listed instrument (portfolio_sleeves.py).
+    # spec/05 Feature 3, replaced whole on PUT: a strategy or one asset (portfolio_sleeves.py).
     __tablename__ = "portfolio_sleeves"
     __table_args__ = (
         UniqueConstraint("tenant_id", "strategy_ref", name="uq_sleeves_tenant_strategy"),
         UniqueConstraint("tenant_id", "market", "ticker", name="uq_sleeves_tenant_ticker"),
-        CheckConstraint("(strategy_ref IS NULL) <> (ticker IS NULL)", name="ck_sleeves_one_source"),
+        CheckConstraint("(strategy_ref IS NULL) <> (ticker IS NULL) AND (ticker IS NULL) = "
+                        "(market IS NULL) AND market IN ('B3', 'US', 'CRYPTO')",
+                        name="ck_sleeves_one_source"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

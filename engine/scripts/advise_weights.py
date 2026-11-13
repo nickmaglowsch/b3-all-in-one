@@ -23,6 +23,9 @@ Usage:
   --markets    with --weights: {"TICKER": "US" | "CRYPTO"} for the tickers that
                are not B3 codes, priced from their own plane in reais. A crypto
                quantity is fractional (8 decimals); every other is whole units.
+               Keyed by symbol alone, as --weights and --positions are: the
+               platform refuses one symbol as a sleeve on two markets
+               (portfolio_sleeves.one_market_per_symbol), so a key is one asset.
   --positions  current book, {"TICKER": {"qty": N, "avg_cost": BRL}, ...}. When
                given (with --nav-cash), also emit a whole-unit trade list to
                move the book to the advised weights (pure computation, NO tax

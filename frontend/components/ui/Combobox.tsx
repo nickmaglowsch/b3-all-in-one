@@ -15,6 +15,7 @@ import {
   grouped,
   onKey,
   reconcile,
+  typedQuery,
   type ComboOption,
   type ComboState,
 } from "@/lib/combobox";
@@ -86,7 +87,8 @@ export function Combobox<T extends ComboOption>(props: ComboboxProps<T>) {
         value={state.open ? query : value}
         placeholder={state.open && value ? value : placeholder}
         onChange={(e) => {
-          onQueryChange(e.target.value);
+          // Closed, the field shows the current choice: typing starts a new search.
+          onQueryChange(typedQuery(state.open, value, e.target.value));
           setState({ open: true, active: -1 });
         }}
         onClick={() => !state.open && setState({ open: true, active: -1 })}

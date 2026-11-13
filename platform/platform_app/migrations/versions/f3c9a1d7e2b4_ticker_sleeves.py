@@ -28,8 +28,12 @@ def upgrade() -> None:
                     nullable=True)
     op.create_unique_constraint('uq_sleeves_tenant_ticker', 'portfolio_sleeves',
                                 ['tenant_id', 'market', 'ticker'])
-    op.create_check_constraint('ck_sleeves_one_source', 'portfolio_sleeves',
-                               '(strategy_ref IS NULL) <> (ticker IS NULL)')
+    # Exactly one of strategy_ref / ticker; a ticker always with its market, and
+    # a market the planes have (a NULL market passes IN, as a strategy row needs).
+    op.create_check_constraint(
+        'ck_sleeves_one_source', 'portfolio_sleeves',
+        "(strategy_ref IS NULL) <> (ticker IS NULL) AND (ticker IS NULL) = "
+        "(market IS NULL) AND market IN ('B3', 'US', 'CRYPTO')")
 
 
 def downgrade() -> None:

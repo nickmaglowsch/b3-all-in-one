@@ -11,6 +11,7 @@ import {
   onKey,
   reconcile,
   step,
+  typedQuery,
   type ComboOption,
 } from "./combobox.ts";
 
@@ -107,4 +108,24 @@ test("options are grouped in order, keeping their list index", () => {
     ],
   );
   assert.deepEqual(grouped([]), []);
+});
+
+test("typing into a closed field starts a fresh search, not one for the choice + key", () => {
+  // Open, the field holds the query as typed.
+  assert.equal(typedQuery(true, "PETR4", "petr"), "petr");
+  // Closed, it shows "PETR4": the keystroke is the query.
+  assert.equal(typedQuery(false, "PETR4", "PETR4V"), "V");
+  assert.equal(typedQuery(false, "SPY · EUA", "SPY · EUAb"), "b");
+  // Typed in the middle, or over a selection of all of it, or pasted.
+  assert.equal(typedQuery(false, "PETR4", "PEVTR4"), "V");
+  assert.equal(typedQuery(false, "PETR4", "v"), "v");
+  assert.equal(typedQuery(false, "PETR4", "BTC"), "BTC");
+  // A deletion inserts nothing: an empty search, never "PETR".
+  assert.equal(typedQuery(false, "PETR4", "PETR"), "");
+  assert.equal(typedQuery(false, "PETR4", ""), "");
+  // A repeated letter still counts once: "AAPL" + "A" is "A".
+  assert.equal(typedQuery(false, "AAPL", "AAPLA"), "A");
+  assert.equal(typedQuery(false, "AAPL", "AAAPL"), "A");
+  // Nothing chosen yet: the field was empty, so the text is the query.
+  assert.equal(typedQuery(false, "", "mom"), "mom");
 });

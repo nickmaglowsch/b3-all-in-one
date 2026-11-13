@@ -18,6 +18,9 @@ _SLEEVE = {
         "ticker": {"type": "string", "description": (
             "A listed B3 instrument held directly, e.g. IVVB11.SA, DIVO11.SA, "
             "BOVA11.SA. Its weight sits in CDI until its first price.")},
+        "market": {"type": "string", "enum": ["B3"], "description": (
+            "Optional, B3 only: a portfolio backtests on the B3 plane, so US and "
+            "crypto tickers are refused.")},
         "target_pct": {"type": "number", "exclusiveMinimum": 0, "maximum": 100},
     },
     "required": ["target_pct"],

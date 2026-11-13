@@ -86,7 +86,7 @@ class MarketSpec:
 
 
 # Character-for-character the predicate the two B3 loaders and
-# advise_weights._STANDARD_LOT_SQL have always used: standard lots ending in
+# weights_pricing.STANDARD_LOT_SQL have always used: standard lots ending in
 # 3/4/5/6, plus units ending in 11. BDRs (34, 35) and the rest stay out.
 _B3_LOTS = (
     "((LENGTH({col}) = 5 AND SUBSTR({col}, 5, 1) IN ('3', '4', '5', '6'))"

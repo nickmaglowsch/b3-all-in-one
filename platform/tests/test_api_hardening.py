@@ -131,7 +131,7 @@ async def test_a_cache_emptied_mid_request_keeps_the_hits_it_already_had(monkeyp
 
     monkeypatch.setattr(routes, "_advise_strategy", advise)
     async with async_session_maker() as s:
-        combined, cash = await routes._combined_target(s, tid)
+        combined, cash, _ = await routes._combined_target(s, tid)
     assert combined == {"WARM3": 0.5, "COLD3": 0.5}
 
 

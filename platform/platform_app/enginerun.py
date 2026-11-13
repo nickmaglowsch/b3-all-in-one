@@ -116,15 +116,17 @@ def advise_weights(
     strategy: str | None = None,
     params: dict | None = None,
     weights: dict | None = None,
+    markets: dict | None = None,
     positions: dict | None = None,
     nav_cash: float = 0.0,
     extra_env: dict | None = None,
 ) -> dict:
     """Run scripts/advise_weights.py and return its parsed JSON. Pass either a
     ``strategy`` name (signals, optionally overridden by ``params``, e.g.
-    ``{"rebalance_freq": "QE"}``) or fixed ``weights`` (no signals). When
-    ``positions`` is given the payload also carries a trade list + valuations.
-    Raises RuntimeError on a non-zero exit (caller maps to HTTP)."""
+    ``{"rebalance_freq": "QE"}``) or fixed ``weights`` (no signals). ``markets``
+    names the plane of each off-B3 ticker in ``weights`` ({"SPY": "US"}); the
+    rest are B3. When ``positions`` is given the payload also carries a trade
+    list + valuations. Raises RuntimeError on a non-zero exit (caller maps to HTTP)."""
     args: list[str] = []
     if strategy:
         args.append(strategy)
@@ -132,6 +134,8 @@ def advise_weights(
         args += ["--params", json.dumps(params)]
     if weights is not None:
         args += ["--weights", json.dumps(weights)]
+    if markets:
+        args += ["--markets", json.dumps(markets)]
     if positions is not None:
         args += ["--positions", json.dumps(positions), "--nav-cash", str(float(nav_cash))]
     proc = run_script("advise_weights.py", args, extra_env)

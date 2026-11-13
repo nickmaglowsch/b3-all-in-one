@@ -11,13 +11,14 @@ needs the compiled dict.
 from __future__ import annotations
 
 import json
-import re
 from typing import Annotated, Literal
 
 from fastapi import HTTPException
 from pydantic import (
     AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator,
 )
+
+from platform_app import asset_refs
 
 _REBALANCE = Literal["ME", "QE", "W-FRI"]
 _MARKET = Literal["B3", "US", "CRYPTO"]
@@ -27,17 +28,13 @@ _MARKET = Literal["B3", "US", "CRYPTO"]
 # a sane size, and are generous for a field a person types.
 _NAME_MAX, _TEXT_MAX, _SLEEVES_MAX, _REGIME_MAX = 120, 2000, 50, 16 * 1024
 _VARS_MAX, _LEGS_MAX, _KEYWORDS_MAX, _KEYWORD_LEN = 16, 8, 20, 80
-# A B3 trading code — a four-character root and a one- or two-digit class
-# (PETR4, IVVB11) — optionally with the ".SA" the built-in specs carry from the
-# yfinance era. `^BVSP` and `$IBOV` fail it on purpose: indices are not tradable,
-# and the plane's `$` namespace is stored series (CDI, IPCA), not instruments.
+# What a ticker is, per market, lives in asset_refs (B3 codes, US symbols,
+# crypto pairs); a saved carteira's ticker sleeves are B3 codes.
 _TICKER_MAX = 16
 _UNIVERSE_TICKERS_MAX = 50    # engine/scripts/validate_spec.py says the same
-_TICKER = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}(\.SA)?")
-_FRACTIONAL = re.compile(r"[A-Z0-9]{4}[0-9]{1,2}F")
-# /estrategia's sleeve picker gives ticker options this value prefix
-# (frontend/lib/portfolioSleeves.ts). Refused at the start of a strategy name so
-# no strategy option can ever share a ticker option's value.
+# /estrategia's sleeve editor keys a ticker row with this prefix
+# (frontend/lib/portfolioSleeves.ts rowKey). Refused at the start of a strategy
+# name so no strategy row can ever share a ticker row's key.
 _RESERVED_PREFIX = "@ticker:"
 
 
@@ -195,35 +192,40 @@ class PortfolioSleeveIn(_Finite):
     portfolios use. Exactly one of the two."""
     strategy_ref: str | None = Field(default=None, min_length=1, max_length=_NAME_MAX)
     ticker: str | None = Field(default=None, min_length=1, max_length=_TICKER_MAX)
+    # Said so a US or crypto asset is refused for what it is, not as a malformed
+    # B3 code. None and "B3" are the same sleeve.
+    market: _MARKET | None = None
     target_pct: float = Field(gt=0, le=100)
-
-    @field_validator("ticker")
-    @classmethod
-    def _ticker_shape(cls, v: str | None) -> str | None:
-        """Normalised to the built-ins' own spelling (`IVVB11.SA`), so a user sleeve
-        and a built-in one compile to the same thing. Whether the plane has prices
-        for it is the engine's to say (validate_spec), on save."""
-        if v is None:
-            return v
-        t = v.strip().upper().removesuffix(".SA")
-        # PETR4F is the fractional market's code for the PETR4 share. The plane
-        # keeps only the round-lot market (the parser drops TPMERC 020), and a
-        # backtest holds amounts, not lots — so it is the same sleeve.
-        if _FRACTIONAL.fullmatch(t):
-            t = t[:-1]
-        if t.startswith(("^", "$")):
-            raise ValueError(f"ticker {v!r} is an index, not a listed instrument — "
-                             "hold it through its ETF (BOVA11.SA tracks the Ibovespa)")
-        if not _TICKER.fullmatch(t):
-            raise ValueError(f"ticker {v!r} is not a B3 trading code: four characters "
-                             "and a one- or two-digit class, like PETR4 or IVVB11.SA")
-        return f"{t}.SA"
 
     @model_validator(mode="after")
     def _one_source(self):
         if (self.strategy_ref is None) == (self.ticker is None):
             raise ValueError("a sleeve needs exactly one of strategy_ref / ticker")
+        if self.market and not self.ticker:
+            raise ValueError("market goes with a ticker sleeve, and only with it")
+        if self.ticker:
+            self.ticker = _b3_sleeve_ticker(self.ticker, self.market or "B3")
+            self.market = None
         return self
+
+
+def _b3_sleeve_ticker(raw: str, market: str) -> str:
+    """Normalised to the built-ins' own spelling (`IVVB11.SA`), so a user sleeve
+    and a built-in one compile to the same thing. Whether the plane has prices
+    for it is the engine's to say (validate_spec), on save.
+
+    B3 only. A carteira backtests through FixedWeight, which reads a ticker
+    sleeve off the B3 plane and books every sale on the one B3 tax ledger — a
+    US sale (anual, Lei 14.754) or a crypto one (R$35 mil, no carry) cannot be
+    apurated there. The live sleeves take them; a saved carteira refuses them.
+    """
+    if market != "B3":
+        raise ValueError(
+            f"{asset_refs.label(raw.strip().upper(), market)} não pode entrar numa "
+            "carteira salva: o backtest de carteiras roda no plano da B3 e apura o "
+            "imposto pelas regras da B3. Ativos dos EUA e cripto entram só nos "
+            "sleeves ativos (alvo e rebalanceamento) em /estrategia.")
+    return f"{asset_refs.b3_code(raw)}.SA"
 
 
 class PortfolioStrategyIn(_Finite):
@@ -341,23 +343,24 @@ def check_sleeve_refs(m: PortfolioStrategyIn, *, resolvable: set[str],
             raise off_b3_refusal(ref, off_b3[ref])
         if ref not in resolvable:
             hint = (" (a listed instrument goes in `ticker`, not `strategy_ref`)"
-                    if _TICKER.fullmatch(ref.strip().upper()) else "")
+                    if asset_refs.B3_TICKER.fullmatch(
+                        ref.strip().upper().removesuffix(".SA")) else "")
             raise HTTPException(422, f"unknown sleeve strategy_ref: {ref!r}{hint}")
 
 
-def live_sleeves(spec: dict, name: str) -> list[tuple[str, float]]:
-    """A saved portfolio as the live target's (strategy_ref, pct) rows.
+def live_sleeves(spec: dict) -> list[dict]:
+    """A saved portfolio as the live target's sleeve bodies (PUT /portfolio/sleeves).
 
-    The live target (PUT /portfolio/sleeves) advises weights per *strategy* and
-    holds the tenant's real book against them; it has no notion of a bare
-    instrument as a sleeve. Rather than drop a ticker sleeve and activate a
-    different portfolio from the one the user saved, refuse and say which.
+    One for one: a strategy stays a strategy, CDI is CASH_CDI, and a ticker
+    sleeve — always a B3 code in a saved carteira — is the same instrument as a
+    live ticker sleeve, which PUT /portfolio/sleeves prices before it is stored.
     """
-    sleeves = spec.get("sleeves", [])
-    if tickers := [sl["ticker"] for sl in sleeves if "ticker" in sl]:
-        raise HTTPException(422, f"{name!r} holds ticker sleeves ({', '.join(tickers)}): "
-                                 "the live target only takes strategies and CASH_CDI. "
-                                 "Backtest it as it is, or swap the tickers for "
-                                 "strategies to activate it.")
-    return [("CASH_CDI" if sl.get("asset") == "CDI" else sl["strategy"],
-             round(float(sl["weight"]) * 100.0, 6)) for sl in sleeves]
+    out: list[dict] = []
+    for sl in spec.get("sleeves", []):
+        pct = round(float(sl["weight"]) * 100.0, 6)
+        if "ticker" in sl:
+            out.append({"ticker": sl["ticker"], "market": "B3", "target_pct": pct})
+        else:
+            ref = "CASH_CDI" if sl.get("asset") == "CDI" else sl["strategy"]
+            out.append({"strategy_ref": ref, "target_pct": pct})
+    return out

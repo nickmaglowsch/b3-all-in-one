@@ -19,6 +19,7 @@ import pytest
 
 from b3_pipeline import storage
 from scripts import advise_weights as aw
+from scripts import weights_pricing
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -117,7 +118,7 @@ def test_a_target_weight_of_zero_is_not_a_ticker_in_play():
 
 
 # --------------------------------------------------------------------------
-# _latest_plane_close — the --weights valuation, straight off the plane
+# weights_pricing.latest_plane_close — the --weights valuation, off the plane
 # --------------------------------------------------------------------------
 
 def plane(tmp_path, rows) -> str:
@@ -135,7 +136,7 @@ def plane(tmp_path, rows) -> str:
 
 def test_an_empty_plane_reports_no_as_of_rather_than_a_made_up_one(tmp_path):
     db = plane(tmp_path, [])
-    assert aw._latest_plane_close(db, "2005-01-01", "2030-01-01") == (None, {})
+    assert weights_pricing.latest_plane_close(db, "2005-01-01", "2030-01-01") == (None, {})
 
 
 def test_each_ticker_is_valued_at_its_own_most_recent_close(tmp_path):
@@ -143,7 +144,7 @@ def test_each_ticker_is_valued_at_its_own_most_recent_close(tmp_path):
         ("PETR4", "2025-06-10", 30.0), ("PETR4", "2025-06-20", 32.0),
         ("VALE3", "2025-03-05", 55.0),      # stopped trading in March
     ])
-    as_of, prices = aw._latest_plane_close(db, "2005-01-01", "2030-01-01")
+    as_of, prices = weights_pricing.latest_plane_close(db, "2005-01-01", "2030-01-01")
     assert prices == {"PETR4": 32.0, "VALE3": 55.0}
     # as_of is the month-end label of the plane's last bucket, matching the
     # resampled frame this query replaces.
@@ -152,7 +153,7 @@ def test_each_ticker_is_valued_at_its_own_most_recent_close(tmp_path):
 
 def test_an_end_date_makes_a_past_valuation_reproducible(tmp_path):
     db = plane(tmp_path, [("PETR4", "2025-06-10", 30.0), ("PETR4", "2025-06-20", 32.0)])
-    as_of, prices = aw._latest_plane_close(db, "2005-01-01", "2025-06-15")
+    as_of, prices = weights_pricing.latest_plane_close(db, "2005-01-01", "2025-06-15")
     assert prices == {"PETR4": 30.0} and as_of == pd.Timestamp("2025-06-30")
 
 
@@ -165,7 +166,7 @@ def test_odd_lots_and_options_are_not_part_of_the_tradeable_universe(tmp_path):
         ("PETR4F", "2025-06-20", 31.9),     # fracionário
         ("PETRA300", "2025-06-20", 1.2),    # option series
     ])
-    _, prices = aw._latest_plane_close(db, "2005-01-01", "2030-01-01")
+    _, prices = weights_pricing.latest_plane_close(db, "2005-01-01", "2030-01-01")
     assert set(prices) == {"PETR4", "HGLG11"}
 
 

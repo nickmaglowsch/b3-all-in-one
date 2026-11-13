@@ -162,6 +162,7 @@ POST /backtests                  {strategy_id|inline spec, params} → job
 GET  /backtests/{id}             status, metrics, artifact URLs
 GET  /rankings/{methodology}     equities/FII rankings (shared, cached)
 GET  /market/status              data freshness per source
+GET  /market/assets?q=           asset search across B3 / US / crypto (sleeve picker)
 ```
 
 An MCP server (per the b3-portfolio plan, a prototype already exists) is a thin second

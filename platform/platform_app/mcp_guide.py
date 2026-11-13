@@ -313,9 +313,11 @@ sleeve only.
   (CASH_CDI, and where a regime parks) is booked like ações, isenção included,
   and so is the IBOV column a regime overlay can hold. `loss_carryforward` in a
   run's curves is the two carries summed.
-- A portfolio with ticker sleeves backtests and lists like any other, but the
-  live rebalance target ("Ativar" in /estrategia) only takes strategies and
-  CASH_CDI, so it cannot be activated there.
+- B3 tickers only. A portfolio backtests on the B3 plane and apurates every
+  sale under B3 rules, so a US or crypto asset (`{"ticker": "SPY", "market":
+  "US"}`) is refused: those are held directly only as live sleeves, which the
+  user sets in /estrategia. A portfolio with B3 ticker sleeves backtests, lists
+  and activates ("Ativar") like any other.
 
 ## 3. Running backtests
 

@@ -99,8 +99,15 @@ first price its weight sits in CDI, as in "DIVO11 / CDI / IVVB11 (thirds)".
   sleeves through the existing PUT `/portfolio/sleeves` logic (routes.py:268).
   Two representations on purpose: named spec = saved/backtestable artifact;
   sleeve set = single live target. One-way sync at promote. A live sleeve is a
-  strategy (advised per strategy), so promoting a portfolio with ticker sleeves
-  is a 422 naming them — never a silent drop of part of the portfolio.
+  strategy (advised per strategy) or a ticker on a market plane (spec/05), so a
+  ticker sleeve promotes as the same B3 instrument (`IVVB11.SA` → live
+  `{ticker: IVVB11, market: B3}`), priced before it is stored.
+- **B3 tickers only in a saved portfolio.** `FixedWeight` reads a ticker sleeve
+  off the B3 plane and books every sale on the one B3 ledger, which settles
+  monthly; a US sale settles annually (Lei 14.754) and a crypto one has its own
+  isenção and no carry, so a carteira holding either could not be apurated
+  honestly. A sleeve `{ticker, market: "US" | "CRYPTO"}` is refused with a pt-BR
+  message pointing to the live sleeves, which take them.
 - **Cycle guard:** a user portfolio sleeve may reference built-ins, `CASH_CDI`,
   or the tenant's *rank_and_hold* strategies — never another user
   `fixed_weight` (prevents registry recursion at config_strategy.py:362).
@@ -175,8 +182,13 @@ first price its weight sits in CDI, as in "DIVO11 / CDI / IVVB11 (thirds)".
 - **Portfolio builder — `/estrategia`** (`#sleeves` section): "Salvar como
   estratégia" (names current editor state) + saved-portfolios list with
   **Backtest** (POST /backtests → /bench), **Ativar** (promote → live target;
-  target/plan sections refresh), **Excluir**. Sleeve picker includes the
-  tenant's rule strategies (arrive via the merged gallery hook).
+  target/plan sections refresh), **Excluir**. The sleeve picker is a searchable
+  combobox (`components/ui/Combobox.tsx`, keyboard and ARIA per the WAI-ARIA
+  combobox pattern): Caixa, the platform's and the tenant's B3 rule strategies
+  (filtered locally), and any listed asset found by `GET /market/assets` — B3,
+  US and crypto, priced, unpriced ones shown disabled. While a saved carteira is
+  being edited, US and crypto assets are shown disabled with the reason, and
+  "Salvar como estratégia" says which rows keep it from saving.
 
 ## Test strategy
 

@@ -57,7 +57,7 @@ async def test_sleeves_are_advised_concurrently(monkeypatch, clear_sleeve_cache)
 
     async with async_session_maker() as s:
         t = time.perf_counter()
-        combined, cash = await routes._combined_target(s, tid)
+        combined, cash, _ = await routes._combined_target(s, tid)
         elapsed = time.perf_counter() - t
 
     assert peak == 3, f"sleeves still advised one at a time (peak in-flight={peak})"
@@ -81,11 +81,44 @@ async def test_cash_cdi_sleeve_never_shells_out(monkeypatch, clear_sleeve_cache)
 
     monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
     async with async_session_maker() as s:
-        combined, cash = await routes._combined_target(s, tid)
+        combined, cash, _ = await routes._combined_target(s, tid)
 
     assert called == ["A"]
     assert combined == {"ATICK": 0.60}
     assert cash == pytest.approx(0.40)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_ticker_sleeves_are_their_own_weight_and_never_shell_out(
+    monkeypatch, clear_sleeve_cache
+):
+    """A ticker sleeve has nothing to advise: it is {ticker: 1} at its pct, added
+    to a strategy's pick of the same name (as FixedWeight does), and an off-B3
+    one comes back with its market for advise_weights --markets."""
+    tid = uuid.uuid4()
+    async with async_session_maker() as s:
+        s.add(PortfolioSleeve(tenant_id=tid, strategy_ref="A", target_pct=40))
+        for ticker, market, pct in (("PETR4", "B3", 20), ("SPY", "US", 25),
+                                    ("BTCUSDT", "CRYPTO", 15)):
+            s.add(PortfolioSleeve(tenant_id=tid, ticker=ticker, market=market,
+                                  target_pct=pct))
+        await s.commit()
+
+    called: list[str] = []
+
+    async def fake_advise(strategy, freq, extra_env=None):
+        called.append(strategy)
+        return {"weights": {"PETR4": 0.5, "VALE3": 0.5}}
+
+    monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
+    async with async_session_maker() as s:
+        combined, cash, off_b3 = await routes._combined_target(s, tid)
+
+    assert called == ["A"]
+    assert combined == pytest.approx(
+        {"PETR4": 0.40, "VALE3": 0.20, "SPY": 0.25, "BTCUSDT": 0.15})
+    assert cash == 0.0
+    assert off_b3 == {"SPY": "US", "BTCUSDT": "CRYPTO"}
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -102,8 +135,8 @@ async def test_a_cached_sleeve_is_not_re_advised(monkeypatch, clear_sleeve_cache
 
     monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
     async with async_session_maker() as s:
-        first, _ = await routes._combined_target(s, tid)
-        second, _ = await routes._combined_target(s, tid)
+        first, *_ = await routes._combined_target(s, tid)
+        second, *_ = await routes._combined_target(s, tid)
 
     assert sorted(calls) == ["A", "B"], f"second call re-advised: {calls}"
     assert first == second

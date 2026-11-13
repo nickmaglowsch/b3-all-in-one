@@ -18,12 +18,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, exists, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, darf, enginerun, market_planes, specstore, subprocs, tasks
+from platform_app import (
+    b3run, darf, enginerun, market_planes, portfolio_sleeves, specstore, subprocs, tasks,
+)
 from platform_app.billing import (
     EMPRESARIAL, entitled, gate_detail, needs_bench, needs_mercado,
 )
@@ -34,6 +36,7 @@ from platform_app.models import (
     Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
     TaxSummary, Trade, UserStrategy,
 )
+from platform_app.portfolio_sleeves import SleeveIn, sleeve_out
 from platform_app.routes_portfolio_index import bounded, current_rf_marks
 from platform_app.routes_portfolio_settings import _settings_dict
 from platform_app.strategy_refs import _cascade_rename, _refuse_if_used
@@ -397,13 +400,6 @@ async def get_income(
 
 # ── Portfolio sleeves (spec/05 Feature 3) ─────────────────────────────────────
 
-class SleeveIn(BaseModel):
-    strategy_ref: str
-    # NaN passed the sum-to-100 check (every comparison with it is False) and
-    # was stored; a negative sleeve is a short position nobody can hold.
-    target_pct: float = Field(ge=0, le=100, allow_inf_nan=False)
-
-
 @portfolio_router.get("/sleeves")
 async def get_sleeves(
     tenant=Depends(needs_mercado),
@@ -412,9 +408,9 @@ async def get_sleeves(
     _user, tid = tenant
     rows = (await session.scalars(
         select(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid)
-        .order_by(PortfolioSleeve.strategy_ref)
+        .order_by(PortfolioSleeve.strategy_ref, PortfolioSleeve.market, PortfolioSleeve.ticker)
     )).all()
-    return [{"strategy_ref": s.strategy_ref, "target_pct": float(s.target_pct)} for s in rows]
+    return [sleeve_out(s.strategy_ref, s.ticker, s.market, s.target_pct) for s in rows]
 
 
 @portfolio_router.put("/sleeves")
@@ -424,13 +420,15 @@ async def put_sleeves(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Replace the whole sleeve set atomically. Validates percentages sum to 100
-    (±0.01) and every strategy_ref is 'CASH_CDI' or a real gallery spec. Saving a
+    (±0.01), every strategy_ref is 'CASH_CDI' or a real gallery spec and every
+    ticker is priced on its market's plane (portfolio_sleeves). Saving a
     fundamentals-needing strategy is allowed even when none are ingested yet (data
     may arrive later) — the response just carries a warning."""
     _user, tid = tenant
-    refs = [s.strategy_ref for s in body]
-    if len(set(refs)) != len(refs):
-        raise HTTPException(422, "duplicate strategy_ref in sleeve set")
+    keys = [s.key for s in body]
+    if dup := sorted({k for k in keys if keys.count(k) > 1}):
+        raise HTTPException(422, f"duplicate sleeve in sleeve set: {dup[0]}")
+    refs = [s.strategy_ref for s in body if s.strategy_ref]
     total = sum(s.target_pct for s in body)
     if abs(total - 100.0) > 0.01:
         raise HTTPException(422, f"sleeve percentages must sum to 100 (got {total:g})")
@@ -438,24 +436,23 @@ async def put_sleeves(
     # (built-ins + this tenant's user strategies).
     gallery = {s["name"]: s for s in await _gallery(session, tid)}
     check_live_refs(refs, gallery)
+    warnings = await portfolio_sleeves.check_tickers(body)  # 422 on an unpriced ticker
 
     await xact_lock(session, "sleeves", tid)
     await session.execute(delete(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid))
     for s in body:
-        session.add(PortfolioSleeve(
-            tenant_id=tid, strategy_ref=s.strategy_ref, target_pct=s.target_pct))
+        session.add(PortfolioSleeve(tenant_id=tid, strategy_ref=s.strategy_ref,
+                                    ticker=s.ticker, market=s.market, target_pct=s.target_pct))
     await session.commit()
 
     # Soft warning (no hard-refuse): chosen strategy needs fundamentals and none
     # are ingested yet. Only touches the engine DB when it can actually matter.
-    warnings: list[str] = []
     needs = [r for r in refs if gallery.get(r, {}).get("needs_fundamentals")]
     if needs and not await _fundamentals_available():
         warnings.append(_needs_funds_msg(needs))
 
     return {
-        "sleeves": [{"strategy_ref": s.strategy_ref, "target_pct": s.target_pct}
-                    for s in body],
+        "sleeves": [sleeve_out(s.strategy_ref, s.ticker, s.market, s.target_pct) for s in body],
         "warnings": warnings,
     }
 
@@ -527,10 +524,12 @@ async def _cash_cdi_tickers(session: AsyncSession, tid: uuid.UUID) -> set[str]:
 
 async def _combined_target(
     session: AsyncSession, tid: uuid.UUID, freq: str = "ME"
-) -> tuple[dict[str, float], float]:
-    """Blend the tenant's sleeves into (combined_weights, cash_weight_target):
-    combined[t] = Σ sleeve_pct/100 × sleeve_weights[t]; CASH_CDI pct becomes the
-    cash weight. 409 when no sleeves are configured. `freq` is the rebalance
+) -> tuple[dict[str, float], float, dict[str, str]]:
+    """Blend the tenant's sleeves into (combined_weights, cash_weight_target,
+    off_b3): combined[t] = Σ sleeve_pct/100 × sleeve_weights[t], where a ticker
+    sleeve's weights are just {ticker: 1}; CASH_CDI pct becomes the cash weight;
+    off_b3 is {ticker: market} for the US/crypto tickers advise_weights prices off
+    their own plane. 409 when no sleeves are configured. `freq` is the rebalance
     cadence passed to each strategy sleeve (default 'ME' = today's behavior)."""
     sleeves = (await session.scalars(
         select(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid)
@@ -548,23 +547,17 @@ async def _combined_target(
     user_upd = {r.name: r.updated_at.isoformat() if r.updated_at else "" for r in user_rows}
 
     today = date.today().isoformat()
-    combined: dict[str, float] = {}
-    cash_weight = 0.0
 
     def _key(ref: str) -> tuple:
         if ref in user_upd:
             return (ref, today, freq, str(tid), user_upd[ref])
         return (ref, today, freq)
 
-    # Split cash out first: CASH_CDI is the risk-free sleeve and has nothing to
-    # advise, so it must never reach the engine.
-    equity: list[tuple] = []       # (sleeve_ref, pct, cache_key)
-    for s in sleeves:
-        pct = float(s.target_pct) / 100.0
-        if s.strategy_ref == "CASH_CDI":
-            cash_weight += pct
-        else:
-            equity.append((s.strategy_ref, pct, _key(s.strategy_ref)))
+    # Split cash and tickers out first: CASH_CDI is the risk-free sleeve and a
+    # ticker is its own target weight, so neither has anything to advise and
+    # neither may reach the engine as a strategy.
+    cash_weight, by_ref, combined, off_b3 = portfolio_sleeves.split_sleeves(sleeves)
+    equity = [(ref, pct, _key(ref)) for ref, pct in by_ref]  # (sleeve_ref, pct, cache_key)
 
     # Each sleeve is a separate engine subprocess that builds its own market
     # plane, and they are independent — one sleeve's weights depend only on its
@@ -608,7 +601,7 @@ async def _combined_target(
             combined[t] = combined.get(t, 0.0) + pct * float(w)
     if missing:
         raise HTTPException(422, _needs_funds_msg(missing))
-    return combined, cash_weight
+    return combined, cash_weight, off_b3
 
 
 async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, dict]:
@@ -628,11 +621,11 @@ async def get_target(
     book via one advise_weights --weights valuation pass (same basis as the
     rebalance trades)."""
     _user, tid = tenant
-    combined, cash_weight = await _combined_target(session, tid)
+    combined, cash_weight, off_b3 = await _combined_target(session, tid)
     positions = await _positions_json(session, tid)
     cash_cdi = await _cash_cdi_tickers(session, tid)
 
-    priced = await _advise(weights=combined, positions=positions, nav_cash=0.0)
+    priced = await _advise(weights=combined, markets=off_b3, positions=positions, nav_cash=0.0)
     trades = priced.get("trades") or {}
     nav = float(trades.get("nav", 0.0))
     valued = trades.get("positions_valued") or {}
@@ -660,6 +653,8 @@ async def get_target(
         "cash_weight_current": cash_weight_current,
         "drift": drift,
         "nav": nav,
+        "markets": off_b3,
+        "warnings": portfolio_sleeves.target_warnings(off_b3, trades),
     }
 
 
@@ -729,7 +724,7 @@ async def create_rebalance_plan(
     buy_only = settings_["buy_only_laggards"]
     harvest_only = settings_["sell_only_for_harvest"]
 
-    combined, cash_weight = await _combined_target(session, tid, freq=cadence)
+    combined, cash_weight, off_b3 = await _combined_target(session, tid, freq=cadence)
     positions = await _positions_json(session, tid)
     held = set(positions)
     cash_cdi = await _cash_cdi_tickers(session, tid)
@@ -742,7 +737,7 @@ async def create_rebalance_plan(
     if frozen or cash_cdi_held:
         # One valuation pass (no new_cash) to learn current values, so frozen and
         # cash/CDI holdings can be pinned at their current weight.
-        val = await _advise(weights=combined, positions=positions, nav_cash=0.0)
+        val = await _advise(weights=combined, markets=off_b3, positions=positions, nav_cash=0.0)
         vtrades = val.get("trades") or {}
         valued = {k.upper(): v for k, v in (vtrades.get("positions_valued") or {}).items()}
         final_nav = float(vtrades.get("nav", 0.0)) + body.new_cash
@@ -757,7 +752,8 @@ async def create_rebalance_plan(
             if w > 0:
                 target[tu] = w
 
-    priced = await _advise(weights=target, positions=positions, nav_cash=body.new_cash)
+    priced = await _advise(weights=target, markets=off_b3, positions=positions,
+                           nav_cash=body.new_cash)
     trades = priced.get("trades") or {"sells": [], "buys": [], "nav": 0.0}
     # Belt-and-suspenders: frozen / cash-CDI tickers never appear in a trade.
     skip = frozen | {t.upper() for t in cash_cdi_held}
@@ -781,11 +777,16 @@ async def create_rebalance_plan(
         budget = float(body.new_cash) + sum(float(s.get("est_brl", 0.0)) for s in sells)
         buys = _cap_buys(buys, budget)
 
-    # Tax overlay: run the plan's sells (only tickers actually held) through tlh_plan.
-    tax = await _run_tlh_plan(
-        session, tid, [(s["ticker"], s["qty"]) for s in sells if s["ticker"] in held])
+    # Tax overlay: run the plan's sells (only B3 tickers actually held) through
+    # tlh_plan; an off-B3 sale is not apurated by B3 rules (plan_notes says so).
+    # A book with no B3 history (sleeves of US / crypto tickers only, nothing
+    # imported) has no apuração to overlay, and tlh_plan cannot build an empty one.
+    has_book = await session.scalar(select(exists().where(Trade.tenant_id == tid)))
+    tax = await _run_tlh_plan(session, tid, [(s["ticker"], s["qty"]) for s in sells if
+                                             s["ticker"] in held and s["ticker"] not in off_b3]
+                              ) if has_book else {}
 
-    notes: list[str] = []
+    notes = portfolio_sleeves.plan_notes(off_b3, {**trades, "buys": buys})
     acao = (tax.get("buckets") or {}).get("AÇÃO") or {}
     limit = float(tax.get("isencao_limit", 20_000.0))
     if float(acao.get("gross_after", 0.0)) > limit:
@@ -1568,9 +1569,7 @@ async def promote_user_strategy(
     row = await _get_user_strategy(sid, tid, session)
     if row.kind != "fixed_weight":
         raise HTTPException(422, "only portfolio (fixed_weight) strategies can be promoted")
-    # Refuses a portfolio with ticker sleeves: the live target holds strategies.
-    sleeves = [SleeveIn(strategy_ref=ref, target_pct=pct)
-               for ref, pct in live_sleeves(row.spec, row.name)]
+    sleeves = [SleeveIn(**sl) for sl in live_sleeves(row.spec)]
     return await put_sleeves(sleeves, tenant, session)
 
 

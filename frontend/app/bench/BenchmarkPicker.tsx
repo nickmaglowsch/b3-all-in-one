@@ -1,5 +1,6 @@
 "use client";
 
+import { benchmarkNote, type Proxied } from "@/lib/benchmarks";
 import type { Benchmark } from "./lib";
 
 /**
@@ -17,6 +18,7 @@ export function BenchmarkPicker({
   selected,
   colorOf,
   unavailable,
+  proxied = {},
   onToggle,
 }: {
   catalog: Benchmark[];
@@ -26,6 +28,8 @@ export function BenchmarkPicker({
   colorOf: (key: string) => string;
   /** Selected, requested, and not drawable. */
   unavailable: string[];
+  /** Drawn (in part) off the market's proxy: said under its label. */
+  proxied?: Record<string, Proxied>;
   onToggle: (key: string) => void;
 }) {
   // Nothing to offer yet — the catalogue is still in flight, or this account
@@ -70,7 +74,7 @@ export function BenchmarkPicker({
                 {/* Not a tooltip only: what the number is has to be readable
                     without hovering, on a touch screen included. */}
                 <span className="mt-0.5 block leading-snug text-muted">
-                  {missing ? "sem série para este período" : b.note}
+                  {benchmarkNote(b.note, missing, proxied[b.key])}
                 </span>
               </span>
             </label>

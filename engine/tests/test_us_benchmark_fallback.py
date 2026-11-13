@@ -160,3 +160,19 @@ def test_a_stale_benchmark_with_no_proxy_is_said():
     # Within a week of the plane's last session it is just a late print.
     assert _benchmark_notes(spec, pd.Series(1.0, index=DAYS[:-3]), "2020-01-01",
                             "2021-12-31", DAYS[-1]) == []
+
+
+def test_the_bench_chart_says_its_sp500_line_is_spliced_from_spy(plane):
+    """/benchmarks draws sp500 off the same reader: a line partly made of SPY
+    says so, with the date it took over."""
+    from scripts import bench_series
+    _store_spx(plane, days=DAYS[DAYS <= SPX_STOPS])
+    out = bench_series.series("2020-01-01", "2021-12-31", ["sp500", "cdi"])
+    assert out["proxied"] == {"sp500": {"proxy": "SPY", "from": "2021-01-01"}}
+    assert max(out["sp500"]) == DAYS[-1].strftime("%Y-%m-%d")
+
+
+def test_a_bench_chart_on_a_whole_spx_names_no_proxy(plane):
+    from scripts import bench_series
+    _store_spx(plane)
+    assert "proxied" not in bench_series.series("2020-01-01", "2021-12-31", ["sp500"])

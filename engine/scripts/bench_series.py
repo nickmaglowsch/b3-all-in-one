@@ -76,6 +76,7 @@ def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
     empty means "the plane has no rows yet" and a typo means "this chart will
     silently lose a line", and the caller has to be able to tell them apart.
     """
+    from backtests.core import markets
     from backtests.core.data import download_benchmark
 
     out: dict = {}
@@ -83,6 +84,12 @@ def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
         symbol, market = BENCHMARKS[name]
         level = download_benchmark(symbol, start, end, market=market)
         out[name] = {d.strftime("%Y-%m-%d"): float(v) for d, v in level.items()}
+        # Drawn off the market's proxy (sp500 from SPY when `$SPX` is missing or
+        # stopped early): said, with the date it took over (None: the whole line).
+        if level.attrs.get("proxy_for"):
+            out.setdefault("proxied", {})[name] = {
+                "proxy": markets.get(market).benchmark_proxy,
+                "from": level.attrs.get("proxy_from")}
     # Per-series, not all-or-nothing: each ruler is written by a different
     # pipeline step, so one being late must not blank the others.
     out["offline"] = not any(out[name] for name in names)

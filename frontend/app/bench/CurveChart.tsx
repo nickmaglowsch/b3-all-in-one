@@ -76,6 +76,7 @@ export function CurveChart({
           selected={picked}
           colorOf={bench.colorOf}
           unavailable={bench.unavailable}
+          proxied={bench.proxied}
           onToggle={toggle}
         />
       </div>

@@ -1,7 +1,7 @@
 // Run: npm test (node --test, native TS — no runner dependency).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { alignLevels, withBenchmarks } from "./benchmarks.ts";
+import { alignLevels, benchmarkNote, withBenchmarks } from "./benchmarks.ts";
 
 const grid = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"];
 
@@ -85,4 +85,15 @@ test("an anchor of zero cannot scale anything, so nothing is drawn", () => {
   // index points there would put 130.000 on an axis of reais.
   const out = withBenchmarks(rows, { ibov: { "2024-01-02": 130000 } }, 0);
   assert.ok(out.every((r) => !("ibov" in r)));
+});
+
+test("a line drawn off its proxy says so under the picker", () => {
+  const note = "S&P 500 em reais";
+  assert.equal(benchmarkNote(note, false), note);
+  assert.equal(benchmarkNote(note, true, { proxy: "SPY", from: null }), "sem série para este período");
+  assert.equal(
+    benchmarkNote(note, false, { proxy: "SPY", from: "2021-01-04" }),
+    "S&P 500 em reais · a partir de 04/01/2021, lido do SPY no plano (a série própria parou)",
+  );
+  assert.match(benchmarkNote(note, false, { proxy: "SPY", from: null }), /no período todo/);
 });

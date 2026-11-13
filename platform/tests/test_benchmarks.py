@@ -90,6 +90,22 @@ async def test_series_returns_raw_levels_per_requested_name(client, monkeypatch)
     assert seen == [("2024-01-01", "2024-01-31", ("cdi", "ibov"))]
 
 
+async def test_a_line_drawn_off_the_proxy_says_so(client, monkeypatch):
+    """sp500 is `$SPX`; when the plane filled it (or its tail) from SPY, the
+    response says which line and from when, for the chart to tell the reader."""
+    headers = await _bencher(client, "proxied@example.com")
+    _stub(monkeypatch, {"sp500": {"2024-01-02": 5000.0}, "cdi": {"2024-01-02": 1.5},
+                        "proxied": {"sp500": {"proxy": "SPY", "from": "2024-01-02"},
+                                    "bitcoin": {"proxy": "X", "from": None}},
+                        "offline": False})
+    r = await client.get(
+        "/benchmarks/series?start=2024-01-01&end=2024-01-31&keys=sp500,cdi",
+        headers=headers)
+    assert r.status_code == 200, r.text
+    # Only for lines actually served.
+    assert r.json()["proxied"] == {"sp500": {"proxy": "SPY", "from": "2024-01-02"}}
+
+
 async def test_a_name_the_plane_cannot_serve_is_named_not_dropped(client, monkeypatch):
     """A benchmark that silently vanishes from a chart is worse than one the
     page says it could not draw — the reader has no way to tell the difference
@@ -147,7 +163,7 @@ async def test_an_engine_failure_degrades_rather_than_500s(client, monkeypatch):
 
     assert r.status_code == 200, r.text
     assert r.json() == {"start": "2024-01-01", "end": "2024-01-31",
-                        "series": {}, "unavailable": ["cdi"]}
+                        "series": {}, "unavailable": ["cdi"], "proxied": {}}
 
 
 async def test_one_window_is_read_once_per_day(client, monkeypatch):

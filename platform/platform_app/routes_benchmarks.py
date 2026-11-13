@@ -152,17 +152,20 @@ async def get_benchmark_series(
         raise HTTPException(422, "start must not be after end")
     names = _parse_keys(keys)
 
-    series = await _levels(start.isoformat(), end.isoformat(), names)
+    series, proxied = await _levels(start.isoformat(), end.isoformat(), names)
     return {
         "start": start.isoformat(),
         "end": end.isoformat(),
         "series": series,
         "unavailable": [n for n in names if n not in series],
+        # {name: {proxy, from}}: a line drawn (from `from` on, or whole when it is
+        # null) off the market's proxy on its own plane — sp500 from SPY.
+        "proxied": proxied,
     }
 
 
-async def _levels(start: str, end: str, names: list[str]) -> dict[str, dict]:
-    """Cached {name: {date: level}}, empty series dropped.
+async def _levels(start: str, end: str, names: list[str]) -> tuple[dict, dict]:
+    """Cached ({name: {date: level}}, {name: {proxy, from}}), empty series dropped.
 
     Keyed on the day as well as the window: yesterday's answer for a window
     ending today is short by a session. Only a real answer is cached — pinning a
@@ -177,7 +180,8 @@ async def _levels(start: str, end: str, names: list[str]) -> dict[str, dict]:
     try:
         raw = await asyncio.to_thread(_run_bench, start, end, names)
     except Exception:
-        return {}
+        return {}, {}
     out = {n: raw[n] for n in names if raw.get(n)}
-    bounded(_CACHE, _CACHE_MAX)[key] = out
-    return out
+    proxied = {n: v for n, v in (raw.get("proxied") or {}).items() if n in out}
+    bounded(_CACHE, _CACHE_MAX)[key] = (out, proxied)
+    return out, proxied

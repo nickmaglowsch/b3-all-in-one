@@ -48,9 +48,9 @@ def plane(tmp_path, monkeypatch) -> str:
     return db
 
 
-def _store_spx(db: str, level: float = 7.0) -> None:
+def _store_spx(db: str, level: float = 7.0, days=DAYS) -> None:
     conn = sqlite3.connect(db)
-    for d in DAYS:
+    for d in days:
         conn.execute("INSERT INTO external_prices (ticker, isin_code, date, open, high, low,"
                      " close, volume, source) VALUES ('$SPX', 'UNKNOWN', ?, NULL, NULL, NULL,"
                      " ?, 0, 'ALPHAVANTAGE_SPY_BRL')", (d.date().isoformat(), level))
@@ -106,3 +106,57 @@ def test_a_run_without_any_benchmark_says_so():
 def test_a_normal_benchmark_adds_no_note():
     px = pd.Series(1.0, index=DAYS)
     assert _benchmark_notes(markets.MARKETS["B3"], px, "2020-01-01", "2021-12-31") == []
+
+
+# ── a stale `$SPX`: it stops, SPY goes on ─────────────────────────────────────
+
+SPX_STOPS = pd.Timestamp("2020-12-31")
+
+
+def test_a_stale_spx_is_carried_to_the_end_by_spys_returns(plane):
+    """The job failing *after* a while left `$SPX` ending early. Not empty, so
+    the old fallback never fired, and every flag read False over the tail."""
+    _store_spx(plane, days=DAYS[DAYS <= SPX_STOPS])
+    px = download_benchmark("$SPX", "2020-01-01", "2021-12-31", market="US")
+    spy = download_benchmark("SPY", "2020-01-01", "2021-12-31", market="US")
+    assert px.index[-1] == DAYS[-1]                          # reaches the end
+    assert (px.loc[:SPX_STOPS] == 7.0).all()                 # its own prints kept
+    tail = px.loc[px.index > SPX_STOPS]
+    # Rescaled to meet $SPX where it stops, moving with SPY from there.
+    assert tail.iloc[0] == pytest.approx(7.0 * spy[tail.index[0]] / spy[SPX_STOPS])
+    assert tail.pct_change().dropna().values == pytest.approx(
+        spy.loc[tail.index].pct_change().dropna().values)
+    assert px.attrs == {"proxy_for": "$SPX", "proxy_from": tail.index[0].date().isoformat()}
+
+
+def test_a_spx_a_few_days_short_is_left_alone(plane):
+    """A holiday or a late job is not staleness: nothing is spliced."""
+    _store_spx(plane, days=DAYS[:-3])
+    px = download_benchmark("$SPX", "2020-01-01", "2021-12-31", market="US")
+    assert (px == 7.0).all() and "proxy_for" not in px.attrs
+
+
+def test_a_run_on_a_stale_spx_says_where_the_proxy_took_over(plane, monkeypatch):
+    import backtests.core.shared_data as sd
+    monkeypatch.setattr(sd, "download_cdi_daily", lambda s, e: pd.Series(0.0, index=DAYS))
+    _store_spx(plane, days=DAYS[DAYS <= SPX_STOPS])
+    shared = build_shared_data(plane, "2020-01-01", "2021-12-31", "ME", market="US")
+    assert shared["bench_px"].index[-1] == DAYS[-1]
+    assert shared["bench_above"].loc["2021-02-01":].notna().all()
+    [note] = [n for n in shared["data_warnings"] if n["code"].startswith("benchmark")]
+    assert note == {"code": "benchmark_proxy_from_plane",
+                    "detail": {"market": "US", "ticker": "$SPX", "proxy": "SPY",
+                               "from": "2021-01-01"}}
+
+
+def test_a_stale_benchmark_with_no_proxy_is_said():
+    """B3 has no proxy: a `$IBOV` that stops early cannot be completed, so the
+    run says the flags read nothing past its last print."""
+    spec = markets.MARKETS["B3"]
+    px = pd.Series(1.0, index=DAYS[DAYS <= SPX_STOPS])
+    assert _benchmark_notes(spec, px, "2020-01-01", "2021-12-31", DAYS[-1]) == [
+        {"code": "benchmark_stale",
+         "detail": {"market": "B3", "ticker": "^BVSP", "last": "2020-12-31"}}]
+    # Within a week of the plane's last session it is just a late print.
+    assert _benchmark_notes(spec, pd.Series(1.0, index=DAYS[:-3]), "2020-01-01",
+                            "2021-12-31", DAYS[-1]) == []

@@ -356,8 +356,12 @@ cash or CDI until `invested_from`, so judge the run from there.
 `benchmark_missing` (`{market, ticker}`) means the run had no benchmark data in
 its window: every `bench_*`/`ibov_*` regime flag read False, so a gated book sat
 in CDI — a plane problem, not a calm strategy. `benchmark_proxy_from_plane`
-(`{market, ticker, proxy}`) means the stored series was empty and the run used
-the market's proxy off its own plane instead (US: `$SPX` from SPY, in BRL).
+(`{market, ticker, proxy, from?}`) means the run used the market's proxy off its
+own plane (US: `$SPX` from SPY, in BRL): for the whole run when the stored series
+was empty, or, with `from`, only from that date on, because the stored series
+stopped there. `benchmark_stale` (`{market, ticker, last}`) means the benchmark
+stops more than a week before the plane's last session and nothing could fill
+it: past `last` the flags read False.
 
 - Compare against built-ins over the **same window** (list_backtests).
 - Every variant you try is a hypothesis test; many tries on one window find

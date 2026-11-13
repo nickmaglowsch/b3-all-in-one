@@ -74,19 +74,44 @@ def download_index_level(ticker: str, start: str, end: str) -> pd.Series:
                          ticker.strip().upper(), start, end)
 
 
+# A benchmark whose last print sits this far behind the plane is stale, not a
+# long weekend: past it the bench_* flags would read the tail as missing.
+STALE_DAYS = 7
+
+
 def or_proxy(level: pd.Series, spec, symbol: str, start: str, end: str) -> pd.Series:
-    """`level`, or — when it is empty and `symbol` is the market's own benchmark —
-    that market's proxy read off its own plane (MarketSpec.benchmark_proxy; US:
-    SPY for `$SPX`). Marked with `attrs["proxy_for"]`, so shared_data can say which
-    ruler the run used. Without it a failed `$SPX` job left every bench_* flag on
-    US reading False and every gated US book in CDI, silently."""
+    """`level`, completed — when `symbol` is the market's own benchmark — by that
+    market's proxy read off its own plane (MarketSpec.benchmark_proxy; US: SPY
+    for `$SPX`). Marked with `attrs["proxy_for"]` (and `proxy_from` when only a
+    tail was filled), so shared_data can say which ruler the run used.
+
+    Empty, the proxy stands in whole: a failed `$SPX` job left every bench_*
+    flag on US reading False and every gated US book in CDI, silently. Stale —
+    stopping more than STALE_DAYS before the proxy does — the proxy's returns
+    carry it on from its last print: otherwise the run's tail, the part a live
+    target reads, had no benchmark and the flags read False from there on."""
     from backtests.core import markets
     from backtests.core.data import _plane_series
 
-    if not level.empty or not spec.benchmark_proxy or symbol != markets.plane_symbol(
-            spec.benchmark, spec.key):
+    if not spec.benchmark_proxy or symbol != markets.plane_symbol(spec.benchmark, spec.key):
         return level
     proxy = _plane_series(spec.table, "adj_close", spec.benchmark_proxy, start, end,
                           market=spec.key, symbol_column=spec.symbol_column)
-    proxy.attrs["proxy_for"] = symbol
-    return proxy
+    if level.empty:
+        proxy.attrs["proxy_for"] = symbol
+        return proxy
+    return _splice_tail(level, proxy, symbol)
+
+
+def _splice_tail(level: pd.Series, proxy: pd.Series, symbol: str) -> pd.Series:
+    """`level` carried past its last print by `proxy`'s returns, rescaled to meet
+    it there; `level` itself when the proxy does not run on past it, or has no
+    print on or before that date to chain from."""
+    last = level.index[-1]
+    anchor = proxy.loc[:last]
+    if proxy.empty or anchor.empty or (proxy.index[-1] - last).days <= STALE_DAYS:
+        return level
+    tail = proxy.loc[proxy.index > last] * (level.iloc[-1] / anchor.iloc[-1])
+    out = pd.concat([level, tail]).rename(level.name)
+    out.attrs.update(proxy_for=symbol, proxy_from=tail.index[0].date().isoformat())
+    return out

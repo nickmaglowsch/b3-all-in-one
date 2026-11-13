@@ -111,21 +111,35 @@ test("options are grouped in order, keeping their list index", () => {
 });
 
 test("typing into a closed field starts a fresh search, not one for the choice + key", () => {
+  const typed = (data: string) => ({ inputType: "insertText", data });
   // Open, the field holds the query as typed.
   assert.equal(typedQuery(true, "PETR4", "petr"), "petr");
-  // Closed, it shows "PETR4": the keystroke is the query.
+  // Closed, it shows "PETR4": the keystroke is the query, wherever it landed.
+  assert.equal(typedQuery(false, "PETR4", "PETR4V", typed("V")), "V");
+  assert.equal(typedQuery(false, "PETR4", "PEVTR4", typed("V")), "V");
+  // The whole choice selected (Tab focus) and typed over — even with the first or
+  // last letter of the choice itself, which the text alone cannot tell apart.
+  assert.equal(typedQuery(false, "PETR4", "P", typed("P")), "P");
+  assert.equal(typedQuery(false, "PETR4", "4", typed("4")), "4");
+  assert.equal(typedQuery(false, "momentum", "m", typed("m")), "m");
+  // A deletion of any kind clears the search: never "PETR".
+  assert.equal(typedQuery(false, "PETR4", "PETR", { inputType: "deleteContentBackward" }), "");
+  assert.equal(typedQuery(false, "PETR4", "", { inputType: "deleteContentBackward" }), "");
+  assert.equal(typedQuery(false, "PETR4", "PETR4", { inputType: "deleteByCut" }), "");
+  // Nothing chosen yet: the field was empty, so the text is the query.
+  assert.equal(typedQuery(false, "", "mom", typed("m")), "mom");
+});
+
+test("without the edit's own account, what replaced the choice is the query", () => {
+  // A paste over the selection (data is null on paste) — or an old browser.
+  const paste = { inputType: "insertFromPaste", data: null };
+  assert.equal(typedQuery(false, "PETR4", "BTC", paste), "BTC");
+  assert.equal(typedQuery(false, "PETR4", "P"), "P");
+  assert.equal(typedQuery(false, "momentum", "m"), "m");
+  // The choice still there whole: only what was added to it.
   assert.equal(typedQuery(false, "PETR4", "PETR4V"), "V");
   assert.equal(typedQuery(false, "SPY · EUA", "SPY · EUAb"), "b");
-  // Typed in the middle, or over a selection of all of it, or pasted.
-  assert.equal(typedQuery(false, "PETR4", "PEVTR4"), "V");
-  assert.equal(typedQuery(false, "PETR4", "v"), "v");
-  assert.equal(typedQuery(false, "PETR4", "BTC"), "BTC");
-  // A deletion inserts nothing: an empty search, never "PETR".
-  assert.equal(typedQuery(false, "PETR4", "PETR"), "");
-  assert.equal(typedQuery(false, "PETR4", ""), "");
   // A repeated letter still counts once: "AAPL" + "A" is "A".
   assert.equal(typedQuery(false, "AAPL", "AAPLA"), "A");
   assert.equal(typedQuery(false, "AAPL", "AAAPL"), "A");
-  // Nothing chosen yet: the field was empty, so the text is the query.
-  assert.equal(typedQuery(false, "", "mom"), "mom");
 });

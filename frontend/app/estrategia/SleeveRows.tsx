@@ -17,7 +17,7 @@ import {
   type SleeveRow,
 } from "@/lib/portfolioSleeves";
 import { useUserStrategies } from "@/lib/strategies";
-import { ASSET_SEARCH_MIN, useAssetSearch, useStrategies } from "./lib";
+import { ASSET_QUERY_MAX, ASSET_SEARCH_MIN, useAssetSearch, useStrategies } from "./lib";
 
 interface Refs {
   builtinRefs: string[];
@@ -66,7 +66,7 @@ export function SleeveRows({
   return (
     <>
       {rows.map((r, i) => (
-        <div key={i} className="flex items-center gap-2">
+        <div key={r.uid ?? i} className="flex items-center gap-2">
           <SleevePicker
             row={r}
             refs={refs}
@@ -128,6 +128,11 @@ function SleevePicker({
   const term = useDebounced(query.trim(), 250);
   const search = useAssetSearch(term);
   const hits = term.length >= ASSET_SEARCH_MIN ? search.data?.results : undefined;
+  // The hits on screen answer the query as typed: not while the pause before
+  // the search runs, nor while a newer one is in flight (they are filtered to
+  // the query either way — this only stops Enter pre-choosing among them).
+  const settled = query.trim().length < ASSET_SEARCH_MIN
+    || (term === query.trim() && !search.isPlaceholderData && !search.isFetching);
   const options = useMemo(
     () => pickerOptions({ query, ...refs, held, hits: hits ?? [], carteira }),
     [query, refs, held, hits, carteira],
@@ -141,6 +146,8 @@ function SleevePicker({
       onQueryChange={setQuery}
       options={options}
       onSelect={(o) => onPick(o.pick)}
+      settled={settled}
+      maxQuery={ASSET_QUERY_MAX}
       notice={searchNotice(query, search)}
       emptyText="Nada encontrado."
     />

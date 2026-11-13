@@ -204,9 +204,11 @@ export interface IncomeRow {
 export interface DriftRow {
   ticker: string;
   target_w: number;
-  current_w: number;
-  drift_w: number;
-  drift_brl: number;
+  // null on a sleeve held off B3 (outside_b3): its position is unknown.
+  current_w: number | null;
+  drift_w: number | null;
+  drift_brl: number | null;
+  outside_b3?: boolean;
 }
 
 export interface Target {

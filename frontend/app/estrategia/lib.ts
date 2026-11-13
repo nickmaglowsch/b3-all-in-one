@@ -43,6 +43,8 @@ export function useSaveSleeves() {
 // crypto. From two characters: one matches half the market. The previous answer
 // stays up while the next loads, so the list does not blink at every keystroke.
 export const ASSET_SEARCH_MIN = 2;
+// GET /market/assets takes up to 40 characters; the picker never sends more.
+export const ASSET_QUERY_MAX = 40;
 
 export function useAssetSearch(term: string) {
   return useQuery({
@@ -189,7 +191,8 @@ export interface RebalancePlan {
   nav: number;
   new_cash: number;
   trades: { sells: TradeLine[]; buys: TradeLine[] };
-  tax: RebalanceTax;
+  // {} when the book has no B3 history to apurate.
+  tax: Partial<RebalanceTax>;
   notes: string[];
 }
 

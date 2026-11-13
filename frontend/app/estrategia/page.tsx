@@ -23,6 +23,7 @@ import {
   rowKey,
   rowToSleeve,
   specToRows,
+  withUid,
   type LiveSleeve,
   type SleeveRow as Row,
 } from "@/lib/portfolioSleeves";
@@ -136,7 +137,7 @@ function SleevesEditor() {
   // runs once per new server payload — is the React-endorsed alternative to an effect.
   if (sleeves.data && sleeves.data !== syncedFrom && !dirty) {
     setSyncedFrom(sleeves.data);
-    setRows(liveToRows(sleeves.data));
+    setRows(withUid(liveToRows(sleeves.data)));
   }
 
   const { sum, sumOk, hasDup, sleevesValid } = checkRows(rows);
@@ -154,7 +155,7 @@ function SleevesEditor() {
     // must still restore the live rows, not the previous carteira's.
     if (!editId) setLive({ rows, dirty });
     setDirty(true);
-    setRows(specToRows(u.spec));
+    setRows(withUid(specToRows(u.spec)));
     setName(u.name);
     setDesc(typeof u.spec.description === "string" ? u.spec.description : "");
     setEditId(u.id);
@@ -230,7 +231,7 @@ function SleevesEditor() {
             <button
               type="button"
               onClick={() =>
-                edit((rs) => [...rs, { strategy_ref: "", target_pct: "" }])
+                edit((rs) => withUid([...rs, { strategy_ref: "", target_pct: "" }]))
               }
               className="rounded-md border border-hairline bg-paper px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40"
             >
@@ -609,14 +610,17 @@ function TargetPanel() {
   }
 
   const t = target.data!;
-  const sorted = [...t.drift].sort(
-    (a, b) => Math.abs(b.drift_brl) - Math.abs(a.drift_brl),
-  );
+  // The B3 book's rows drift; a sleeve held off B3 has no known position, so it
+  // is listed after them, with no bar.
+  const sorted = t.drift
+    .filter((d) => !d.outside_b3)
+    .sort((a, b) => Math.abs(b.drift_brl ?? 0) - Math.abs(a.drift_brl ?? 0));
+  const outside = t.drift.filter((d) => d.outside_b3);
   const top = sorted.slice(0, DRIFT_TOP);
   const rest = sorted.slice(DRIFT_TOP);
-  const restSum = rest.reduce((a, r) => a + r.drift_brl, 0);
+  const restSum = rest.reduce((a, r) => a + (r.drift_brl ?? 0), 0);
   const bars = [
-    ...top.map((d) => ({ label: d.ticker, value: d.drift_brl })),
+    ...top.map((d) => ({ label: d.ticker, value: d.drift_brl ?? 0 })),
     ...(rest.length ? [{ label: "outros", value: restSum }] : []),
   ];
 
@@ -632,19 +636,19 @@ function TargetPanel() {
       key: "current_w",
       header: "Peso atual",
       align: "right",
-      render: (r) => formatPercent(r.current_w),
+      render: (r) => (r.current_w === null ? "fora da B3" : formatPercent(r.current_w)),
     },
     {
       key: "drift_w",
       header: "Desvio",
       align: "right",
-      render: (r) => <PctDelta value={r.drift_w} />,
+      render: (r) => (r.drift_w === null ? "—" : <PctDelta value={r.drift_w} />),
     },
     {
       key: "drift_brl",
       header: "Desvio (R$)",
       align: "right",
-      render: (r) => <Money value={r.drift_brl} sign />,
+      render: (r) => (r.drift_brl === null ? "—" : <Money value={r.drift_brl} sign />),
     },
   ];
 
@@ -666,7 +670,7 @@ function TargetPanel() {
           </p>
           <DivergingBars data={bars} valueFormat={compactBRL} height={Math.max(200, bars.length * 26)} />
         </div>
-        <DataTable columns={columns} rows={sorted} getRowKey={(r) => r.ticker} label="Desvio por ativo" />
+        <DataTable columns={columns} rows={[...sorted, ...outside]} getRowKey={(r) => r.ticker} label="Desvio por ativo" />
       </div>
     </Card>
   );

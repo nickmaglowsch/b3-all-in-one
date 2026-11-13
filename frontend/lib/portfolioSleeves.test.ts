@@ -1,6 +1,7 @@
 // Run: npm test (node --test, native TS — no runner dependency).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { onKey, reconcile } from "./combobox.ts";
 import {
   CASH_REF,
   heldAssets,
@@ -14,6 +15,7 @@ import {
   rowToSleeve,
   specTickers,
   specToRows,
+  withUid,
   type AssetHit,
   type PickerInput,
   type SleeveRow,
@@ -177,8 +179,12 @@ test("a query filters strategies locally, accents and case aside", () => {
   assert.deepEqual(pickerOptions(input({ query: "nada disso" })), []);
 });
 
+// The asset half of the list.
+const assets = (opts: ReturnType<typeof pickerOptions>) =>
+  opts.filter((o) => o.group.startsWith("Ativos ·"));
+
 test("search hits come grouped by market, priced, and choose a ticker row", () => {
-  const opts = pickerOptions(input({ query: "zz", hits: HITS }));
+  const opts = assets(pickerOptions(input({ query: "", hits: HITS })));
   assert.deepEqual(opts.map((o) => [o.group, o.label]), [
     ["Ativos · B3", "PETR4"],
     ["Ativos · EUA", "SPY · EUA"],
@@ -194,7 +200,7 @@ test("search hits come grouped by market, priced, and choose a ticker row", () =
 });
 
 test("editing a saved carteira shows US and crypto assets disabled, saying why", () => {
-  const opts = pickerOptions(input({ query: "zz", hits: HITS, carteira: true }));
+  const opts = assets(pickerOptions(input({ query: "", hits: HITS, carteira: true })));
   const why = Object.fromEntries(opts.map((o) => [o.label, o.disabledReason]));
   assert.equal(why["PETR4"], undefined);
   assert.match(why["SPY · EUA"] ?? "", /só nos sleeves ativos/);
@@ -207,4 +213,43 @@ test("an asset already in play is listed once, under the held group", () => {
   assert.deepEqual(opts.map((o) => [o.group, o.label]), [["Ativos nesta alocação", "PETR4"]]);
   assert.equal(new Set(pickerOptions(input({ hits: HITS, held })).map((o) => o.id)).size,
     pickerOptions(input({ hits: HITS, held })).length);
+});
+
+test("hits still on screen for an earlier query are not offered for the new one", () => {
+  // The reviewer's case: "petr" was searched, then "4" typed; until the search
+  // for "petr4" lands, the list still holds the hits for "petr".
+  const stale = [hit({ ticker: "PETR3", market: "B3", name: "PETROBRAS" }),
+                 hit({ ticker: "PETR4", market: "B3", name: "PETROBRAS" })];
+  const before = pickerOptions(input({ query: "petr", hits: stale }));
+  const after = pickerOptions(input({ query: "petr4", hits: stale }));
+  assert.deepEqual(assets(after).map((o) => o.label), ["PETR4"]);
+  // Enter takes what the query names, never PETR3.
+  const state = reconcile({ open: true, active: -1 }, before, after);
+  assert.equal(after[onKey(state, "Enter", after).select!].label, "PETR4");
+  // A name match still counts — "petrobras" is PETR3's name, not its ticker.
+  assert.deepEqual(assets(pickerOptions(input({ query: "petrobras", hits: stale })))
+    .map((o) => o.label), ["PETR3", "PETR4"]);
+});
+
+test("while the search is unsettled, nothing is pre-selected for Enter", () => {
+  const stale = [hit({ ticker: "PETR4", market: "B3" })];
+  const before = pickerOptions(input({ query: "pe", hits: stale }));
+  const after = pickerOptions(input({ query: "pet", hits: stale }));
+  const waiting = reconcile({ open: true, active: -1 }, before, after, false);
+  assert.equal(waiting.active, -1);
+  assert.equal(onKey(waiting, "Enter", after).select, undefined);
+  // An option the user had already moved to is kept, settled or not.
+  const mom = pickerOptions(input({ query: "mom", hits: stale }));
+  const moms = pickerOptions(input({ query: "momS", hits: stale }));
+  const moved = reconcile({ open: true, active: 0 }, mom, moms, false);
+  assert.equal(moms[moved.active].label, "MomSharpe");
+});
+
+test("rows get a stable identity once, and keep it through edits", () => {
+  const rows = withUid(specToRows(THIRDS));
+  assert.equal(new Set(rows.map((r) => r.uid)).size, 3);
+  const edited = withUid([{ ...rows[1], target_pct: "50" }, ...rows.slice(2)]);
+  assert.deepEqual(edited.map((r) => r.uid), [rows[1].uid, rows[2].uid]);
+  // Never part of what is sent.
+  assert.deepEqual(rowToSleeve(rows[0]), { ticker: "DIVO11.SA", target_pct: 34 });
 });

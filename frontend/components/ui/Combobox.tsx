@@ -32,10 +32,15 @@ export interface ComboboxProps<T extends ComboOption> {
   // also announced to screen readers with the option count.
   notice?: string;
   emptyText: string;
+  // False while `options` may still hold results for an earlier query (a search
+  // in flight): the list shows them, but nothing is pre-selected for Enter.
+  settled?: boolean;
+  maxQuery?: number; // what the search takes; longer input is cut here
 }
 
 export function Combobox<T extends ComboOption>(props: ComboboxProps<T>) {
   const { label, value, placeholder, query, onQueryChange, options, onSelect } = props;
+  const { settled, maxQuery } = props; // settled: reconcile's default is true
   const id = useId();
   const listId = `${id}-list`;
   const optId = (i: number) => `${id}-opt-${i}`;
@@ -47,7 +52,7 @@ export function Combobox<T extends ComboOption>(props: ComboboxProps<T>) {
   // the highlight on the same option (or the first choosable one).
   if (options !== shown) {
     setShown(options);
-    setState(reconcile(state, shown, options));
+    setState(reconcile(state, shown, options, settled));
   }
 
   // Keep the active option in view as the arrows move past the list's edge.
@@ -64,6 +69,8 @@ export function Combobox<T extends ComboOption>(props: ComboboxProps<T>) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // Mid-composition (an IME, a dead key), Enter and the arrows are the IME's.
+    if (e.nativeEvent.isComposing) return;
     const r = onKey(state, e.key, options);
     if (r.handled) e.preventDefault();
     setState(r.state);
@@ -86,14 +93,21 @@ export function Combobox<T extends ComboOption>(props: ComboboxProps<T>) {
         spellCheck={false}
         value={state.open ? query : value}
         placeholder={state.open && value ? value : placeholder}
+        maxLength={state.open ? maxQuery : undefined}
         onChange={(e) => {
-          // Closed, the field shows the current choice: typing starts a new search.
-          onQueryChange(typedQuery(state.open, value, e.target.value));
+          // Closed, the field shows the current choice: typing starts a new
+          // search — for what the edit itself says was typed (lib/combobox).
+          const edit = e.nativeEvent as InputEvent;
+          const q = typedQuery(state.open, value, e.target.value, edit);
+          onQueryChange(q.slice(0, maxQuery));
           setState({ open: true, active: -1 });
         }}
         onClick={() => !state.open && setState({ open: true, active: -1 })}
         onKeyDown={onKeyDown}
-        onBlur={() => setState(CLOSED)}
+        onBlur={() => {
+          setState(CLOSED);
+          onQueryChange(""); // a later visit starts from the full list
+        }}
         className="w-full rounded-md border border-hairline bg-paper py-1.5 pl-2 pr-7 font-mono text-sm text-ink placeholder:text-muted"
       />
       <span aria-hidden className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted">

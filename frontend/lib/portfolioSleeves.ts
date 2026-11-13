@@ -16,7 +16,7 @@
 // Pure and import-free, because `npm test` runs this file through `node --test`.
 
 import type { ComboOption } from "./combobox.ts";
-import { matches } from "./combobox.ts";
+import { fold, matches } from "./combobox.ts";
 
 export const CASH_REF = "CASH_CDI";
 
@@ -47,6 +47,7 @@ export function pickerRefs(
 }
 
 export interface SleeveRow {
+  uid?: string; // the row's identity in the editor (withUid), never sent
   strategy_ref: string; // "" on a ticker row
   ticker?: string;
   market?: Market; // with a ticker; B3 when absent
@@ -101,6 +102,15 @@ function sleeveRef(s: Record<string, unknown>): RowRef {
   if (typeof s.ticker === "string") return { strategy_ref: "", ticker: s.ticker, market: "B3" };
   if (s.asset === "CDI") return { strategy_ref: CASH_REF };
   return { strategy_ref: String(s.strategy ?? "") };
+}
+
+let lastUid = 0;
+
+/** Rows with a stable identity for React to key them by: removing a row must
+ *  not hand its picker's state (a half-typed search) to the row below. A row
+ *  that has one keeps it. */
+export function withUid(rows: readonly SleeveRow[]): SleeveRow[] {
+  return rows.map((r) => (r.uid ? r : { ...r, uid: `sleeve-${++lastUid}` }));
 }
 
 // The live sleeves as the API stores them → rows.
@@ -202,7 +212,9 @@ export interface PickerInput {
   userRefs: readonly string[];
   needsFunds: ReadonlySet<string>;
   held: readonly PickedAsset[]; // assets already in the rows / the saved carteira
-  hits: readonly AssetHit[]; // the server's search for `query`
+  // The server's search — possibly still for an earlier query while the next
+  // one is on its way (kept on screen so the list does not blink).
+  hits: readonly AssetHit[];
   carteira: boolean; // editing a saved carteira: B3 assets only
 }
 
@@ -244,10 +256,19 @@ export function pickerOptions(input: PickerInput): SleeveOption[] {
   ].filter((o) => matches(query, `${o.label} ${o.detail ?? ""} ${o.pick.ticker ?? ""}`));
   const seen = new Set(local.map((o) => o.id));
   const found = input.hits
+    .filter((h) => hitMatches(query, h))
     .map((h) => assetOption(h, `Ativos · ${MARKET_LABEL[h.market]}`, carteira, h))
     .filter((o) => !seen.has(o.id))
     .sort((a, b) => MARKET_ORDER[a.pick.market!] - MARKET_ORDER[b.pick.market!]);
   return [...local, ...found];
+}
+
+// A hit as the server matched it — its ticker starts with the query, or its name
+// holds it — checked again here against the query as it is *now*: results for
+// "petr" still on screen while "petr4" is fetched must not offer PETR3.
+function hitMatches(query: string, h: AssetHit): boolean {
+  const q = fold(query.trim());
+  return fold(h.ticker).startsWith(q) || (!!h.name && matches(query, h.name));
 }
 
 // The server ranks hits by relevance across markets; the list groups them, so

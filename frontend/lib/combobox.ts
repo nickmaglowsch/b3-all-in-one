@@ -93,40 +93,59 @@ export function onKey(
   return (KEYS.get(key) ?? ignore)(state, options);
 }
 
+/** What the browser says an edit was (InputEvent.inputType / .data). */
+export interface EditInfo {
+  inputType?: string;
+  data?: string | null;
+}
+
 /**
  * The query an edit of the field means. Open, the field holds the query itself.
- * Closed, it shows the current choice ("PETR4"), so a keystroke there must
- * start a fresh search for what was typed — "V", not "PETR4V". The typed text
- * is what the edit inserted: whatever is left once the prefix and suffix it
- * shares with the shown choice are taken off. A deletion inserts nothing, and
- * so clears the search; typing over a selection gives the new text.
+ * Closed, it shows the current choice ("PETR4"), so a keystroke there must start
+ * a fresh search for what was typed — "V", not "PETR4V".
+ *
+ * The edit's own account decides, because the text alone cannot: "P" is both
+ * "PETR4 selected whole and typed over" (focus by Tab selects it) and "PETR4
+ * with 'ETR4' deleted". Typed or composed text is `data`; any deletion clears
+ * the search. Without that account (a paste, an old browser), what replaced the
+ * choice is the query: the inserted part when the choice is still there whole,
+ * else the field's whole new text.
  */
-export function typedQuery(open: boolean, shown: string, next: string): string {
+export function typedQuery(open: boolean, shown: string, next: string, edit: EditInfo = {}): string {
   if (open || !shown) return next;
+  const type = edit.inputType ?? "";
+  if (type.startsWith("delete")) return "";
+  if (type.startsWith("insert") && typeof edit.data === "string" && edit.data) return edit.data;
+  return next.includes(shown) ? inserted(shown, next) : next;
+}
+
+/** What an insertion into `shown` added: `next` less the prefix and suffix the
+ *  two share (bounded, so "AAPL" → "AAPLA" is "A", not ""). */
+function inserted(shown: string, next: string): string {
   let head = 0;
-  while (head < shown.length && head < next.length && shown[head] === next[head]) head++;
+  while (head < shown.length && shown[head] === next[head]) head++;
   let tail = 0;
-  while (
-    tail < shown.length - head &&
-    tail < next.length - head &&
-    shown[shown.length - 1 - tail] === next[next.length - 1 - tail]
-  ) {
+  while (tail < shown.length - head && shown[shown.length - 1 - tail] === next[next.length - 1 - tail]) {
     tail++;
   }
   return next.slice(head, next.length - tail);
 }
 
 /** The active option after the list changed under it (a new query, new search
- *  results): kept when it is still there, else the first enabled one. */
+ *  results): kept when it is still there, else the first enabled one — unless
+ *  the list is not `settled` yet (results for an older query still showing):
+ *  then none, so Enter cannot choose what the user did not ask for. */
 export function reconcile(
   state: ComboState,
   before: readonly ComboOption[],
   after: readonly ComboOption[],
+  settled = true,
 ): ComboState {
   if (!state.open) return state;
   const id = before[state.active]?.id;
   const kept = id === undefined ? -1 : after.findIndex((o) => o.id === id);
-  return { open: true, active: enabled(after[kept]) ? kept : firstEnabled(after) };
+  if (enabled(after[kept])) return { open: true, active: kept };
+  return { open: true, active: settled ? firstEnabled(after) : -1 };
 }
 
 /** Consecutive options of one group, in order, with their list index. */

@@ -201,16 +201,6 @@ export interface IncomeRow {
   total: number;
 }
 
-export interface Sleeve {
-  strategy_ref: string;
-  target_pct: number;
-}
-
-export interface SleevesSaveResult {
-  sleeves: Sleeve[];
-  warnings: string[];
-}
-
 export interface DriftRow {
   ticker: string;
   target_w: number;
@@ -226,6 +216,8 @@ export interface Target {
   cash_weight_target: number;
   drift: DriftRow[];
   nav: number;
+  markets?: Record<string, string>; // {ticker: "US" | "CRYPTO"} of the off-B3 sleeves
+  warnings?: string[]; // what the drift cannot show (an off-B3 position is unknown)
 }
 
 export interface StrategyParam {

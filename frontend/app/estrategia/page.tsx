@@ -15,8 +15,17 @@ import { DivergingBars } from "@/components/charts/DivergingBars";
 import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
-import type { DriftRow, Sleeve, UserStrategy } from "@/lib/types";
-import { fromSelect, pickerRefs, portfolioBody, selectValue, specToRows, type SleeveRow as Row } from "@/lib/portfolioSleeves";
+import type { DriftRow, UserStrategy } from "@/lib/types";
+import {
+  liveToRows,
+  offB3Rows,
+  portfolioBody,
+  rowKey,
+  rowToSleeve,
+  specToRows,
+  type LiveSleeve,
+  type SleeveRow as Row,
+} from "@/lib/portfolioSleeves";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -24,7 +33,6 @@ import {
   useUserStrategies,
 } from "@/lib/strategies";
 import {
-  CASH_REF,
   useCreateBacktest,
   useRebalancePlan,
   useSaveSleeves,
@@ -35,7 +43,7 @@ import {
   type TradeLine,
 } from "./lib";
 import { SettingsPanel } from "./Settings";
-import { TickerOptions } from "./TickerOptions";
+import { SleeveRows } from "./SleeveRows";
 
 const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
 
@@ -107,12 +115,11 @@ export default function EstrategiaPage() {
 function SleevesEditor() {
   const sleeves = useSleeves();
   const strategies = useStrategies();
-  const userStrats = useUserStrategies();
   const save = useSaveSleeves();
   const saveStrat = useSaveUserStrategy();
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
-  const [syncedFrom, setSyncedFrom] = useState<Sleeve[] | null>(null);
+  const [syncedFrom, setSyncedFrom] = useState<LiveSleeve[] | null>(null);
   // "Salvar como estratégia" form — shares `rows` with the live-target editor.
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
@@ -129,71 +136,18 @@ function SleevesEditor() {
   // runs once per new server payload — is the React-endorsed alternative to an effect.
   if (sleeves.data && sleeves.data !== syncedFrom && !dirty) {
     setSyncedFrom(sleeves.data);
-    setRows(
-      sleeves.data.map((s) => ({
-        strategy_ref: s.strategy_ref,
-        target_pct: String(s.target_pct),
-      })),
-    );
+    setRows(liveToRows(sleeves.data));
   }
 
-  // A user fixed_weight portfolio can't be a sleeve of another (cycle guard —
-  // server 422s); drop those names from the picker.
-  const fixedWeightNames = useMemo(
-    () =>
-      new Set(
-        (userStrats.data ?? [])
-          .filter((u) => u.kind === "fixed_weight")
-          .map((u) => u.name),
-      ),
-    [userStrats.data],
-  );
-
-  // Split the merged gallery: platform built-ins vs the tenant's own rule
-  // strategies (source:"user", minus fixed_weight portfolios) — grouped in the
-  // picker via <optgroup>.
-  //
-  // B3 strategies only: a carteira and the live target run on the B3 plane, and
-  // the API refuses a US or crypto strategy as a sleeve (strategy_specs
-  // off_b3_refs / check_live_refs), so the picker does not offer one to be
-  // refused. The split lives in lib/portfolioSleeves.ts, under `npm test`.
-  const { builtinRefs, userRefs } = useMemo(
-    () => pickerRefs(strategies.data ?? [], fixedWeightNames),
-    [strategies.data, fixedWeightNames],
-  );
-
-  // Strategies that read CVM fundamentals — flag them in the picker so the choice
-  // is informed (native <option> can't hold a badge, so the label carries a marker).
-  const needsFunds = useMemo(
-    () =>
-      new Set(
-        (strategies.data ?? [])
-          .filter((s) => s.needs_fundamentals)
-          .map((s) => s.name),
-      ),
-    [strategies.data],
-  );
-
-  const optGroup = (label: string, names: string[]) => (
-    <optgroup label={label}>
-      {names.map((n) => (
-        <option key={n} value={n}>
-          {needsFunds.has(n) ? `${n} · precisa de fundamentos` : n}
-        </option>
-      ))}
-    </optgroup>
-  );
-
-  const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
-  const refs = rows.map(selectValue); // a ticker row is keyed by its ticker
-  const hasDup = new Set(refs).size !== refs.length;
-  const hasBlank = rows.some((r) => !selectValue(r) || r.target_pct.trim() === "");
-  const sumOk = Math.abs(sum - 100) < 0.01;
-  const sleevesValid = rows.length > 0 && sumOk && !hasDup && !hasBlank;
+  const { sum, sumOk, hasDup, sleevesValid } = checkRows(rows);
   // While a saved carteira is in the editor its rows are not the live target, so
   // the live "Salvar" stays off until the edit ends.
   const canSave = sleevesValid && !save.isPending && !editId;
-  const canSaveStrat = sleevesValid && name.trim() !== "" && !saveStrat.isPending;
+  // A carteira backtests on the B3 plane under B3 tax rules: US and crypto
+  // assets stay live-only, and the form says so rather than letting the API refuse.
+  const offB3 = offB3Rows(rows);
+  const canSaveStrat =
+    sleevesValid && name.trim() !== "" && !saveStrat.isPending && offB3.length === 0;
 
   const loadStrategy = (u: UserStrategy) => {
     // Only the first "Editar" snapshots: switching between carteiras mid-edit
@@ -245,13 +199,8 @@ function SleevesEditor() {
   const setField = (i: number, patch: Partial<Row>) =>
     edit((rs) => rs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
-  const onSave = () => {
-    const body: Sleeve[] = rows.map((r) => ({
-      strategy_ref: r.strategy_ref,
-      target_pct: parseFloat(r.target_pct),
-    }));
-    save.mutate(body, { onSuccess: () => setDirty(false) });
-  };
+  const onSave = () =>
+    save.mutate(rows.map(rowToSleeve), { onSuccess: () => setDirty(false) });
 
   return (
     <div className="space-y-4">
@@ -269,41 +218,13 @@ function SleevesEditor() {
         <Skeleton className="h-24 w-full" />
       ) : (
         <div className="space-y-2">
-          {rows.map((r, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <select
-                value={selectValue(r)}
-                onChange={(e) => setField(i, fromSelect(e.target))}
-                className="min-w-0 flex-1 rounded-md border border-hairline bg-paper px-2 py-1.5 font-mono text-sm text-ink"
-              >
-                <option value="">selecione…</option>
-                <option value={CASH_REF}>Caixa (CDI)</option>
-                {optGroup("Estratégias da plataforma", builtinRefs)}
-                {userRefs.length > 0 && optGroup("Minhas estratégias de regra", userRefs)}
-                <TickerOptions rows={rows} editId={editId} />
-              </select>
-              <div className="flex items-center gap-1">
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={1}
-                  value={r.target_pct}
-                  onChange={(e) => setField(i, { target_pct: e.target.value })}
-                  className="w-20 rounded-md border border-hairline bg-paper px-2 py-1.5 text-right font-mono text-sm tnum text-ink"
-                />
-                <span className="font-mono text-sm text-muted">%</span>
-              </div>
-              <button
-                type="button"
-                onClick={() => edit((rs) => rs.filter((_, j) => j !== i))}
-                aria-label="Remover sleeve"
-                className="rounded-md border border-hairline px-2 py-1.5 text-sm text-muted hover:bg-hairline/40"
-              >
-                ✕
-              </button>
-            </div>
-          ))}
+          <SleeveRows
+            rows={rows}
+            editId={editId}
+            onPick={(i, pick) => setField(i, pick)}
+            onPct={(i, target_pct) => setField(i, { target_pct })}
+            onRemove={(i) => edit((rs) => rs.filter((_, j) => j !== i))}
+          />
 
           <div className="flex items-center justify-between pt-1">
             <button
@@ -327,7 +248,7 @@ function SleevesEditor() {
 
           {hasDup && (
             <p className="text-xs text-loss" role="alert">
-              Cada estratégia só pode aparecer uma vez.
+              Cada estratégia ou ativo só pode aparecer uma vez.
             </p>
           )}
           {save.error && (
@@ -346,6 +267,7 @@ function SleevesEditor() {
             desc={desc}
             setDesc={setDesc}
             editing={!!editId}
+            offB3={offB3}
             saveStrat={saveStrat}
             canSave={canSaveStrat}
             onSave={onSaveStrat}
@@ -362,6 +284,17 @@ function SleevesEditor() {
   );
 }
 
+// What the editor's rows add up to, and whether they can be saved: summing to
+// 100, each sleeve once (a ticker row is keyed by its market + ticker), none blank.
+function checkRows(rows: Row[]) {
+  const sum = rows.reduce((a, r) => a + (parseFloat(r.target_pct) || 0), 0);
+  const keys = rows.map(rowKey);
+  const hasDup = new Set(keys).size !== keys.length;
+  const hasBlank = rows.some((r) => !rowKey(r) || r.target_pct.trim() === "");
+  const sumOk = Math.abs(sum - 100) < 0.01;
+  return { sum, sumOk, hasDup, sleevesValid: rows.length > 0 && sumOk && !hasDup && !hasBlank };
+}
+
 // "Salvar como estratégia" / "Editar carteira": names the editor's rows as a
 // saved fixed_weight carteira. Cancelar and a successful Atualizar both end the
 // edit, which hands the rows back to the live sleeves (SleevesEditor.endEdit).
@@ -371,6 +304,7 @@ function StrategySaveForm({
   desc,
   setDesc,
   editing,
+  offB3,
   saveStrat,
   canSave,
   onSave,
@@ -381,6 +315,7 @@ function StrategySaveForm({
   desc: string;
   setDesc: (v: string) => void;
   editing: boolean;
+  offB3: string[];
   saveStrat: ReturnType<typeof useSaveUserStrategy>;
   canSave: boolean;
   onSave: () => void;
@@ -428,6 +363,12 @@ function StrategySaveForm({
           ? "Editando uma carteira salva — os sleeves ativos não mudam. Cancelar ou Atualizar devolve o editor a eles."
           : "Salva a alocação atual como carteira nomeada — dá para backtestar e ativar em “Minhas carteiras”."}
       </p>
+      {offB3.length > 0 && (
+        <p className="text-xs text-series-4" role="status">
+          {offB3.join(", ")}: ativos dos EUA e cripto ficam só nos sleeves ativos — uma
+          carteira salva roda no plano da B3 e apura o imposto pelas regras da B3.
+        </p>
+      )}
       {saveStrat.error && (
         <p className="text-xs text-loss" role="alert">
           {errorText(saveStrat.error, "Falha ao salvar a estratégia.")}
@@ -489,108 +430,158 @@ function MinhasCarteiras({
         </p>
       ) : (
         <ul className="space-y-2">
-          {portfolios.map((u) => {
-            const nSleeves = Array.isArray(u.spec.sleeves)
-              ? (u.spec.sleeves as unknown[]).length
-              : 0;
-            const ranId =
-              backtest.data && backtest.variables?.strategy === u.name
-                ? backtest.data.id
-                : null;
-            return (
-              <li
-                key={u.id}
-                className={`rounded-lg border bg-paper p-3 ${
-                  u.id === activeEditId ? "border-navy" : "border-hairline"
-                }`}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-ink">
-                      {u.name}
-                    </p>
-                    <p className="font-mono text-[11px] text-muted">
-                      {nSleeves} sleeve(s) · atualizada {formatInstantDate(u.updated_at)}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => promote.mutate(u.id)}
-                      disabled={promote.isPending && promote.variables === u.id}
-                      className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
-                    >
-                      {promote.isPending && promote.variables === u.id
-                        ? "Ativando…"
-                        : "Ativar"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => backtest.mutate({ strategy: u.name })}
-                      disabled={
-                        backtest.isPending &&
-                        backtest.variables?.strategy === u.name
-                      }
-                      className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40 disabled:opacity-40"
-                    >
-                      {backtest.isPending &&
-                      backtest.variables?.strategy === u.name
-                        ? "Enviando…"
-                        : "Backtest"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onEdit(u)}
-                      className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40"
-                    >
-                      Editar
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(u)}
-                      disabled={del.isPending && del.variables === u.id}
-                      className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-loss hover:bg-hairline/40 disabled:opacity-40"
-                    >
-                      Excluir
-                    </button>
-                  </div>
-                </div>
-
-                {ranId && (
-                  <p className="mt-2 text-xs text-gain">
-                    Backtest enviado —{" "}
-                    <Link href={`/bench/run?id=${ranId}`} className="underline">
-                      ver resultado
-                    </Link>
-                    .
-                  </p>
-                )}
-                {promote.error && promote.variables === u.id && (
-                  <p className="mt-2 text-xs text-loss" role="alert">
-                    {errorText(promote.error, "Falha ao ativar.")}
-                  </p>
-                )}
-                {promote.isSuccess && promote.variables === u.id && (
-                  <p className="mt-2 text-xs text-gain">
-                    Carteira ativada — alvo atualizado.
-                  </p>
-                )}
-                {del.error && del.variables === u.id && (
-                  <p className="mt-2 text-xs text-loss" role="alert">
-                    {errorText(del.error, "Falha ao excluir.")}
-                  </p>
-                )}
-                {backtest.error && backtest.variables?.strategy === u.name && (
-                  <p className="mt-2 text-xs text-loss" role="alert">
-                    {errorText(backtest.error, "Falha ao enviar o backtest.")}
-                  </p>
-                )}
-              </li>
-            );
-          })}
+          {portfolios.map((u) => (
+            <CarteiraItem
+              key={u.id}
+              u={u}
+              active={u.id === activeEditId}
+              status={carteiraStatus(u, promote, del, backtest)}
+              onPromote={() => promote.mutate(u.id)}
+              onBacktest={() => backtest.mutate({ strategy: u.name })}
+              onEdit={() => onEdit(u)}
+              onDelete={() => onDelete(u)}
+            />
+          ))}
         </ul>
       )}
     </Card>
+  );
+}
+
+// What this list's mutations say about carteira `u`. One hook instance serves
+// every row, so its state belongs only to the row it was last called for.
+interface CarteiraStatus {
+  promoting: boolean;
+  promoted: boolean;
+  promoteError: unknown;
+  deleting: boolean;
+  deleteError: unknown;
+  sending: boolean;
+  backtestError: unknown;
+  ranId: string | null;
+}
+
+function carteiraStatus(
+  u: UserStrategy,
+  promote: ReturnType<typeof usePromoteStrategy>,
+  del: ReturnType<typeof useDeleteUserStrategy>,
+  backtest: ReturnType<typeof useCreateBacktest>,
+): CarteiraStatus {
+  const promoted = promote.variables === u.id;
+  const deleted = del.variables === u.id;
+  return {
+    promoting: promote.isPending && promoted,
+    promoted: promote.isSuccess && promoted,
+    promoteError: promoted ? promote.error : null,
+    deleting: del.isPending && deleted,
+    deleteError: deleted ? del.error : null,
+    ...backtestStatus(u, backtest),
+  };
+}
+
+function backtestStatus(
+  u: UserStrategy,
+  backtest: ReturnType<typeof useCreateBacktest>,
+): Pick<CarteiraStatus, "sending" | "backtestError" | "ranId"> {
+  const ran = backtest.variables?.strategy === u.name;
+  return {
+    sending: backtest.isPending && ran,
+    backtestError: ran ? backtest.error : null,
+    ranId: ran ? (backtest.data?.id ?? null) : null,
+  };
+}
+
+function CarteiraItem({
+  u,
+  active,
+  status,
+  onPromote,
+  onBacktest,
+  onEdit,
+  onDelete,
+}: {
+  u: UserStrategy;
+  active: boolean;
+  status: CarteiraStatus;
+  onPromote: () => void;
+  onBacktest: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const nSleeves = Array.isArray(u.spec.sleeves) ? (u.spec.sleeves as unknown[]).length : 0;
+  return (
+    <li className={`rounded-lg border bg-paper p-3 ${active ? "border-navy" : "border-hairline"}`}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-ink">{u.name}</p>
+          <p className="font-mono text-[11px] text-muted">
+            {nSleeves} sleeve(s) · atualizada {formatInstantDate(u.updated_at)}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onPromote}
+            disabled={status.promoting}
+            className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-40"
+          >
+            {status.promoting ? "Ativando…" : "Ativar"}
+          </button>
+          <button
+            type="button"
+            onClick={onBacktest}
+            disabled={status.sending}
+            className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40 disabled:opacity-40"
+          >
+            {status.sending ? "Enviando…" : "Backtest"}
+          </button>
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-ink hover:bg-hairline/40"
+          >
+            Editar
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            disabled={status.deleting}
+            className="rounded-md border border-hairline px-3 py-1.5 text-xs font-medium text-loss hover:bg-hairline/40 disabled:opacity-40"
+          >
+            Excluir
+          </button>
+        </div>
+      </div>
+      <CarteiraMessages status={status} />
+    </li>
+  );
+}
+
+function CarteiraMessages({ status }: { status: CarteiraStatus }) {
+  const fail = (error: unknown, fallback: string) =>
+    !!error && (
+      <p className="mt-2 text-xs text-loss" role="alert">
+        {errorText(error, fallback)}
+      </p>
+    );
+  return (
+    <>
+      {status.ranId && (
+        <p className="mt-2 text-xs text-gain">
+          Backtest enviado —{" "}
+          <Link href={`/bench/run?id=${status.ranId}`} className="underline">
+            ver resultado
+          </Link>
+          .
+        </p>
+      )}
+      {fail(status.promoteError, "Falha ao ativar.")}
+      {status.promoted && (
+        <p className="mt-2 text-xs text-gain">Carteira ativada — alvo atualizado.</p>
+      )}
+      {fail(status.deleteError, "Falha ao excluir.")}
+      {fail(status.backtestError, "Falha ao enviar o backtest.")}
+    </>
   );
 }
 
@@ -668,6 +659,7 @@ function TargetPanel() {
       }
     >
       <div className="space-y-4">
+        <Warnings warnings={t.warnings} />
         <div>
           <p className="mb-2 text-xs text-muted">
             Desvio por ativo (positivo = comprar para atingir o alvo)
@@ -772,7 +764,8 @@ function RebalancePanel() {
 function PlanResult({ plan }: { plan: RebalancePlan }) {
   const tradeCols: Column<TradeLine>[] = [
     { key: "ticker", header: "Ativo", mobile: "title", render: (r) => <TickerChip ticker={r.ticker} /> },
-    { key: "qty", header: "Qtd", align: "right", render: (r) => r.qty.toLocaleString("pt-BR") },
+    // A crypto quantity is a fraction of a coin (8 decimals); every other is whole.
+    { key: "qty", header: "Qtd", align: "right", render: (r) => r.qty.toLocaleString("pt-BR", { maximumFractionDigits: 8 }) },
     { key: "est_price", header: "Preço est.", align: "right", render: (r) => <Money value={r.est_price} /> },
     { key: "est_brl", header: "Valor", align: "right", render: (r) => <Money value={r.est_brl} /> },
   ];

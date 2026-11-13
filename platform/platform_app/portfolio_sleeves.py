@@ -19,6 +19,7 @@ Two things a US or crypto sleeve cannot have, said rather than glossed over:
 from __future__ import annotations
 
 import datetime
+from typing import NamedTuple
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -114,20 +115,35 @@ def off_b3_note(labels: list[str]) -> str:
             "apenas com aporte — nunca vendendo ativos da B3 para isso.")
 
 
-def split_sleeves(sleeves) -> tuple[float, list, dict[str, float], dict[str, str]]:
-    """Stored sleeves → (cash weight, strategy sleeves, {ticker: weight},
-    {ticker: market} of the off-B3 tickers advise_weights must price elsewhere).
-    Keyed by symbol alone, which the save guarantees is unambiguous."""
+class SleeveSplit(NamedTuple):
+    cash: float                        # CASH_CDI's weight
+    strategies: list                   # [(strategy_ref, weight)]
+    tickers: dict[str, float]          # {ticker: weight}
+    off_b3: dict[str, str]             # {ticker: market} of the US / crypto ones
+    # The weight of the sleeves that hold B3 assets — strategies and B3 tickers,
+    # 0% ones aside. Read off the sleeves themselves, not off advised weights:
+    # whether a target has a B3 book to rebalance is a fact about what the user
+    # chose, not something float rounding of a near-100% total can flip.
+    b3_assets: float
+
+
+def split_sleeves(sleeves) -> SleeveSplit:
+    """Stored sleeves, by kind. Tickers are keyed by symbol alone, which the save
+    guarantees is unambiguous."""
     one_market_per_symbol([(s.ticker, s.market) for s in sleeves if s.ticker])
-    cash, strategies, tickers, off_b3 = 0.0, [], {}, {}
+    out = SleeveSplit(0.0, [], {}, {}, 0.0)
+    cash = b3_assets = 0.0
     for s in sleeves:
         w = float(s.target_pct) / 100.0
         if s.ticker:
-            tickers[s.ticker] = tickers.get(s.ticker, 0.0) + w
+            out.tickers[s.ticker] = out.tickers.get(s.ticker, 0.0) + w
             if s.market != "B3":
-                off_b3[s.ticker] = s.market
+                out.off_b3[s.ticker] = s.market
+            else:
+                b3_assets += w
         elif s.strategy_ref == CASH:
             cash += w
         else:
-            strategies.append((s.strategy_ref, w))
-    return cash, strategies, tickers, off_b3
+            out.strategies.append((s.strategy_ref, w))
+            b3_assets += w
+    return out._replace(cash=cash, b3_assets=b3_assets)

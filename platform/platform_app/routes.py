@@ -525,13 +525,14 @@ async def _cash_cdi_tickers(session: AsyncSession, tid: uuid.UUID) -> set[str]:
 
 async def _combined_target(
     session: AsyncSession, tid: uuid.UUID, freq: str = "ME"
-) -> tuple[dict[str, float], float, dict[str, str]]:
+) -> tuple[dict[str, float], float, dict[str, str], float]:
     """Blend the tenant's sleeves into (combined_weights, cash_weight_target,
-    off_b3): combined[t] = Σ sleeve_pct/100 × sleeve_weights[t], where a ticker
+    off_b3, b3_assets): combined[t] = Σ sleeve_pct/100 × sleeve_weights[t], where a ticker
     sleeve's weights are just {ticker: 1}; CASH_CDI pct becomes the cash weight;
     off_b3 is {ticker: market} for the US/crypto tickers advise_weights prices off
-    their own plane. 409 when no sleeves are configured. `freq` is the rebalance
-    cadence passed to each strategy sleeve (default 'ME' = today's behavior)."""
+    their own plane; b3_assets is the weight of the sleeves holding B3 assets
+    (portfolio_sleeves.SleeveSplit). 409 when no sleeves are configured. `freq`
+    is the rebalance cadence passed to each strategy sleeve (default 'ME')."""
     sleeves = (await session.scalars(
         select(PortfolioSleeve).where(PortfolioSleeve.tenant_id == tid)
     )).all()
@@ -557,7 +558,7 @@ async def _combined_target(
     # Split cash and tickers out first: CASH_CDI is the risk-free sleeve and a
     # ticker is its own target weight, so neither has anything to advise and
     # neither may reach the engine as a strategy.
-    cash_weight, by_ref, combined, off_b3 = portfolio_sleeves.split_sleeves(sleeves)
+    cash_weight, by_ref, combined, off_b3, b3_assets = portfolio_sleeves.split_sleeves(sleeves)
     equity = [(ref, pct, _key(ref)) for ref, pct in by_ref]  # (sleeve_ref, pct, cache_key)
 
     # Each sleeve is a separate engine subprocess that builds its own market
@@ -602,7 +603,7 @@ async def _combined_target(
             combined[t] = combined.get(t, 0.0) + pct * float(w)
     if missing:
         raise HTTPException(422, _needs_funds_msg(missing))
-    return combined, cash_weight, off_b3
+    return combined, cash_weight, off_b3, b3_assets
 
 
 async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, dict]:
@@ -623,8 +624,8 @@ async def get_target(
     rebalance trades). The drift is the B3 book against its own share of the
     target; off-B3 sleeves are listed with no current position (rebalance_plan)."""
     _user, tid = tenant
-    combined, cash_weight, off_b3 = await _combined_target(session, tid)
-    split = rebalance_plan.split_target(combined, cash_weight, off_b3)
+    combined, cash_weight, off_b3, b3_assets = await _combined_target(session, tid)
+    split = rebalance_plan.split_target(combined, cash_weight, off_b3, b3_assets)
     positions = await _positions_json(session, tid)
     cash_cdi = await _cash_cdi_tickers(session, tid)
 
@@ -647,8 +648,9 @@ async def get_target(
         "as_of": priced["as_of"],
         "combined_weights": combined,
         "current_weights": current,
-        # Of the B3 book, as current_weights and the drift are.
-        "cash_weight_target": split.cash,
+        # Of the B3 book, as current_weights and the drift are; a book held as
+        # it is (no B3 asset sleeve) targets the cash it has.
+        "cash_weight_target": cash_weight_current if split.hold_b3 else split.cash,
         "cash_weight_current": cash_weight_current,
         "drift": drift,
         "nav": nav,
@@ -658,7 +660,9 @@ async def get_target(
 
 
 class RebalanceRequest(BaseModel):
-    new_cash: float = Field(0.0, allow_inf_nan=False)
+    # An aporte, never a withdrawal: a negative one would have the off-B3 share
+    # "sell" assets the plan cannot see.
+    new_cash: float = Field(0.0, ge=0, allow_inf_nan=False)
     exclude: list[str] = []
     pins: list[str] = []
 
@@ -704,19 +708,21 @@ async def create_rebalance_plan(
     buy_only = settings_["buy_only_laggards"]
     harvest_only = settings_["sell_only_for_harvest"]
 
-    combined, cash_weight, off_b3 = await _combined_target(session, tid, freq=cadence)
-    # From here the B3 book's own target, and its own share of the aporte.
-    split = rebalance_plan.split_target(combined, cash_weight, off_b3)
+    combined, cash_weight, off_b3, b3_assets = await _combined_target(
+        session, tid, freq=cadence)
+    # v0: pins and excludes collapse to one "freeze" set — both mean "don't trade
+    # this ticker, keep its current position" (per-ticker keep-in-place).
+    frozen = {t.upper() for t in (body.exclude + body.pins)}
+    # From here the B3 book's own target, and its own share of the aporte; an
+    # excluded/pinned off-B3 sleeve's share (off_kept) stays as cash.
+    split = rebalance_plan.split_target(combined, cash_weight, off_b3, b3_assets)
     combined, cash_weight = split.b3, split.cash
-    new_cash, off_cash = split.aporte(body.new_cash)
+    new_cash, off_cash, off_kept = split.aporte(body.new_cash, frozen)
     positions = await _positions_json(session, tid)
     held = set(positions)
     cash_cdi = await _cash_cdi_tickers(session, tid)
     cash_cdi_held = {t for t in held if t.upper() in cash_cdi}
-    # v0: pins and excludes collapse to one "freeze" set — both mean "don't trade
-    # this ticker, keep its current position" (per-ticker keep-in-place). With no
-    # B3 sleeve at all, the whole B3 book is held as it is.
-    frozen = {t.upper() for t in (body.exclude + body.pins)}
+    # With no sleeve holding a B3 asset, the whole B3 book is held as it is.
     if split.hold_b3:
         frozen |= {t.upper() for t in held}
 
@@ -778,7 +784,7 @@ async def create_rebalance_plan(
     notes = rebalance_plan.plan_notes(split, off_b3, body.new_cash, {
         "buys": buys,
         **{k: sorted({*trades.get(k, []), *off_trades.get(k, [])})
-           for k in ("unpriced_skipped", "below_one_lot")}}, unfunded)
+           for k in ("unpriced_skipped", "below_one_lot")}}, unfunded, frozen)
     acao = (tax.get("buckets") or {}).get("AÇÃO") or {}
     limit = float(tax.get("isencao_limit", 20_000.0))
     if float(acao.get("gross_after", 0.0)) > limit:
@@ -788,7 +794,9 @@ async def create_rebalance_plan(
 
     return {
         "as_of": priced["as_of"],
-        "nav": nav + off_cash,  # the B3 book and the aporte share headed abroad
+        # The B3 book plus the whole aporte: the share headed abroad, and the
+        # excluded/pinned off-B3 share kept as cash.
+        "nav": nav + off_cash + off_kept,
         "new_cash": body.new_cash,
         "cadence": cadence,
         "settings": settings_,
@@ -802,10 +810,11 @@ async def _off_b3_buys(split, off_b3: dict[str, str], cash: float, frozen: set[s
     """The off-B3 sleeves' buys, sized from their share of the aporte alone, in
     reais off each one's own plane; an excluded/pinned one keeps its share as
     cash. {} with no aporte: nothing is ever sold to buy them."""
-    # Of the aporte's off-B3 share, each in proportion to its weight in the target.
-    weights = {t: w / split.off_weight for t, w in split.off.items() if t not in frozen}
-    if cash <= 0 or not weights:
+    # Of what buys them, each in proportion to its weight in the target.
+    buying = {t: w for t, w in split.off.items() if t not in frozen}
+    if cash <= 0 or not buying:
         return {}
+    weights = {t: w / sum(buying.values()) for t, w in buying.items()}
     out = await _advise(weights=weights, markets={t: off_b3[t] for t in weights},
                         positions={}, nav_cash=cash)
     return out.get("trades") or {}

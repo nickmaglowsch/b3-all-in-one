@@ -12,7 +12,14 @@ cannot even see. So the target is split in two (split_target):
   · the off-B3 sleeves are bought only with the aporte: new_cash is shared
     between the two by target weight (Σ off-B3 weight of it goes abroad), so an
     off-B3 buy never exceeds the aporte and nothing is sold to fund one. No
-    aporte, no off-B3 buy.
+    aporte, no off-B3 buy; an excluded or pinned one's share stays as cash.
+
+With off-B3 sleeves and no sleeve holding a B3 asset (no strategy, no B3
+ticker — CASH_CDI alone is not one), there is nothing to rebalance the B3 book
+to, so it is held exactly as it is: a CASH_CDI weight there would otherwise
+read "sell every B3 holding", the very liquidation this module exists to stop.
+That is decided from the sleeves (SleeveSplit.b3_assets), never from float
+arithmetic on weights a save accepts within ±0.01 of 100.
 
 The plan's notes say so first, then what the trade list and the B3 tax overlay
 leave out.
@@ -30,31 +37,46 @@ class TargetSplit:
     b3: dict[str, float]           # the B3 book's target, scaled to the book
     cash: float                    # CASH_CDI's weight within the B3 book
     off: dict[str, float] = field(default_factory=dict)  # off-B3 weights in the whole target
-    # No B3 sleeve at all: the B3 book is left as it is (nothing to rebalance
-    # it to), rather than sold down to cash.
+    # No sleeve holds a B3 asset: the B3 book is left as it is (nothing to
+    # rebalance it to), rather than sold down to cash.
     hold_b3: bool = False
+    # What the sleeves add up to (100% within the save's ±0.01): the aporte is
+    # shared out of this, so a near-100 total never leaves a sliver unassigned.
+    total: float = 1.0
 
     @property
     def off_weight(self) -> float:
         return sum(self.off.values())
 
-    def aporte(self, new_cash: float) -> tuple[float, float]:
-        """new_cash → (the B3 book's share, the off-B3 sleeves' share)."""
-        off = new_cash * self.off_weight
-        return new_cash - off, off
+    def aporte(self, new_cash: float, frozen=frozenset()) -> tuple[float, float, float]:
+        """new_cash → (the B3 book's share, what buys the off-B3 sleeves, the
+        share of the excluded/pinned off-B3 ones — kept as cash this time)."""
+        if not self.off or new_cash <= 0:
+            return new_cash, 0.0, 0.0
+        shares = {t: new_cash * w / self.total for t, w in self.off.items()}
+        kept = sum(v for t, v in shares.items() if t in frozen)
+        buy = sum(shares.values()) - kept
+        return new_cash - buy - kept, buy, kept
 
 
 def split_target(combined: dict[str, float], cash_weight: float,
-                 off_b3: dict[str, str]) -> TargetSplit:
-    """The combined target as the B3 book's own target plus the off-B3 part."""
+                 off_b3: dict[str, str], b3_assets: float) -> TargetSplit:
+    """The combined target as the B3 book's own target plus the off-B3 part.
+    `b3_assets` is the weight of the sleeves holding B3 assets; 0% sleeves and
+    0 weights are left out of both halves."""
     off = {t: w for t, w in combined.items() if t in off_b3 and w > 0}
-    rest = 1.0 - sum(off.values())
-    if not off:
-        return TargetSplit(dict(combined), cash_weight)
-    if rest <= 1e-9:
-        return TargetSplit({}, 0.0, off, hold_b3=True)
-    b3 = {t: w / rest for t, w in combined.items() if t not in off_b3}
-    return TargetSplit(b3, cash_weight / rest, off)
+    b3 = {t: w for t, w in combined.items() if t not in off_b3 and w > 0}
+    off_w = sum(off.values())
+    if off and b3_assets <= 0:
+        return TargetSplit({}, cash_weight, off, hold_b3=True, total=cash_weight + off_w)
+    # The B3 book's share is its sleeves' (B3 assets + CASH_CDI), not what their
+    # advised weights add up to: a strategy keeping part of its sleeve in cash
+    # keeps it in cash here too, instead of being scaled up to fill it.
+    book = b3_assets + cash_weight
+    if book <= 0:                         # nothing at all: an empty target
+        return TargetSplit({}, 0.0, off, total=max(off_w, 1e-12))
+    return TargetSplit({t: w / book for t, w in b3.items()}, cash_weight / book, off,
+                       total=book + off_w)
 
 
 def drift_rows(split: TargetSplit, current: dict[str, float], nav: float,
@@ -115,19 +137,35 @@ def target_warnings(split: TargetSplit, off_b3: dict[str, str], trades: dict) ->
     return out
 
 
-def funding_note(split: TargetSplit, off_b3: dict[str, str], new_cash: float) -> str | None:
+def funding_note(split: TargetSplit, off_b3: dict[str, str], new_cash: float,
+                 frozen=frozenset()) -> str | None:
     """The first note of a plan with off-B3 sleeves: where their money comes from."""
     if not split.off:
         return None
     names = ", ".join(asset_refs.label(t, off_b3[t]) for t in sorted(split.off))
     head = (f"Ativos fora da B3 ({names}) entram só com aporte: o plano nunca vende "
-            "ativos da B3 para comprá-los, e a carteira da B3 é rebalanceada entre os "
-            "sleeves da B3, com o peso deles tratado como mantido fora.")
+            "ativos da B3 para comprá-los" + (
+                "." if split.hold_b3 else  # HOLD_NOTE says what happens to the B3 book
+                ", e a carteira da B3 é rebalanceada entre os sleeves da B3, com o peso "
+                "deles tratado como mantido fora."))
     if new_cash <= 0:
         return head + " Sem aporte, nenhuma compra deles neste plano."
-    _b3, off = split.aporte(new_cash)
-    return head + (f" Deste aporte, R$ {_brl(off)} vão para eles ({split.off_weight:.0%}, "
-                   "o peso deles no alvo).")
+    _b3, buy, kept = split.aporte(new_cash, frozen)
+    out = head
+    if buying := sorted(t for t in split.off if t not in frozen):
+        pct = sum(split.off[t] for t in buying) / split.total
+        out += (f" Deste aporte, R$ {_brl(buy)} vão para "
+                f"{', '.join(asset_refs.label(t, off_b3[t]) for t in buying)} "
+                f"({pct:.0%}, o peso no alvo).")
+    if held := sorted(t for t in split.off if t in frozen):
+        out += (f" A parte de {', '.join(asset_refs.label(t, off_b3[t]) for t in held)} "
+                f"(R$ {_brl(kept)}), excluída ou fixada neste plano, fica em caixa desta vez.")
+    return out
+
+
+HOLD_NOTE = ("Nenhum sleeve de ativo da B3 definido: a carteira da B3 fica como está — "
+             "nada nela é comprado ou vendido, e o que do aporte não vai para os ativos "
+             "de fora fica em caixa.")
 
 
 def _brl(v: float) -> str:
@@ -136,11 +174,14 @@ def _brl(v: float) -> str:
 
 
 def plan_notes(split: TargetSplit, off_b3: dict[str, str], new_cash: float,
-               trades: dict, unfunded: list[str]) -> list[str]:
-    """The rebalance plan's notes: how off-B3 sleeves are funded, their tax rules,
-    unpriced names, a new position under one unit, a budget that ran out.
-    `trades` merges the B3 book's and the off-B3 buys' engine answers."""
-    out = [n for n in [funding_note(split, off_b3, new_cash)] if n]
+               trades: dict, unfunded: list[str], frozen=frozenset()) -> list[str]:
+    """The rebalance plan's notes: how off-B3 sleeves are funded (and the B3 book
+    held, when nothing in it is a sleeve), their tax rules, unpriced names, a
+    new position under one unit, a budget that ran out. `trades` merges the B3
+    book's and the off-B3 buys' engine answers."""
+    out = [n for n in [funding_note(split, off_b3, new_cash, frozen)] if n]
+    if split.hold_b3:
+        out.append(HOLD_NOTE)
     if bought := sorted(b["ticker"] for b in trades.get("buys", []) if b["ticker"] in off_b3):
         out.append(f"{', '.join(asset_refs.label(t, off_b3[t]) for t in bought)}: compra "
                    "fora da B3; a venda futura é tributada por outras regras (exterior: "

@@ -57,7 +57,7 @@ async def test_sleeves_are_advised_concurrently(monkeypatch, clear_sleeve_cache)
 
     async with async_session_maker() as s:
         t = time.perf_counter()
-        combined, cash, _ = await routes._combined_target(s, tid)
+        combined, cash, *_ = await routes._combined_target(s, tid)
         elapsed = time.perf_counter() - t
 
     assert peak == 3, f"sleeves still advised one at a time (peak in-flight={peak})"
@@ -81,7 +81,7 @@ async def test_cash_cdi_sleeve_never_shells_out(monkeypatch, clear_sleeve_cache)
 
     monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
     async with async_session_maker() as s:
-        combined, cash, _ = await routes._combined_target(s, tid)
+        combined, cash, *_ = await routes._combined_target(s, tid)
 
     assert called == ["A"]
     assert combined == {"ATICK": 0.60}
@@ -112,13 +112,15 @@ async def test_ticker_sleeves_are_their_own_weight_and_never_shell_out(
 
     monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
     async with async_session_maker() as s:
-        combined, cash, off_b3 = await routes._combined_target(s, tid)
+        combined, cash, off_b3, b3_assets = await routes._combined_target(s, tid)
 
     assert called == ["A"]
     assert combined == pytest.approx(
         {"PETR4": 0.40, "VALE3": 0.20, "SPY": 0.25, "BTCUSDT": 0.15})
     assert cash == 0.0
     assert off_b3 == {"SPY": "US", "BTCUSDT": "CRYPTO"}
+    # The B3 assets' share is the sleeves' (strategy A + PETR4), not the weights'.
+    assert b3_assets == pytest.approx(0.60)
 
 
 @pytest.mark.asyncio(loop_scope="session")

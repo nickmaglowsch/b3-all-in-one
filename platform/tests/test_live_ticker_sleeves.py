@@ -398,6 +398,123 @@ async def test_with_no_b3_sleeve_the_b3_book_is_left_alone(client, plane):
     assert [(b["ticker"], b["qty"]) for b in plan["trades"]["buys"]] == [("SPY", 3)]
 
 
+async def _sleeves(client, h, body) -> None:
+    r = await client.put("/portfolio/sleeves", json=body, headers=h)
+    assert r.status_code == 200, r.text
+
+
+_SPY = {"ticker": "SPY", "market": "US"}
+
+
+@pytest.mark.parametrize("body", [
+    [{**_SPY, "target_pct": 99.995}],                        # a save within ±0.01
+    [{**_SPY, "target_pct": 50.004}, {"ticker": "BTCUSDT", "market": "CRYPTO",
+                                      "target_pct": 49.99}],
+    [{**_SPY, "target_pct": 90}, {"strategy_ref": "CASH_CDI", "target_pct": 10}],
+    [{**_SPY, "target_pct": 99.99}, {"strategy_ref": "CASH_CDI", "target_pct": 0.01}],
+])
+async def test_no_b3_asset_sleeve_keeps_the_b3_book_as_it_is(client, plane, body):
+    """No sleeve holds a B3 asset: nothing in B3 is sold — not through float
+    rounding of a near-100 total, and not because CASH_CDI read as "all cash"."""
+    h = await _user(client, "plan-hold")
+    await _seed_petr4(client, h)
+    await _sleeves(client, h, body)
+    plan = await _plan(client, h, new_cash=0)
+    assert plan["trades"] == {"sells": [], "buys": []}
+    assert any("a carteira da B3 fica como está" in n for n in plan["notes"])
+    t = (await client.get("/portfolio/target", headers=h)).json()
+    drift = {d["ticker"]: d for d in t["drift"]}
+    assert drift["PETR4"]["drift_w"] == 0
+    assert t["cash_weight_target"] == t["cash_weight_current"]
+    # With an aporte, only the off-B3 share buys, and nothing in B3 trades.
+    plan = await _plan(client, h, new_cash=10000)
+    assert plan["trades"]["sells"] == []
+    assert {b["ticker"] for b in plan["trades"]["buys"]} <= {"SPY", "BTCUSDT"}
+    assert sum(b["est_brl"] for b in plan["trades"]["buys"]) <= 10000
+
+
+@pytest.mark.parametrize("with_off, without_off", [
+    # CASH_CDI is the B3 book's cash: rebalanced against, as without SPY.
+    ([{"ticker": "PETR4", "target_pct": 35}, {"strategy_ref": "CASH_CDI", "target_pct": 35},
+      {**_SPY, "target_pct": 30}],
+     [{"ticker": "PETR4", "target_pct": 50}, {"strategy_ref": "CASH_CDI", "target_pct": 50}]),
+    # A B3 book off its own target: the same sells and buys, SPY or not.
+    ([{"ticker": "PETR4", "target_pct": 35}, {"ticker": "IVVB11", "target_pct": 35},
+      {**_SPY, "target_pct": 30}],
+     [{"ticker": "PETR4", "target_pct": 50}, {"ticker": "IVVB11", "target_pct": 50}]),
+])
+async def test_an_off_b3_sleeve_changes_no_b3_trade(client, plane, with_off, without_off):
+    plans = []
+    for i, body in enumerate((with_off, without_off)):
+        h = await _user(client, f"plan-same-{i}")
+        await _seed_petr4(client, h)
+        await _sleeves(client, h, body)
+        plans.append((await _plan(client, h, new_cash=0))["trades"])
+    assert plans[0]["sells"], "the B3 book should be off its target"
+    assert plans[0] == plans[1]
+
+
+async def test_a_strategy_sleeve_next_to_an_off_b3_one(client, plane, monkeypatch):
+    """The B3 book's share is the strategy's sleeve, 70% — what it advises
+    inside it is rebalanced; what it leaves in cash stays cash."""
+    from platform_app import routes
+    advised = {"weights": {"PETR4": 1.0}}
+
+    async def fake_advise(strategy, freq, extra_env=None):
+        return advised
+
+    monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
+    monkeypatch.setattr(routes, "_SLEEVE_WEIGHTS_CACHE", {})
+    h = await _user(client, "plan-strategy")
+    await _seed_petr4(client, h)
+    await _sleeves(client, h, [{"strategy_ref": "MomSharpe", "target_pct": 70},
+                               {**_SPY, "target_pct": 30}])
+    assert (await _plan(client, h, new_cash=0))["trades"] == {"sells": [], "buys": []}
+    # Half of the strategy's book in cash: half of PETR4 goes, never more.
+    advised = {"weights": {"PETR4": 0.5}}
+    monkeypatch.setattr(routes, "_SLEEVE_WEIGHTS_CACHE", {})
+    plan = await _plan(client, h, new_cash=0)
+    assert [(s["ticker"], s["qty"]) for s in plan["trades"]["sells"]] == [("PETR4", 50)]
+
+
+async def test_a_held_b3_book_keeps_its_cash_cdi_holdings_too(client, plane):
+    h = await _user(client, "plan-hold-cdi")
+    await _seed_petr4(client, h)
+    tid = uuid.UUID((await client.get("/me", headers=h)).json()["id"])
+    async with async_session_maker() as s:
+        s.add(Position(tenant_id=tid, ticker="B5P211", qty=10.0, avg_cost=95.0,
+                       total_cost=950.0, market="Mercado à Vista"))
+        await s.commit()
+    r = await client.put("/portfolio/settings/asset-overrides", headers=h,
+                         json=[{"ticker": "B5P211", "treatment": "cash_cdi"}])
+    assert r.status_code == 200, r.text
+    await _sleeves(client, h, [{**_SPY, "target_pct": 100}])
+    plan = await _plan(client, h, new_cash=0)
+    assert plan["trades"] == {"sells": [], "buys": []}
+
+
+async def test_an_excluded_off_b3_sleeve_keeps_its_share_as_cash(client, plane):
+    h = await _user(client, "plan-exclude-off")
+    await _seed_petr4(client, h)
+    await _sleeves(client, h, [{"ticker": "PETR4", "target_pct": 70},
+                               {**_SPY, "target_pct": 20},
+                               {"ticker": "BTCUSDT", "market": "CRYPTO", "target_pct": 10}])
+    plan = await _plan(client, h, new_cash=10000, exclude=["SPY"])
+    buys = {b["ticker"]: b for b in plan["trades"]["buys"]}
+    assert "SPY" not in buys and buys["BTCUSDT"]["est_brl"] <= 1000
+    assert "R$ 1.000,00 vão para BTCUSDT (cripto)" in plan["notes"][0]
+    assert "A parte de SPY (EUA) (R$ 2.000,00)" in plan["notes"][0]
+    assert "fica em caixa desta vez" in plan["notes"][0]
+    # The whole aporte is still in the plan's NAV: the B3 book + R$10k.
+    assert plan["nav"] == pytest.approx(14_000)
+
+
+async def test_an_aporte_is_never_negative(client, plane):
+    h = await _user(client, "plan-negative")
+    r = await client.post("/portfolio/rebalance-plans", json={"new_cash": -100}, headers=h)
+    assert r.status_code == 422
+
+
 async def test_a_new_position_below_one_unit_is_named_in_the_plan(client, plane):
     h = await _user(client, "plan-small")
     body = [{"ticker": "SPY", "market": "US", "target_pct": 50},

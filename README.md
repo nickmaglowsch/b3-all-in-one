@@ -177,6 +177,10 @@ the latest close, `close_brl` for US and crypto); tax runs through taxcore's TLH
   is split by target weight, their share buys them, and the B3 book is rebalanced among
   the B3 sleeves alone with their weight treated as held outside — so nothing in B3 is
   ever sold to fund them, and with no new_cash they get no buy (`rebalance_plan.py`).
+  With no sleeve holding a B3 asset (CASH_CDI alone is not one) the B3 book is held as
+  it is — decided from the sleeves, not from a near-100 total's rounding — and an
+  excluded/pinned off-B3 sleeve's share of the aporte stays as cash. `new_cash` < 0 is
+  a 422.
   Pinned/excluded tickers are held in place (dropped from both sells and buys); `notes`
   start with that funding rule and flag e.g. an ações month above the R$20k isenção,
   US/crypto buys and the rules their sale falls under (not estimated here), unpriced

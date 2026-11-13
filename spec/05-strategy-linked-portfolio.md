@@ -119,7 +119,10 @@ strategy" framing is prominent so users don't read it as tracking error.
   crypto position is unknown: the target compares only the B3 book (its share
   of the target, scaled to it) and lists off-B3 sleeves without a current
   weight, and the plan buys them only with their target-weight share of the
-  aporte — never by selling B3 assets, and not at all without an aporte.
+  aporte — never by selling B3 assets, and not at all without an aporte. With
+  no sleeve holding a B3 asset (strategies and B3 tickers; CASH_CDI is not one),
+  the B3 book is held as it is rather than read as "all cash" — a fact about the
+  sleeves, never about float rounding of a total saved within ±0.01 of 100.
   Counting them as zero instead would re-buy their full weight every cycle and,
   without buy_only_laggards, sell B3 holdings (a taxable sale) to pay for it.
   And their sales follow other rules (exterior: annual, Lei 14.754/2023;

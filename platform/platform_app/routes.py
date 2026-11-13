@@ -24,7 +24,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import (
-    b3run, darf, enginerun, market_planes, portfolio_sleeves, specstore, subprocs, tasks,
+    b3run, darf, enginerun, market_planes, portfolio_sleeves, rebalance_plan, specstore,
+    subprocs, tasks,
 )
 from platform_app.billing import (
     EMPRESARIAL, entitled, gate_detail, needs_bench, needs_mercado,
@@ -427,7 +428,7 @@ async def put_sleeves(
     _user, tid = tenant
     keys = [s.key for s in body]
     if dup := sorted({k for k in keys if keys.count(k) > 1}):
-        raise HTTPException(422, f"duplicate sleeve in sleeve set: {dup[0]}")
+        raise HTTPException(422, f"sleeve repetido no conjunto: {dup[0]}")
     refs = [s.strategy_ref for s in body if s.strategy_ref]
     total = sum(s.target_pct for s in body)
     if abs(total - 100.0) > 0.01:
@@ -619,13 +620,15 @@ async def get_target(
 ) -> dict:
     """Combined target weights, current weights, and per-ticker drift. Prices the
     book via one advise_weights --weights valuation pass (same basis as the
-    rebalance trades)."""
+    rebalance trades). The drift is the B3 book against its own share of the
+    target; off-B3 sleeves are listed with no current position (rebalance_plan)."""
     _user, tid = tenant
     combined, cash_weight, off_b3 = await _combined_target(session, tid)
+    split = rebalance_plan.split_target(combined, cash_weight, off_b3)
     positions = await _positions_json(session, tid)
     cash_cdi = await _cash_cdi_tickers(session, tid)
 
-    priced = await _advise(weights=combined, markets=off_b3, positions=positions, nav_cash=0.0)
+    priced = await _advise(weights=split.b3, positions=positions, nav_cash=0.0)
     trades = priced.get("trades") or {}
     nav = float(trades.get("nav", 0.0))
     valued = trades.get("positions_valued") or {}
@@ -635,12 +638,7 @@ async def get_target(
     current = {t: v / nav for t, v in valued.items()
                if t.upper() not in cash_cdi} if nav > 0 else {}
 
-    drift = []
-    for t in sorted(set(combined) | set(current)):
-        tw = float(combined.get(t, 0.0))
-        cw = float(current.get(t, 0.0))
-        drift.append({"ticker": t, "target_w": tw, "current_w": cw,
-                      "drift_w": tw - cw, "drift_brl": (tw - cw) * nav})
+    drift = rebalance_plan.drift_rows(split, current, nav, off_b3)
 
     # Residual (non-equity) weight = actual uninvested cash + any cash/CDI holdings.
     cash_weight_current = max(0.0, 1.0 - sum(current.values())) if nav > 0 else 0.0
@@ -649,12 +647,13 @@ async def get_target(
         "as_of": priced["as_of"],
         "combined_weights": combined,
         "current_weights": current,
-        "cash_weight_target": cash_weight,
+        # Of the B3 book, as current_weights and the drift are.
+        "cash_weight_target": split.cash,
         "cash_weight_current": cash_weight_current,
         "drift": drift,
         "nav": nav,
         "markets": off_b3,
-        "warnings": portfolio_sleeves.target_warnings(off_b3, trades),
+        "warnings": rebalance_plan.target_warnings(split, off_b3, trades),
     }
 
 
@@ -696,7 +695,9 @@ async def create_rebalance_plan(
       · cash/CDI holdings are pinned as cash (not sold, not an equity trim);
       · buy_only_laggards → no trim sells, deploy cash only into underweight names;
       · sell_only_for_harvest → keep only sells that realize a loss;
-      · cadence → the rebalance freq passed to the combined target."""
+      · cadence → the rebalance freq passed to the combined target.
+    US / crypto sleeves are bought only with their share of new_cash and never
+    cause a B3 trade (rebalance_plan.split_target)."""
     _user, tid = tenant
     settings_ = _settings_dict(await session.get(RebalanceSettings, tid))
     cadence = settings_["cadence"]
@@ -704,22 +705,29 @@ async def create_rebalance_plan(
     harvest_only = settings_["sell_only_for_harvest"]
 
     combined, cash_weight, off_b3 = await _combined_target(session, tid, freq=cadence)
+    # From here the B3 book's own target, and its own share of the aporte.
+    split = rebalance_plan.split_target(combined, cash_weight, off_b3)
+    combined, cash_weight = split.b3, split.cash
+    new_cash, off_cash = split.aporte(body.new_cash)
     positions = await _positions_json(session, tid)
     held = set(positions)
     cash_cdi = await _cash_cdi_tickers(session, tid)
     cash_cdi_held = {t for t in held if t.upper() in cash_cdi}
     # v0: pins and excludes collapse to one "freeze" set — both mean "don't trade
-    # this ticker, keep its current position" (per-ticker keep-in-place).
+    # this ticker, keep its current position" (per-ticker keep-in-place). With no
+    # B3 sleeve at all, the whole B3 book is held as it is.
     frozen = {t.upper() for t in (body.exclude + body.pins)}
+    if split.hold_b3:
+        frozen |= {t.upper() for t in held}
 
     target = combined
     if frozen or cash_cdi_held:
         # One valuation pass (no new_cash) to learn current values, so frozen and
         # cash/CDI holdings can be pinned at their current weight.
-        val = await _advise(weights=combined, markets=off_b3, positions=positions, nav_cash=0.0)
+        val = await _advise(weights=combined, positions=positions, nav_cash=0.0)
         vtrades = val.get("trades") or {}
         valued = {k.upper(): v for k, v in (vtrades.get("positions_valued") or {}).items()}
-        final_nav = float(vtrades.get("nav", 0.0)) + body.new_cash
+        final_nav = float(vtrades.get("nav", 0.0)) + new_cash
         target = _freeze_target(combined, cash_weight, frozen, valued, final_nav) \
             if frozen else dict(combined)
         # Feature 3: pin cash/CDI holdings at their current weight. Unlike a pinned
@@ -731,8 +739,7 @@ async def create_rebalance_plan(
             if w > 0:
                 target[tu] = w
 
-    priced = await _advise(weights=target, markets=off_b3, positions=positions,
-                           nav_cash=body.new_cash)
+    priced = await _advise(weights=target, positions=positions, nav_cash=new_cash)
     trades = priced.get("trades") or {"sells": [], "buys": [], "nav": 0.0}
     # Belt-and-suspenders: frozen / cash-CDI tickers never appear in a trade.
     skip = frozen | {t.upper() for t in cash_cdi_held}
@@ -752,10 +759,12 @@ async def create_rebalance_plan(
 
     # Feature 4 — buy behavior. buy_only_laggards deploys only new_cash + surviving
     # sell proceeds into the underweight names advise already picked.
-    unfunded: list[str] = []  # a top-up the budget left short of one unit
+    unfunded: list[str] = []  # buys the budget ran out before
     if buy_only:
-        budget = float(body.new_cash) + sum(float(s.get("est_brl", 0.0)) for s in sells)
-        buys, unfunded = portfolio_sleeves.cap_buys(buys, budget, off_b3)
+        budget = new_cash + sum(float(s.get("est_brl", 0.0)) for s in sells)
+        buys, unfunded = rebalance_plan.cap_buys(buys, budget)
+    off_trades = await _off_b3_buys(split, off_b3, off_cash, frozen)
+    buys += off_trades.get("buys", [])
 
     # Tax overlay: run the plan's sells (only B3 tickers actually held) through
     # tlh_plan; an off-B3 sale is not apurated by B3 rules (plan_notes says so).
@@ -766,9 +775,10 @@ async def create_rebalance_plan(
                                              s["ticker"] in held and s["ticker"] not in off_b3]
                               ) if has_book else {}
 
-    notes = portfolio_sleeves.plan_notes(off_b3, {
-        **trades, "buys": buys,
-        "below_one_lot": sorted({*trades.get("below_one_lot", []), *unfunded})})
+    notes = rebalance_plan.plan_notes(split, off_b3, body.new_cash, {
+        "buys": buys,
+        **{k: sorted({*trades.get(k, []), *off_trades.get(k, [])})
+           for k in ("unpriced_skipped", "below_one_lot")}}, unfunded)
     acao = (tax.get("buckets") or {}).get("AÇÃO") or {}
     limit = float(tax.get("isencao_limit", 20_000.0))
     if float(acao.get("gross_after", 0.0)) > limit:
@@ -778,7 +788,7 @@ async def create_rebalance_plan(
 
     return {
         "as_of": priced["as_of"],
-        "nav": nav,
+        "nav": nav + off_cash,  # the B3 book and the aporte share headed abroad
         "new_cash": body.new_cash,
         "cadence": cadence,
         "settings": settings_,
@@ -786,6 +796,19 @@ async def create_rebalance_plan(
         "tax": tax,
         "notes": notes,
     }
+
+
+async def _off_b3_buys(split, off_b3: dict[str, str], cash: float, frozen: set[str]) -> dict:
+    """The off-B3 sleeves' buys, sized from their share of the aporte alone, in
+    reais off each one's own plane; an excluded/pinned one keeps its share as
+    cash. {} with no aporte: nothing is ever sold to buy them."""
+    # Of the aporte's off-B3 share, each in proportion to its weight in the target.
+    weights = {t: w / split.off_weight for t, w in split.off.items() if t not in frozen}
+    if cash <= 0 or not weights:
+        return {}
+    out = await _advise(weights=weights, markets={t: off_b3[t] for t in weights},
+                        positions={}, nav_cash=cash)
+    return out.get("trades") or {}
 
 
 class IrpfRequest(BaseModel):

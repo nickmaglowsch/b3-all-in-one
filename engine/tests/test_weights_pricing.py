@@ -125,3 +125,17 @@ def test_a_fractional_sell_never_exceeds_the_holding():
                            fractional=frozenset({"BTCUSDT"}))
     [sell] = out["sells"]
     assert sell["qty"] == pytest.approx(0.025) and sell["qty"] <= 0.05
+
+
+def test_an_off_b3_ticker_with_a_b3_codes_shape_is_priced_on_its_own_plane(plane):
+    """A US symbol may read like a B3 standard lot; the B3 close of the same
+    letters must not stand in for its own plane's."""
+    conn = sqlite3.connect(plane)
+    conn.execute("INSERT INTO prices (ticker, isin_code, date, close, adj_close, volume)"
+                 " VALUES ('ABCD3', 'X', '2026-10-30', 10.0, 10.0, 1e6)")
+    conn.execute("INSERT INTO market_prices (market, symbol, date, close, close_brl, fx_rate,"
+                 " source) VALUES ('US', 'ABCD3', '2026-10-30', 20.0, 108.0, 5.4, 'T')")
+    conn.commit()
+    conn.close()
+    [buy] = _advise({"ABCD3": 1.0}, {"ABCD3": "US"}, nav_cash=1080.0)["trades"]["buys"]
+    assert (buy["est_price"], buy["qty"]) == (108.0, 10)

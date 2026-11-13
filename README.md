@@ -161,20 +161,27 @@ the latest close, `close_brl` for US and crypto); tax runs through taxcore's TLH
   directly: a B3 code (`PETR4`, `IVVB11`, a FII, the BDR `AAPL34`; `market` defaults to
   `B3`, `.SA` is folded away), a US symbol (`SPY`, `market: "US"`) or a crypto pair
   (`BTCUSDT`, or just `BTC`, `market: "CRYPTO"`). A ticker the plane has never priced is
-  a 422 naming it; a stale close, and the fact that a US or crypto position is not in
-  the B3 book (so it counts as zero), come back in `warnings`.
+  a 422 naming it, and so is one symbol on two markets; a stale close, and the fact
+  that a US or crypto position is not in the B3 book, come back in `warnings`.
 - `GET /portfolio/target` — the combined target: each strategy sleeve's advised weights
-  (blended `Σ pct/100 × weights`), each ticker sleeve's own weight, plus
-  `cash_weight_target` from `CASH_CDI`, the current weights from the priced book, and
-  per-ticker `drift`; `markets` names the off-B3 tickers and `warnings` what the drift
-  cannot show. `409` when no sleeves configured.
+  (blended `Σ pct/100 × weights`), each ticker sleeve's own weight; then the B3 book
+  against its own share of that target (B3 weights scaled to the book, with
+  `cash_weight_target` and the current weights of the priced book) as per-ticker
+  `drift`. A US or crypto sleeve is a drift row with `outside_b3: true` and no current
+  position or drift — unknown, not zero; `markets` names them and `warnings` says so.
+  `409` when no sleeves configured.
 - `POST /portfolio/rebalance-plans {new_cash?, exclude?, pins?}` — advisor v0
   (single-shot, this month): combined target → trade list (whole units; fractions of a
   coin for crypto) → tax overlay on the B3 sells (per-class situation, isenção usage,
-  harvest + T+1 rebuys). Pinned/excluded tickers are held in place (dropped from both
-  sells and buys); `notes` flags e.g. an ações month above the R$20k isenção, US/crypto
-  buys and the rules their sale falls under (not estimated here), unpriced names and a
-  new position too small for one unit. Advisory only — nothing executes.
+  harvest + T+1 rebuys). US/crypto sleeves are bought **only with the aporte**: new_cash
+  is split by target weight, their share buys them, and the B3 book is rebalanced among
+  the B3 sleeves alone with their weight treated as held outside — so nothing in B3 is
+  ever sold to fund them, and with no new_cash they get no buy (`rebalance_plan.py`).
+  Pinned/excluded tickers are held in place (dropped from both sells and buys); `notes`
+  start with that funding rule and flag e.g. an ações month above the R$20k isenção,
+  US/crypto buys and the rules their sale falls under (not estimated here), unpriced
+  names, a new position too small for one unit and buys the buy-only budget ran out
+  before. Advisory only — nothing executes.
 
 ### Billing (Stripe, spec/01)
 

@@ -289,7 +289,10 @@ def _advise_from_weights(args) -> dict:
     as_of, prices = weights_pricing.latest_plane_close(db_path, start, end)
     if as_of is None:
         raise SystemExit("no price data available to value --weights")
-    prices = {**weights_pricing.rf_etf_closes(db_path, end), **prices}
+    # An off-B3 ticker is priced on its own plane, never as a B3 code that happens
+    # to share its letters.
+    prices = {t: p for t, p in {**weights_pricing.rf_etf_closes(db_path, end), **prices}.items()
+              if t not in off_b3}
 
     row = pd.Series(
         {t: float(w) for t, w in weights_in.items() if t != "CASH_CDI"}, dtype=float)

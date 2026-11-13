@@ -8,9 +8,10 @@ from each ticker's own plane (advise_weights --weights --markets).
 
 Two things a US or crypto sleeve cannot have, said rather than glossed over:
 
-  · a current position. The book is built from B3 extracts, so the target treats
-    what the tenant holds abroad or on an exchange as zero, and the plan buys
-    toward the full weight every time;
+  · a current position. The book is built from B3 extracts, so what the tenant
+    holds abroad or on an exchange is unknown; the plan treats the off-B3 weight
+    as held outside the B3 book and buys it only with the aporte
+    (rebalance_plan.py), never by selling B3 assets;
   · the B3 tax overlay. Its sales are apurated under other rules (exterior:
     anual, Lei 14.754/2023; cripto: R$35 mil/mês, no loss carry), so they are
     kept out of tlh_plan rather than booked as ações, and the plan says so.
@@ -18,7 +19,6 @@ Two things a US or crypto sleeve cannot have, said rather than glossed over:
 from __future__ import annotations
 
 import datetime
-import math
 
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -46,7 +46,7 @@ class SleeveIn(BaseModel):
     @model_validator(mode="after")
     def _one_source(self):
         if (self.strategy_ref is None) == (self.ticker is None):
-            raise ValueError("a sleeve needs exactly one of strategy_ref / ticker")
+            raise ValueError("um sleeve leva exatamente um de strategy_ref / ticker")
         if self.market and not self.ticker:
             raise ValueError("market só acompanha um sleeve de ticker")
         if self.ticker:
@@ -109,8 +109,9 @@ def one_market_per_symbol(refs) -> None:
 
 
 def off_b3_note(labels: list[str]) -> str:
-    return (f"{', '.join(labels)}: a posição atual não vem dos seus extratos da B3, "
-            "então o alvo x atual e o plano a tratam como zero.")
+    return (f"{', '.join(labels)}: a posição atual não vem dos seus extratos da B3. O "
+            "alvo x atual compara só a carteira da B3, e o plano compra esses ativos "
+            "apenas com aporte — nunca vendendo ativos da B3 para isso.")
 
 
 def split_sleeves(sleeves) -> tuple[float, list, dict[str, float], dict[str, str]]:
@@ -130,74 +131,3 @@ def split_sleeves(sleeves) -> tuple[float, list, dict[str, float], dict[str, str
         else:
             strategies.append((s.strategy_ref, w))
     return cash, strategies, tickers, off_b3
-
-
-# A crypto pair trades in fractions of a coin, as advise_weights sizes it
-# (_FRACTION_STEP there): a whole-unit floor would turn any top-up smaller than
-# one BTC into nothing.
-_CRYPTO_STEP = 1e-8
-
-
-def units(brl: float, price: float, crypto: bool) -> float:
-    """BRL → the most units it buys: whole ones, or 1e-8 of a coin. Rounded
-    before the floor so float noise (0.3 / 1e-8 = 29999999.99…) costs no step."""
-    if not crypto:
-        return math.floor(brl / price)
-    return round(math.floor(round(brl / price / _CRYPTO_STEP, 6)) * _CRYPTO_STEP, 8)
-
-
-def cap_buys(buys: list[dict], budget: float,
-             off_b3: dict[str, str]) -> tuple[list[dict], list[str]]:
-    """Greedy top-up: deploy `budget` BRL into buys, biggest gap first, trimming the
-    last one to whole units (fractions of a coin for crypto). Used by
-    buy_only_laggards so the plan only spends the cash actually available
-    (new_cash + harvest proceeds), never phantom trim proceeds.
-
-    Returns (kept, unfunded): `unfunded` names a buy the leftover budget reached
-    but could not pay one unit of, so the plan can say so instead of dropping it."""
-    kept: list[dict] = []
-    unfunded: list[str] = []
-    for b in sorted(buys, key=lambda x: -float(x.get("est_brl", 0.0))):
-        if budget <= 0:
-            break
-        brl = float(b.get("est_brl", 0.0))
-        price = float(b.get("est_price", 0.0))
-        if brl <= budget:
-            kept.append(b)
-            budget -= brl
-        elif price > 0:
-            qty = units(budget, price, off_b3.get(b["ticker"]) == "CRYPTO")
-            if qty > 0:
-                kept.append({**b, "qty": qty, "est_brl": qty * price})
-                budget -= qty * price
-            else:
-                unfunded.append(b["ticker"])
-    return kept, unfunded
-
-
-def target_warnings(off_b3: dict[str, str], trades: dict) -> list[str]:
-    """What /portfolio/target cannot show for its ticker sleeves."""
-    out = []
-    if off_b3:
-        out.append(off_b3_note([asset_refs.label(t, m) for t, m in sorted(off_b3.items())]))
-    if unpriced := trades.get("unpriced_skipped"):
-        out.append(f"sem cotação hoje, fora do valor do alvo: {', '.join(unpriced)}")
-    return out
-
-
-def plan_notes(off_b3: dict[str, str], trades: dict) -> list[str]:
-    """The rebalance plan's notes for what its trade list and tax overlay leave
-    out: off-B3 buys and their tax rules, unpriced names, sub-unit buys."""
-    out = []
-    if bought := sorted(b["ticker"] for b in trades.get("buys", []) if b["ticker"] in off_b3):
-        out.append(f"{', '.join(asset_refs.label(t, off_b3[t]) for t in bought)}: compra "
-                   "fora da B3, sem posição atual conhecida; a venda futura é tributada "
-                   "por outras regras (exterior: 15% na declaração anual, Lei 14.754/2023; "
-                   "cripto: isenção até R$35 mil de vendas no mês, sem compensar prejuízo) "
-                   "e não entra no imposto estimado abaixo.")
-    if unpriced := trades.get("unpriced_skipped"):
-        out.append(f"sem cotação hoje, ficaram fora do plano: {', '.join(unpriced)}")
-    if small := trades.get("below_one_lot"):
-        out.append(f"o valor a comprar não chega a uma unidade de: {', '.join(small)} "
-                   "— aumente o aporte para incluí-los.")
-    return out

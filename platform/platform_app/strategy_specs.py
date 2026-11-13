@@ -225,7 +225,11 @@ def _b3_sleeve_ticker(raw: str, market: str) -> str:
             "carteira salva: o backtest de carteiras roda no plano da B3 e apura o "
             "imposto pelas regras da B3. Ativos dos EUA e cripto entram só nos "
             "sleeves ativos (alvo e rebalanceamento) em /estrategia.")
-    return f"{asset_refs.b3_code(raw)}.SA"
+    return f"{asset_refs.b3_code(raw, _CARTEIRA_HINT)}.SA"
+
+
+_CARTEIRA_HINT = ("ativos dos EUA e cripto não entram numa carteira salva, só nos "
+                  "sleeves ativos em /estrategia")
 
 
 class PortfolioStrategyIn(_Finite):

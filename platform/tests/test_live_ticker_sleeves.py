@@ -23,11 +23,12 @@ from platform_app import enginerun
 from platform_app.config import settings
 from platform_app.db import async_session_maker, close_engine_pool
 from platform_app.models import Position, Trade
-from tests.conftest import auth
+from tests.conftest import TEST_DB, auth
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
-PLANE_DB = "live_ticker_sleeves_engine"
+# Named after the test DB, so parallel runs (PLATFORM_TEST_DB) never share a plane.
+PLANE_DB = f"{TEST_DB}_ticker_plane"
 
 # Run in the engine venv: the engine's own schema, then a handful of rows.
 _BOOTSTRAP = r"""
@@ -145,8 +146,10 @@ async def test_search_finds_assets_of_every_market_by_ticker_or_name(client, pla
     [spy] = await _search(client, h, q="SPY")
     assert (spy["market"], spy["asset_class"], spy["price_brl"]) == ("US", "ETF", 3294.0)
     [btc] = await _search(client, h, q="btc", market="CRYPTO")
-    assert (btc["ticker"], btc["asset_class"], btc["price_brl"]) == (
-        "BTCUSDT", "CRYPTO", 540000.0)
+    assert (btc["ticker"], btc["name"], btc["asset_class"], btc["price_brl"]) == (
+        "BTCUSDT", "Bitcoin", "CRYPTO", 540000.0)
+    # A major coin is found by its name too.
+    assert [r["ticker"] for r in await _search(client, h, q="bitcoin")] == ["BTCUSDT"]
     # A renda-fixa ETF lives only in external_prices — still found, never the index.
     assert [(r["ticker"], r["asset_class"]) for r in await _search(client, h, q="B5P")] == [
         ("B5P211", "ETF_RF")]
@@ -216,9 +219,9 @@ async def test_ticker_sleeves_of_every_market_are_stored_canonical(client, plane
     ([{"ticker": "XPTO3", "target_pct": 100}], 422, "sem cotação no plano de preços: XPTO3"),
     ([{"ticker": "QQQ", "market": "US", "target_pct": 100}], 422, "QQQ (EUA)"),
     ([{"ticker": "IVVB11", "target_pct": 50}, {"ticker": "ivvb11.sa", "target_pct": 50}],
-     422, "duplicate sleeve in sleeve set: B3:IVVB11"),
+     422, "sleeve repetido no conjunto: B3:IVVB11"),
     ([{"ticker": "PETR4", "strategy_ref": "CASH_CDI", "target_pct": 100}], 422,
-     "exactly one of strategy_ref / ticker"),
+     "exatamente um de strategy_ref / ticker"),
     ([{"strategy_ref": "CASH_CDI", "market": "US", "target_pct": 100}], 422,
      "market só acompanha um sleeve de ticker"),
     ([{"ticker": "SPY", "market": "NYSE", "target_pct": 100}], 422, "market"),
@@ -296,7 +299,7 @@ async def _seed_petr4(client, h) -> None:
         await s.commit()
 
 
-async def test_target_values_every_ticker_sleeve_in_brl(client, plane):
+async def test_target_compares_the_b3_book_and_lists_off_b3_sleeves_outside(client, plane):
     h = await _user(client, "target")
     await _seed_petr4(client, h)
     assert (await client.put("/portfolio/sleeves", json=MIX, headers=h)).status_code == 200
@@ -306,13 +309,19 @@ async def test_target_values_every_ticker_sleeve_in_brl(client, plane):
     assert t["combined_weights"] == pytest.approx({
         "PETR4": 0.15, "IVVB11": 0.15, "AAPL34": 0.10, "B5P211": 0.10,
         "SPY": 0.20, "BTCUSDT": 0.10})
-    assert t["cash_weight_target"] == pytest.approx(0.20)
     assert t["markets"] == {"SPY": "US", "BTCUSDT": "CRYPTO"}
     assert t["nav"] == pytest.approx(4000.0)                  # 100 x R$40
     assert t["current_weights"] == pytest.approx({"PETR4": 1.0})
+    # The B3 book against its own 70% of the target, scaled to the book.
+    assert t["cash_weight_target"] == pytest.approx(0.20 / 0.70)
     drift = {d["ticker"]: d for d in t["drift"]}
-    assert drift["SPY"]["current_w"] == 0 and drift["SPY"]["target_w"] == pytest.approx(0.2)
-    assert any("SPY (EUA)" in w for w in t["warnings"])
+    assert drift["PETR4"]["target_w"] == pytest.approx(0.15 / 0.70)
+    # Off B3: its weight in the whole target, and no position — unknown, not zero.
+    assert drift["SPY"] == {"ticker": "SPY", "market": "US", "target_w": pytest.approx(0.2),
+                            "current_w": None, "drift_w": None, "drift_brl": None,
+                            "outside_b3": True}
+    assert any("Fora da B3 no alvo: BTCUSDT (cripto) 10%, SPY (EUA) 20%" in w
+               for w in t["warnings"])
 
 
 async def test_rebalance_plan_trades_each_market_at_its_own_brl_price(client, plane):
@@ -324,19 +333,69 @@ async def test_rebalance_plan_trades_each_market_at_its_own_brl_price(client, pl
     plan = r.json()
     assert plan["nav"] == pytest.approx(100_000.0)
     buys = {b["ticker"]: b for b in plan["trades"]["buys"]}
-    assert set(buys) == {"PETR4", "IVVB11", "AAPL34", "B5P211", "SPY", "BTCUSDT"}
-    expected = {"PETR4": 40.0, "IVVB11": 350.0, "AAPL34": 61.5, "B5P211": 100.0,
-                "SPY": 3294.0, "BTCUSDT": 540000.0}
-    assert {t: b["est_price"] for t, b in buys.items()} == expected
-    assert buys["SPY"]["qty"] == 6                            # floor(20000 / 3294)
-    # A coin is bought in fractions — R$10k of BTC is not zero BTC.
-    assert 0 < buys["BTCUSDT"]["qty"] < 1
-    assert buys["BTCUSDT"]["qty"] == pytest.approx(10000 / 540000, abs=1e-8)
-    assert buys["PETR4"]["qty"] == 275                        # 15k target - 4k held
-    # The off-B3 buys say how they are taxed instead of joining the B3 overlay.
-    [note] = [n for n in plan["notes"] if "fora da B3" in n]
-    assert "SPY (EUA)" in note and "BTCUSDT (cripto)" in note and "14.754" in note
+    assert {t: b["est_price"] for t, b in buys.items()} == {
+        "PETR4": 40.0, "IVVB11": 350.0, "AAPL34": 61.5, "B5P211": 100.0,
+        "SPY": 3294.0, "BTCUSDT": 540000.0}
+    # 30% of the aporte (R$28.8k) goes abroad, by target weight: SPY 2/3, BTC 1/3.
+    assert buys["SPY"]["qty"] == 5                            # floor(19200 / 3294)
+    assert buys["BTCUSDT"]["qty"] == pytest.approx(9600 / 540000, abs=1e-8)
+    assert buys["SPY"]["est_brl"] + buys["BTCUSDT"]["est_brl"] <= 28_800
+    # The rest rebalances the B3 book: R$71.2k, 15/70 of it in PETR4.
+    assert buys["PETR4"]["qty"] == 281                        # (15257 - 4000) / 40
     assert plan["trades"]["sells"] == []
+    # How they are funded comes first; how they are taxed is said too.
+    assert "entram só com aporte" in plan["notes"][0] and "R$ 28.800,00" in plan["notes"][0]
+    [tax] = [n for n in plan["notes"] if "14.754" in n]
+    assert "SPY (EUA)" in tax and "BTCUSDT (cripto)" in tax
+
+
+async def _rebalance(client, h, *, buy_only: bool) -> None:
+    r = await client.put("/portfolio/settings/rebalance", headers=h, json={
+        "buy_only_laggards": buy_only, "sell_only_for_harvest": False, "cadence": "ME"})
+    assert r.status_code == 200, r.text
+
+
+async def _plan(client, h, **body) -> dict:
+    r = await client.post("/portfolio/rebalance-plans", json=body, headers=h)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.mark.parametrize("buy_only", [False, True])
+async def test_off_b3_sleeves_are_bought_with_the_aporte_never_with_b3_sales(
+        client, plane, buy_only):
+    """Counted as zero, SPY used to be re-bought in full every plan — and, without
+    buy_only_laggards, paid for by selling PETR4: a taxable sale every cycle."""
+    h = await _user(client, f"plan-funding-{buy_only}")
+    await _seed_petr4(client, h)                              # R$4k, all PETR4
+    body = [{"ticker": "PETR4", "target_pct": 70},
+            {"ticker": "SPY", "market": "US", "target_pct": 30}]
+    assert (await client.put("/portfolio/sleeves", json=body, headers=h)).status_code == 200
+    await _rebalance(client, h, buy_only=buy_only)
+
+    plan = await _plan(client, h, new_cash=0)
+    # PETR4 is the whole B3 book's target: nothing to sell, nothing to buy.
+    assert plan["trades"] == {"sells": [], "buys": []}
+    assert "Sem aporte, nenhuma compra deles" in plan["notes"][0]
+
+    plan = await _plan(client, h, new_cash=20000)
+    buys = {b["ticker"]: b for b in plan["trades"]["buys"]}
+    assert plan["trades"]["sells"] == []
+    assert buys["SPY"]["qty"] == 1                            # floor(6000 / 3294)
+    assert buys["SPY"]["est_brl"] <= 0.30 * 20000
+    assert buys["PETR4"]["qty"] == 350                        # the B3 share, R$14k
+
+
+async def test_with_no_b3_sleeve_the_b3_book_is_left_alone(client, plane):
+    h = await _user(client, "plan-all-abroad")
+    await _seed_petr4(client, h)
+    body = [{"ticker": "SPY", "market": "US", "target_pct": 100}]
+    assert (await client.put("/portfolio/sleeves", json=body, headers=h)).status_code == 200
+    plan = await _plan(client, h, new_cash=0)
+    assert plan["trades"] == {"sells": [], "buys": []}       # PETR4 is not sold
+    plan = await _plan(client, h, new_cash=10000)
+    assert plan["trades"]["sells"] == []
+    assert [(b["ticker"], b["qty"]) for b in plan["trades"]["buys"]] == [("SPY", 3)]
 
 
 async def test_a_new_position_below_one_unit_is_named_in_the_plan(client, plane):
@@ -344,47 +403,38 @@ async def test_a_new_position_below_one_unit_is_named_in_the_plan(client, plane)
     body = [{"ticker": "SPY", "market": "US", "target_pct": 50},
             {"ticker": "PETR4", "target_pct": 50}]
     assert (await client.put("/portfolio/sleeves", json=body, headers=h)).status_code == 200
-    r = await client.post("/portfolio/rebalance-plans", json={"new_cash": 1000}, headers=h)
-    assert r.status_code == 200, r.text
-    plan = r.json()
+    plan = await _plan(client, h, new_cash=1000)
     assert [b["ticker"] for b in plan["trades"]["buys"]] == ["PETR4"]
     assert any("não chega a uma unidade de: SPY" in n for n in plan["notes"])
     # No B3 history at all: no apuração to overlay, and no 500 for want of one.
     assert plan["tax"] == {}
 
 
-async def test_buy_only_laggards_trims_a_coin_in_fractions_and_names_the_unfunded(
-        client, plane):
-    """The budget-capped top-up sizes a crypto buy in fractions of a coin as
-    advise_weights does: a whole-unit floor turned R$1k of BTC into nothing."""
+async def test_buy_only_laggards_names_what_the_aporte_ran_out_before(client, plane):
     h = await _user(client, "plan-buy-only")
     await _seed_petr4(client, h)                              # R$4k of PETR4
     body = [{"ticker": "BTCUSDT", "market": "CRYPTO", "target_pct": 60},
-            {"ticker": "IVVB11", "target_pct": 30}, {"ticker": "PETR4", "target_pct": 10}]
+            {"ticker": "IVVB11", "target_pct": 20}, {"ticker": "AAPL34", "target_pct": 10},
+            {"ticker": "PETR4", "target_pct": 10}]
     assert (await client.put("/portfolio/sleeves", json=body, headers=h)).status_code == 200
-    r = await client.put("/portfolio/settings/rebalance", headers=h, json={
-        "buy_only_laggards": True, "sell_only_for_harvest": False, "cadence": "ME"})
-    assert r.status_code == 200, r.text
+    await _rebalance(client, h, buy_only=True)
 
-    r = await client.post("/portfolio/rebalance-plans", json={"new_cash": 1000}, headers=h)
-    assert r.status_code == 200, r.text
-    plan = r.json()
+    plan = await _plan(client, h, new_cash=1000)
     assert plan["trades"]["sells"] == []                      # pure top-up
-    [btc] = plan["trades"]["buys"]                            # R$1k reaches BTC only
-    assert btc["ticker"] == "BTCUSDT"
-    assert btc["qty"] == pytest.approx(0.00185185, abs=1e-8)  # floor(1000/540000, 1e-8)
-    assert btc["est_brl"] <= 1000
-    # What was left (a cent) reached IVVB11 and bought none of it: said, not dropped.
-    assert any("não chega a uma unidade de: IVVB11" in n for n in plan["notes"])
+    buys = {b["ticker"]: b for b in plan["trades"]["buys"]}
+    # 60% of the aporte buys the coin, in fractions of it.
+    assert buys["BTCUSDT"]["qty"] == pytest.approx(600 / 540000, abs=1e-8)
+    # The B3 R$400 buys one IVVB11; the R$50 left buys no AAPL34 — said, not dropped.
+    assert buys["IVVB11"]["qty"] == 1 and "AAPL34" not in buys
+    assert any("o aporte acabou antes de: AAPL34" in n for n in plan["notes"])
+    assert not any("não chega a uma unidade" in n for n in plan["notes"])
 
-    # Excluded (or pinned), the coin is held where it is — here, at nothing — and
-    # the budget goes to what is left.
+    # Excluded (or pinned), the coin is not bought; its share stays cash and the
+    # B3 book's share is untouched.
     for key in ("exclude", "pins"):
-        r = await client.post("/portfolio/rebalance-plans", headers=h,
-                              json={"new_cash": 1000, key: ["BTCUSDT"]})
-        assert r.status_code == 200, r.text
-        buys = {b["ticker"]: b for b in r.json()["trades"]["buys"]}
-        assert "BTCUSDT" not in buys and buys["IVVB11"]["qty"] == 2   # floor(1000/350)
+        plan = await _plan(client, h, new_cash=1000, **{key: ["BTCUSDT"]})
+        buys = {b["ticker"]: b for b in plan["trades"]["buys"]}
+        assert "BTCUSDT" not in buys and buys["IVVB11"]["qty"] == 1
 
 
 # ── saved carteiras: B3 tickers activate; US / crypto are refused ─────────────
@@ -413,3 +463,14 @@ async def test_a_saved_carteira_refuses_an_off_b3_ticker_in_portuguese(
                     {"strategy_ref": "CASH_CDI", "target_pct": 50}]})
     assert r.status_code == 422
     assert "não pode entrar numa carteira salva" in r.text and ticker in r.text
+
+
+async def test_a_saved_carteira_does_not_suggest_market_for_a_us_ticker(client):
+    """The live sleeves' hint ("leva `market`: US ou CRYPTO") would only lead to
+    the refusal above; a carteira's message says where such an asset can go."""
+    h = await auth(client, "carteira-hint@example.com", modules=["bench"])
+    r = await client.post("/strategies/user", headers=h, json={
+        "kind": "fixed_weight", "name": "Hint", "rebalance": "QE",
+        "sleeves": [{"ticker": "SPY", "target_pct": 100}]})
+    assert r.status_code == 422
+    assert "não entram numa carteira salva" in r.text and "leva `market`" not in r.text

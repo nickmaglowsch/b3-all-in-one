@@ -115,9 +115,14 @@ strategy" framing is prominent so users don't read it as tracking error.
   name; it is priced in reais off its own plane (`close_brl` for US/crypto) by
   `advise_weights --weights --markets`, and the save refuses a ticker the plane
   has never priced. Two honest limits, said in the API's `warnings`/`notes`
-  rather than glossed over: the book is built from B3 extracts, so a US or
-  crypto position counts as zero in the drift and the plan buys toward the full
-  weight; and its sales follow other rules (exterior: annual, Lei 14.754/2023;
+  rather than glossed over. The book is built from B3 extracts, so a US or
+  crypto position is unknown: the target compares only the B3 book (its share
+  of the target, scaled to it) and lists off-B3 sleeves without a current
+  weight, and the plan buys them only with their target-weight share of the
+  aporte — never by selling B3 assets, and not at all without an aporte.
+  Counting them as zero instead would re-buy their full weight every cycle and,
+  without buy_only_laggards, sell B3 holdings (a taxable sale) to pay for it.
+  And their sales follow other rules (exterior: annual, Lei 14.754/2023;
   cripto: R$35k monthly isenção, no loss carry), so they stay out of the B3 tax
   overlay. A crypto trade is sized in fractions of a coin. A saved carteira
   (backtested by `FixedWeight` on the B3 plane, one B3 ledger) takes B3 tickers

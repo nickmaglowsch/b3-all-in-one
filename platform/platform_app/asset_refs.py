@@ -38,7 +38,12 @@ CRYPTO_QUOTE = "USDT"
 _CRYPTO_PAIR = re.compile(rf"[A-Z0-9]{{2,20}}{CRYPTO_QUOTE}")
 
 
-def b3_code(raw: str) -> str:
+# What a malformed B3 code's message suggests for a US or crypto asset — where
+# one can go. A saved carteira passes its own: there, nowhere.
+LIVE_HINT = "um ativo dos EUA ou cripto leva `market`: US ou CRYPTO"
+
+
+def b3_code(raw: str, off_b3_hint: str = LIVE_HINT) -> str:
     """A B3 trading code, bare: case, the `.SA` suffix and the fractional
     market's F folded away. Raises ValueError for an index or anything not
     shaped like a code."""
@@ -53,8 +58,8 @@ def b3_code(raw: str) -> str:
                          "use o ETF que o acompanha (BOVA11 acompanha o Ibovespa)")
     if not B3_TICKER.fullmatch(t):
         raise ValueError(f"ticker {raw!r} não é um código da B3: quatro caracteres e "
-                         "uma classe de um ou dois dígitos, como PETR4 ou IVVB11 (um "
-                         "ativo dos EUA ou cripto leva `market`: US ou CRYPTO)")
+                         f"uma classe de um ou dois dígitos, como PETR4 ou IVVB11 "
+                         f"({off_b3_hint})")
     return t
 
 

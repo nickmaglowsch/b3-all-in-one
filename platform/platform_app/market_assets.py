@@ -46,7 +46,8 @@ WITH cand AS (
 SELECT market, symbol, kind, name FROM cand
 WHERE symbol ~ (CASE market WHEN 'B3' THEN $7 WHEN 'US' THEN $8 ELSE $10 END)
   AND (symbol LIKE $2 ESCAPE '\' OR name ILIKE $3 ESCAPE '\'
-       OR (market = 'B3' AND SUBSTR(symbol, 1, 4) = ANY($9::text[])))
+       OR (market = 'B3' AND SUBSTR(symbol, 1, 4) = ANY($9::text[]))
+       OR (market = 'CRYPTO' AND symbol = ANY($11::text[])))
 ORDER BY symbol = $4 DESC, symbol LIKE $2 ESCAPE '\' DESC, length(symbol), symbol, market
 LIMIT $5
 """
@@ -55,7 +56,19 @@ LIMIT $5
 # ticker root (cvm_companies) and the renda-fixa ETFs outside COTAHIST
 # (external_prices). Both change with a daily ingest at most, and walking them
 # on every keystroke bought nothing. Per pool, so a test's plane is its own.
+# The cost is a lag of up to this long: a renda-fixa ETF B3 starts publishing,
+# or a renamed company, is found by its new name only after the cache expires.
+# Prices are never cached — every search reads them live.
 _REFERENCE_TTL_S = 3600.0
+
+# The crypto plane carries pairs, not names: the coins a person searches by
+# name, so "bitcoin" finds BTCUSDT. A short list on purpose — any other pair is
+# found by its symbol.
+COIN_NAMES = {
+    "BTCUSDT": "Bitcoin", "ETHUSDT": "Ethereum", "SOLUSDT": "Solana", "BNBUSDT": "BNB",
+    "XRPUSDT": "XRP", "ADAUSDT": "Cardano", "DOGEUSDT": "Dogecoin", "LTCUSDT": "Litecoin",
+    "DOTUSDT": "Polkadot", "AVAXUSDT": "Avalanche", "LINKUSDT": "Chainlink",
+}
 _REFERENCE: dict = {}
 
 
@@ -106,17 +119,19 @@ async def search(pool, q: str, markets: list[str], limit: int) -> list[dict]:
     needle = q.strip()
     names, rf = await _reference(pool)
     roots = [root for root, name in names.items() if needle.lower() in name.lower()]
+    coins = [pair for pair, name in COIN_NAMES.items() if needle.lower() in name.lower()]
     pat = asset_refs.SYMBOL_PATTERN
     rows = await pool.fetch(_SEARCH_SQL, markets, _like(needle.upper()) + "%",
                             f"%{_like(needle)}%", needle.upper(), limit, rf,
-                            pat["B3"], pat["US"], roots, pat["CRYPTO"])
+                            pat["B3"], pat["US"], roots, pat["CRYPTO"], coins)
     prices = await latest_closes(pool, [(r["symbol"], r["market"]) for r in rows])
     out = []
     for r in rows:
         b3_name = names.get(r["symbol"][:4]) if r["market"] == "B3" else None
+        coin = COIN_NAMES.get(r["symbol"]) if r["market"] == "CRYPTO" else None
         close, day = prices.get((r["symbol"], r["market"]), (None, None))
         out.append({
-            "ticker": r["symbol"], "market": r["market"], "name": r["name"] or b3_name,
+            "ticker": r["symbol"], "market": r["market"], "name": r["name"] or b3_name or coin,
             "asset_class": asset_class(r["market"], r["symbol"], r["kind"], bool(b3_name)),
             "price_brl": close, "price_date": day.isoformat() if day else None,
         })

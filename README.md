@@ -71,6 +71,12 @@ the image — backtests read the market plane from Postgres, not from files.
 - `GET /market/status` — price-plane row count, distinct tickers, min/max date, and
   per-table freshness for `corporate_actions`/`fundamentals_pit` (0-row tables reported
   honestly).
+- `GET /market/assets?q=&market=&limit=` — asset search for the sleeve picker
+  (signed in): a ticker prefix or part of a name, across B3 (`instruments` +
+  `external_prices`, names from `cvm_companies`), the US and crypto, exact ticker
+  first. Each result is `{ticker, market, name, asset_class, price_brl, price_date}`
+  in the spelling a sleeve stores (`platform_app/asset_refs.py`); `price_brl` is
+  null for an instrument the plane has never priced. 503 when the plane cannot be read.
 
 The bench UI reads any money chart two ways — reais, or return from the left edge
 of the chart (`frontend/lib/chartMode.ts`, toggled per chart beside the date
@@ -144,20 +150,42 @@ Two complementary answers to "how am I doing?", both off the tenant's own book:
 
 ### Strategy-linked portfolio (spec/05)
 
-Attach strategies to the portfolio as fixed-percentage sleeves, then get told what to
-buy/sell to rebalance — tax-optimally. All prices come from the engine market plane
-(`advise_weights.py`, latest `raw_close`); tax runs through taxcore's TLH machinery.
+Attach strategies — or single assets — to the portfolio as fixed-percentage sleeves,
+then get told what to buy/sell to rebalance — tax-optimally. All prices come from the
+engine market plane in reais (`advise_weights.py --weights`, `scripts/weights_pricing.py`:
+the latest close, `close_brl` for US and crypto); tax runs through taxcore's TLH machinery.
 
-- `GET/PUT /portfolio/sleeves` — sleeve config `[{strategy_ref, target_pct}]`, validated
-  to sum to 100 (`CASH_CDI` is the risk-free sleeve; everything else a gallery spec).
+- `GET/PUT /portfolio/sleeves` — sleeve config, validated to sum to 100. Each sleeve is
+  exactly one of `{strategy_ref, target_pct}` (`CASH_CDI` is the risk-free sleeve;
+  everything else a B3 gallery spec) or `{ticker, market?, target_pct}` — one asset held
+  directly: a B3 code (`PETR4`, `IVVB11`, a FII, the BDR `AAPL34`; `market` defaults to
+  `B3`, `.SA` is folded away), a US symbol (`SPY`, `market: "US"`) or a crypto pair
+  (`BTCUSDT`, or just `BTC`, `market: "CRYPTO"`). A ticker the plane has never priced is
+  a 422 naming it, and so is one symbol on two markets; a stale close, and the fact
+  that a US or crypto position is not in the B3 book, come back in `warnings`.
 - `GET /portfolio/target` — the combined target: each strategy sleeve's advised weights
-  (blended `Σ pct/100 × weights`) plus `cash_weight_target` from `CASH_CDI`, the current
-  weights from the priced book, and per-ticker `drift`. `409` when no sleeves configured.
+  (blended `Σ pct/100 × weights`), each ticker sleeve's own weight; then the B3 book
+  against its own share of that target (B3 weights scaled to the book, with
+  `cash_weight_target` and the current weights of the priced book) as per-ticker
+  `drift`. A US or crypto sleeve is a drift row with `outside_b3: true` and no current
+  position or drift — unknown, not zero; `markets` names them and `warnings` says so.
+  `409` when no sleeves configured.
 - `POST /portfolio/rebalance-plans {new_cash?, exclude?, pins?}` — advisor v0
-  (single-shot, this month): combined target → integer trade list → tax overlay
-  (per-class situation, isenção usage, harvest + T+1 rebuys). Pinned/excluded tickers are
-  held in place (dropped from both sells and buys); `notes` flags e.g. an ações month
-  above the R$20k isenção. Advisory only — nothing executes.
+  (single-shot, this month): combined target → trade list (whole units; fractions of a
+  coin for crypto) → tax overlay on the B3 sells (per-class situation, isenção usage,
+  harvest + T+1 rebuys). US/crypto sleeves are bought **only with the aporte**: new_cash
+  is split by target weight, their share buys them, and the B3 book is rebalanced among
+  the B3 sleeves alone with their weight treated as held outside — so nothing in B3 is
+  ever sold to fund them, and with no new_cash they get no buy (`rebalance_plan.py`).
+  With no sleeve holding a B3 asset (CASH_CDI alone is not one) the B3 book is held as
+  it is — decided from the sleeves, not from a near-100 total's rounding — and an
+  excluded/pinned off-B3 sleeve's share of the aporte stays as cash. `new_cash` < 0 is
+  a 422.
+  Pinned/excluded tickers are held in place (dropped from both sells and buys); `notes`
+  start with that funding rule and flag e.g. an ações month above the R$20k isenção,
+  US/crypto buys and the rules their sale falls under (not estimated here), unpriced
+  names, a new position too small for one unit and buys the buy-only budget ran out
+  before. Advisory only — nothing executes.
 
 ### Billing (Stripe, spec/01)
 

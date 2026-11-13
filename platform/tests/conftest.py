@@ -82,6 +82,11 @@ def sample_value(col):
     }.get(py, uuid.uuid4().hex if col.unique else "x")
 
 
+# What a table's CHECK demands beyond its NOT NULL columns, which the generic
+# filler below cannot read: a sleeve is exactly one of strategy_ref / ticker.
+_SEED_EXTRA = {"portfolio_sleeves": {"strategy_ref": "x"}}
+
+
 async def seed_tenant_tables(session, tenant_id) -> list:
     """One row in *every* tenant-scoped table, so a sweep or an export that
     quietly stops covering one of them fails in the test that seeded it.
@@ -92,7 +97,7 @@ async def seed_tenant_tables(session, tenant_id) -> list:
 
     tables = [t for t in Base.metadata.sorted_tables if "tenant_id" in t.c]
     for table in tables:
-        row = {"tenant_id": tenant_id}
+        row = {"tenant_id": tenant_id, **_SEED_EXTRA.get(table.name, {})}
         # Fill whatever else the table demands; the values are irrelevant, the
         # row only has to exist and carry this tenant_id.
         for col in table.c:

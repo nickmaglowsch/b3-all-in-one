@@ -36,6 +36,7 @@ from platform_app.routes import (
 )
 from platform_app.routes_backtest_retention import backtest_retention_router
 from platform_app.routes_benchmarks import benchmarks_router
+from platform_app.routes_market_assets import market_assets_router
 from platform_app.routes_portfolio_index import portfolio_index_router
 from platform_app.routes_portfolio_settings import portfolio_settings_router
 from platform_app.routes_portfolios import portfolios_router
@@ -134,6 +135,8 @@ app.include_router(privacy_router)
 # The free base (`carteira`): import extracts, see the book, read market status.
 app.include_router(imports_router)
 app.include_router(market_router)
+# The sleeve picker's asset search: signed-in, no module (it prices nothing of yours).
+app.include_router(market_assets_router)
 # Listing your books is free (everyone has one); managing clients' is `empresarial`.
 app.include_router(portfolios_router)
 # Mixed — the paid /portfolio and /strategies routes carry their own gate (routes.py).

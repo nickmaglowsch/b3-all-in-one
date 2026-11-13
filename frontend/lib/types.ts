@@ -201,22 +201,14 @@ export interface IncomeRow {
   total: number;
 }
 
-export interface Sleeve {
-  strategy_ref: string;
-  target_pct: number;
-}
-
-export interface SleevesSaveResult {
-  sleeves: Sleeve[];
-  warnings: string[];
-}
-
 export interface DriftRow {
   ticker: string;
   target_w: number;
-  current_w: number;
-  drift_w: number;
-  drift_brl: number;
+  // null on a sleeve held off B3 (outside_b3): its position is unknown.
+  current_w: number | null;
+  drift_w: number | null;
+  drift_brl: number | null;
+  outside_b3?: boolean;
 }
 
 export interface Target {
@@ -226,6 +218,8 @@ export interface Target {
   cash_weight_target: number;
   drift: DriftRow[];
   nav: number;
+  markets?: Record<string, string>; // {ticker: "US" | "CRYPTO"} of the off-B3 sleeves
+  warnings?: string[]; // what the drift cannot show (an off-B3 position is unknown)
 }
 
 export interface StrategyParam {

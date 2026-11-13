@@ -9,7 +9,7 @@
 // it inline is where a chart component turns into a data layer.
 
 import type { Series } from "@/components/charts/LineSeries";
-import type { Levels } from "@/lib/benchmarks";
+import type { Levels, Proxied } from "@/lib/benchmarks";
 import type { Dated } from "@/lib/chartRange";
 import { type Benchmark, useBenchmarks, useBenchmarkSeries } from "./lib";
 
@@ -35,6 +35,8 @@ export interface BenchmarkOverlay {
   /** Selected but not drawable: the plane has nothing for this window, or the
    *  engine could not be reached. Named on the picker, never dropped. */
   unavailable: string[];
+  /** Lines drawn (in part) off their market's proxy — said on the picker. */
+  proxied: Record<string, Proxied>;
   /** The lines to add to the chart — only the ones that actually have levels. */
   series: Series[];
   colorOf: (key: string) => string;
@@ -67,6 +69,7 @@ export function useBenchmarkOverlay(
     catalog: entries,
     levels,
     unavailable: bench.data?.unavailable ?? [],
+    proxied: bench.data?.proxied ?? {},
     series: entries
       .filter((b) => picked.includes(b.key) && b.key in levels)
       .map((b) => ({

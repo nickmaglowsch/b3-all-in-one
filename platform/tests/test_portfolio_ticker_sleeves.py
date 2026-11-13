@@ -108,8 +108,8 @@ async def test_mcp_rejects_an_unknown_ticker_by_name(client, plane):
 
 
 @pytest.mark.parametrize("sleeves, needle", [
-    ([_t("^BVSP", 100)], "is an index"),
-    ([_t("PETRO4", 100)], "not a B3 trading code"),
+    ([_t("^BVSP", 100)], "é um índice"),
+    ([_t("PETRO4", 100)], "não é um código da B3"),
     ([{"ticker": "IVVB11", "strategy_ref": "MomSharpe", "target_pct": 100}],
      "exactly one of strategy_ref / ticker"),
     ([{"target_pct": 100}], "exactly one of strategy_ref / ticker"),
@@ -123,8 +123,8 @@ async def test_malformed_ticker_sleeves_are_refused_before_the_engine(client, sl
 
 
 async def test_the_pickers_ticker_prefix_is_not_a_strategy_name(client):
-    """/estrategia gives ticker options the value "@ticker:<code>"; no strategy
-    may be named so, or its option would share that value."""
+    """/estrategia keys a ticker row "@ticker:<market>:<code>"; no strategy may
+    be named so, or its row would share that key."""
     h = await auth(client, "tickers-reserved@example.com", modules=["bench"])
     token = await _token(client, h)
     bad, err = await _call(client, token, "validate_strategy", spec=_port(
@@ -138,14 +138,3 @@ async def test_a_ticker_passed_as_strategy_ref_gets_a_hint(client):
         "Hint", _s("IVVB11.SA", 100)))
     assert r.status_code == 422
     assert "goes in `ticker`" in r.json()["detail"]
-
-
-async def test_promote_refuses_ticker_sleeves_and_keeps_the_live_target(client, plane):
-    h = await auth(client, "tickers-promote@example.com", modules=["bench", "mercado"])
-    r = await client.post("/strategies/user", headers=h, json=_port(
-        "ETFs", _t("IVVB11.SA", 50), _s("CASH_CDI", 50)))
-    assert r.status_code == 200, r.text
-    promo = await client.post(f"/strategies/user/{r.json()['id']}/promote", headers=h)
-    assert promo.status_code == 422
-    assert "IVVB11.SA" in promo.json()["detail"]
-    assert (await client.get("/portfolio/sleeves", headers=h)).json() == []

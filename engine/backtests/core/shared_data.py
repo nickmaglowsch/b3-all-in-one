@@ -34,6 +34,7 @@ from backtests.core import plane
 from backtests.core.data import (
     download_benchmark, download_cdi_daily, load_sector_pit,
 )
+from backtests.core.stored_series import STALE_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,33 @@ def _defer_derived(shared, freq: str, intervals, sessions, symbols) -> None:
     # fill at a delisting — but it is part of the bundle's published shape.
     shared.defer("tradable",
                  lambda: universe.tradable_mask(intervals, sessions, symbols))
+
+
+def _benchmark_notes(spec, bench_px: pd.Series, start: str, end: str,
+                     last_session=None) -> list:
+    """What the run's benchmark could not be. Empty over the window means every
+    bench_*/ibov_* regime flag reads False and a gated book sits in CDI for the
+    whole run — which looks like a calm strategy, not a missing ruler, unless
+    the run says so. A proxy read off the plane is said too (with `from` when it
+    only filled a stale tail), and so is a benchmark still stopping more than
+    STALE_DAYS before the plane's last session: the flags read False past it."""
+    inside = bench_px.loc[str(start)[:10]:str(end)[:10]].dropna() if len(bench_px) else bench_px
+    if inside.empty:
+        return [{"code": "benchmark_missing",
+                 "detail": {"market": spec.key, "ticker": spec.benchmark}}]
+    notes = []
+    if bench_px.attrs.get("proxy_for"):
+        detail = {"market": spec.key, "ticker": bench_px.attrs["proxy_for"],
+                  "proxy": spec.benchmark_proxy}
+        if bench_px.attrs.get("proxy_from"):
+            detail["from"] = bench_px.attrs["proxy_from"]
+        notes.append({"code": "benchmark_proxy_from_plane", "detail": detail})
+    last = inside.index[-1]
+    if last_session is not None and (pd.Timestamp(last_session) - last).days > STALE_DAYS:
+        notes.append({"code": "benchmark_stale",
+                      "detail": {"market": spec.key, "ticker": spec.benchmark,
+                                 "last": last.date().isoformat()}})
+    return notes
 
 
 def _ath_drawdown(db_path: str, end: str, spec, freq: str, px: pd.DataFrame) -> pd.DataFrame:
@@ -282,7 +310,9 @@ def build_shared_data(
             intervals, sessions, symbols, dense=False),
         # What this window's data cannot support, as codes. Every branch lives
         # inside coverage_notes, which degrades to [] rather than failing a run.
-        "data_warnings": universe.coverage_notes(db_path, spec.key, window_start, end),
+        "data_warnings": universe.coverage_notes(db_path, spec.key, window_start, end)
+        + _benchmark_notes(spec, ibov_px, window_start, end,
+                           sessions[-1] if len(sessions) else None),
     })
 
     _defer_derived(shared, freq, intervals, sessions, symbols)

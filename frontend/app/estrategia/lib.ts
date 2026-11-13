@@ -1,8 +1,15 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Sleeve, SleevesSaveResult, Target } from "@/lib/types";
+import type {
+  AssetHit,
+  LiveSleeve,
+  SleeveBody,
+  SleevesSaveResult,
+} from "@/lib/portfolioSleeves";
+import type { Target } from "@/lib/types";
+import { withQuery } from "@/lib/url";
 // Reused across the two feature dirs I own — same queryKey dedupes the fetch.
 export { useStrategies, useCreateBacktest } from "../bench/lib";
 
@@ -13,14 +20,14 @@ export function useSleeves() {
     queryKey: ["sleeves"],
     // Page-load queries below pass paywallDialog: false — the page renders the
     // offer inline (LoadFailure) instead of a modal over a page not yet read.
-    queryFn: () => api<Sleeve[]>("/portfolio/sleeves", {}, { paywallDialog: false }),
+    queryFn: () => api<LiveSleeve[]>("/portfolio/sleeves", {}, { paywallDialog: false }),
   });
 }
 
 export function useSaveSleeves() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: Sleeve[]) =>
+    mutationFn: (body: SleeveBody[]) =>
       api<SleevesSaveResult>("/portfolio/sleeves", {
         method: "PUT",
         body: JSON.stringify(body),
@@ -29,6 +36,25 @@ export function useSaveSleeves() {
       qc.invalidateQueries({ queryKey: ["sleeves"] });
       qc.invalidateQueries({ queryKey: ["target"] });
     },
+  });
+}
+
+// The sleeve picker's asset search (GET /market/assets), across B3, the US and
+// crypto. From two characters: one matches half the market. The previous answer
+// stays up while the next loads, so the list does not blink at every keystroke.
+export const ASSET_SEARCH_MIN = 2;
+// GET /market/assets takes up to 40 characters; the picker never sends more.
+export const ASSET_QUERY_MAX = 40;
+
+export function useAssetSearch(term: string) {
+  return useQuery({
+    queryKey: ["asset-search", term],
+    queryFn: () =>
+      api<{ results: AssetHit[] }>(withQuery("/market/assets", { q: term, limit: 20 }), {},
+        { paywallDialog: false }),
+    enabled: term.length >= ASSET_SEARCH_MIN,
+    staleTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -165,7 +191,8 @@ export interface RebalancePlan {
   nav: number;
   new_cash: number;
   trades: { sells: TradeLine[]; buys: TradeLine[] };
-  tax: RebalanceTax;
+  // {} when the book has no B3 history to apurate.
+  tax: Partial<RebalanceTax>;
   notes: string[];
 }
 

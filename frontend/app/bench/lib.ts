@@ -13,7 +13,7 @@ import {
 import { api } from "@/lib/api";
 import { withQuery } from "@/lib/url";
 import type { Dated } from "@/lib/chartRange";
-import type { Levels } from "@/lib/benchmarks";
+import type { Levels, Proxied } from "@/lib/benchmarks";
 import type { BacktestCurves, BacktestRun, Strategy } from "@/lib/types";
 
 export function useStrategies() {
@@ -94,6 +94,8 @@ export interface BenchmarkSeries {
    *  engine could not be reached. Named rather than dropped: a line that
    *  silently never appears reads as one nobody selected. */
   unavailable: string[];
+  /** Lines drawn (in part) off their market's proxy on the plane. */
+  proxied?: Record<string, Proxied>;
 }
 
 export function useBenchmarks() {

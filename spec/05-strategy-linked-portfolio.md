@@ -109,6 +109,27 @@ strategy" framing is prominent so users don't read it as tracking error.
 
 - **Data:** `portfolio_sleeves` table: `tenant_id, strategy_ref (spec id | 'CASH_CDI'),
   target_pct, attached_at`. Percentages validated to sum to 100.
+- **Asset sleeves:** a sleeve can instead be one listed asset held directly —
+  `ticker` + `market` (B3, US or CRYPTO), exactly one of the two per row. Its
+  target weight is its own percentage, added to any strategy's pick of the same
+  name; it is priced in reais off its own plane (`close_brl` for US/crypto) by
+  `advise_weights --weights --markets`, and the save refuses a ticker the plane
+  has never priced. Two honest limits, said in the API's `warnings`/`notes`
+  rather than glossed over. The book is built from B3 extracts, so a US or
+  crypto position is unknown: the target compares only the B3 book (its share
+  of the target, scaled to it) and lists off-B3 sleeves without a current
+  weight, and the plan buys them only with their target-weight share of the
+  aporte — never by selling B3 assets, and not at all without an aporte. With
+  no sleeve holding a B3 asset (strategies and B3 tickers; CASH_CDI is not one),
+  the B3 book is held as it is rather than read as "all cash" — a fact about the
+  sleeves, never about float rounding of a total saved within ±0.01 of 100.
+  Counting them as zero instead would re-buy their full weight every cycle and,
+  without buy_only_laggards, sell B3 holdings (a taxable sale) to pay for it.
+  And their sales follow other rules (exterior: annual, Lei 14.754/2023;
+  cripto: R$35k monthly isenção, no loss carry), so they stay out of the B3 tax
+  overlay. A crypto trade is sized in fractions of a coin. A saved carteira
+  (backtested by `FixedWeight` on the B3 plane, one B3 ledger) takes B3 tickers
+  only; the editor shows US/crypto assets disabled there and the API refuses them.
 - **Backtesting a sleeve mix is already native:** the engine's `FixedWeight` spec nests
   strategies with weights (`config_strategy.py:356-371`) into one book with one tax
   ledger — a tenant's sleeve config compiles directly to a 5-line spec. "Backtest my
@@ -152,7 +173,8 @@ per item:
 ## API additions
 
 ```
-GET/PUT /portfolio/sleeves                 sleeve config
+GET/PUT /portfolio/sleeves                 sleeve config (strategies, CASH_CDI, tickers)
+GET  /market/assets?q=&market=             asset search for the sleeve picker
 GET  /portfolio/target                     combined target weights + drift
 POST /portfolio/rebalance-plans            {horizon_months, new_cash, pins/excludes} → plan
 GET  /portfolio/rebalance-plans/{id}

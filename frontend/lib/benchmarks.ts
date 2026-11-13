@@ -91,3 +91,22 @@ export function withBenchmarks<T extends Dated>(
     return out as T;
   });
 }
+
+/** A line the API drew off its market's proxy (sp500 from SPY): the proxy, and
+ *  the date it took over — null when it is the whole line. */
+export interface Proxied {
+  proxy: string;
+  from: string | null;
+}
+
+/** The text under a benchmark in the picker: what the number is — or that it
+ *  has nothing here, or that part of it is the proxy and not the series itself. */
+export function benchmarkNote(note: string, missing: boolean, proxied?: Proxied): string {
+  if (missing) return "sem série para este período";
+  if (!proxied) return note;
+  if (!proxied.from) {
+    return `${note} · lido do ${proxied.proxy} no plano no período todo (a série própria está vazia)`;
+  }
+  const from = proxied.from.split("-").reverse().join("/");
+  return `${note} · a partir de ${from}, lido do ${proxied.proxy} no plano (a série própria parou)`;
+}

@@ -4,8 +4,8 @@ import uuid
 from fastapi_users_db_sqlalchemy.generics import GUID
 from fastapi_users.db import SQLAlchemyBaseOAuthAccountTableUUID, SQLAlchemyBaseUserTableUUID
 from sqlalchemy import (
-    BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Numeric, String, Text,
-    UniqueConstraint, func, text,
+    BigInteger, Boolean, CheckConstraint, Date, DateTime, Float, ForeignKey, Index, Numeric,
+    String, Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -92,9 +92,7 @@ def _tenant_col(index: bool = True) -> Mapped[uuid.UUID]:
 
 class Import(Base):
     __tablename__ = "imports"
-    __table_args__ = (
-        Index("ix_imports_tenant_created", "tenant_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_imports_tenant_created", "tenant_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
@@ -153,9 +151,7 @@ class CashEvent(Base):
 class Position(Base):
     # Mirrors taxcore/data/positions.csv.
     __tablename__ = "positions"
-    __table_args__ = (
-        Index("ix_positions_tenant_ticker", "tenant_id", "ticker"),
-    )
+    __table_args__ = (Index("ix_positions_tenant_ticker", "tenant_id", "ticker"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
@@ -209,20 +205,24 @@ class BacktestRun(Base):
 
 
 class PortfolioSleeve(Base):
-    # spec/05 Feature 3: fixed-percentage strategy sleeves. The whole set is
-    # replaced atomically per tenant on PUT; percentages sum to 100.
+    # spec/05 Feature 3, replaced whole on PUT: a strategy or one asset (portfolio_sleeves.py).
     __tablename__ = "portfolio_sleeves"
     __table_args__ = (
         UniqueConstraint("tenant_id", "strategy_ref", name="uq_sleeves_tenant_strategy"),
+        UniqueConstraint("tenant_id", "market", "ticker", name="uq_sleeves_tenant_ticker"),
+        CheckConstraint("(strategy_ref IS NULL) <> (ticker IS NULL) AND (ticker IS NULL) = "
+                        "(market IS NULL) AND market IN ('B3', 'US', 'CRYPTO')",
+                        name="ck_sleeves_one_source"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     tenant_id: Mapped[uuid.UUID] = _tenant_col()
-    strategy_ref: Mapped[str] = mapped_column(Text, nullable=False)  # spec name | 'CASH_CDI'
+    strategy_ref: Mapped[str | None] = mapped_column(Text)  # spec name | 'CASH_CDI'
+    ticker: Mapped[str | None] = mapped_column(Text)  # plane symbol: PETR4, SPY, BTCUSDT
+    market: Mapped[str | None] = mapped_column(Text)  # B3 | US | CRYPTO, with a ticker
     target_pct: Mapped[float] = mapped_column(Numeric, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
+        DateTime(timezone=True), server_default=func.now())
 
 
 class AssetClassOverride(Base):

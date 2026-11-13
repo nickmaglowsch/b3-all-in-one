@@ -8,7 +8,7 @@ import json
 import sqlite3
 
 from b3_pipeline import storage
-from scripts import advise_weights
+from scripts import advise_weights, weights_pricing
 
 
 def test_weights_mode_prices_a_renda_fixa_etf_from_its_own_close(tmp_path, monkeypatch):
@@ -33,4 +33,4 @@ def test_weights_mode_prices_a_renda_fixa_etf_from_its_own_close(tmp_path, monke
     trades = json.dumps(out["trades"])
     assert "IMAB11" not in out["trades"].get("unpriced_skipped", []), trades
     assert "IMAB11" in trades and "100.0" in trades
-    assert advise_weights._rf_etf_closes(db, "2026-10-29") == {"IMAB11": 99.0}
+    assert weights_pricing.rf_etf_closes(db, "2026-10-29") == {"IMAB11": 99.0}

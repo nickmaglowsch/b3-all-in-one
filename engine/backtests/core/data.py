@@ -14,7 +14,7 @@ from b3_pipeline import config, storage
 
 from backtests.core import markets
 from backtests.core.pit import PIT_EXTRA_COLUMNS, latest_period_rows
-from backtests.core.stored_series import download_index_level, rf_etf_series
+from backtests.core.stored_series import download_index_level, or_proxy, rf_etf_series
 # The price-panel loading moved to its own module — it is the part of this file
 # that decides how much memory a backtest takes, and it had outgrown living
 # alongside the fundamentals and the benchmark fetchers. The names stay here so
@@ -208,7 +208,7 @@ def download_benchmark(ticker: str, start: str, end: str, *,
         # COTAHIST year, so b3_pipeline/ibov_series.py writes B3's own published
         # index, in points, every session, as `$IBOV` in `external_prices` — see
         # there for why the index and not a fund that tracks it.
-        return download_index_level(symbol, start, end)
+        return or_proxy(download_index_level(symbol, start, end), spec, symbol, start, end)
     if symbol in config.RENDA_FIXA_ETFS and spec.table == "prices":
         return rf_etf_series(symbol, start, end)
     return _plane_series(spec.table, "adj_close", symbol, start, end,

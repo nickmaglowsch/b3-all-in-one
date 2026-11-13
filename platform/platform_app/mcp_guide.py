@@ -313,9 +313,11 @@ sleeve only.
   (CASH_CDI, and where a regime parks) is booked like ações, isenção included,
   and so is the IBOV column a regime overlay can hold. `loss_carryforward` in a
   run's curves is the two carries summed.
-- A portfolio with ticker sleeves backtests and lists like any other, but the
-  live rebalance target ("Ativar" in /estrategia) only takes strategies and
-  CASH_CDI, so it cannot be activated there.
+- B3 tickers only. A portfolio backtests on the B3 plane and apurates every
+  sale under B3 rules, so a US or crypto asset (`{"ticker": "SPY", "market":
+  "US"}`) is refused: those are held directly only as live sleeves, which the
+  user sets in /estrategia. A portfolio with B3 ticker sleeves backtests, lists
+  and activates ("Ativar") like any other.
 
 ## 3. Running backtests
 
@@ -350,6 +352,16 @@ falls inside the window: `invested_from` is later and `data_warnings` has
 `not_invested_at_start` (same detail) means the history was there but the book
 was empty anyway (too few names passed the filters). Either way the book sat in
 cash or CDI until `invested_from`, so judge the run from there.
+
+`benchmark_missing` (`{market, ticker}`) means the run had no benchmark data in
+its window: every `bench_*`/`ibov_*` regime flag read False, so a gated book sat
+in CDI — a plane problem, not a calm strategy. `benchmark_proxy_from_plane`
+(`{market, ticker, proxy, from?}`) means the run used the market's proxy off its
+own plane (US: `$SPX` from SPY, in BRL): for the whole run when the stored series
+was empty, or, with `from`, only from that date on, because the stored series
+stopped there. `benchmark_stale` (`{market, ticker, last}`) means the benchmark
+stops more than a week before the plane's last session and nothing could fill
+it: past `last` the flags read False.
 
 - Compare against built-ins over the **same window** (list_backtests).
 - Every variant you try is a hypothesis test; many tries on one window find

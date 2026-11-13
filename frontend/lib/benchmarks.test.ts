@@ -95,5 +95,9 @@ test("a line drawn off its proxy says so under the picker", () => {
     benchmarkNote(note, false, { proxy: "SPY", from: "2021-01-04" }),
     "S&P 500 em reais · a partir de 04/01/2021, lido do SPY no plano (a série própria parou)",
   );
-  assert.match(benchmarkNote(note, false, { proxy: "SPY", from: null }), /no período todo/);
+  // No `from`: the series had nothing in the window — never "it stopped".
+  assert.equal(
+    benchmarkNote(note, false, { proxy: "SPY", from: null }),
+    "S&P 500 em reais · lido do SPY no plano no período todo (a série própria está vazia)",
+  );
 });

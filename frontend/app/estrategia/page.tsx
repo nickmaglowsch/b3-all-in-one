@@ -7,15 +7,13 @@ import { Card } from "@/components/ui/Card";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
-import { PctDelta } from "@/components/ui/PctDelta";
-import { EmptyState, LoadFailure } from "@/components/ui/EmptyState";
+import { LoadFailure } from "@/components/ui/EmptyState";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { DivergingBars } from "@/components/charts/DivergingBars";
 import { IconCompass } from "@/components/icons";
 import { errorText } from "@/lib/api";
-import { compactBRL, formatDate, formatInstantDate, formatPercent } from "@/lib/format";
-import type { DriftRow, UserStrategy } from "@/lib/types";
+import { compactBRL, formatDate, formatInstantDate } from "@/lib/format";
+import type { UserStrategy } from "@/lib/types";
 import {
   liveToRows,
   offB3Rows,
@@ -45,6 +43,7 @@ import {
 } from "./lib";
 import { SettingsPanel } from "./Settings";
 import { SleeveRows } from "./SleeveRows";
+import { TargetPanel, Warnings } from "./TargetPanel";
 
 const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
 
@@ -381,15 +380,6 @@ function StrategySaveForm({
   );
 }
 
-// Soft warnings the API echoes on a save (e.g. needs-funds).
-function Warnings({ warnings }: { warnings?: string[] }) {
-  return warnings?.map((w, i) => (
-    <p key={i} className="text-xs text-series-4" role="status">
-      {w}
-    </p>
-  ));
-}
-
 // ── saved portfolio strategies ───────────────────────────────────────────────
 
 function MinhasCarteiras({
@@ -583,96 +573,6 @@ function CarteiraMessages({ status }: { status: CarteiraStatus }) {
       {fail(status.deleteError, "Falha ao excluir.")}
       {fail(status.backtestError, "Falha ao enviar o backtest.")}
     </>
-  );
-}
-
-// ── target / drift ──────────────────────────────────────────────────────────
-
-const DRIFT_TOP = 12;
-
-function TargetPanel() {
-  const target = useTarget();
-
-  if (target.isLoading) return <Skeleton className="h-72 w-full" />;
-
-  // 409 = sleeves exist but target can't be built (shouldn't happen here, but be honest).
-  if (target.error) {
-    const msg = errorText(target.error, "Falha ao calcular o alvo.");
-    return (
-      <Card title="Alvo x atual">
-        <EmptyState
-          icon={<IconCompass size={28} />}
-          title="Não foi possível montar a carteira-alvo."
-          hint={msg}
-        />
-      </Card>
-    );
-  }
-
-  const t = target.data!;
-  // The B3 book's rows drift; a sleeve held off B3 has no known position, so it
-  // is listed after them, with no bar.
-  const sorted = t.drift
-    .filter((d) => !d.outside_b3)
-    .sort((a, b) => Math.abs(b.drift_brl ?? 0) - Math.abs(a.drift_brl ?? 0));
-  const outside = t.drift.filter((d) => d.outside_b3);
-  const top = sorted.slice(0, DRIFT_TOP);
-  const rest = sorted.slice(DRIFT_TOP);
-  const restSum = rest.reduce((a, r) => a + (r.drift_brl ?? 0), 0);
-  const bars = [
-    ...top.map((d) => ({ label: d.ticker, value: d.drift_brl ?? 0 })),
-    ...(rest.length ? [{ label: "outros", value: restSum }] : []),
-  ];
-
-  const columns: Column<DriftRow>[] = [
-    { key: "ticker", header: "Ativo", mobile: "title", render: (r) => <TickerChip ticker={r.ticker} /> },
-    {
-      key: "target_w",
-      header: "Peso alvo",
-      align: "right",
-      render: (r) => formatPercent(r.target_w),
-    },
-    {
-      key: "current_w",
-      header: "Peso atual",
-      align: "right",
-      render: (r) => (r.current_w === null ? "fora da B3" : formatPercent(r.current_w)),
-    },
-    {
-      key: "drift_w",
-      header: "Desvio",
-      align: "right",
-      render: (r) => (r.drift_w === null ? "—" : <PctDelta value={r.drift_w} />),
-    },
-    {
-      key: "drift_brl",
-      header: "Desvio (R$)",
-      align: "right",
-      render: (r) => (r.drift_brl === null ? "—" : <Money value={r.drift_brl} sign />),
-    },
-  ];
-
-  return (
-    <Card
-      title="Alvo x atual"
-      action={
-        <span className="font-mono text-[11px] text-muted">
-          {formatDate(t.as_of)} · patrimônio {compactBRL(t.nav)} · caixa-alvo{" "}
-          {formatPercent(t.cash_weight_target)}
-        </span>
-      }
-    >
-      <div className="space-y-4">
-        <Warnings warnings={t.warnings} />
-        <div>
-          <p className="mb-2 text-xs text-muted">
-            Desvio por ativo (positivo = comprar para atingir o alvo)
-          </p>
-          <DivergingBars data={bars} valueFormat={compactBRL} height={Math.max(200, bars.length * 26)} />
-        </div>
-        <DataTable columns={columns} rows={[...sorted, ...outside]} getRowKey={(r) => r.ticker} label="Desvio por ativo" />
-      </div>
-    </Card>
   );
 }
 

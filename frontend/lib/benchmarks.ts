@@ -104,8 +104,9 @@ export interface Proxied {
 export function benchmarkNote(note: string, missing: boolean, proxied?: Proxied): string {
   if (missing) return "sem série para este período";
   if (!proxied) return note;
-  const from = proxied.from
-    ? `a partir de ${proxied.from.split("-").reverse().join("/")}`
-    : "no período todo";
-  return `${note} · ${from}, lido do ${proxied.proxy} no plano (a série própria parou)`;
+  if (!proxied.from) {
+    return `${note} · lido do ${proxied.proxy} no plano no período todo (a série própria está vazia)`;
+  }
+  const from = proxied.from.split("-").reverse().join("/");
+  return `${note} · a partir de ${from}, lido do ${proxied.proxy} no plano (a série própria parou)`;
 }

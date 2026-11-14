@@ -146,7 +146,13 @@ Two complementary answers to "how am I doing?", both off the tenant's own book:
   (`scripts/bench_series.py`); with `ENGINE_BENCH_OFFLINE=1` they are reported
   unavailable rather than drawn flat. The same script serves the bench's
   `/benchmarks/series` — it takes a name list, and `ibov,cdi` is its default.
-- `POST /whatif` — the same money through a *different* strategy (spec/05 Feature 2).
+- `POST /whatif {strategy_ids, freq?}` — the same money through a *different* strategy
+  (spec/05 Feature 2). Each scenario is a full backtest, so this validates and
+  queues (`202 {id, status}`; an account may have two in flight, else 429) and the
+  default worker replays it (`tasks_whatif`). `GET /whatif/{id}` answers
+  `{status, error, result}`, where `result` is the comparison — total invested,
+  the real book's value today and each scenario's after-tax curve and metrics. A
+  book keeps its 20 newest runs.
 
 ### Strategy-linked portfolio (spec/05)
 
@@ -163,6 +169,14 @@ the latest close, `close_brl` for US and crypto); tax runs through taxcore's TLH
   (`BTCUSDT`, or just `BTC`, `market: "CRYPTO"`). A ticker the plane has never priced is
   a 422 naming it, and so is one symbol on two markets; a stale close, and the fact
   that a US or crypto position is not in the B3 book, come back in `warnings`.
+- Strategy sleeves' advised weights are a full market-plane build each (10–20 s), so
+  the latest answer per strategy and cadence is kept in Postgres (`sleeve_weights`)
+  and served even when it is from an earlier day or plane, while the ingest worker
+  recomputes it (`warm_sleeve_weights`: after every ingest that lands, just after
+  the UTC day turns, and whenever the API serves a stale one). "Stale" means an
+  earlier day, or any price plane (B3, US, crypto) having moved since. Only a
+  strategy nobody has asked for yet, or a book whose user strategies were just
+  edited, is computed inside a request.
 - `GET /portfolio/target` — the combined target: each strategy sleeve's advised weights
   (blended `Σ pct/100 × weights`), each ticker sleeve's own weight; then the B3 book
   against its own share of that target (B3 weights scaled to the book, with

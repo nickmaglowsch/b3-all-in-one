@@ -35,7 +35,7 @@ def _closes(rows: pd.DataFrame, column: str = "close") -> dict[str, float]:
 
 
 def latest_plane_close(
-    db_path: str, start: str, end: str
+    db_path: str, start: str, end: str, tickers: "list[str] | None" = None,
 ) -> tuple["pd.Timestamp | None", dict[str, float]]:
     """(as_of, {ticker: latest raw close}) read straight from the market plane.
 
@@ -60,28 +60,58 @@ def latest_plane_close(
     Window filtering is kept even though only the newest row survives: `start`
     bounds nothing in practice but `end` does — it is what makes an as-of-a-past
     -date valuation reproducible instead of silently using today's plane.
+
+    ``tickers`` narrows the answer to the names a caller actually trades. A
+    valuation needs a handful of closes, and ranking every row of `prices` to
+    find the newest one per name read the whole plane — seconds on a 20-year
+    history, on a request path. Given a list, each name is one probe down the
+    (ticker, date) primary key instead. ``as_of`` is still the plane's, so the
+    answer for a name is the same either way; None keeps the whole universe.
     """
     from b3_pipeline import storage
 
-    ranked = f"""
-        SELECT ticker, close FROM (
-            SELECT ticker, close,
-                   ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
-            FROM prices
-            WHERE date >= ? AND date <= ? AND close IS NOT NULL
-              AND {STANDARD_LOT_SQL}
-        ) latest
-        WHERE rn = 1
-    """
+    if tickers is None:
+        sql = f"""
+            SELECT ticker, close FROM (
+                SELECT ticker, close,
+                       ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY date DESC) AS rn
+                FROM prices
+                WHERE date >= ? AND date <= ? AND close IS NOT NULL
+                  AND {STANDARD_LOT_SQL}
+            ) latest
+            WHERE rn = 1
+        """
+        params: list = [start, end]
+    else:
+        names = sorted(set(tickers))
+        # A CTE rather than `(VALUES …) AS t(ticker)`: SQLite cannot name a
+        # VALUES list's columns, and the test planes are SQLite. The standard-
+        # lot predicate is about the name alone, so it filters the list, not
+        # the probe: inside the probe Postgres misread its selectivity and
+        # sorted every row of each name instead of walking the key backwards.
+        sql = f"""
+            WITH t(ticker) AS (VALUES {", ".join("(?)" for _ in names) or "(NULL)"}),
+                 lots AS (SELECT ticker FROM t WHERE {STANDARD_LOT_SQL})
+            SELECT lots.ticker, (
+                SELECT p.close FROM prices p
+                WHERE p.ticker = lots.ticker AND p.date >= ? AND p.date <= ?
+                  AND p.close IS NOT NULL
+                ORDER BY p.date DESC LIMIT 1
+            ) AS close FROM lots
+        """
+        params = [*names, start, end]
     with storage.get_connection(db_path) as conn:
-        rows = storage.read_sql(ranked, conn, params=[start, end])
+        rows = storage.read_sql(sql, conn, params=params)
         max_date = storage.read_sql(
             "SELECT MAX(date) AS d FROM prices "
             f"WHERE date >= ? AND date <= ? AND {STANDARD_LOT_SQL}",
             conn, params=[start, end],
         ).iloc[0]["d"]
 
-    if max_date is None or pd.isna(max_date) or rows.empty:
+    # The plane's emptiness is its max date's, not the rows': a narrowed read
+    # of names that are not standard lots (a US-only target) is no rows over a
+    # plane that has plenty, and its as_of still stands.
+    if max_date is None or pd.isna(max_date) or (tickers is None and rows.empty):
         return None, {}
     as_of = pd.Timestamp(max_date) + pd.offsets.MonthEnd(0)
     return as_of, _closes(rows)

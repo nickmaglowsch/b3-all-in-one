@@ -157,6 +157,24 @@ def test_an_end_date_makes_a_past_valuation_reproducible(tmp_path):
     assert prices == {"PETR4": 30.0} and as_of == pd.Timestamp("2025-06-30")
 
 
+def test_naming_the_tickers_prices_them_exactly_as_the_whole_plane_does(tmp_path):
+    """The narrowed probe is a speed-up, not a second answer: same as_of, same
+    close per name, and a name outside the universe (odd lot) or unknown to
+    the plane is simply absent, as it is from the full read."""
+    db = plane(tmp_path, [
+        ("PETR4", "2025-06-10", 30.0), ("PETR4", "2025-06-20", 32.0),
+        ("VALE3", "2025-03-05", 55.0), ("PETR4F", "2025-06-20", 31.9),
+        ("ITUB4", "2025-06-25", 40.0),
+    ])
+    full_as_of, full = weights_pricing.latest_plane_close(db, "2005-01-01", "2025-06-22")
+    as_of, some = weights_pricing.latest_plane_close(
+        db, "2005-01-01", "2025-06-22", ["VALE3", "PETR4", "PETR4F", "NOPE3"])
+    assert as_of == full_as_of
+    assert some == {"PETR4": 32.0, "VALE3": 55.0} == {
+        t: full[t] for t in ("PETR4", "VALE3")}
+    assert weights_pricing.latest_plane_close(db, "2005-01-01", "2030-01-01", [])[1] == {}
+
+
 def test_odd_lots_and_options_are_not_part_of_the_tradeable_universe(tmp_path):
     """The predicate is a character-for-character copy of load_b3_data's; if it
     drifts, the advisor starts pricing names no backtest ever saw."""

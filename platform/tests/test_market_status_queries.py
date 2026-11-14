@@ -43,7 +43,7 @@ async def _seed(n_per_kind: int = 30):
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_reports_the_latest_run_per_kind():
-    from platform_app.routes import _last_ingest
+    from platform_app.routes_market_status import _last_ingest
 
     await _clear()
     await _seed()
@@ -62,7 +62,7 @@ async def test_reports_the_latest_run_per_kind():
 async def test_never_exposes_the_error_text():
     """It carries subprocess output with server paths — status is the part a
     caller needs (same reasoning as privacy._INTERNAL_COLUMNS)."""
-    from platform_app.routes import _last_ingest
+    from platform_app.routes_market_status import _last_ingest
 
     await _clear()
     await _seed()
@@ -84,7 +84,7 @@ async def test_reads_only_the_newest_row_per_kind():
     from sqlalchemy import event
 
     from platform_app.db import engine
-    from platform_app.routes import _last_ingest
+    from platform_app.routes_market_status import _last_ingest
 
     await _clear()
     await _seed(n_per_kind=30)
@@ -111,7 +111,7 @@ async def test_reads_only_the_newest_row_per_kind():
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_empty_table_is_not_an_error():
-    from platform_app.routes import _last_ingest
+    from platform_app.routes_market_status import _last_ingest
 
     await _clear()
     async with async_session_maker() as s:

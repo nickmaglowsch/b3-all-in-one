@@ -286,7 +286,11 @@ def _advise_from_weights(args) -> dict:
     start, end = "2005-01-01", datetime.today().strftime("%Y-%m-%d")
     db_path = os.environ.get("ENGINE_DATABASE_URL") or str(ROOT / "b3_market_data.sqlite")
 
-    as_of, prices = weights_pricing.latest_plane_close(db_path, start, end)
+    # Only the names in play are priced: _build_trades narrows to positions ∪
+    # target anyway, and ranking the whole plane for them cost seconds.
+    positions_in = json.loads(args.positions) if args.positions else {}
+    in_play = sorted({*weights_in, *positions_in} - set(off_b3) - {"CASH_CDI"})
+    as_of, prices = weights_pricing.latest_plane_close(db_path, start, end, in_play)
     if as_of is None:
         raise SystemExit("no price data available to value --weights")
     # An off-B3 ticker is priced on its own plane, never as a B3 code that happens
@@ -307,7 +311,7 @@ def _advise_from_weights(args) -> dict:
     }
     if args.positions:
         out["trades"] = _build_trades(
-            json.loads(args.positions), args.nav_cash, row, prices,
+            positions_in, args.nav_cash, row, prices,
             fractional=frozenset(t for t, m in off_b3.items() if m == "CRYPTO"))
     return out
 

@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import math
 import time
 
@@ -9,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi_users import exceptions
 from sqlalchemy import text
 
+from platform_app import b3run, enginerun, subprocs
 from platform_app.billing import (
     EMPRESARIAL,
     billing_router,
@@ -29,13 +32,13 @@ from platform_app.routes import (
     backtests_router,
     imports_router,
     irpf_router,
-    market_router,
     portfolio_router,
     strategies_router,
     tlh_router,
 )
 from platform_app.routes_backtest_retention import backtest_retention_router
 from platform_app.routes_benchmarks import benchmarks_router
+from platform_app.routes_market_status import market_router, refresh_market_status
 from platform_app.routes_market_assets import market_assets_router
 from platform_app.routes_portfolio_index import portfolio_index_router
 from platform_app.routes_portfolio_settings import portfolio_settings_router
@@ -57,7 +60,34 @@ from platform_app.users import (
     session_started_at,
 )
 
-app = FastAPI(title="b3-all-in-one platform")
+@contextlib.asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Started in the background: the API must come up (and pass its healthcheck)
+    # even when an interpreter takes a while or fails to start — a call that
+    # finds no zygote just runs cold.
+    warmup = None
+    if settings.subprocess_zygotes:
+        warmup = asyncio.create_task(asyncio.to_thread(
+            subprocs.enable_zygotes, enginerun.warm(), b3run.warm()))
+    # /market/status serves a cached summary and refreshes it off the request
+    # path; fill it now so not even the first dashboard after a deploy waits.
+    status = asyncio.create_task(_warm_market_status())
+    try:
+        yield
+    finally:
+        status.cancel()
+        if warmup is not None:
+            with contextlib.suppress(Exception):
+                await warmup
+            await asyncio.to_thread(subprocs.disable_zygotes)
+
+
+async def _warm_market_status() -> None:
+    with contextlib.suppress(Exception):   # an absent plane is reported per call
+        await refresh_market_status()
+
+
+app = FastAPI(title="b3-all-in-one platform", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

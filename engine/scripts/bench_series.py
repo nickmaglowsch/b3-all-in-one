@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -76,14 +77,29 @@ def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
     empty means "the plane has no rows yet" and a typo means "this chart will
     silently lose a line", and the caller has to be able to tell them apart.
     """
+    from b3_pipeline import storage
     from backtests.core import markets
     from backtests.core.data import download_benchmark
 
-    out: dict = {}
-    for name in names:
+    def read(name: str):
         symbol, market = BENCHMARKS[name]
-        level = download_benchmark(symbol, start, end, market=market)
-        out[name] = {d.strftime("%Y-%m-%d"): float(v) for d, v in level.items()}
+        return download_benchmark(symbol, start, end, market=market)
+
+    # Independent reads, each on its own connection: the bench asks for all
+    # sixteen at once, and in sequence that was the whole of its latency. On
+    # Postgres only — a SQLite plane is a local file with nothing to overlap,
+    # and connections opened at once collide on its `PRAGMA journal_mode=WAL`
+    # ("database is locked").
+    targets = [BENCHMARKS[name] for name in names]       # KeyError before any I/O
+    workers = 4 if storage.using_postgres() else 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        levels = list(pool.map(read, names))
+
+    out: dict = {}
+    for name, (_symbol, market), level in zip(names, targets, levels):
+        # Vectorised: a strftime per Timestamp was a third of a sixteen-series call.
+        out[name] = dict(zip(level.index.strftime("%Y-%m-%d"),
+                             level.to_numpy(dtype=float).tolist()))
         # Drawn off the market's proxy (sp500 from SPY when `$SPX` is missing or
         # stopped early): said, with the date it took over (None: the whole line).
         if level.attrs.get("proxy_for"):

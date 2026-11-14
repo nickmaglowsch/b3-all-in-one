@@ -8,11 +8,17 @@ comparison is a point comparison against the real book (total invested + actual
 market value) plus each scenario's after-tax equity curve — we do NOT reconstruct
 a full historical portfolio index here.
 
+Each scenario is a full backtest (6-20 s), so POST /whatif only validates and
+queues a run (whatif_models.WhatIfRun); the default worker replays it
+(tasks_whatif → replay below) and the page polls GET /whatif/{id}.
+
 Owned by the what-if agent. Registered in main.py as `whatif_router`.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
+import datetime
 import json
 import shutil
 import tempfile
@@ -23,12 +29,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from platform_app import b3run, enginerun, specstore, subprocs
-from platform_app.db import get_async_session
-from platform_app.models import CashEvent, Position, Trade
+from platform_app import b3run, enginerun, specstore, subprocs, tasks
+from platform_app.db import get_async_session, xact_lock
+from platform_app.jobstatus import WHATIF_INFLIGHT, WhatIfStatus
+from platform_app.models import CashEvent, Portfolio, Position, Trade
+from platform_app.whatif_models import WhatIfRun
 from platform_app.routes import (
     _REBALANCE,
     _fundamentals_available,
@@ -36,7 +44,7 @@ from platform_app.routes import (
     _latest_engine_prices,
     _needs_funds_msg,
 )
-from platform_app.tenancy import get_current_tenant
+from platform_app.tenancy import get_current_tenant, get_owned
 
 whatif_router = APIRouter(prefix="/whatif", tags=["whatif"])
 
@@ -45,13 +53,16 @@ whatif_router = APIRouter(prefix="/whatif", tags=["whatif"])
 INCOME_CATEGORIES = {"income", "amortization"}
 
 
-# Each id replays the tenant's whole history through a full backtest subprocess,
-# serially — so the request's cost is linear in the list the caller sends. Uncapped,
-# one authenticated POST with the whole gallery in it occupies the box for minutes.
-# ponytail: a cap, not a queue — this is a comparison a person reads, and four
-# scenarios is already more than a chart shows well. Move it to the job queue
-# (like /backtests) if the comparison ever needs to be wider than that.
+# Each id replays the tenant's whole history through a full backtest, serially
+# in one worker job — so a run's cost is linear in the list the caller sends, and
+# four scenarios is already more than a chart shows well.
 MAX_SCENARIOS = 4
+# Runs one ACCOUNT may have queued or running at once: each holds one of the
+# default worker's two slots for up to four backtests, the slots imports and the
+# bench share. Same reasoning as routes.BACKTEST_QUOTA.
+MAX_INFLIGHT = 2
+# Finished runs kept per book (_forget_old_runs).
+KEEP_RUNS = 20
 
 
 class WhatIfRequest(BaseModel):
@@ -59,8 +70,7 @@ class WhatIfRequest(BaseModel):
     # Same enum BacktestRequest uses, and for the same reason: this reaches
     # pandas .resample() in build_shared_data over ~20 years of daily prices. As
     # a free-form string it accepted "s", which asks for a second-resolution
-    # frame of hundreds of millions of rows — an OOM of the API container, since
-    # unlike a backtest this runs inside the request rather than on the worker.
+    # frame of hundreds of millions of rows — an OOM of the worker that runs it.
     freq: _REBALANCE = "ME"
 
 
@@ -177,16 +187,53 @@ def _run_whatif(
         shutil.rmtree(out, ignore_errors=True)
 
 
-@whatif_router.post("")
+def _run_dict(r: WhatIfRun) -> dict:
+    """The row as the page polls it; `result` is the old synchronous response."""
+    return {
+        "id": str(r.id), "status": r.status, "error": subprocs.redact(r.error),
+        "strategy_ids": (r.params or {}).get("strategy_ids", []),
+        "freq": (r.params or {}).get("freq"), "result": r.result,
+        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+    }
+
+
+async def inflight_whatifs(session: AsyncSession, user) -> int:
+    """Runs not yet finished across every book the account owns — the same
+    shape, window and reasoning as routes.inflight_backtests."""
+    managed = select(Portfolio.id).where(Portfolio.owner_id == user.id)
+    return await session.scalar(
+        select(func.count()).select_from(WhatIfRun).where(
+            WhatIfRun.status.in_(WHATIF_INFLIGHT),
+            WhatIfRun.created_at > func.now() - datetime.timedelta(days=1),
+            (WhatIfRun.tenant_id == user.id) | WhatIfRun.tenant_id.in_(managed),
+        ))
+
+
+async def _forget_old_runs(session: AsyncSession, tid) -> None:
+    """Keep a book's KEEP_RUNS newest runs. Each holds the book's dated flows
+    and up to four curves; nothing lists the old ones, so they are only weight."""
+    keep = select(WhatIfRun.id).where(WhatIfRun.tenant_id == tid) \
+        .order_by(WhatIfRun.created_at.desc()).limit(KEEP_RUNS)
+    await session.execute(delete(WhatIfRun).where(
+        WhatIfRun.tenant_id == tid, WhatIfRun.status.not_in(WHATIF_INFLIGHT),
+        WhatIfRun.id.not_in(keep)))
+
+
+@whatif_router.post("", status_code=202)
 async def create_whatif(
     body: WhatIfRequest,
     tenant=Depends(get_current_tenant),
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
-    """Replay the tenant's real cash flows through each requested strategy and
-    return a point comparison (invested + actual value) plus per-scenario
-    after-tax curves and metrics."""
-    _user, tid = tenant
+    """Queue a replay of the tenant's real cash flows through each requested
+    strategy; poll GET /whatif/{id} for the point comparison (invested + actual
+    value) and per-scenario after-tax curves and metrics.
+
+    Everything that can be refused is refused here, synchronously — an unknown
+    strategy, missing fundamentals, a book with nothing to replay — so a queued
+    run is one the engine can actually do."""
+    user, tid = tenant
     if not body.strategy_ids:
         raise HTTPException(422, "strategy_ids must be non-empty")
     gallery = {s["name"]: s for s in await _gallery(session, tid)}
@@ -204,18 +251,52 @@ async def create_whatif(
     if not flows_list:
         raise HTTPException(
             422, "sem aporte líquido para replicar — as saídas cobrem todas as entradas")
-    total_invested = round(sum(flows.values()), 2)
-    start = flows_list[0]["date"]  # the date the book is first net-funded
 
+    # Held to the commit, so parallel POSTs cannot all count `limit - 1`.
+    await xact_lock(session, "whatif", user.id)
+    running = await inflight_whatifs(session, user)
+    if running >= MAX_INFLIGHT:
+        raise HTTPException(429, detail={
+            "error": "whatif_quota", "limit": MAX_INFLIGHT, "running": running,
+            "message": f"{running} simulações já na fila — aguarde uma terminar."})
+    await _forget_old_runs(session, tid)
+    run = WhatIfRun(tenant_id=tid, status=WhatIfStatus.PENDING, params={
+        "strategy_ids": body.strategy_ids, "freq": body.freq,
+        "flows": flows_list, "start": flows_list[0]["date"],  # first net-funded date
+        "total_invested": round(sum(flows.values()), 2)})
+    session.add(run)
+    await session.commit()
+
+    from platform_app import tasks_whatif  # it imports this module
+    await tasks.defer_or_fail(
+        session, [run], "whatif", lambda: tasks_whatif.run_whatif.defer_async(run_id=str(run.id)),
+        WhatIfStatus.PENDING, status=WhatIfStatus.ERROR, finished_at=func.now())
+    return _run_dict(run)
+
+
+@whatif_router.get("/{run_id}")
+async def get_whatif(
+    run_id: str,
+    tenant=Depends(get_current_tenant),
+    session: AsyncSession = Depends(get_async_session),
+) -> dict:
+    _user, tid = tenant
+    return _run_dict(await get_owned(session, WhatIfRun, run_id, tid, "simulação não encontrada"))
+
+
+async def replay(session: AsyncSession, tid, params: dict) -> dict:
+    """Run every scenario of a queued what-if; the result the page reads.
+    For tasks_whatif, in the worker: the engine runs are full backtests.
+    RuntimeError names the scenario that failed (subprocs.report's ref)."""
     extra_env = await specstore.user_specs_env(session, tid) or None
     await session.commit()  # no connection held across up to four engine runs
+    config = {"flows": params["flows"], "start": params["start"], "freq": params["freq"]}
     scenarios = []
-    for sid in body.strategy_ids:
-        config = {"flows": flows_list, "start": start, "freq": body.freq}
+    for sid in params["strategy_ids"]:
         try:
-            out = await subprocs.offload(_run_whatif, sid, config, tid, extra_env)
+            out = await asyncio.to_thread(_run_whatif, sid, config, tid, extra_env)
         except RuntimeError as e:
-            raise HTTPException(500, subprocs.report(f"whatif ({sid})", str(e)))
+            raise RuntimeError(subprocs.report(f"whatif ({sid})", str(e))) from None
         m = out["summary"]
         aft = m.get("aftertax") or {}
         scenarios.append({
@@ -226,10 +307,9 @@ async def create_whatif(
             "max_dd": aft.get("Max Drawdown (%)"),
             "curve": out["curve"],
         })
-
     return {
         "as_of": date.today().isoformat(),
-        "total_invested": total_invested,
+        "total_invested": params["total_invested"],
         "actual_value": await _actual_value(session, tid),
         "scenarios": scenarios,
     }

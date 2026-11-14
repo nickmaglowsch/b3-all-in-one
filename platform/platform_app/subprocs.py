@@ -13,9 +13,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
+import selectors
+import shutil
 import signal
+import socket
 import subprocess
+import tempfile
+import threading
 import uuid
 import weakref
 from pathlib import Path
@@ -47,9 +53,175 @@ def interpreter(explicit: str, root: Path) -> list[str]:
     return ["uv", "run", "--directory", str(root), "python"]
 
 
+class Warm:
+    """Which zygote may run a call: the interpreter prefix of its argv and the
+    third-party modules that interpreter should hold preloaded."""
+
+    def __init__(self, interp: list[str], preload: tuple[str, ...]) -> None:
+        self.interp = list(interp)
+        self.preload = tuple(preload)
+        self.key = (tuple(self.interp), self.preload)
+
+
+_ZYGOTE_SCRIPT = Path(__file__).with_name("zygote_server.py")
+# Off until the API turns it on (main.py's lifespan). The worker and the test
+# suite keep plain subprocesses: a backtest is tens of seconds and gains nothing
+# from saving half of one, and tests monkeypatch subprocess-level behaviour.
+_zygotes_enabled = False
+_zygotes: dict[tuple, "Zygote"] = {}
+_zygotes_lock = threading.Lock()
+
+
+class Unreachable(RuntimeError):
+    """The call never reached a zygote (not started, gone before it connected).
+    Nothing ran, so it is safe to try again — warm or cold."""
+
+
+# What the call gets when the zygote took it and then vanished without an
+# answer (killed mid-run, most likely the container's memory limit). The script
+# may have run, so it is a failed child, never a reason to run it again.
+_LOST = -signal.SIGKILL
+
+
+class Zygote:
+    """A long-lived interpreter that forks a fresh child per call
+    (zygote_server.py). Thread-safe: every call is its own connection."""
+
+    def __init__(self, warm: Warm) -> None:
+        self.warm = warm
+        self._dir = tempfile.mkdtemp(prefix="b3zyg-")  # 0700: only we can connect
+        self.path = os.path.join(self._dir, "s")
+        self.proc = None
+        try:
+            self.proc = subprocess.Popen(
+                [*warm.interp, str(_ZYGOTE_SCRIPT), self.path, ",".join(warm.preload)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                env={**os.environ, "PYTHONWARNINGS": "ignore", "PYTHONIOENCODING": "utf-8"},
+                cwd=self._dir,
+            )
+            # Bounded: an interpreter that never comes up must not hang a request.
+            # A selector, not select(): that one refuses fds >= 1024.
+            with selectors.DefaultSelector() as sel:
+                sel.register(self.proc.stdout, selectors.EVENT_READ)
+                ready = sel.select(120)
+            if not ready or self.proc.stdout.readline().strip() != b"ready":
+                raise Unreachable("zygote did not start")
+        except BaseException:
+            # Whatever failed, nothing may outlive it: a dropped Popen keeps its
+            # stdin pipe open, and the zygote only exits when that closes.
+            self.close()
+            raise
+
+    def alive(self) -> bool:
+        return self.proc is not None and self.proc.poll() is None
+
+    def run(self, argv: list[str], *, cwd: Path, env: dict, timeout_s: int,
+            stdin: str | None, label: str) -> subprocess.CompletedProcess:
+        req = json.dumps({"argv": argv[len(self.warm.interp):], "cwd": str(cwd),
+                          "env": env, "stdin": stdin, "timeout": timeout_s})
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            # The supervisor enforces timeout_s; this only covers a zygote that
+            # died mid-call without closing the socket.
+            s.settimeout(timeout_s + 60)
+            try:
+                s.connect(self.path)
+                s.sendall(req.encode())
+                s.shutdown(socket.SHUT_WR)
+            except OSError as e:
+                raise Unreachable(str(e)) from e
+            try:
+                chunks = []
+                while chunk := s.recv(1 << 16):
+                    chunks.append(chunk)
+                res = json.loads(b"".join(chunks))
+                timed_out, rc, out, err = (
+                    res["timed_out"], res["rc"], res["stdout"], res["stderr"])
+            except (OSError, ValueError, KeyError, TypeError):
+                return subprocess.CompletedProcess(
+                    argv, _LOST, "", f"{label}: the warm interpreter running it went away")
+        if timed_out:
+            return subprocess.CompletedProcess(
+                argv, TIMEOUT_EXIT, "", f"{label} timed out after {timeout_s}s")
+        return subprocess.CompletedProcess(argv, rc, out, err)
+
+    def close(self) -> None:
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(5)
+                for pipe in (self.proc.stdin, self.proc.stdout):
+                    if pipe:
+                        pipe.close()
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(self._dir, ignore_errors=True)
+
+
+def enable_zygotes(*warms: Warm) -> None:
+    """Turn the warm path on for this process, and start ``warms`` now so the
+    first request does not pay the preload. Blocking — call via to_thread."""
+    global _zygotes_enabled
+    for w in warms:
+        try:
+            _zygote(w)
+        except Exception:  # noqa: BLE001 — cold subprocesses still work
+            log.warning("zygote for %s did not start; using plain subprocesses", w.interp)
+    # Only now: a request that arrives while the interpreters are importing
+    # runs cold instead of queueing behind the spawn lock.
+    _zygotes_enabled = True
+
+
+def disable_zygotes() -> None:
+    global _zygotes_enabled
+    _zygotes_enabled = False
+    with _zygotes_lock:
+        for z in _zygotes.values():
+            z.close()
+        _zygotes.clear()
+
+
+def _zygote(warm: Warm) -> Zygote:
+    with _zygotes_lock:
+        z = _zygotes.get(warm.key)
+        if z is None or not z.alive():
+            if z is not None:
+                z.close()
+            z = _zygotes[warm.key] = Zygote(warm)
+        return z
+
+
+def _drop(warm: Warm, z: Zygote | None) -> None:
+    """Forget ``z`` — only if it is still the one registered: another thread
+    may already have replaced a dead one with a healthy zygote."""
+    with _zygotes_lock:
+        if z is not None and _zygotes.get(warm.key) is z:
+            del _zygotes[warm.key]
+    if z is not None:
+        z.close()
+
+
+def _run_warm(argv, warm: Warm, *, cwd, env, timeout_s, stdin, label):
+    """The call through a zygote, or None when no zygote could take it (then
+    the caller runs it cold — the warm path is an optimisation, never a new
+    way to fail). Retried only while it provably never reached one: a call a
+    zygote accepted may have run, and is answered, never run a second time."""
+    if argv[:len(warm.interp)] != warm.interp:
+        return None
+    for _attempt in range(2):           # one respawn if the zygote had died
+        z = None
+        try:
+            z = _zygote(warm)
+            return z.run(argv, cwd=cwd, env=env, timeout_s=timeout_s,
+                         stdin=stdin, label=label)
+        except Exception:  # noqa: BLE001 — Unreachable, or a spawn that failed
+            _drop(warm, z)
+    log.warning("zygote unavailable for %s; running cold", warm.interp)
+    return None
+
+
 def run(
     argv: list[str], *, cwd: Path, env: dict, timeout_s: int, label: str,
-    stdin: str | None = None,
+    stdin: str | None = None, warm: Warm | None = None,
 ) -> subprocess.CompletedProcess:
     """``subprocess.run`` that reports a timeout instead of raising it.
 
@@ -71,12 +243,21 @@ def run(
     128 KB MAX_ARG_STRLEN and the exec itself fails with E2BIG. An exec that
     fails for any reason is reported like a failed child too, for the same
     reason as the timeout: callers branch on returncode, never on OSError.
+
+    ``warm`` lets the call run in a forked child of an interpreter that already
+    imported the heavy deps (see Zygote) once the process has enabled zygotes;
+    the result has the same shape either way.
     """
+    proc = None
+    if warm is not None and _zygotes_enabled:
+        proc = _run_warm(argv, warm, cwd=cwd, env=env, timeout_s=timeout_s,
+                         stdin=stdin, label=label)
     try:
-        proc = subprocess.run(
-            argv, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout_s,
-            input=stdin,
-        )
+        if proc is None:
+            proc = subprocess.run(
+                argv, cwd=cwd, env=env, capture_output=True, text=True,
+                timeout=timeout_s, input=stdin,
+            )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             argv, TIMEOUT_EXIT, stdout="",
@@ -151,6 +332,17 @@ async def offload(fn, /, *args, **kwargs):
         sem = _slots[loop] = asyncio.Semaphore(API_SLOTS)
     async with sem:
         return await asyncio.to_thread(fn, *args, **kwargs)
+
+
+async def gather_all(*aws):
+    """``asyncio.gather`` that always waits for every awaitable, then raises the
+    first failure. An offloaded engine thread cannot be cancelled, so a sibling
+    left running after a failure would be unowned work holding a slot."""
+    results = await asyncio.gather(*aws, return_exceptions=True)
+    for res in results:
+        if isinstance(res, BaseException):
+            raise res
+    return results
 
 
 def report(label: str, output: str | subprocess.CompletedProcess) -> str:

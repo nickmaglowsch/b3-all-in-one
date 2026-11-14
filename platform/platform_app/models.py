@@ -12,7 +12,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from platform_app.db import Base
 from platform_app.jobstatus import BacktestStatus, ImportStatus, IngestStatus, check_sql
-from platform_app.mcp_models import McpToken  # noqa: F401  (registers the table)
+from platform_app import mcp_models, sleeve_weights, whatif_models  # noqa: F401  (tables)
 
 
 class OAuthAccount(SQLAlchemyBaseOAuthAccountTableUUID, Base):

@@ -24,7 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import (
-    b3run, darf, enginerun, market_planes, portfolio_sleeves, rebalance_plan, specstore,
+    b3run, darf, enginerun, portfolio_sleeves, rebalance_plan, sleeve_weights, specstore,
     subprocs, tasks,
 )
 from platform_app.billing import (
@@ -35,7 +35,7 @@ from platform_app.db import get_async_session, get_engine_pool, xact_lock
 from platform_app.jobstatus import BACKTEST_INFLIGHT, BacktestStatus, ImportStatus
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, DarfPayment,
-    Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
+    Import, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
     TaxSummary, Trade, UserStrategy,
 )
 from platform_app.portfolio_sleeves import SleeveIn, sleeve_out
@@ -54,7 +54,6 @@ irpf_router = APIRouter(prefix="/irpf", tags=["irpf"])
 tlh_router = APIRouter(prefix="/tlh", tags=["tlh"])
 strategies_router = APIRouter(prefix="/strategies", tags=["backtests"])
 backtests_router = APIRouter(prefix="/backtests", tags=["backtests"])
-market_router = APIRouter(prefix="/market", tags=["market"])
 
 
 # Admission control on the upload boundary. `await f.read()` materializes the whole
@@ -460,17 +459,9 @@ async def put_sleeves(
 
 
 # ── Combined target + rebalance advisor (spec/05 Features 1 & 3) ──────────────
-# advise_weights per strategy sleeve is deterministic for a given day's data, so
-# cache the JSON per (strategy, date, freq). ponytail: process-lifetime dict keyed
-# by the calendar day — same lifecycle as _STRATEGIES_CACHE. USER refs also carry
-# (tenant_id, updated_at) so two tenants' same-named specs can't collide and a
-# same-day edit busts the entry; built-in refs keep the shared 3-tuple key.
-_SLEEVE_WEIGHTS_CACHE: dict[tuple, dict] = {}
-
-# Every key here embeds a date or an updated_at, so entries are never reused past
-# the day they were written — without a bound the dict just grows by
-# (tenants x strategies) per day until the process restarts. Dropping the whole
-# thing on overflow is fine: it is a cache, and the next call refills what it needs.
+# A strategy sleeve's advised weights are a 10-20 s engine run, kept per family in
+# Postgres and served stale while the ingest worker refreshes them — see
+# sleeve_weights.py. _CACHE_MAX bounds the in-process memos below (the gallery).
 _CACHE_MAX = 1024
 
 
@@ -506,8 +497,8 @@ async def _advise_strategy(strategy: str, freq: str, extra_env: dict | None = No
     freq='ME' is the default path and passes no params; a non-default cadence is
     threaded as ``--params rebalance_freq`` through the engine script. extra_env
     points the registry at the tenant's user specs when the strategy is a user ref."""
-    params = None if freq == "ME" else {"rebalance_freq": freq}
-    return await _advise(strategy=strategy, params=params, extra_env=extra_env)
+    return await _advise(strategy=strategy, params=sleeve_weights.advise_params(freq),
+                         extra_env=extra_env)
 
 
 # ── Per-tenant portfolio settings (spec/05 Features 3 & 4) ────────────────────
@@ -541,61 +532,40 @@ async def _combined_target(
         raise HTTPException(409, "no sleeves configured — PUT /portfolio/sleeves first")
 
     # A sleeve ref may be one of the tenant's user strategies — materialize them
-    # and point the engine subprocess at the dir. updated_at keys the cache so a
-    # same-day edit isn't served stale and two tenants never collide.
+    # and point the engine subprocess at the dir. The tenant's latest edit is
+    # part of its family, so an edit (to it, or to a strategy a user portfolio
+    # is built from) is never served the previous version's weights.
     user_rows = (await session.scalars(
         select(UserStrategy).where(UserStrategy.tenant_id == tid)
     )).all()
     extra_env = specstore.specs_env(user_rows, tid)
-    user_upd = {r.name: r.updated_at.isoformat() if r.updated_at else "" for r in user_rows}
+    user_names, stamp = {r.name for r in user_rows}, sleeve_weights.user_stamp(user_rows)
 
-    today = date.today().isoformat()
-
-    def _key(ref: str) -> tuple:
-        if ref in user_upd:
-            return (ref, today, freq, str(tid), user_upd[ref])
-        return (ref, today, freq)
+    def _family(ref: str) -> str:
+        if ref in user_names:
+            return sleeve_weights.family(ref, freq, tid, stamp)
+        return sleeve_weights.family(ref, freq)
 
     # Split cash and tickers out first: CASH_CDI is the risk-free sleeve and a
     # ticker is its own target weight, so neither has anything to advise and
     # neither may reach the engine as a strategy.
     cash_weight, by_ref, combined, off_b3, b3_assets = portfolio_sleeves.split_sleeves(sleeves)
-    equity = [(ref, pct, _key(ref)) for ref, pct in by_ref]  # (sleeve_ref, pct, cache_key)
+    equity = [(ref, pct, _family(ref)) for ref, pct in by_ref]
 
-    # Each sleeve is a separate engine subprocess that builds its own market
-    # plane, and they are independent — one sleeve's weights depend only on its
-    # own strategy. Awaiting them in a loop made a cold three-sleeve portfolio
-    # pay three full plane builds end to end. Gathered, the wall clock is the
-    # slowest sleeve. Cache hits are resolved before dispatch so a warm sleeve
-    # costs nothing — and copied out, not re-read after the await: any other
-    # request's bounded() can empty the shared dict meanwhile, and a hit gone
-    # missing read as "needs fundamentals" (a 422 for a strategy that needs none).
-    advised = {key: hit for _ref, _pct, key in equity
-               if (hit := _SLEEVE_WEIGHTS_CACHE.get(key)) is not None}
-    todo = [(ref, key) for ref, _pct, key in equity if key not in advised]
-    if todo:
-        await session.commit()  # no connection held across the subprocesses
-        results = await asyncio.gather(
-            *(_advise_strategy(ref, freq, extra_env or None) for ref, _key_ in todo),
-            return_exceptions=True,
-        )
-        for (ref, key), res in zip(todo, results):
-            if isinstance(res, BaseException):
-                continue          # classified below, so one failure is not fatal here
-            advised[key] = bounded(_SLEEVE_WEIGHTS_CACHE, _CACHE_MAX)[key] = res
-        # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
-        # others mid-flight; anything that is not that is still a real failure.
-        failures = {ref: res for (ref, _k), res in zip(todo, results)
-                    if isinstance(res, BaseException)}
-        for ref, exc in failures.items():
-            if not isinstance(exc, enginerun.EngineNeedsFundamentals):
-                raise exc
-    else:
-        failures = {}
+    # Stored answers first, a stale one served and refreshed in the background.
+    today, plane = date.today(), await sleeve_weights.plane_date()
+    stored = await sleeve_weights.lookup(session, [fam for _r, _p, fam in equity], today, plane)
+    advised = {fam: e.payload for fam, e in stored.items()}
+    if any(not e.fresh(today, plane) for e in stored.values()):
+        sleeve_weights.refresh_soon(today, plane)
+
+    todo = [(ref, fam, tid if ref in user_names else None)
+            for ref, _pct, fam in equity if fam not in advised]
+    failures = await _advise_missing(session, todo, freq, extra_env, (today, plane), advised)
 
     missing: list[str] = []   # strategies that need fundamentals not yet ingested
-    for ref, pct, key in equity:
-        adv = advised.get(key)
+    for ref, pct, fam in equity:
+        adv = advised.get(fam)
         if adv is None:
             exc = failures.get(ref)
             missing.append(getattr(exc, "strategy", None) or ref)
@@ -605,6 +575,33 @@ async def _combined_target(
     if missing:
         raise HTTPException(422, _needs_funds_msg(missing))
     return combined, cash_weight, off_b3, b3_assets
+
+
+async def _advise_missing(session: AsyncSession, todo: list[tuple], freq: str,
+                          extra_env: dict, stamp: tuple, advised: dict) -> dict:
+    """Compute, store and add to ``advised`` the (ref, family, owner) sleeves with
+    no stored answer — gathered, they are independent plane builds. Returns the
+    needs-fundamentals failures by ref, for the 422."""
+    if not todo:
+        return {}
+    await session.commit()  # no connection held across the subprocesses
+    results = await asyncio.gather(
+        *(_advise_strategy(ref, freq, extra_env or None) for ref, _fam, _owner in todo),
+        return_exceptions=True,
+    )
+    failures = {}
+    for (ref, fam, owner), res in zip(todo, results):
+        if isinstance(res, BaseException):
+            failures[ref] = res  # classified below, so one failure is not fatal here
+            continue
+        advised[fam] = res
+        await sleeve_weights.store(session, fam, owner, *stamp, res)
+    # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
+    # others mid-flight; anything that is not that is still a real failure.
+    for exc in failures.values():
+        if not isinstance(exc, enginerun.EngineNeedsFundamentals):
+            raise exc
+    return failures
 
 
 async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, dict]:
@@ -727,26 +724,30 @@ async def create_rebalance_plan(
     if split.hold_b3:
         frozen |= {t.upper() for t in held}
 
-    target = combined
-    if frozen or cash_cdi_held:
-        # One valuation pass (no new_cash) to learn current values, so frozen and
-        # cash/CDI holdings can be pinned at their current weight.
-        val = await _advise(weights=combined, positions=positions, nav_cash=0.0)
-        vtrades = val.get("trades") or {}
-        valued = {k.upper(): v for k, v in (vtrades.get("positions_valued") or {}).items()}
-        final_nav = float(vtrades.get("nav", 0.0)) + new_cash
-        target = _freeze_target(combined, cash_weight, frozen, valued, final_nav) \
-            if frozen else dict(combined)
-        # Feature 3: pin cash/CDI holdings at their current weight. Unlike a pinned
-        # equity, their weight comes out of the cash sleeve (equity budget stays put),
-        # so they fulfil the CASH_CDI target instead of being sold as an equity trim.
-        for t in cash_cdi_held:
-            tu = t.upper()
-            w = valued.get(tu, 0.0) / final_nav if final_nav > 0 else 0.0
-            if w > 0:
-                target[tu] = w
+    async def _b3_priced() -> dict:
+        target = combined
+        if frozen or cash_cdi_held:
+            # One valuation pass (no new_cash) to learn current values, so frozen and
+            # cash/CDI holdings can be pinned at their current weight.
+            val = await _advise(weights=combined, positions=positions, nav_cash=0.0)
+            vtrades = val.get("trades") or {}
+            valued = {k.upper(): v for k, v in (vtrades.get("positions_valued") or {}).items()}
+            final_nav = float(vtrades.get("nav", 0.0)) + new_cash
+            target = _freeze_target(combined, cash_weight, frozen, valued, final_nav) \
+                if frozen else dict(combined)
+            # Feature 3: pin cash/CDI holdings at their current weight. Unlike a pinned
+            # equity, their weight comes out of the cash sleeve (equity budget stays put),
+            # so they fulfil the CASH_CDI target instead of being sold as an equity trim.
+            for t in cash_cdi_held:
+                tu = t.upper()
+                w = valued.get(tu, 0.0) / final_nav if final_nav > 0 else 0.0
+                if w > 0:
+                    target[tu] = w
+        return await _advise(weights=target, positions=positions, nav_cash=new_cash)
 
-    priced = await _advise(weights=target, positions=positions, nav_cash=new_cash)
+    # The off-B3 buys need only the aporte's split: priced alongside the B3 book.
+    priced, off_trades = await subprocs.gather_all(
+        _b3_priced(), _off_b3_buys(split, off_b3, off_cash, frozen))
     trades = priced.get("trades") or {"sells": [], "buys": [], "nav": 0.0}
     # Belt-and-suspenders: frozen / cash-CDI tickers never appear in a trade.
     skip = frozen | {t.upper() for t in cash_cdi_held}
@@ -770,7 +771,6 @@ async def create_rebalance_plan(
     if buy_only:
         budget = new_cash + sum(float(s.get("est_brl", 0.0)) for s in sells)
         buys, unfunded = rebalance_plan.cap_buys(buys, budget)
-    off_trades = await _off_b3_buys(split, off_b3, off_cash, frozen)
     buys += off_trades.get("buys", [])
 
     # Tax overlay: run the plan's sells (only B3 tickers actually held) through
@@ -1087,10 +1087,13 @@ async def _latest_engine_prices(tickers: list[str]) -> list[list]:
     if not tickers:
         return []
     pool = await get_engine_pool()
+    # One probe per name down the (ticker, date) key, newest row first.
+    # DISTINCT ON read every name's whole history to keep one row of it — and
+    # /positions runs this on every page load.
     rows = await pool.fetch(
-        "SELECT DISTINCT ON (ticker) ticker, close FROM prices "
-        "WHERE ticker = ANY($1::text[]) AND close IS NOT NULL "
-        "ORDER BY ticker, date DESC",
+        "SELECT t.ticker, p.close FROM unnest($1::text[]) AS t(ticker) "
+        "CROSS JOIN LATERAL (SELECT close FROM prices WHERE prices.ticker = t.ticker "
+        "AND close IS NOT NULL ORDER BY date DESC LIMIT 1) p",
         tickers,
     )
     return [[r["ticker"], float(r["close"])] for r in rows if r["close"]]
@@ -1781,103 +1784,3 @@ def _finite_or_none(cell: str | None) -> float | None:
     except (TypeError, ValueError):
         return None
     return v if math.isfinite(v) else None
-
-
-# ── Market status ─────────────────────────────────────────────────────────────
-# count(*) + count(DISTINCT ticker) over `prices` is an aggregate across the whole
-# table (89 ms at 257k rows, and it grows linearly with the plane). The dashboard
-# polls this endpoint on a timer from every open tab, so the cost used to scale
-# with the number of people looking at it. One cached answer per TTL decouples the
-# two: the plane only changes when the ingestion pipeline runs, which is a manual,
-# infrequent job.
-_MARKET_STATUS_TTL = datetime.timedelta(seconds=60)
-_market_status_cache: tuple[datetime.datetime, dict] | None = None
-
-
-async def _last_ingest(session: AsyncSession) -> dict[str, dict]:
-    """Latest ingestion attempt per kind. `error` is deliberately not exposed —
-    it carries subprocess output with server paths (privacy._INTERNAL_COLUMNS
-    strips the same field for the same reason); `status` is the part a caller
-    needs. Never fails the status call: knowing the plane is stale matters more
-    than knowing why."""
-    out: dict[str, dict] = {}
-    try:
-        # DISTINCT ON, not "read everything and keep the first of each kind in
-        # Python". ingest_runs grows by a row per ingestion attempt and never
-        # shrinks, and this endpoint is polled on a timer from every open tab, so
-        # the old form made the cost of answering "is the plane fresh?" scale with
-        # how often the plane had been refreshed. ix_ingest_runs_kind_started
-        # already indexes exactly this; only the query was wrong.
-        #
-        # The column list is explicit so `error` never leaves the database — it
-        # carries subprocess output with server paths.
-        rows = (await session.execute(
-            select(IngestRun.kind, IngestRun.status,
-                   IngestRun.started_at, IngestRun.finished_at)
-            .distinct(IngestRun.kind)
-            .order_by(IngestRun.kind, IngestRun.started_at.desc())
-        )).all()
-    except Exception:
-        return out
-    for kind, status, started_at, finished_at in rows:
-        out[kind] = {
-            "status": status,
-            "started_at": started_at.isoformat() if started_at else None,
-            "finished_at": finished_at.isoformat() if finished_at else None,
-        }
-    return out
-
-
-# What an absent market plane looks like. A fresh deploy has no `prices` table at
-# all until the first ingest runs, and aggregating a missing table raises — so the
-# status endpoint used to 500 on exactly the environment that most needs to report
-# "there is no data yet". Same posture as /positions and /price-history: the plane
-# is optional, its absence is a fact to report, not an error.
-_EMPTY_PLANE = market_planes._EMPTY_PLANE
-
-
-async def _market_status_uncached() -> dict:
-    return await market_planes.status(await get_engine_pool())
-
-
-# Prices are expected every trading day. Four calendar days absorbs a long weekend
-# plus a feriado without crying wolf; past that the plane is genuinely behind.
-_PRICES_STALE_AFTER_DAYS = 4
-
-
-@market_router.get("/status")
-async def market_status(
-    session: AsyncSession = Depends(get_async_session),
-) -> dict:
-    """Health of the engine market plane (plain SQL over ENGINE_DATABASE_URL).
-    0-row tables are reported honestly (fresh: null). Cached for _MARKET_STATUS_TTL.
-
-    `stale` is the field worth acting on: this plane sat seven months behind while
-    every position was marked from it, and nothing said so.
-    """
-    global _market_status_cache
-    now = datetime.datetime.now(datetime.UTC)
-    if _market_status_cache and now - _market_status_cache[0] < _MARKET_STATUS_TTL:
-        payload = _market_status_cache[1]
-    else:
-        try:
-            payload = await _market_status_uncached()
-        except Exception:
-            # Not cached: an unreachable plane should recover on the next call
-            # rather than be pinned as empty for the whole TTL.
-            return {**_EMPTY_PLANE, "prices_age_days": None, "stale": True,
-                    "last_ingest": await _last_ingest(session)}
-        _market_status_cache = (now, payload)
-
-    max_date = payload["prices"]["max_date"]
-    age_days = (
-        (now.date() - date.fromisoformat(max_date)).days if max_date else None
-    )
-    # Not cached with the payload: ingest rows change on their own schedule, and
-    # this is one indexed query against the platform DB.
-    return {
-        **payload,
-        "prices_age_days": age_days,
-        "stale": age_days is None or age_days > _PRICES_STALE_AFTER_DAYS,
-        "last_ingest": await _last_ingest(session),
-    }

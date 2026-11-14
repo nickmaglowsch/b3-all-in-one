@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # backtest is the slow case — but bounded, so a wedged child can't hold a
     # request thread or one of the worker's two slots forever.
     subprocess_timeout_s: int = 600
+    # The API runs its taxcore/engine scripts in forked children of interpreters
+    # that already imported pandas (subprocs.Zygote) — about half a second off
+    # every such request. Off => a cold `python script.py` per call, as before.
+    subprocess_zygotes: bool = True
     # Ingestion runs on its own clock: a first full COTAHIST backfill is hours of
     # download + parse, so the per-request cap above would kill it. Bounded anyway
     # so a stalled B3 download cannot hold the ingest worker forever.
@@ -69,6 +73,10 @@ class Settings(BaseSettings):
     # constraint, and a skipped day is a day of backfill that never happens.
     ingest_us_prices_cron: str = "0 5 * * *"
     ingest_spx_cron: str = "30 5 * * 1-5"
+    # Strategy sleeves' advised weights (tasks_sleeves): just after the UTC date
+    # turns, when every stored answer becomes a day old. Also run after each
+    # price ingest, and whenever the API serves a stale one.
+    warm_sleeves_cron: str = "10 0 * * *"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

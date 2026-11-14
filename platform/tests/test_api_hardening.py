@@ -111,28 +111,33 @@ async def test_the_same_put_twice_at_once_is_not_a_500(client, path, body):
 # ── The sleeve-weights cache (M7) ─────────────────────────────────────────────
 
 async def test_a_cache_emptied_mid_request_keeps_the_hits_it_already_had(monkeypatch):
-    from platform_app import routes
+    from platform_app import routes, sleeve_weights
     from platform_app.db import async_session_maker
     from platform_app.models import PortfolioSleeve
+    from tests.conftest import reset_sleeve_weights
 
+    await reset_sleeve_weights()
     tid = uuid.uuid4()
     async with async_session_maker() as s:
         s.add(PortfolioSleeve(tenant_id=tid, strategy_ref="Warm", target_pct=50))
         s.add(PortfolioSleeve(tenant_id=tid, strategy_ref="Cold", target_pct=50))
         await s.commit()
-    today = datetime.date.today().isoformat()
-    monkeypatch.setitem(routes._SLEEVE_WEIGHTS_CACHE, ("Warm", today, "ME"),
-                        {"weights": {"WARM3": 1.0}})
+        await sleeve_weights.store(
+            s, sleeve_weights.family("Warm", "ME"), None, datetime.date.today(),
+            await sleeve_weights.plane_date(), {"weights": {"WARM3": 1.0}})
 
     async def advise(strategy, freq, extra_env=None):
-        # Another request's bounded() overflowing while this one awaits.
-        routes._SLEEVE_WEIGHTS_CACHE.clear()
+        # Another request's memo overflowing while this one awaits.
+        sleeve_weights.clear_memory()
         return {"weights": {"COLD3": 1.0}}
 
     monkeypatch.setattr(routes, "_advise_strategy", advise)
-    async with async_session_maker() as s:
-        combined, cash, *_ = await routes._combined_target(s, tid)
-    assert combined == {"WARM3": 0.5, "COLD3": 0.5}
+    try:
+        async with async_session_maker() as s:
+            combined, cash, *_ = await routes._combined_target(s, tid)
+        assert combined == {"WARM3": 0.5, "COLD3": 0.5}
+    finally:
+        await reset_sleeve_weights()
 
 
 # ── The public spec route (M4) ────────────────────────────────────────────────

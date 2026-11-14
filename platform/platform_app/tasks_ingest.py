@@ -17,7 +17,7 @@ import sys
 
 from sqlalchemy import func
 
-from platform_app import enginerun
+from platform_app import enginerun, tasks_sleeves
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.jobstatus import IngestStatus, transition
@@ -91,7 +91,18 @@ async def _record_ingest(kind: str, args: list[str]) -> dict:
           + (f"\n{detail}" if detail else ""), file=sys.stderr, flush=True)
     if proc.returncode != 0:
         raise IngestFailed(kind, run_id, detail)
+    await _queue_sleeve_refresh()
     return {"kind": kind, "status": str(status), "run_id": str(run_id)}
+
+
+async def _queue_sleeve_refresh() -> None:
+    """A plane moved, so strategy sleeves' stored weights may be stale; the
+    refresh recomputes only those that are. Best effort — the ingest landed
+    either way, and the midnight run and the API's stale reads queue it too."""
+    try:
+        await tasks_sleeves.defer_warm_open()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ingest] could not queue {tasks_sleeves.WARM}: {e}", file=sys.stderr, flush=True)
 
 
 @app.periodic(cron=settings.ingest_prices_cron)

@@ -43,6 +43,16 @@ def _engine_python() -> list[str]:
     return subprocs.interpreter(settings.engine_python, ENGINE)
 
 
+# What the engine's request-path scripts import before doing anything — pandas
+# alone is ~0.4 s. Third-party only: see zygote_server.py for why.
+ENGINE_PRELOAD = ("pandas", "numpy", "psycopg", "yaml", "requests",
+                  "pyarrow.csv", "pyarrow.compute")
+
+
+def warm() -> subprocs.Warm:
+    return subprocs.Warm(_engine_python(), ENGINE_PRELOAD)
+
+
 def _env(extra_env: dict | None = None) -> dict:
     # Forward the parent env (so ENGINE_BENCH_OFFLINE flows through) and pin the
     # market-plane DSN the engine reads. extra_env (e.g. ENGINE_USER_SPECS_DIR)
@@ -73,6 +83,7 @@ def run_script(
         timeout_s=settings.subprocess_timeout_s,
         label=script,
         stdin=stdin,
+        warm=warm(),
     )
 
 

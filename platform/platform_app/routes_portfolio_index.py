@@ -251,18 +251,18 @@ def bounded(cache: dict, cap: int) -> dict:
 
 
 async def _fetch_grid(pool, start: datetime.date) -> list[datetime.date]:
-    """Every date the plane has any price for, from `start`."""
+    """Every date the plane has any price for, from `start`. See _trading_grid."""
     rows = await pool.fetch(
-        "SELECT DISTINCT date FROM prices WHERE date >= $1 ORDER BY date", start)
+        "WITH RECURSIVE g(d) AS (SELECT min(date) FROM prices WHERE date >= $1 UNION ALL"
+        " SELECT (SELECT min(date) FROM prices WHERE date > d) FROM g WHERE d IS NOT NULL)"
+        " SELECT d AS date FROM g WHERE d IS NOT NULL ORDER BY d", start)
     return [r["date"] for r in rows]
 
 
 async def _trading_grid(start: datetime.date) -> list[datetime.date]:
-    """The exchange calendar from `start`, cached for the day.
-
-    `SELECT DISTINCT date FROM prices` is an index-only scan over most of the
-    table (Postgres has no loose index scan before 18), and it was run on every
-    page load to rediscover a calendar that changes once a day at most.
+    """The exchange calendar from `start`, cached for the day (it changes once a
+    day at most). DISTINCT over `prices` reads most of the table — Postgres has no
+    loose index scan before 18 — so _fetch_grid emulates one, a probe per session.
     """
     key = (start, datetime.date.today())
     grid = _GRID_CACHE.get(key)

@@ -21,8 +21,8 @@ import os
 
 from procrastinate.jobs import Status
 
-from platform_app import tasks_ingest  # noqa: F401  (registers the periodics)
-from platform_app.jobstatus import BacktestStatus, IMPORT_INFLIGHT, IngestStatus
+from platform_app import tasks_ingest, tasks_whatif  # noqa: F401  (register tasks)
+from platform_app.jobstatus import BacktestStatus, IMPORT_INFLIGHT, IngestStatus, WhatIfStatus
 from platform_app.tasks import app, defer_process_imports
 
 # What a row left `running` by a dead worker is closed with. The backtest one is
@@ -35,6 +35,14 @@ INTERRUPTED_BACKTEST = (
 INTERRUPTED_INGEST = (
     "interrupted: the ingest worker restarted (a deploy or a crash) while this "
     "run was in progress; the next scheduled run starts from what had landed"
+)
+INTERRUPTED_WHATIF = (
+    "Interrompida: o worker reiniciou (deploy ou queda) enquanto esta simulação "
+    "rodava. Simule de novo."
+)
+LOST_WHATIF = (
+    "Perdida na fila: esta simulação nunca chegou a rodar (deploy ou queda logo "
+    "após o envio). Simule de novo."
 )
 LOST_BACKTEST = (
     "Perdido na fila: este backtest nunca chegou a rodar (deploy ou queda logo "
@@ -75,6 +83,19 @@ _ORPHANS = {
          " WHERE j.task_name = 'run_backtest' AND j.args->>'run_id' = r.id::text"
          " AND j.status IN ('todo', 'doing')) RETURNING r.id",
          LOST_BACKTEST, "lost"),
+        # The same two sweeps for what-if runs (tasks_whatif), for the same reasons.
+        (f"UPDATE whatif_runs SET status = '{WhatIfStatus.ERROR}', error = %(msg)s,"
+         " finished_at = now()"
+         f" WHERE status = '{WhatIfStatus.RUNNING}' AND created_at < now() RETURNING id",
+         INTERRUPTED_WHATIF, "interrupted what-if"),
+        (f"UPDATE whatif_runs AS r SET status = '{WhatIfStatus.ERROR}', error = %(msg)s,"
+         " finished_at = now()"
+         f" WHERE r.status = '{WhatIfStatus.PENDING}'"
+         f" AND r.created_at < now() - interval '{LOST_GRACE}'"
+         " AND NOT EXISTS (SELECT 1 FROM procrastinate_jobs j"
+         " WHERE j.task_name = 'run_whatif' AND j.args->>'run_id' = r.id::text"
+         " AND j.status IN ('todo', 'doing')) RETURNING r.id",
+         LOST_WHATIF, "lost what-if"),
     ),
     "ingest": (
         (f"UPDATE ingest_runs SET status = '{IngestStatus.ERROR}', error = %(msg)s,"

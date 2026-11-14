@@ -21,6 +21,7 @@ from platform_app import enginerun, routes
 from platform_app.config import settings
 from platform_app.db import async_session_maker, close_engine_pool
 from platform_app.models import PortfolioSleeve
+from tests.conftest import reset_sleeve_weights
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -79,12 +80,12 @@ async def empty_engine_db():
 
     old = settings.engine_database_url
     settings.engine_database_url = test_dsn
-    routes._SLEEVE_WEIGHTS_CACHE.clear()
+    await reset_sleeve_weights()
     try:
         yield test_dsn
     finally:
         settings.engine_database_url = old
-        routes._SLEEVE_WEIGHTS_CACHE.clear()
+        await reset_sleeve_weights()
         # The market-plane pool holds live connections to guard_engine; close it
         # before dropping the database out from under it. Same reason the sleeve
         # cache above is cleared — this fixture mutates global config, so it owns
@@ -131,7 +132,7 @@ async def test_guard_422_without_fundamentals(client, empty_engine_db):
         assert STRAT in rp.json()["detail"]
     finally:
         await _clear_sleeves()
-        routes._SLEEVE_WEIGHTS_CACHE.clear()
+        await reset_sleeve_weights()
 
 
 async def test_needs_funds_msg_singular_plural_and_dedup():

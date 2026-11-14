@@ -29,7 +29,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app.billing import EMPRESARIAL, entitled, gate_detail, needs_bench
 from platform_app.db import get_async_session
-from platform_app.models import McpToken, Portfolio, User
+from platform_app.mcp_models import McpToken
+from platform_app.models import Portfolio, User
 from platform_app.tenancy import get_owned
 
 mcp_tokens_router = APIRouter(prefix="/mcp/tokens", tags=["mcp"])

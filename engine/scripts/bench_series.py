@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -79,11 +80,21 @@ def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
     from backtests.core import markets
     from backtests.core.data import download_benchmark
 
-    out: dict = {}
-    for name in names:
+    def read(name: str):
         symbol, market = BENCHMARKS[name]
-        level = download_benchmark(symbol, start, end, market=market)
-        out[name] = {d.strftime("%Y-%m-%d"): float(v) for d, v in level.items()}
+        return download_benchmark(symbol, start, end, market=market)
+
+    # Independent reads, each on its own connection: the bench asks for all
+    # sixteen at once, and in sequence that was the whole of its latency.
+    targets = [BENCHMARKS[name] for name in names]       # KeyError before any I/O
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        levels = list(pool.map(read, names))
+
+    out: dict = {}
+    for name, (_symbol, market), level in zip(names, targets, levels):
+        # Vectorised: a strftime per Timestamp was a third of a sixteen-series call.
+        out[name] = dict(zip(level.index.strftime("%Y-%m-%d"),
+                             level.to_numpy(dtype=float).tolist()))
         # Drawn off the market's proxy (sp500 from SPY when `$SPX` is missing or
         # stopped early): said, with the date it took over (None: the whole line).
         if level.attrs.get("proxy_for"):

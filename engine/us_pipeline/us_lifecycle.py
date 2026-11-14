@@ -13,10 +13,12 @@ other one's:
 
   observe_present   the directory saw the symbol today. Its sighting widens the
                     observed bounds, and if the directory itself had recorded
-                    the symbol dead, the symbol is revived — a relisting, or a
-                    snapshot that missed it. A delisting `us_listing` claimed
-                    is left alone: withdrawing that is `withdraw_claim`'s, on
-                    `us_listing`'s own evidence.
+                    the symbol dead within RELIST_WINDOW_DAYS, the symbol is
+                    revived — a snapshot that missed it, a short halt. Gone
+                    longer than that, the ticker most likely belongs to another
+                    company now, and the old one's delisting stays. A delisting
+                    `us_listing` claimed is left alone too: withdrawing that is
+                    `withdraw_claim`'s, on `us_listing`'s own evidence.
   observe_absent    the directory did not see a live symbol it had seen before.
                     Delisted at its `last_seen`, the last day the plane can
                     prove it traded. A symbol the directory never saw has no
@@ -50,6 +52,14 @@ LISTING_REASON = "alpha vantage listing status"
 # trade. Beyond this the two are describing different companies.
 SETTLEMENT_SLACK_DAYS = 5
 
+# How long a symbol may drop out of the directory and still be the same listing
+# when it comes back: a missed capture, a halt, a late file. A symbol gone longer
+# than this and back is a recycled ticker — `_dated` refuses the same merge on
+# the vendor's side — and reviving it would erase the old company's delisting
+# (its terminal return in `universe.delisting_returns`) and carry its last price
+# across the gap.
+RELIST_WINDOW_DAYS = 30
+
 CLEARED = {"delisting_date": None, "delist_reason": None}
 
 
@@ -73,9 +83,14 @@ def foreign_delisting(prior) -> bool:
 def observe_present(prior, as_of) -> dict:
     """The columns a sighting in today's directory writes."""
     row = {"first_seen": as_of, "last_seen": as_of}
-    if _delisted_by(prior, DIRECTORY_REASON):
+    if _delisted_by(prior, DIRECTORY_REASON) and _within_relist_window(prior, as_of):
         row.update(CLEARED)
     return row
+
+
+def _within_relist_window(prior, as_of) -> bool:
+    gap = pd.Timestamp(as_of) - pd.Timestamp(prior["delisting_date"])
+    return gap.days <= RELIST_WINDOW_DAYS
 
 
 def observe_absent(prior):

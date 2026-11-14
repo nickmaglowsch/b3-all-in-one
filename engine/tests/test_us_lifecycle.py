@@ -68,6 +68,28 @@ def test_a_relisted_symbol_is_tradable_again_in_a_backtest(tmp_path):
     assert bool(mask.iloc[0, 0])
 
 
+def test_a_ticker_back_after_the_relist_window_is_a_different_company(tmp_path):
+    """Delisted in 2021, back in 2025: a recycled ticker, not a missed capture.
+    Reviving it would merge the two companies — the old one's delisting (and its
+    terminal return) erased, its last price carried across four years."""
+    conn = sqlite_db(tmp_path)
+    syms = many(6_000)
+    _snap(conn, syms, "2021-03-01")
+    _snap(conn, syms[1:], "2021-03-02")
+
+    out = _snap(conn, syms, "2025-06-01")
+    row = _row(conn, syms[0])
+    assert out["revived"] == 0
+    assert row["delisting_date"] == "2021-03-01"
+    assert row["delist_reason"] == lc.DIRECTORY_REASON
+
+
+def test_a_symbol_back_inside_the_relist_window_is_revived():
+    prior = {"delisting_date": "2026-01-05", "delist_reason": lc.DIRECTORY_REASON}
+    assert "delisting_date" in lc.observe_present(prior, D(2026, 2, 4))
+    assert "delisting_date" not in lc.observe_present(prior, D(2026, 2, 5))
+
+
 def test_the_directory_does_not_revive_a_delisting_the_vendor_claimed(tmp_path):
     """Withdrawing `us_listing`'s claim is `us_listing`'s call, on its own
     evidence; a sighting here only moves the observed bounds."""

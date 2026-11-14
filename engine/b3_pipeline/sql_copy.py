@@ -67,8 +67,8 @@ _COPY_TYPES = {
 # CTE or a locking clause changes meaning inside a wrapper, and a second
 # statement would not survive one at all.
 _PLAIN_READ = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
-_NOT_PLAIN = re.compile(r";|\b(insert|update|delete|merge|for\s+share)\b",
-                        re.IGNORECASE)
+_NOT_PLAIN = re.compile(
+    r";|\b(insert|update|delete|merge|for\s+(key\s+)?share)\b", re.IGNORECASE)
 
 
 def read(conn, sql: str, params=None) -> pd.DataFrame | None:
@@ -81,27 +81,77 @@ def read(conn, sql: str, params=None) -> pd.DataFrame | None:
     if plan is None:
         return None
     statement, names, types = plan
-    parse = _parser(names, types)
     out = _Collector(names, types)
-    # Chunk k parses on the worker while chunk k+1 drains; one in flight keeps
-    # the order and bounds what is held to two chunks of text. The per-row work
-    # is one append into a bytearray — not a list of rows joined later: each row
-    # psycopg yields is a view on a libpq buffer, and keeping 100k of them alive
-    # measured 70% slower than the bare iteration, where appending is within 5%.
+    # The per-row work is one append into a bytearray — not a list of rows
+    # joined later: each row psycopg yields is a view on a libpq buffer, and
+    # keeping 100k of them alive measured 70% slower than the bare iteration,
+    # where appending is within 5% of it.
     with ThreadPoolExecutor(max_workers=1) as worker, \
             conn.cursor() as cur, cur.copy(statement) as copy:
-        pending, buf = None, bytearray()
+        chunks = _Chunks(_parser(names, types), out, worker)
+        buf = bytearray()
         for row in copy:
             buf += row
             if len(buf) >= COPY_BLOCK_BYTES:
-                if pending is not None:
-                    out.add(pending.result())
-                pending, buf = worker.submit(parse, buf), bytearray()
-        if pending is not None:
-            out.add(pending.result())
-        if buf:
-            out.add(parse(buf))
+                buf = chunks.push(buf)
+        chunks.finish(buf)
+    chunks.raise_failure()
     return out.frame()
+
+
+class _Chunks:
+    """Whole-row chunks of CSV in, parsed and collected in order.
+
+    Chunk k parses on the worker (arrow drops the GIL) while chunk k+1 drains;
+    one in flight keeps the order and bounds what is held to two chunks of text.
+
+    A chunk that fails to parse does not end the COPY. Leaving the ``copy``
+    block early makes psycopg cancel the statement, and that aborts the caller's
+    transaction — where the cursor path, failing on the same value client-side,
+    leaves it usable. So the failure is kept, the rest of the stream is drained
+    and dropped, and it is raised once the COPY has finished cleanly, as the
+    ``psycopg.DataError`` the cursor path raises for a value it cannot load.
+    """
+
+    def __init__(self, parse, out: _Collector, worker) -> None:
+        self.parse, self.out, self.worker = parse, out, worker
+        self.pending = None
+        self.failure: BaseException | None = None
+
+    def push(self, buf: bytearray) -> bytearray:
+        """Hand over a full chunk; returns the empty buffer to fill next."""
+        self._collect()
+        if self.failure is None:
+            self.pending = self.worker.submit(self.parse, buf)
+        return bytearray()
+
+    def finish(self, buf: bytearray) -> None:
+        self._collect()
+        if buf and self.failure is None:
+            self._keep(lambda: self.parse(buf))
+
+    def raise_failure(self) -> None:
+        exc = self.failure
+        if exc is None:
+            return
+        import psycopg
+        import pyarrow as pa
+        if isinstance(exc, pa.ArrowException):
+            raise psycopg.DataError(f"COPY read could not parse a value: {exc}") from exc
+        raise exc
+
+    def _collect(self) -> None:
+        pending, self.pending = self.pending, None
+        if pending is not None:
+            self._keep(pending.result)
+
+    def _keep(self, table) -> None:
+        if self.failure is not None:
+            return
+        try:
+            self.out.add(table())
+        except Exception as exc:                # noqa: BLE001 — re-raised after the drain
+            self.failure = exc
 
 
 def _plan(conn, sql: str, params):
@@ -121,8 +171,11 @@ def _plan(conn, sql: str, params):
         return None
 
     import psycopg
-    query = (sql if params is None
-             else psycopg.ClientCursor(conn).mogrify(sql, params))
+    if params is None:
+        query = sql
+    else:
+        with psycopg.ClientCursor(conn) as client:
+            query = client.mogrify(sql, params)
     # A newline before each closing paren: a query ending in a `-- comment`
     # would otherwise swallow the rest of the wrapper.
     with conn.cursor() as cur:
@@ -140,12 +193,14 @@ def _parser(names: list, types: list):
 
     NULL is CSV's unquoted empty field and nothing else — pyarrow's default null
     spellings ("NA", "null", "N/A"…) are real tickers and company names here —
-    and a quoted "" stays the empty string it was.
+    and a quoted "" stays the empty string it was. Empty lines are rows: in a
+    one-column result an empty line *is* a NULL, and pyarrow's default skips it.
     """
     import pyarrow as pa
     import pyarrow.csv as pacsv
 
-    parse = pacsv.ParseOptions(newlines_in_values="string" in types)
+    parse = pacsv.ParseOptions(newlines_in_values="string" in types,
+                               ignore_empty_lines=False)
     convert = pacsv.ConvertOptions(
         column_types={n: getattr(pa, t)() for n, t in zip(names, types)},
         null_values=[""], strings_can_be_null=True,
@@ -158,11 +213,10 @@ def _parser(names: list, types: list):
         try:
             return pacsv.read_csv(source, read_options=blocks,
                                   parse_options=parse, convert_options=convert)
-        except pa.ArrowInvalid as exc:
+        except pa.ArrowInvalid:
             # A row longer than arrow's block cannot be split across two. The
-            # chunk is whole rows, so one block the size of the chunk always fits.
-            if "straddl" not in str(exc):
-                raise
+            # chunk is whole rows, so one block the size of the chunk always
+            # fits; a value that is genuinely bad fails this second parse too.
             whole = pacsv.ReadOptions(column_names=names, use_threads=False,
                                       block_size=len(buf) + 1)
             return pacsv.read_csv(source, read_options=whole,

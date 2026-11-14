@@ -403,6 +403,15 @@ def test_copy_read_chunks_by_bytes_and_survives_a_row_longer_than_arrow_block(
     ("WITH x AS (SELECT i, dt FROM typed) SELECT * FROM x ORDER BY i", None),
     ("SELECT count(*) AS n, max(dt) AS m FROM typed", None),
     ("SELECT * FROM typed WHERE i > 100000", None),
+    # One column: a NULL there is an empty CSV line, which pyarrow skips unless
+    # told not to — rows vanished, silently, on every type.
+    ("SELECT void_t FROM typed ORDER BY i", None),
+    ("SELECT sparse FROM typed ORDER BY i", None),
+    ("SELECT t FROM typed ORDER BY i", None),
+    ("SELECT dt FROM typed ORDER BY i", None),
+    ("SELECT n FROM typed ORDER BY i", None),
+    ("SELECT b FROM typed ORDER BY i", None),
+    ("SELECT max(dt) AS m FROM typed WHERE i < 0", None),
 ])
 def test_copy_read_handles_the_shapes_of_query_read_sql_gets(typed, monkeypatch,
                                                              sql, params):
@@ -420,9 +429,41 @@ def test_copy_read_hands_other_types_to_the_cursor(typed, monkeypatch, sql):
     assert not took
 
 
+def test_an_empty_aggregate_is_one_null_row_not_no_rows(typed):
+    """scripts/weights_pricing.py reads `SELECT MAX(date) … .iloc[0]["d"]` and
+    handles None. Losing the one-column NULL row turned that into IndexError."""
+    got = storage.read_sql("SELECT max(dt) AS d FROM typed WHERE i < :lo", typed,
+                           params={"lo": 0})
+    assert len(got) == 1 and got.iloc[0]["d"] is None
+
+
+def test_a_value_arrow_cannot_parse_fails_like_the_cursor_and_keeps_the_transaction(
+        raw_conn, monkeypatch):
+    """'infinity' is a valid Postgres date neither path can load. Mid-stream,
+    with rows still coming, the COPY read must not abandon the COPY — psycopg
+    would cancel it and abort the caller's transaction — and must raise the
+    DataError the cursor path raises."""
+    with raw_conn.cursor() as cur:
+        cur.execute("CREATE TEMP TABLE bad (i int, dt date)")
+        cur.execute("INSERT INTO bad SELECT g, DATE '2020-01-01' + g % 400"
+                    " FROM generate_series(1, 5000) g")
+        cur.execute("UPDATE bad SET dt = 'infinity' WHERE i = 10")
+    monkeypatch.setattr(sql_copy, "COPY_BLOCK_BYTES", 256)
+    for copy_read in (True, False):
+        monkeypatch.setattr(sql_stream, "COPY_READ", copy_read)
+        with pytest.raises(psycopg.DataError):
+            storage.read_sql("SELECT i, dt FROM bad ORDER BY i", raw_conn)
+        assert raw_conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS
+        with raw_conn.cursor() as cur:            # and it still answers
+            cur.execute("SELECT count(*) FROM bad")
+            assert cur.fetchone()[0] == 5000
+    raw_conn.rollback()
+
+
 @pytest.mark.parametrize("sql", [
     "WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone",
     "SELECT * FROM t FOR SHARE",
+    "SELECT * FROM t FOR KEY SHARE",
     "SELECT 1; SELECT 2",
     "INSERT INTO t VALUES (1) RETURNING *",
     "SHOW TimeZone",

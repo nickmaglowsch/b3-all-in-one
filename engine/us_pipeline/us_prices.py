@@ -15,7 +15,10 @@ do: the symbols those sources do not carry, and the corporate actions that turn
 a `split_only` series into a `total_return` one. `select_work` is handed the set
 of symbols the free sources already priced and never re-prices them;
 `us_seam.demote_bulk_priced` says why that matters and what would break without
-it.
+it — and that, for those symbols, the actions are stored but not yet applied.
+
+Where each symbol stands is `us_price_cursor`, and its states and transitions
+are `price_cursor`'s.
 
 Two conversions happen here and nowhere else.
 
@@ -42,12 +45,13 @@ from b3_pipeline import fx_series, market_storage, storage, us_storage
 
 from . import us_adjust, us_seam
 from .alphavantage import (
-    AlphaVantageError,
+    BadRequest,
     BudgetExhausted,
     Client,
     PremiumOnly,
     RateLimited,
 )
+from .price_cursor import Outcome, next_cursor, select_work
 from .av_parsers import parse_dividends, parse_splits, parse_time_series_daily
 
 logger = logging.getLogger(__name__)
@@ -55,16 +59,12 @@ logger = logging.getLogger(__name__)
 MARKET = "US"
 SOURCE = "alphavantage-time-series-daily"
 
-# How long a symbol's corporate actions stay fresh. Splits and dividends are
-# rare; re-asking every day would spend two thirds of a free tier's budget on
-# answers that have not changed.
-ACTIONS_STALE_DAYS = 90
-
 # Requests held back for the listing and benchmark jobs, which share the key.
 DEFAULT_RESERVE = 5
 
-_PRICE_COST = 1
-_ACTIONS_COST = 2
+# The scheduler (`select_work`) and the cursor's states live in `price_cursor`;
+# `select_work` is imported above and stays reachable here, where its callers
+# have always found it.
 
 
 def fetch_prices(client: Client, symbol: str) -> pd.DataFrame:
@@ -75,25 +75,36 @@ def fetch_prices(client: Client, symbol: str) -> pd.DataFrame:
 
 
 def _fetch_one_action(client: Client, function: str, symbol: str, parse):
-    """One actions endpoint, or `None` if this key cannot reach it.
+    """One actions endpoint -> `(frame or None, throttled)`.
 
     The distinction `us_adjust` rests on: an empty frame is the vendor saying
-    "none on record", `None` is the vendor refusing. A refusal is recorded, not
-    retried into oblivion — if the endpoint is premium on this key it will
-    refuse forever, and the symbol's series is honestly split-only.
+    "none on record", `None` is the vendor refusing. A premium refusal is
+    recorded, not retried into oblivion — if the endpoint is premium on this
+    key it will refuse forever, and the symbol's series is honestly split-only.
+
+    A throttle is flagged separately because it is not an answer at all: it
+    says nothing about the symbol or the key. Stamping it as one is what used
+    to lock a downgraded `adjust_state` in for the 90 days until the actions
+    next went stale.
     """
     try:
-        return parse(client.get_json(function, symbol=symbol), symbol)
+        return parse(client.get_json(function, symbol=symbol), symbol), False
     except (PremiumOnly, RateLimited) as exc:
         logger.info(f"{symbol}: {function} unavailable ({exc}); "
                     "adjustment will be recorded as partial")
-        return None
+        return None, isinstance(exc, RateLimited)
+
+
+def _fetch_actions(client: Client, symbol: str) -> tuple:
+    """`((splits, throttled), (dividends, throttled))`. Two requests."""
+    return (_fetch_one_action(client, "SPLITS", symbol, parse_splits),
+            _fetch_one_action(client, "DIVIDENDS", symbol, parse_dividends))
 
 
 def fetch_actions(client: Client, symbol: str) -> tuple:
-    """Splits and dividends for one symbol. Two requests."""
-    return (_fetch_one_action(client, "SPLITS", symbol, parse_splits),
-            _fetch_one_action(client, "DIVIDENDS", symbol, parse_dividends))
+    """Splits and dividends for one symbol, `None` where refused. Two requests."""
+    (splits, _), (dividends, _) = _fetch_actions(client, symbol)
+    return splits, dividends
 
 
 def to_market_rows(symbol: str, bars: pd.DataFrame, state: str,
@@ -117,86 +128,6 @@ def to_market_rows(symbol: str, bars: pd.DataFrame, state: str,
         "source": f"{SOURCE}:{state}",
     })
     return fx_series.to_brl(out, rates)
-
-
-def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
-                actions_stale_days: int = ACTIONS_STALE_DAYS,
-                bulk_covered=frozenset()) -> list:
-    """What this run can afford to do, in the order it should do it.
-
-    Pure — no network, no database — so the policy can be tested directly, in
-    the spirit of `external_prices.days_to_fetch`.
-
-    `universe` is the symbols in preference order; the caller does the ordering
-    in SQL. The order here is between *kinds* of work:
-
-    1. symbols recorded as needing a retry, oldest first — the durable retry
-       queue, drained before new work, or a transient failure would keep its
-       place at the back of an eleven-thousand-symbol line forever;
-    2. symbols with no bars at all, in the caller's preference order — a
-       backtest is useless with eight random tickers and useful with the two
-       hundred largest;
-    3. symbols whose last bar is behind today;
-    4. symbols whose corporate actions have gone stale.
-
-    Returns `[(symbol, want_prices, want_actions)]` costing no more than
-    `budget` requests. A negative budget means no ceiling.
-    """
-    today = pd.Timestamp(today).date()
-    # One plain dict per cursor row, not one `pd.Series`. `iterrows` builds a
-    # Series per row and this lookup holds every one of them for the length of
-    # the run: at ~13,000 US symbols that measured ~19 MB retained and ~2.1 s to
-    # build, against ~5 MB and ~0.3 s here, on a scheduler that runs every day in
-    # the same worker a backtest shares. Nothing below wants a Series — the row
-    # is only ever read by column name.
-    state = {} if cursor.empty else {
-        r["symbol"]: r for r in cursor.to_dict("records")}
-
-    retry, fresh, stale_bars, stale_actions = [], [], [], []
-    for symbol in universe:
-        row = state.get(symbol)
-        if row is None:
-            fresh.append((symbol, True, True))
-            continue
-        if row.get("status") == "retry":
-            retry.append((symbol, True, _actions_due(row, today, actions_stale_days)))
-            continue
-        last = _as_date(row.get("last_bar"))
-        actions_due = _actions_due(row, today, actions_stale_days)
-        if last is None:
-            fresh.append((symbol, True, True))
-        elif last < today:
-            stale_bars.append((symbol, True, actions_due))
-        elif actions_due:
-            stale_actions.append((symbol, False, True))
-
-    retry, fresh, stale_bars, stale_actions = us_seam.demote_bulk_priced(
-        (retry, fresh, stale_bars, stale_actions), bulk_covered)
-
-    plan, spent = [], 0
-    for item in [*retry, *fresh, *stale_bars, *stale_actions]:
-        cost = (_PRICE_COST if item[1] else 0) + (_ACTIONS_COST if item[2] else 0)
-        if budget >= 0 and spent + cost > budget:
-            # Prices alone still make progress when actions do not fit.
-            if item[1] and budget >= 0 and spent + _PRICE_COST <= budget:
-                plan.append((item[0], True, False))
-                spent += _PRICE_COST
-            break
-        plan.append(item)
-        spent += cost
-    return plan
-
-
-def _as_date(value):
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    ts = pd.to_datetime(value, errors="coerce")
-    return None if pd.isna(ts) else ts.date()
-
-
-def _actions_due(row, today, stale_days: int) -> bool:
-    fetched = _as_date(row.get("actions_fetched_at"))
-    return fetched is None or (today - fetched).days >= stale_days
 
 
 SPLIT, DIVIDEND = "split", "dividend"
@@ -225,45 +156,97 @@ def _stored_actions(conn, symbol: str, prior_state):
     under a state of 'total_return' is a symbol with no splits and no dividends,
     which is most of them — and is why the state, not the row count, is the
     thing consulted.
+
+    Stored rows are evidence as well, in one direction only: an event is kept
+    only when its endpoint answered. So a kind with rows on file is used even
+    under a state that says its endpoint had not answered — which is how an
+    actions-only refresh that reached the dividends endpoint upgrades a
+    `split_only` series at the next price refresh, rather than never.
     """
-    if prior_state in (None, us_adjust.UNADJUSTED):
-        return None, None
     splits = us_storage.load_corporate_actions(conn, symbol, SPLIT).rename(
         columns={"value": "ratio"})
-    if prior_state == us_adjust.SPLIT_ONLY:
-        return splits, None
-    return splits, us_storage.load_corporate_actions(
-        conn, symbol, DIVIDEND).rename(columns={"value": "amount"})
+    dividends = us_storage.load_corporate_actions(conn, symbol, DIVIDEND).rename(
+        columns={"value": "amount"})
+    split_answered = prior_state in (us_adjust.SPLIT_ONLY, us_adjust.TOTAL_RETURN)
+    dividend_answered = prior_state == us_adjust.TOTAL_RETURN
+    return (splits if split_answered or not splits.empty else None,
+            dividends if dividend_answered or not dividends.empty else None)
+
+
+def _actions(conn, client, symbol, today, prior_state, observed) -> tuple:
+    """Buy both actions endpoints; stamp the purchase only if neither throttled.
+
+    A throttled half falls back to the stored events, so a refresh that hit the
+    vendor's rate limit rebuilds the adjustment it already had instead of
+    downgrading it, and the missing stamp makes the next run ask again.
+    """
+    (splits, s_throttled), (dividends, d_throttled) = _fetch_actions(client, symbol)
+    _persist_actions(conn, symbol, splits, dividends)
+    if not (s_throttled or d_throttled):
+        observed["actions_fetched_at"] = str(today)
+        return splits, dividends
+    stored_splits, stored_dividends = _stored_actions(conn, symbol, prior_state)
+    return (stored_splits if s_throttled else splits,
+            stored_dividends if d_throttled else dividends)
 
 
 def ingest_symbol(conn, client: Client, symbol: str, rates: pd.Series, *,
                   want_prices: bool, want_actions: bool, today,
                   prior_state=None) -> dict:
-    """Fetch, convert and write one symbol. Returns the row for the cursor."""
-    cursor = {"symbol": symbol, "status": "ok", "error": None, "attempts": 0}
+    """Fetch, convert and write one symbol.
+
+    Returns what the attempt observed — the cursor columns it established — with
+    its `price_cursor.Outcome` under "outcome". Vendor errors propagate; turning
+    either into a cursor row is `price_cursor.next_cursor`'s job, not this one's.
+    """
+    observed = {}
     if want_actions:
-        splits, dividends = fetch_actions(client, symbol)
-        _persist_actions(conn, symbol, splits, dividends)
-        cursor["actions_fetched_at"] = str(today)
+        splits, dividends = _actions(conn, client, symbol, today, prior_state,
+                                     observed)
     else:
         splits, dividends = _stored_actions(conn, symbol, prior_state)
 
     if not want_prices:
-        return cursor
+        return {**observed, "outcome": Outcome.ACTIONS}
 
     bars = fetch_prices(client, symbol)
-    cursor["prices_fetched_at"] = str(today)
+    observed["prices_fetched_at"] = str(today)
     if bars.empty:
         logger.warning(f"{symbol}: the vendor returned no bars")
-        return cursor
+        return {**observed, "outcome": Outcome.EMPTY}
 
     adjusted, state = us_adjust.apply(bars, splits, dividends)
     market_storage.upsert_market_prices(
         conn, to_market_rows(symbol, adjusted, state, rates))
-    cursor.update({"first_bar": str(bars["date"].iloc[0]),
-                   "last_bar": str(bars["date"].iloc[-1]),
-                   "adjust_state": state})
-    return cursor
+    observed.update({"first_bar": str(bars["date"].iloc[0]),
+                     "last_bar": str(bars["date"].iloc[-1]),
+                     "adjust_state": state})
+    return {**observed, "outcome": Outcome.BARS}
+
+
+def _attempt(conn, client, symbol, rates, want_prices, want_actions, today,
+             prior) -> tuple:
+    """One symbol, start to finish: `(outcome, the cursor row it leaves)`.
+
+    `BudgetExhausted` is not an outcome — nothing about the symbol was learned —
+    so it propagates and the caller stops.
+    """
+    try:
+        observed = ingest_symbol(conn, client, symbol, rates,
+                                 want_prices=want_prices,
+                                 want_actions=want_actions, today=today,
+                                 prior_state=(prior or {}).get("adjust_state"))
+    except BudgetExhausted:
+        raise
+    except BadRequest as exc:
+        return Outcome.BAD_REQUEST, next_cursor(
+            prior, symbol, Outcome.BAD_REQUEST, error=str(exc))
+    except Exception as exc:                               # noqa: BLE001
+        logger.error(f"{symbol}: {exc}")
+        return Outcome.FAILED, next_cursor(
+            prior, symbol, Outcome.FAILED, error=str(exc))
+    outcome = observed.pop("outcome")
+    return outcome, next_cursor(prior, symbol, outcome, observed)
 
 
 def _universe(conn) -> list:
@@ -313,27 +296,21 @@ def run_pipeline(db_path=None, limit: int = 0, today=None,
                            bulk_covered=bulk)
         logger.info(f"{len(plan):,} symbols planned against a budget of {budget}")
 
-        prior = {} if cursor_df.empty else dict(
-            zip(cursor_df["symbol"], cursor_df["adjust_state"]))
+        prior = {} if cursor_df.empty else {
+            r["symbol"]: r for r in cursor_df.to_dict("records")}
         rows, failed, exhausted = 0, [], False
         for i, (symbol, want_prices, want_actions) in enumerate(plan, 1):
             try:
-                cursor = ingest_symbol(conn, client, symbol, rates,
-                                       want_prices=want_prices,
-                                       want_actions=want_actions, today=today,
-                                       prior_state=prior.get(symbol))
+                outcome, cursor = _attempt(conn, client, symbol, rates, want_prices,
+                                           want_actions, today,
+                                           prior.get(symbol))
             except BudgetExhausted:
                 exhausted = True
                 break
-            except AlphaVantageError as exc:
+            # An empty series is the vendor answering, not failing: it moves
+            # the cursor towards `no_data` but is no evidence the vendor is gone.
+            if outcome in (Outcome.FAILED, Outcome.BAD_REQUEST):
                 failed.append(symbol)
-                cursor = {"symbol": symbol, "status": "retry",
-                          "error": str(exc)[:500]}
-            except Exception as exc:                       # noqa: BLE001
-                failed.append(symbol)
-                logger.error(f"{symbol}: {exc}")
-                cursor = {"symbol": symbol, "status": "retry",
-                          "error": str(exc)[:500]}
             # Inside the loop, before the next request: this is what makes a
             # run that dies halfway still worth having run.
             us_storage.upsert_price_cursor(conn, pd.DataFrame([cursor]))

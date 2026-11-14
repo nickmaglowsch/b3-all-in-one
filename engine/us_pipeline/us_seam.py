@@ -76,6 +76,17 @@ def demote_bulk_priced(buckets, covered) -> tuple:
     day buy the `split_only` -> `total_return` upgrade instead of re-buying bars
     the plane already has.
 
+    **That upgrade is bought but not yet applied.** The actions-only refresh
+    stores the events in `us_corporate_actions` and nothing more: `us_prices`
+    reads them back only when it rebuilds bars it bought itself, and for these
+    symbols it never does — that is this function's whole point — while
+    `us_daily` only appends split-adjusted sessions. Folding the dividends into
+    these bars needs its own pass, and not a trivial one: `us_adjust` measures a
+    distribution against the *raw* previous close, and these bars are already
+    split-adjusted, so reusing it as-is would mis-size every dividend paid before
+    a split. Until that pass exists the stored events are a record, these
+    symbols stay `split_only`, and `/market/status` says so.
+
     Demoted work lands in bucket 4, behind every symbol that still has no bars
     at all — a symbol the free vendor priced *has* bars and no longer belongs
     in the queue of symbols that have none. At 20 requests a day that ordering is the

@@ -16,8 +16,10 @@ from b3_pipeline import market_storage, storage, us_storage
 from us_pipeline import us_adjust, us_prices
 from us_pipeline.alphavantage import (
     AlphaVantageError,
+    BadRequest,
     BudgetExhausted,
     PremiumOnly,
+    RateLimited,
 )
 from tests.conftest import sqlite_db
 
@@ -353,3 +355,137 @@ def test_an_exhausted_budget_is_not_a_failure():
 def test_a_run_with_nothing_to_do_is_not_a_failure():
     """An empty plan means the plane is current, not that the vendor is gone."""
     assert not us_prices.total_failure({"planned": 0, "failed_count": 0})
+
+
+# ── the cursor's terminal states, end to end ──────────────────────────────────
+
+EMPTY_CSV = "timestamp,open,high,low,close,volume\n"
+
+
+class _Refused(_Stub):
+    """The vendor's "Error Message" envelope — what an unknown symbol gets."""
+
+    def get_csv(self, function, **params):
+        self._charge(function)
+        raise BadRequest(f"{function}: Invalid API call")
+
+
+class _Throttled(_Stub):
+    """Dividends throttled, everything else answering."""
+
+    def get_json(self, function, *, expect="data", **params):
+        if function == "DIVIDENDS":
+            self._charge(function)
+            raise RateLimited("DIVIDENDS: please slow down")
+        return super().get_json(function, expect=expect, **params)
+
+
+def _plane(tmp_path, monkeypatch, *symbols):
+    path = str(tmp_path / "prices.sqlite")
+    conn = sqlite3.connect(path)
+    storage.init_db(conn)
+    _universe(conn, *symbols)
+    conn.commit()
+    monkeypatch.setattr(us_prices.fx_series, "build", lambda d: pd.DataFrame())
+    monkeypatch.setattr(us_prices.fx_series, "load", lambda c: _rates())
+    return path
+
+
+def _run(path, monkeypatch, stub, today=TODAY):
+    monkeypatch.setattr(us_prices, "Client", lambda c, **kw: stub)
+    return us_prices.run_pipeline(db_path=path, today=today)
+
+
+def _row(path, symbol):
+    df = us_storage.load_price_cursor(sqlite3.connect(path))
+    return df.set_index("symbol").loc[symbol]
+
+
+def test_a_symbol_the_vendor_refuses_is_written_off_not_rebought(tmp_path,
+                                                                 monkeypatch):
+    """BadRequest says retrying cannot help, and it used to be retried at the
+    front of the queue every night, for ever."""
+    path = _plane(tmp_path, monkeypatch, "BOGUS")
+    for _ in range(3):
+        _run(path, monkeypatch, _Refused())
+    row = _row(path, "BOGUS")
+    assert row["status"] == "dead" and row["attempts"] == 3
+    assert "Invalid API call" in row["error"]
+
+    stub = _Stub()
+    out = _run(path, monkeypatch, stub)
+    assert stub.calls == [] and out["planned"] == 0
+
+
+def test_failures_are_counted_in_the_stored_cursor(tmp_path, monkeypatch):
+    path = _plane(tmp_path, monkeypatch, "FLAKY")
+    _run(path, monkeypatch, _Refused())
+    _run(path, monkeypatch, _Refused())
+    assert _row(path, "FLAKY")["attempts"] == 2
+    _run(path, monkeypatch, _Stub())
+    row = _row(path, "FLAKY")
+    assert row["status"] == "ok" and row["attempts"] == 0
+    assert row["last_bar"] == "2026-08-31"
+
+
+def test_a_symbol_the_vendor_has_no_bars_for_stops_being_bought(tmp_path,
+                                                                monkeypatch):
+    """It used to be stored as `ok` with no `last_bar` — which the scheduler
+    reads as never priced, so it was bought again every run."""
+    path = _plane(tmp_path, monkeypatch, "EMPTY")
+    first = _run(path, monkeypatch, _Stub(csv=EMPTY_CSV))
+    assert first["failed_count"] == 0, "an empty answer is not a vendor failure"
+    _run(path, monkeypatch, _Stub(csv=EMPTY_CSV))
+    assert _row(path, "EMPTY")["status"] == "no_data"
+
+    stub = _Stub(csv=EMPTY_CSV)
+    _run(path, monkeypatch, stub, today=TODAY + datetime.timedelta(days=1))
+    assert stub.calls == []
+
+
+def test_a_throttled_actions_call_is_not_stamped_as_an_answer(tmp_path):
+    """A throttle used to be filed with the premium refusals and stamped, which
+    locked the downgraded state in until the actions next went stale."""
+    conn = sqlite_db(tmp_path)
+    divs = [{"ex_dividend_date": "2026-08-31", "amount": "1.0"}]
+    first = us_prices.ingest_symbol(conn, _Stub(dividends=divs), "IBM", _rates(),
+                                    want_prices=True, want_actions=True,
+                                    today=TODAY)
+    assert first["adjust_state"] == us_adjust.TOTAL_RETURN
+    adj = list(_prices(conn, "IBM")["adj_close"])
+
+    again = us_prices.ingest_symbol(conn, _Throttled(), "IBM", _rates(),
+                                    want_prices=True, want_actions=True,
+                                    today=TODAY,
+                                    prior_state=first["adjust_state"])
+    assert "actions_fetched_at" not in again
+    assert again["adjust_state"] == us_adjust.TOTAL_RETURN
+    assert list(_prices(conn, "IBM")["adj_close"]) == pytest.approx(adj)
+
+
+def test_a_premium_refusal_is_still_stamped(tmp_path):
+    conn = sqlite_db(tmp_path)
+    out = us_prices.ingest_symbol(conn, _Stub(premium=("DIVIDENDS",)), "IBM",
+                                  _rates(), want_prices=True, want_actions=True,
+                                  today=TODAY)
+    assert out["actions_fetched_at"] == str(TODAY)
+
+
+def test_dividends_an_actions_only_refresh_bought_reach_the_next_rebuild(tmp_path):
+    """An actions-only refresh stores events but writes no bars, so the next
+    price refresh is where they land. It used to consult only the recorded
+    state, under which a `split_only` symbol's new dividends were never read."""
+    conn = sqlite_db(tmp_path)
+    first = us_prices.ingest_symbol(conn, _Stub(premium=("DIVIDENDS",)), "IBM",
+                                    _rates(), want_prices=True,
+                                    want_actions=True, today=TODAY)
+    assert first["adjust_state"] == us_adjust.SPLIT_ONLY
+    divs = [{"ex_dividend_date": "2026-08-31", "amount": "1.0"}]
+    us_prices.ingest_symbol(conn, _Stub(dividends=divs), "IBM", _rates(),
+                            want_prices=False, want_actions=True, today=TODAY,
+                            prior_state=first["adjust_state"])
+    again = us_prices.ingest_symbol(conn, _Stub(), "IBM", _rates(),
+                                    want_prices=True, want_actions=False,
+                                    today=TODAY,
+                                    prior_state=first["adjust_state"])
+    assert again["adjust_state"] == us_adjust.TOTAL_RETURN

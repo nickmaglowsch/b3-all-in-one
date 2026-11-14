@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CHART, SERIES, TICK_STYLE } from "./theme";
+import { CHART, SERIES, TICK_STYLE, oneLine } from "./theme";
 import { ChartTooltip } from "./ChartTooltip";
 import { NoData } from "./NoData";
 
@@ -30,7 +30,7 @@ export interface Series {
 }
 
 // `undefined` is allowed: a series need not cover every row (an overlay the API
-// could not fetch is simply absent from each point, and recharts skips it).
+// could not fetch is simply absent from each point; see `connectNulls` below).
 type Row = Record<string, string | number | undefined>;
 
 // Multi-series line. 2px strokes, recessive hairline grid, crosshair tooltip,
@@ -58,9 +58,13 @@ export function LineSeries({
   // instead of at each of the four call sites.
   if (data.length === 0) return <NoData height={height} />;
   return (
-    <div style={{ width: "100%", height }}>
+    // A column: the legend takes what it needs and the plot gets the rest. The
+    // plot used to be a fixed "88%" of the box, so a legend that wrapped to a
+    // second line (four runs, or two runs and two rulers) pushed the x-axis
+    // out of the bottom of the card.
+    <div className="flex flex-col" style={{ width: "100%", height }}>
       {series.length >= 2 && (
-        <ul className="mb-2 flex flex-wrap gap-x-4 gap-y-1">
+        <ul className="mb-2 flex shrink-0 flex-wrap gap-x-4 gap-y-1">
           {series.map((s, i) => (
             <li
               key={s.key}
@@ -85,7 +89,8 @@ export function LineSeries({
           ))}
         </ul>
       )}
-      <ResponsiveContainer width="100%" height={series.length >= 2 ? "88%" : "100%"}>
+      <div className="min-h-0 flex-1">
+      <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={MARGIN}>
           <CartesianGrid stroke={CHART.grid} vertical={false} />
           <XAxis
@@ -96,12 +101,19 @@ export function LineSeries({
             minTickGap={40}
             tickFormatter={labelFormat}
           />
+          {/* The axis fits the data, not zero. A money curve that runs from
+              R$ 100 mil to R$ 180 mil on an axis pinned at R$ 0 spends two
+              thirds of the plot on empty space and flattens the very
+              differences a comparison is for. In the percent reading 0% is in
+              the data, so the baseline is still on screen there.
+              72px so "R$ 180 mil" fits on one line — at 56 it wrapped. */}
           <YAxis
             tick={TICK_STYLE}
             tickLine={false}
             axisLine={false}
-            width={56}
-            tickFormatter={valueFormat}
+            width={72}
+            domain={["auto", "auto"]}
+            tickFormatter={(v: number) => oneLine(valueFormat ? valueFormat(v) : String(v))}
           />
           <Tooltip
             cursor={{ stroke: CHART.axis, strokeDasharray: "3 3" }}
@@ -122,12 +134,20 @@ export function LineSeries({
               strokeDasharray={s.dash}
               strokeWidth={s.dash ? 1.5 : 2}
               dot={false}
+              // Bridge the holes. Rows are the union of every line's dates, so
+              // a month-end run beside a daily one has a value on one row in
+              // twenty-one — and without this recharts draws a segment only
+              // between *adjacent* values, i.e. none: the run sat in the legend
+              // and showed up only as the hover dot. A line that starts later
+              // still starts later: leading gaps are not bridged.
+              connectNulls
               activeDot={{ r: 3 }}
               isAnimationActive={false}
             />
           ))}
         </LineChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }

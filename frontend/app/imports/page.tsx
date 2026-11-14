@@ -13,6 +13,7 @@ import {
 import type { ImportRow } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
+import { Pager, usePageSize, usePaged } from "@/components/ui/Pager";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -100,35 +101,26 @@ export default function ImportsPage() {
       <div className="space-y-6">
         <UploadZone />
 
-        <Card title="Onde baixar os extratos">
-          <ol className="ml-4 list-decimal space-y-1.5 text-sm text-ink">
-            <li>
-              Acesse a{" "}
-              <span className="font-medium">Área do Investidor</span> da B3
-              (investidor.b3.com.br) e entre com sua conta gov.br.
-            </li>
-            <li>
-              Vá em <span className="font-medium">Extratos e Informativos</span> →{" "}
-              <span className="font-medium">Negociação</span> e{" "}
-              <span className="font-medium">Movimentação</span>, escolha o período e
-              baixe cada um em Excel (.xlsx).
-            </li>
-            <li>Envie os dois tipos acima para montar posições, negociações e proventos.</li>
-            <li>
-              Para renda fixa ainda em carteira, baixe também o{" "}
-              <span className="font-medium">Relatório Consolidado Mensal</span> (mesma
-              tela). Ele traz o preço atualizado de cada CDB, LCI, LCA e CRI — é o que
-              coloca esses contratos na rentabilidade sem você digitar a taxa. Um por
-              mês; quanto mais meses, mais pontos na curva.
-            </li>
-          </ol>
-          <p className="mt-4 border-t border-hairline pt-3 text-sm text-muted">
-            Baixe o período mais longo possível. Se um extrato começar depois das suas
-            primeiras compras, algumas vendas ficam sem custo de origem (histórico
-            incompleto) e o cálculo de proventos e ganho de capital pode ficar
-            impreciso.
-          </p>
-        </Card>
+        {/* First visit: the how-to is the page. Once something is imported it
+            is a reference, folded to one line so the list is not a screen
+            below the upload zone. */}
+        {rows.length === 0 ? (
+          <Card title="Onde baixar os extratos">
+            <HowTo />
+          </Card>
+        ) : (
+          <details className="group rounded-lg border border-hairline bg-panel">
+            <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold text-ink sm:px-4">
+              <span className="mr-2 inline-block text-muted transition-transform group-open:rotate-90" aria-hidden>
+                ›
+              </span>
+              Onde baixar os extratos
+            </summary>
+            <div className="border-t border-hairline p-3 sm:p-4">
+              <HowTo />
+            </div>
+          </details>
+        )}
 
         <Card title="Extratos enviados">
           {q.isLoading ? (
@@ -140,12 +132,56 @@ export default function ImportsPage() {
               hint="Envie os .xlsx de negociação e movimentação da B3 usando a área acima."
             />
           ) : (
-            <div className="max-h-[28rem] overflow-y-auto">
-              <DataTable columns={columns} rows={rows} getRowKey={(r) => r.id} label="Extratos importados" />
-            </div>
+            <ImportsTable rows={rows} />
           )}
         </Card>
       </div>
+    </>
+  );
+}
+
+// Ten at a time, newest first. Was a 28rem box with its own scrollbar inside the
+// page's — two scrolls, and the inner one invisible until you hovered it.
+function ImportsTable({ rows }: { rows: ImportRow[] }) {
+  const paged = usePaged(rows, usePageSize(10, 5));
+  return (
+    <>
+      <DataTable columns={columns} rows={paged.items} getRowKey={(r) => r.id} label="Extratos importados" />
+      <Pager {...paged} onPage={paged.setPage} />
+    </>
+  );
+}
+
+function HowTo() {
+  return (
+    <>
+      <ol className="ml-4 list-decimal space-y-1.5 text-sm text-ink">
+        <li>
+          Acesse a{" "}
+          <span className="font-medium">Área do Investidor</span> da B3
+          (investidor.b3.com.br) e entre com sua conta gov.br.
+        </li>
+        <li>
+          Vá em <span className="font-medium">Extratos e Informativos</span> →{" "}
+          <span className="font-medium">Negociação</span> e{" "}
+          <span className="font-medium">Movimentação</span>, escolha o período e
+          baixe cada um em Excel (.xlsx).
+        </li>
+        <li>Envie os dois tipos acima para montar posições, negociações e proventos.</li>
+        <li>
+          Para renda fixa ainda em carteira, baixe também o{" "}
+          <span className="font-medium">Relatório Consolidado Mensal</span> (mesma
+          tela). Ele traz o preço atualizado de cada CDB, LCI, LCA e CRI — é o que
+          coloca esses contratos na rentabilidade sem você digitar a taxa. Um por
+          mês; quanto mais meses, mais pontos na curva.
+        </li>
+      </ol>
+      <p className="mt-4 border-t border-hairline pt-3 text-sm text-muted">
+        Baixe o período mais longo possível. Se um extrato começar depois das suas
+        primeiras compras, algumas vendas ficam sem custo de origem (histórico
+        incompleto) e o cálculo de proventos e ganho de capital pode ficar
+        impreciso.
+      </p>
     </>
   );
 }

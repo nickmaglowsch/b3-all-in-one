@@ -9,7 +9,7 @@ export function Card({
   className?: string;
   title?: React.ReactNode;
   action?: React.ReactNode;
-  /** anchor target for SectionNav */
+  /** anchor target */
   id?: string;
 }) {
   return (

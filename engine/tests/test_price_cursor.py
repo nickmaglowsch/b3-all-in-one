@@ -156,6 +156,20 @@ def test_a_no_data_recheck_comes_after_every_other_kind_of_work():
     assert [p[0] for p in plan] == ["NEW", "S", "E"]
 
 
+def test_a_bulk_priced_symbol_whose_actions_were_just_bought_is_left_alone():
+    """The row an actions-only refresh leaves has no `last_bar`. Read as never
+    priced, it was demoted to "buy the actions" again — every run, for the same
+    few symbols at the top of the universe."""
+    cursor = _cursor(AAPL={"status": "ok", "last_bar": None,
+                           "actions_fetched_at": str(TODAY)})
+    assert pc.select_work(["AAPL"], cursor, budget=-1, today=TODAY,
+                          bulk_covered={"AAPL"}) == []
+    stale = _cursor(AAPL={"status": "ok", "last_bar": None,
+                          "actions_fetched_at": "2026-01-01"})
+    assert pc.select_work(["AAPL"], stale, budget=-1, today=TODAY,
+                          bulk_covered={"AAPL"}) == [("AAPL", False, True)]
+
+
 @pytest.mark.parametrize("status", ["ok", "retry", None])
 def test_legacy_rows_schedule_as_before(status):
     cursor = _cursor(A={"status": status, "last_bar": None,

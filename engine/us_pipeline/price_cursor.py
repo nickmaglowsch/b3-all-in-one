@@ -131,7 +131,7 @@ def next_cursor(prior, symbol: str, outcome: Outcome, observed=None,
 
 # ── The scheduler ─────────────────────────────────────────────────────────────
 
-def as_date(value):
+def _as_date(value):
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return None
     ts = pd.to_datetime(value, errors="coerce")
@@ -139,8 +139,18 @@ def as_date(value):
 
 
 def _due(stamp, today, days: int) -> bool:
-    fetched = as_date(stamp)
+    fetched = _as_date(stamp)
     return fetched is None or (today - fetched).days >= days
+
+
+def _actions_fresh(row, today, stale_days: int) -> bool:
+    """A bulk-priced symbol's only work is its actions; with those fresh it has
+    none. Asked before `_classify` because the cursor row an actions-only
+    refresh leaves has no `last_bar`, which `_classify` reads as never priced —
+    and `us_seam.demote_bulk_priced` turns "never priced" into "buy the actions",
+    so the same few symbols had their actions re-bought every single run."""
+    return row is not None and not _due(row.get("actions_fetched_at"), today,
+                                        stale_days)
 
 
 def _classify(symbol, row, today, stale_days: int):
@@ -156,7 +166,7 @@ def _classify(symbol, row, today, stale_days: int):
     if status is CursorStatus.NO_DATA:
         recheck = _due(row.get("prices_fetched_at"), today, NO_DATA_RECHECK_DAYS)
         return ("no_data", (symbol, True, actions_due)) if recheck else None
-    last = as_date(row.get("last_bar"))
+    last = _as_date(row.get("last_bar"))
     if last is None:
         return "fresh", (symbol, True, True)
     if last < today:
@@ -236,7 +246,10 @@ def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
     buckets = {k: [] for k in
                ("retry", "fresh", "stale_bars", "stale_actions", "no_data")}
     for symbol in universe:
-        work = _classify(symbol, state.get(symbol), today, actions_stale_days)
+        row = state.get(symbol)
+        if symbol in bulk_covered and _actions_fresh(row, today, actions_stale_days):
+            continue
+        work = _classify(symbol, row, today, actions_stale_days)
         if work is not None:
             buckets[work[0]].append(work[1])
 

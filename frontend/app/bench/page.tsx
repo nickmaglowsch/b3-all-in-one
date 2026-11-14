@@ -1,12 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Strategy } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { LoadFailure } from "@/components/ui/EmptyState";
 import { errorText } from "@/lib/api";
 import { isDone } from "@/lib/jobStatus";
+import { CLOSED, cloneBlocked, withClone, type FormMode } from "@/lib/strategyFormMode";
 import { StrategyGallery } from "./StrategyGallery";
 import { RunPanel } from "./RunPanel";
 import { RunsList } from "./RunsList";
@@ -21,7 +21,7 @@ export default function BenchPage() {
   const backtests = useBacktests();
   const [selected, setSelected] = useState<string | null>(null);
   const [compareIds, setCompareIds] = useState<string[]>([]);
-  const [cloneFrom, setCloneFrom] = useState<Strategy | null>(null);
+  const [form, setForm] = useState<FormMode>(CLOSED);
 
   const selectedStrategy = useMemo(
     () => strategies.data?.find((s) => s.name === selected) ?? null,
@@ -75,7 +75,8 @@ export default function BenchPage() {
           <RunPanel
             strategy={selectedStrategy}
             onRan={() => {}}
-            onClone={setCloneFrom}
+            onClone={(s) => setForm((m) => withClone(m, s))}
+            cloneBlocked={cloneBlocked(form)}
           />
         </Card>
       </div>
@@ -83,8 +84,8 @@ export default function BenchPage() {
       <div className="mt-4">
         <UserStrategies
           onBacktest={setSelected}
-          cloneFrom={cloneFrom}
-          onConsumeClone={() => setCloneFrom(null)}
+          mode={form}
+          setMode={setForm}
         />
       </div>
 

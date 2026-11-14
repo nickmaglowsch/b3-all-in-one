@@ -22,14 +22,59 @@ import { Field, inputCls } from "./Field";
 // scale. The default stays "ME" (see useState below); this only orders them.
 const FREQS = [REBALANCE_FREQS[2], REBALANCE_FREQS[0], REBALANCE_FREQS[1]];
 
+// Clonar opens the rule form below; while that form is editing a saved strategy
+// it is off, and the reason sits under the header (lib/strategyFormMode.ts).
+function RunHeader({
+  strategy,
+  onClone,
+  cloneBlocked,
+}: {
+  strategy: Strategy;
+  onClone?: (s: Strategy) => void;
+  cloneBlocked?: string | null;
+}) {
+  const clonable = !!onClone && strategy.source !== "user";
+  return (
+    <>
+      <div className="mb-4 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink">{strategy.name}</h3>
+          <p className="mt-1 text-xs leading-snug text-muted">{strategy.description}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {clonable && (
+            <button
+              type="button"
+              onClick={() => onClone?.(strategy)}
+              disabled={!!cloneBlocked}
+              aria-describedby={cloneBlocked ? "clone-blocked" : undefined}
+              className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-navy hover:bg-hairline/40 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Clonar
+            </button>
+          )}
+          <KindBadge kind={strategy.kind} />
+        </div>
+      </div>
+      {clonable && cloneBlocked && (
+        <p id="clone-blocked" className="-mt-2 mb-4 text-[11px] text-muted">
+          {cloneBlocked}
+        </p>
+      )}
+    </>
+  );
+}
+
 export function RunPanel({
   strategy,
   onRan,
   onClone,
+  cloneBlocked,
 }: {
   strategy: Strategy | null;
   onRan: () => void;
   onClone?: (s: Strategy) => void;
+  cloneBlocked?: string | null;
 }) {
   const [start, setStart] = useState("2023-01-01");
   const [end, setEnd] = useState("");
@@ -68,24 +113,7 @@ export function RunPanel({
 
   return (
     <div>
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-ink">{strategy.name}</h3>
-          <p className="mt-1 text-xs leading-snug text-muted">{strategy.description}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {onClone && strategy.source !== "user" && (
-            <button
-              type="button"
-              onClick={() => onClone(strategy)}
-              className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-navy hover:bg-hairline/40"
-            >
-              Clonar
-            </button>
-          )}
-          <KindBadge kind={strategy.kind} />
-        </div>
-      </div>
+      <RunHeader strategy={strategy} onClone={onClone} cloneBlocked={cloneBlocked} />
 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Início">

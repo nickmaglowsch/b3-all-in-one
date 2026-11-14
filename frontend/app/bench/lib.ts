@@ -11,6 +11,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { isBusy } from "@/lib/jobStatus";
 import { withQuery } from "@/lib/url";
 import type { Dated } from "@/lib/chartRange";
 import type { Levels, Proxied } from "@/lib/benchmarks";
@@ -24,8 +25,6 @@ export function useStrategies() {
   });
 }
 
-const busy = (s: string) => s === "pending" || s === "running";
-
 export function useBacktests() {
   return useQuery({
     queryKey: ["backtests"],
@@ -33,7 +32,7 @@ export function useBacktests() {
     queryFn: () => api<BacktestRun[]>("/backtests", {}, { paywallDialog: false }),
     // Poll while any run is in flight, otherwise rest.
     refetchInterval: (q) =>
-      (q.state.data ?? []).some((r) => busy(r.status)) ? 2500 : false,
+      (q.state.data ?? []).some((r) => isBusy(r.status)) ? 2500 : false,
   });
 }
 
@@ -45,7 +44,7 @@ export function useBacktest(id: string) {
     // No id, no request: "/backtests/" is the *list*, which answers 200 with an
     // array — a run with no status, rendered as "Rodando a simulação…" forever.
     enabled: id !== "",
-    refetchInterval: (q) => (q.state.data && busy(q.state.data.status) ? 2000 : false),
+    refetchInterval: (q) => (isBusy(q.state.data?.status) ? 2000 : false),
   });
 }
 

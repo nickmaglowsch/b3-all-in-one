@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { LoadFailure } from "@/components/ui/EmptyState";
 import { errorText } from "@/lib/api";
+import { isDone } from "@/lib/jobStatus";
 import { StrategyGallery } from "./StrategyGallery";
 import { RunPanel } from "./RunPanel";
 import { RunsList } from "./RunsList";
@@ -32,7 +33,7 @@ export default function BenchPage() {
     const byId = new Map((backtests.data ?? []).map((r) => [r.id, r]));
     return compareIds
       .map((id) => byId.get(id))
-      .filter((r): r is NonNullable<typeof r> => r?.status === "done");
+      .filter((r): r is NonNullable<typeof r> => isDone(r?.status));
   }, [backtests.data, compareIds]);
 
   const toggleCompare = (id: string) =>

@@ -3,10 +3,10 @@
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { isBusy } from "@/lib/jobStatus";
 import {
   dependsOnImports,
   importsSettledSince,
-  isBusyImport,
   snapshotImports,
   type ImportSnapshot,
 } from "@/lib/importDeps";
@@ -28,7 +28,7 @@ const KIND_LABEL: Record<string, string> = {
   unknown: "Desconhecido",
 };
 
-const isBusy = (r: ImportRow) => isBusyImport(r.status);
+const busyRow = (r: ImportRow) => isBusy(r.status);
 
 /** When an import finishes, everything built from the extracts is stale —
  *  positions, trades, income, tax, index. Mark it so; the screens that are
@@ -87,7 +87,7 @@ export default function ImportsPage() {
     queryFn: () => api<ImportRow[]>("/imports"),
     // Poll only while something is still being processed; stop once all settled.
     refetchInterval: (query) =>
-      (query.state.data ?? []).some(isBusy) ? 2000 : false,
+      (query.state.data ?? []).some(busyRow) ? 2000 : false,
   });
   useRefreshBookOnImport(q.data);
 

@@ -1,6 +1,8 @@
 // Hand-written types mirroring platform_app/routes.py + main.py responses.
 // Keep in lockstep with the API (see GET /openapi.json for the schema-defined bits).
 
+import type { BacktestStatus, ImportStatus } from "./jobStatus";
+
 export interface Me {
   id: string;
   email: string;
@@ -87,15 +89,14 @@ export interface MarketStatus {
   >;
 }
 
-// Imports move pending → processing → done | error; backtests use "running" not
-// "processing". StatusBadge handles the union.
-export type JobStatus = "pending" | "processing" | "running" | "done" | "error";
+// Imports and backtests name their in-flight state differently: lib/jobStatus.ts.
+export type { JobStatus } from "./jobStatus";
 
 export interface ImportRow {
   id: string;
   filename: string;
   kind: string; // "negociacao" | "movimentacao" | "unknown"
-  status: JobStatus;
+  status: ImportStatus;
   error: string | null;
   parser_version: string | null;
   created_at: string | null;
@@ -278,7 +279,7 @@ export interface SaveStrategyResult extends UserStrategy {
 export interface BacktestRun {
   id: string;
   strategy: string;
-  status: JobStatus;
+  status: BacktestStatus;
   error: string | null;
   params: Record<string, unknown> | null;
   metrics: Record<string, unknown> | null;

@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
+import { isDone, isFinished } from "@/lib/jobStatus";
 import { useDeleteBacktest } from "./lib";
 
 // Rows must be clickable → /bench/run?id=. DataTable (frozen) has no onRowClick, so
@@ -138,8 +139,8 @@ function Row({
   // A run the worker still holds cannot be deleted (the API answers 409): the
   // engine is writing into its artifacts directory, and the queue quota counts
   // exactly these rows.
-  const done = run.status === "done";
-  const finished = done || run.status === "error";
+  const done = isDone(run.status);
+  const finished = isFinished(run.status);
 
   return (
     <tr

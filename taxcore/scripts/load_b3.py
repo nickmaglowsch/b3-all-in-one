@@ -88,7 +88,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts import b3_rules
+from scripts import b3_rules, renda_fixa
 from scripts.b3_options import EMPTY_OPT_STATS, process_option_activity
 from scripts.preco_medio import caminhar
 
@@ -203,17 +203,12 @@ MOV_CATEGORY = {
     "Bonificação em Ativos": "qty_event",
     "Fração em Ativos":      "qty_event",
     # --- Renda fixa contract lifecycle (CDB, LCI, LCA, CRI, CRA, debêntures,
-    # Tesouro Direto). Aplicação is the buy, resgate/vencimento the sell — the
-    # same shape as a trade, so they need no special case downstream. Same
-    # labels irpf_2026.renda_fixa_year_end already recognises; keep in step.
-    "APLICAÇÃO":                        "trade",
-    "APLICAÇÃO/DEPÓSITO":               "trade",
-    "VENCIMENTO":                       "trade",
-    "VENCIMENTO/RESGATE SALDO EM CONTA": "trade",
-    "RESGATE ANTECIPADO":               "trade",
-    "Resgate":                          "trade",
-    # RETIRADA DE CUSTÓDIA is two unrelated events under one label and is
-    # resolved per row below, not here.
+    # Tesouro Direto). renda_fixa owns these labels: every renda fixa row is
+    # re-read through renda_fixa.rf_kind in parse_movimentacao, the same table
+    # irpf_2026.renda_fixa_year_end reads. Listed here as trades — aplicação is
+    # the buy, resgate/vencimento the sell, the same shape as a trade — only so
+    # the label is known; RETIRADA DE CUSTÓDIA is resolved per row there too.
+    **dict.fromkeys(renda_fixa.CICLO, "trade"),
 }
 
 
@@ -226,15 +221,14 @@ _TICKER_RE = re.compile(r"^[A-Z][A-Z0-9]{3}\d{1,2}$")
 # Renda fixa products, which B3 books as 'PREFIX - <contrato> - <emissor>'
 # ('CDB - CDB24C7HQ2L - BANCO ORIGINAL S/A') or, for Tesouro Direto, as a plain
 # name ('Tesouro Selic 2029'). Case-insensitive because B3 writes the bank paper
-# in caps and the Tesouro titles in mixed case. Same prefix list as
-# irpf_2026.renda_fixa_year_end — copied rather than imported, like _TICKER_RE
-# is across this repo, because the two run in different processes. Keep in step.
+# in caps and the Tesouro titles in mixed case. The one copy: ativos_b3 imports
+# it as RF_PREFIX_RE, which is what irpf_2026.renda_fixa_year_end matches with.
 _RF_PREFIX_RE = re.compile(
     r"^(CDB|LCI|LCA|LC|LF|CRA|CRI|TESOURO|DEB|NTN|LTN|LFT|RDB)\b", re.IGNORECASE)
 
 # B3's own label for the market these are booked under. Shared by listed
 # fixed-income ETFs (LFTB11), which is why the ticker decides, never the label.
-RENDA_FIXA_MARKET = "Renda Fixa"
+RENDA_FIXA_MARKET = renda_fixa.RENDA_FIXA_MARKET
 
 
 def _rf_code(produto: str) -> str | None:
@@ -267,10 +261,59 @@ def _extract_ticker(produto: str) -> str | None:
     return _rf_code(produto)
 
 
+_RF_CATEGORY = {renda_fixa.APLIC: "trade", renda_fixa.RESGATE: "trade",
+                renda_fixa.FROZEN: "frozen", renda_fixa.AMORT: "amort",
+                renda_fixa.JUROS: "other"}
+
+
+def _classify_renda_fixa(raw: pd.DataFrame) -> None:
+    """Re-read every renda fixa row through renda_fixa.rf_kind, in place.
+
+    The table irpf_2026.renda_fixa_year_end reads too, so the two cannot drift.
+    Scoped to renda fixa: on an equity RETIRADA DE CUSTÓDIA is a custody
+    transfer to another broker — the shares move, nothing is sold — and booking
+    it as a Venda would invent a realized gain that feeds the month's AÇÃO gross,
+    the R$20k isenção headroom and the DARF. For equities it stays `skip`. A
+    label the table has no rule for keeps MOV_CATEGORY's reading.
+    """
+    rf = raw["is_rf"]
+    raw["rf_kind"] = renda_fixa.OTHER
+    raw.loc[rf, "rf_kind"] = [
+        renda_fixa.rf_kind(m, d.startswith("credito"), bool(v > 0))
+        for m, d, v in zip(raw.loc[rf, "mov_type"], raw.loc[rf, "direction"],
+                           raw.loc[rf, "amount"].fillna(0))]
+    raw["category"] = raw["rf_kind"].map(_RF_CATEGORY).fillna(raw["category"])
+
+
+def _renda_fixa_units(trade_rows: pd.DataFrame) -> pd.DataFrame:
+    """Renda fixa trades priced from their own Valor; rows with no usable numbers dropped.
+
+    Renda fixa is denominated inconsistently: the same R$25k CDB aplicação is
+    2,500,000 units at PU 0.01 in one report and a CRI is 8 units at PU 1035.42
+    in another. `Valor ≈ Quantidade × PU` holds under either, so the PU is
+    derived from the ratio rather than trusting a convention. A row with no
+    Quantidade at all keeps it empty here: how many units it moved depends on
+    the rest of the contract, possibly in another extract, and is decided over
+    the whole book by renda_fixa.preencher_quantidades. Equities keep B3's own
+    Preço unitário untouched.
+    """
+    rf = trade_rows["is_rf"]
+    if rf.any():
+        qty = trade_rows["qty"].where(trade_rows["qty"] > 0)
+        pu = (trade_rows["amount"] / qty).where(trade_rows["amount"] > 0)
+        trade_rows.loc[rf, "qty"] = qty[rf]
+        trade_rows.loc[rf, "price"] = pu[rf].fillna(trade_rows.loc[rf, "price"])
+    trade_rows = trade_rows.dropna(subset=["date", "ticker"])
+    rf = trade_rows["is_rf"]
+    priced = (trade_rows["qty"] > 0) & (trade_rows["price"] > 0)
+    unitless = rf & trade_rows["qty"].isna() & (trade_rows["amount"] > 0)
+    return trade_rows[priced | unitless]
+
+
 def read_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Parse a Movimentação .xlsx into (trades, cash_events) DataFrames."""
     trades, cash_events, _review = parse_movimentacao(path)
-    return trades, cash_events
+    return renda_fixa.preencher_quantidades(trades, cash_events), cash_events
 
 
 def parse_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[dict]]:
@@ -296,40 +339,16 @@ def parse_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[dic
     raw["category"] = raw["mov_type"].map(MOV_CATEGORY).fillna("skip")
     raw["is_rf"] = raw["Produto"].map(_rf_code).notna()
 
-    # RETIRADA DE CUSTÓDIA is two unrelated events sharing one label. With a
-    # settlement value it is a transfer out that paid — a resgate. With none it
-    # is custody frozen (issuer under intervention, FGC pending): the paper still
-    # exists, is still declarable at cost, and booking it as a sale would report
-    # a redemption that never happened. Mirrors irpf_2026.py's `frozen` branch.
-    # Scoped to renda fixa. On an equity the same label is a custody transfer to
-    # another broker: the shares move, nothing is sold, and booking it as a Venda
-    # invents a realized gain that feeds the month's AÇÃO gross, the R$20k
-    # isenção headroom and the DARF. It was `skip` before this branch existed,
-    # and for equities it stays `skip`.
-    held = (raw["mov_type"] == "RETIRADA DE CUSTÓDIA") & raw["is_rf"]
-    raw.loc[held, "category"] = np.where(
-        raw.loc[held, "amount"].fillna(0) > 0, "trade", "frozen")
+    _classify_renda_fixa(raw)
 
     trade_rows = raw[raw["category"] == "trade"].copy()
-    # Direction -> Compra/Venda; skip rows missing essential numeric fields.
+    # Direction -> Compra/Venda, except where renda_fixa's table says which leg
+    # the label is; skip rows missing essential numeric fields.
     trade_rows["side"] = trade_rows["direction"].map(
         lambda d: "Compra" if d.startswith("credito") else "Venda")
-
-    # Renda fixa is denominated inconsistently: the same R$25k CDB aplicação is
-    # 2,500,000 units at PU 0.01 in one report and a CRI is 8 units at PU
-    # 1035.42 in another. `Valor ≈ Quantidade × PU` holds under either, so derive
-    # the PU from the ratio rather than trusting a convention, and fall back to
-    # one unit priced at the whole amount when a report carries no quantity at
-    # all. Equities keep B3's own Preço unitário untouched.
-    rf = trade_rows["is_rf"]
-    if rf.any():
-        qty = trade_rows["qty"].where(trade_rows["qty"] > 0).fillna(1.0)
-        pu = (trade_rows["amount"] / qty).where(trade_rows["amount"] > 0)
-        trade_rows.loc[rf, "qty"] = qty[rf]
-        trade_rows.loc[rf, "price"] = pu[rf].fillna(trade_rows.loc[rf, "price"])
-
-    trade_rows = trade_rows.dropna(subset=["date", "ticker", "qty", "price"])
-    trade_rows = trade_rows[(trade_rows["qty"] > 0) & (trade_rows["price"] > 0)]
+    trade_rows.loc[trade_rows["rf_kind"] == renda_fixa.APLIC, "side"] = "Compra"
+    trade_rows.loc[trade_rows["rf_kind"] == renda_fixa.RESGATE, "side"] = "Venda"
+    trade_rows = _renda_fixa_units(trade_rows)
     # A Liquidação row is dated when the trade settled, D+2 — a sale made on
     # 30/01 lands in February. Walked back to the trade date over the B3
     # calendar. Renda fixa rows are dated by the event itself and stay put.
@@ -380,7 +399,9 @@ def parse_movimentacao(path: Path) -> tuple[pd.DataFrame, pd.DataFrame, list[dic
         bonus = cash_rows["mov_type"].str.startswith("Bonificação")
         cash_rows.loc[qty_mask & ~bonus, "price"] = np.nan
 
-    review = b3_rules.review_rows(raw, set(MOV_CATEGORY))
+    # A renda fixa row renda_fixa has a rule for is known, whatever its label.
+    review = b3_rules.review_rows(
+        raw[~raw["is_rf"] | (raw["rf_kind"] == renda_fixa.OTHER)], set(MOV_CATEGORY))
     return trades, cash_rows[EVENT_COLS], review
 
 
@@ -908,6 +929,9 @@ def main(argv: list[str]) -> int:
     # trades_for_positions and before deriving positions, so old- and new-coded
     # rows roll up as one security everywhere.
     trades = apply_ticker_renames(trades)
+    # A renda fixa row with no Quantidade gets its units here, over the whole
+    # deduplicated book: its aplicação may sit in another extract.
+    trades = renda_fixa.preencher_quantidades(trades, cash_events)
 
     if args.since:
         cutoff = datetime.fromisoformat(args.since)

@@ -36,6 +36,7 @@ from scripts.ativos_b3 import (  # noqa: F401
     RF_PREFIX_RE, UNITS_NOT_FII, asset_class, fii_presumido, irpf_classification,
 )
 from scripts.realizacao import apurar, realized_per_month, snapshot_positions  # noqa: F401
+from scripts.renda_fixa import APLIC, FROZEN, RESGATE, Contrato, rf_kind
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -192,6 +193,59 @@ RF_KINDS = {
 }
 
 
+def _rf_extract() -> pd.DataFrame:
+    """Every renda fixa row of every uploaded Movimentação, with its code, bank
+    and what it does to the contract (renda_fixa.rf_kind — the table load_b3
+    classifies the same rows with)."""
+    files = sorted((ROOT / "b3_imports").glob("movimentacao*.xlsx"))
+    if not files:
+        return pd.DataFrame()
+    mov = pd.concat([pd.read_excel(f) for f in files], ignore_index=True)
+    mov["Data"] = pd.to_datetime(mov["Data"], errors="coerce", dayfirst=True)
+    mov["Valor"] = pd.to_numeric(mov["Valor da Operação"], errors="coerce")
+    mov["dir"] = mov["Entrada/Saída"].astype(str).str.strip().str.lower()
+    mov["mov_type"] = mov["Movimentação"].astype(str).str.strip()
+    mov["Qtd"] = pd.to_numeric(mov.get("Quantidade"), errors="coerce")
+
+    rf = mov[mov["Produto"].astype(str).str.match(
+        RF_PREFIX_RE.pattern, case=False, na=False)].copy()
+
+    def parts(p):
+        return [x.strip() for x in p.split(" - ")]
+
+    rf["code"] = rf["Produto"].map(lambda p: " - ".join(parts(p)[:2]) if len(parts(p)) >= 2 else p)
+    rf["bank"] = rf["Produto"].map(lambda p: parts(p)[2] if len(parts(p)) >= 3 else "")
+    rf["cat"] = [rf_kind(m, d.startswith("credito"), pd.notna(v) and float(v) > 0)
+                 for m, d, v in zip(rf["mov_type"], rf["dir"], rf["Valor"])]
+    return rf
+
+
+def _rf_saldos(g: pd.DataFrame, year: int) -> tuple[Contrato, float, float]:
+    """(contract walked to the end, cost on 31/12/(year-1), cost on 31/12/year).
+
+    One chronological walk in preço médio, renda_fixa.Contrato — the one
+    load_b3 prices a resgate with no Quantidade by, and whose units then go
+    through the same preço médio walk as every other holding — so positions.csv
+    and Bens e Direitos cannot report different cost bases for one contract.
+    An aplicação made after a year-end is not counted into it, a partial
+    resgate leaves the rest declared, and an amortização reduces the cost.
+    """
+    prev_eoy = pd.Timestamp(f"{year-1}-12-31")
+    cur_eoy = pd.Timestamp(f"{year}-12-31")
+    c = Contrato(por_quantidade=float(g.loc[g["cat"] == APLIC, "Qtd"].fillna(0).sum()) > 0)
+    value_prev = value_cur = None
+    for _, r in g.iterrows():
+        if value_prev is None and r["Data"] > prev_eoy:
+            value_prev = c.cost
+        if value_cur is None and r["Data"] > cur_eoy:
+            value_cur = c.cost
+        valor = float(r["Valor"]) if pd.notna(r["Valor"]) else 0.0
+        qtd = float(r["Qtd"]) if pd.notna(r["Qtd"]) else 0.0
+        c.lancar(r["cat"], valor, qtd, r["Data"].year)
+    return (c, c.cost if value_prev is None else value_prev,
+            c.cost if value_cur is None else value_cur)
+
+
 def renda_fixa_year_end(year: int) -> pd.DataFrame:
     """Build per-product saldo snapshot at 31/12/(year-1) and 31/12/year.
 
@@ -204,156 +258,20 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
     resgate takes its share of the cost and leaves the rest declared, and an
     aplicação made *after* a year-end is not counted into that year-end.
     """
-    files = sorted((ROOT / "b3_imports").glob("movimentacao*.xlsx"))
-    if not files:
+    rf = _rf_extract()
+    if rf.empty:
         return pd.DataFrame()
-    mov_dfs = [pd.read_excel(f) for f in files]
-    mov = pd.concat(mov_dfs, ignore_index=True)
-    mov["Data"] = pd.to_datetime(mov["Data"], errors="coerce", dayfirst=True)
-    mov["Valor"] = pd.to_numeric(mov["Valor da Operação"], errors="coerce")
-    mov["dir"] = mov["Entrada/Saída"].astype(str).str.strip().str.lower()
-    mov["mov_type"] = mov["Movimentação"].astype(str).str.strip()
-    mov["Qtd"] = pd.to_numeric(mov.get("Quantidade"), errors="coerce")
-
-    rf = mov[mov["Produto"].astype(str).str.match(
-        RF_PREFIX_RE.pattern, case=False, na=False)].copy()
-
-    def code_of(p):
-        parts = [x.strip() for x in p.split(" - ")]
-        return f"{parts[0]} - {parts[1]}" if len(parts) >= 2 else p
-
-    def bank_of(p):
-        parts = [x.strip() for x in p.split(" - ")]
-        return parts[2] if len(parts) >= 3 else ""
-
-    rf["code"] = rf["Produto"].map(code_of)
-    rf["bank"] = rf["Produto"].map(bank_of)
-    rf["prefix"] = rf["code"].str.split(" - ").str[0]
-
     rows = []
-    prev_eoy = pd.Timestamp(f"{year-1}-12-31")
-    cur_eoy = pd.Timestamp(f"{year}-12-31")
     for code, g in rf.groupby("code"):
         g = g.sort_values("Data")
-        def cat(r):
-            m = r["mov_type"]
-            d = r["dir"]
-            has_value = pd.notna(r["Valor"]) and float(r["Valor"]) > 0
-            # Tesouro Direto is booked as a plain Compra / Venda, which
-            # load_b3.MOV_CATEGORY has always read as a trade — so leaving them
-            # out here dropped every Tesouro position from the report while its
-            # trades parsed fine everywhere else. The two must agree.
-            if m in ("APLICAÇÃO", "APLICAÇÃO/DEPÓSITO", "Compra"): return "aplic"
-            if m in ("VENCIMENTO", "VENCIMENTO/RESGATE SALDO EM CONTA",
-                     "RESGATE ANTECIPADO", "Resgate", "Venda"):
-                return "resgate"
-            # Labels B3 uses for both legs of a round trip; Entrada/Saída is the
-            # only thing that separates them.
-            if m in ("COMPRA / VENDA", "COMPRA/VENDA DEFINITIVA/CESSAO",
-                     "MDA COMPRA/VENDA DEFINITIVA MERCADO PRIMARIO",
-                     "Transferência - Liquidação"):
-                return "aplic" if d.startswith("credito") else "resgate"
-            if m == "RETIRADA DE CUSTÓDIA":
-                return "frozen" if not has_value else "resgate"
-            # Coupon paid during the contract's life (CRI/CRA/debênture). Real
-            # income, unlike AMORTIZAÇÃO, which returns principal.
-            if m in ("PAGAMENTO DE JUROS", "JUROS"):
-                return "juros"
-            # Principal returned mid-life (CRI / CRA / debênture): not income,
-            # and not an exit — it reduces the cost basis and leaves the
-            # quantity alone, exactly as load_b3.derive_positions treats it.
-            if m in ("AMORTIZAÇÃO", "Amortização"):
-                return "amort"
-            return "other"
-        g = g.assign(cat=g.apply(cat, axis=1))
-
-        aplic_total = g.loc[g["cat"] == "aplic", "Valor"].sum()
-        aplic_dates = g.loc[g["cat"] == "aplic", "Data"]
-        first_aplic = aplic_dates.min() if not aplic_dates.empty else None
-        exit_rows = g[g["cat"].isin(["resgate", "frozen"])]
-        first_exit = exit_rows["Data"].min() if not exit_rows.empty else None
-        is_frozen = (g["cat"] == "frozen").any()
-
-        # One chronological walk in preço médio, the same accounting
-        # load_b3.derive_positions applies to every other holding — so the two
-        # surfaces cannot report different cost bases for one contract.
-        #
-        # Three things it fixes at once: summing every aplicação regardless of
-        # date reported a contract's *final* size as its 31/12/(Y-1) balance;
-        # treating the first resgate as terminal wrote a partially redeemed
-        # contract out of Bens e Direitos entirely; and an amortização (CRI /
-        # CRA principal returned in instalments) never reduced the declared
-        # cost at all. Quantities are what let a partial resgate take its
-        # share; a report carrying none falls back to all-or-nothing.
-        walk = g.sort_values("Data")
-        by_qty = float(walk.loc[walk["cat"] == "aplic", "Qtd"].fillna(0).sum()) > 0
-
-        def _num(v):
-            return float(v) if pd.notna(v) else 0.0
-
-        qty = cost = 0.0
-        value_prev = value_cur = None
-        rendimento_cur = juros_cur = 0.0
-        # True when a resgate drew on cost this extract never saw — the aplicação
-        # predates the downloaded window. Its gain cannot be computed from these
-        # rows at all, so the report says so instead of declaring the proceeds as
-        # if they were all profit. Mirrors load_b3's `incomplete_history`.
-        incomplete = False
-        for _, r in walk.iterrows():
-            if value_prev is None and r["Data"] > prev_eoy:
-                value_prev = cost
-            if value_cur is None and r["Data"] > cur_eoy:
-                value_cur = cost
-            v, q, when = _num(r["Valor"]), _num(r["Qtd"]), r["Data"]
-            if r["cat"] == "aplic":
-                cost += v
-                qty += q
-            elif r["cat"] == "amort":
-                # Clamped, exactly as derive_positions:819 clamps it. An extract
-                # whose window opens mid-life shows instalments whose principal
-                # was never seen going in, and an unclamped subtraction prints a
-                # negative custo de aquisição straight into Bens e Direitos.
-                if v > cost:
-                    incomplete = True
-                cost = max(0.0, cost - v)
-            elif r["cat"] == "juros" and when.year == year:
-                juros_cur += v
-            elif r["cat"] == "resgate":
-                # How much of the position left, as a fraction of the cost still
-                # carried. Quantity decides when the row has one — that is preço
-                # médio. When it does not, the money does: consume cost up to the
-                # proceeds. That fallback is what the all-or-nothing branch was
-                # supposed to be and never was (with no quantities anywhere `qty`
-                # stayed 0, so `consumed` was always 0: a fully redeemed contract
-                # stayed declared at full cost *and* booked its own principal as
-                # income). Scaling `qty` by the same share keeps the two
-                # consistent for whichever row comes next.
-                if by_qty and q > 0 and qty > 0:
-                    share = min(q, qty) / qty
-                elif cost > 0:
-                    share = min(v, cost) / cost
-                else:
-                    # Proceeds against no cost at all: everything this contract
-                    # was bought with is outside the extract.
-                    share = 0.0
-                    if v > 0:
-                        incomplete = True
-                consumed = cost * share
-                if when.year == year and not incomplete:
-                    rendimento_cur += v - consumed
-                cost -= consumed
-                qty -= qty * share
-            # "frozen" deliberately consumes nothing: a custody withdrawal that
-            # never settled paid the holder nothing, so the paper is still owned
-            # and still declarable — which is what the ⚠ note in the report says.
-        value_prev = cost if value_prev is None else value_prev
-        value_cur = cost if value_cur is None else value_cur
+        c, value_prev, value_cur = _rf_saldos(g, year)
+        juros_cur = c.juros[year]
 
         held_prev = value_prev > 0.005
         held_cur = value_cur > 0.005
         # A contract opened and fully redeemed inside the year holds nothing at
         # either year-end, but its gain is still declarable — so it stays.
-        redeemed_in_year = ((g["cat"] == "resgate")
+        redeemed_in_year = ((g["cat"] == RESGATE)
                             & (g["Data"].dt.year == year)).any()
         # Coupons and the incomplete flag keep a contract in the report even when
         # it holds nothing at either year-end: a CRI whose aplicação predates the
@@ -361,11 +279,11 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
         # dropping the row would lose that income silently rather than disclose
         # the gap — which is the wrong half of the trade-off to take.
         if not (held_prev or held_cur or redeemed_in_year
-                or abs(juros_cur) > 0.005 or incomplete):
+                or abs(juros_cur) > 0.005 or c.incomplete):
             continue  # not relevant for IRPF this year
 
-        rendimento_cur = round(rendimento_cur, 2)
-
+        aplic = g[g["cat"] == APLIC]
+        exits = g.loc[g["cat"].isin([RESGATE, FROZEN]), "Data"]
         bank = next((b for b in g["bank"] if isinstance(b, str) and b), "")
         # Upper-cased for the buckets below, which are all upper-case literals.
         # B3 caps the bank paper but writes Tesouro titles mixed-case, so
@@ -380,15 +298,20 @@ def renda_fixa_year_end(year: int) -> pd.DataFrame:
             "code": code,
             "bank": bank,
             "kind_label": kind_label,
-            "aplic_value": round(aplic_total, 2),
-            "first_aplic": first_aplic,
-            "exit_date": first_exit,
-            "is_frozen": is_frozen,
+            "aplic_value": round(aplic["Valor"].sum(), 2),
+            "first_aplic": aplic["Data"].min() if not aplic.empty else None,
+            "exit_date": exits.min() if not exits.empty else None,
+            "is_frozen": c.frozen,
             "value_prev": round(value_prev, 2),
             "value_cur": round(value_cur, 2),
-            "rendimento_cur": rendimento_cur,
+            "rendimento_cur": round(c.rendimento[year], 2),
             "juros_cur": round(juros_cur, 2),
-            "incomplete": incomplete,
+            # True when a resgate drew on cost this extract never saw — the
+            # aplicação predates the downloaded window. Its gain cannot be
+            # computed from these rows at all, so the report says so instead of
+            # declaring the proceeds as if they were all profit. Mirrors
+            # load_b3's `incomplete_history`.
+            "incomplete": c.incomplete,
             "irpf_grupo": "04",
             "irpf_codigo": irpf_c,
         })

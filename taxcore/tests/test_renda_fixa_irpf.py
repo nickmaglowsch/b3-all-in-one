@@ -245,3 +245,58 @@ def test_each_prefix_lands_on_its_irpf_codigo_and_label(book, produto, grupo, co
     r = only(book([["Credito", "01/06/2025", "APLICAÇÃO", produto,
                     "XP", 1, 1_000.00, 1_000.00]]))
     assert (r["irpf_grupo"], r["irpf_codigo"], r["kind_label"]) == (grupo, codigo, label)
+
+
+# --- a resgate with no quantity, on both surfaces ----------------------------
+
+def _two_surfaces(book, tmp_path, rows):
+    """(Bens e Direitos row, positions.csv row or None, incomplete) for one contract."""
+    from scripts.load_b3 import derive_positions, read_movimentacao
+
+    irpf = only(book(rows, year=2025))
+    trades, events = read_movimentacao(tmp_path / "b3_imports" / "movimentacao-test.xlsx")
+    positions, incomplete = derive_positions(trades, cash_events=events)
+    return irpf, (positions.iloc[0] if not positions.empty else None), incomplete
+
+
+def test_k4_partial_resgates_with_no_quantity_agree_on_both_surfaces(book, tmp_path):
+    """Case K4: R$ 10.000 applied, then 5.200 and 5.400 redeemed, no Quantidade
+    anywhere. Bens e Direitos took a money share and held 4.800 in between;
+    positions.csv priced each row as one unit, closed the whole contract at the
+    first resgate and flagged the second as a sale of nothing."""
+    k4 = "CDB - K4 - BANCO X S/A"
+    rows = [["Credito", "01/06/2024", "APLICAÇÃO", k4, "XP", None, None, 10_000.00],
+            ["Debito", "01/03/2025", "RESGATE ANTECIPADO", k4, "XP", None, None, 5_200.00]]
+    irpf, pos, incomplete = _two_surfaces(book, tmp_path, rows)
+    assert irpf["value_cur"] == pytest.approx(4_800.00)
+    assert pos is not None and pos["total_cost"] == pytest.approx(4_800.00)
+    assert incomplete == []
+
+    rows.append(["Debito", "01/11/2025", "VENCIMENTO", k4, "XP", None, None, 5_400.00])
+    irpf, pos, incomplete = _two_surfaces(book, tmp_path, rows)
+    assert irpf["value_cur"] == 0.0 and pos is None
+    assert incomplete == [] and not irpf["incomplete"]
+
+
+def test_a_resgate_with_no_quantity_takes_its_money_share_of_a_contract_in_units(book, tmp_path):
+    """The aplicação carries units, the resgate does not. Read as one unit, the
+    resgate took 1 of 2.000.000 units and left the whole contract declared in
+    positions.csv; Bens e Direitos took the 55% its proceeds cover."""
+    k5 = "CDB - K5 - BANCO X S/A"
+    irpf, pos, incomplete = _two_surfaces(book, tmp_path, [
+        ["Credito", "01/06/2024", "APLICAÇÃO", k5, "XP", 2_000_000, 0.01, 20_000.00],
+        ["Debito", "01/06/2025", "RESGATE ANTECIPADO", k5, "XP", None, None, 11_000.00]])
+    assert irpf["value_cur"] == pytest.approx(9_000.00)
+    assert pos["total_cost"] == pytest.approx(9_000.00)
+    assert pos["qty"] == pytest.approx(900_000)
+    assert incomplete == []
+
+
+def test_an_amortizacao_before_a_resgate_with_no_quantity_counts_on_both(book, tmp_path):
+    k6 = "CRI - K6 - OPEA S/A"
+    irpf, pos, _incomplete = _two_surfaces(book, tmp_path, [
+        ["Credito", "05/12/2024", "APLICAÇÃO", k6, "XP", None, None, 10_000.00],
+        ["Credito", "15/03/2025", "AMORTIZAÇÃO", k6, "XP", None, None, 2_000.00],
+        ["Debito", "15/06/2025", "RESGATE ANTECIPADO", k6, "XP", None, None, 4_000.00]])
+    assert irpf["value_cur"] == pytest.approx(4_000.00)
+    assert pos["total_cost"] == pytest.approx(4_000.00)

@@ -34,6 +34,9 @@ export default function IrpfPage() {
       }),
     onSuccess: (data) => setGenerated(data),
   });
+  // Same for a failure: "não foi possível gerar" belongs to the year that failed,
+  // not to the one picked after it.
+  const failed = gen.isError && gen.variables === year;
 
   return (
     <>
@@ -70,27 +73,40 @@ export default function IrpfPage() {
         <DarfLedger />
       </div>
 
-      {gen.isPending ? (
-        <ReportSkeleton />
-      ) : gen.isError ? (
-        <div className="rounded-lg border border-loss/30 bg-loss/[0.04] p-4">
-          <p className="text-sm font-medium text-loss" role="alert">
-            Não foi possível gerar o relatório.
-          </p>
-          <p className="mt-1 text-sm text-muted">
-            {gen.error instanceof Error ? gen.error.message : "Erro inesperado."}
-          </p>
-        </div>
-      ) : report ? (
-        <IrpfReport markdown={report.markdown} />
-      ) : (
-        <EmptyState
-          icon={<IconReceipt size={28} />}
-          title="Nenhum relatório gerado — escolha o ano-base e gere o relatório."
-          hint="Bens e Direitos, proventos e ganhos de capital, prontos para colar no programa do IRPF."
-        />
-      )}
+      <ReportArea pending={gen.isPending} error={failed ? gen.error : null} report={report} />
     </>
+  );
+}
+
+function ReportArea({
+  pending,
+  error,
+  report,
+}: {
+  pending: boolean;
+  error: unknown;
+  report: IrpfResponse | null;
+}) {
+  if (pending) return <ReportSkeleton />;
+  if (error) {
+    return (
+      <div className="rounded-lg border border-loss/30 bg-loss/[0.04] p-4">
+        <p className="text-sm font-medium text-loss" role="alert">
+          Não foi possível gerar o relatório.
+        </p>
+        <p className="mt-1 text-sm text-muted">
+          {error instanceof Error ? error.message : "Erro inesperado."}
+        </p>
+      </div>
+    );
+  }
+  if (report) return <IrpfReport markdown={report.markdown} />;
+  return (
+    <EmptyState
+      icon={<IconReceipt size={28} />}
+      title="Nenhum relatório gerado — escolha o ano-base e gere o relatório."
+      hint="Bens e Direitos, proventos e ganhos de capital, prontos para colar no programa do IRPF."
+    />
   );
 }
 

@@ -11,6 +11,8 @@ import { LoadFailure } from "@/components/ui/EmptyState";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconCompass } from "@/components/icons";
+import { StaleHint } from "@/components/ui/StaleHint";
+import { asSet, isStale } from "@/lib/staleResult";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate } from "@/lib/format";
 import type { UserStrategy } from "@/lib/types";
@@ -608,11 +610,10 @@ function RebalancePanel() {
   const toggle = (t: string) =>
     setExclude((xs) => (xs.includes(t) ? xs.filter((x) => x !== t) : [...xs, t]));
 
-  const onPlan = () =>
-    plan.mutate({
-      new_cash: parseFloat(newCash) || 0,
-      exclude: exclude.length ? exclude : undefined,
-    });
+  // What "Gerar plano" would send now; the plan on screen is checked against it.
+  const request = { new_cash: parseFloat(newCash) || 0, exclude: exclude.length ? exclude : undefined };
+  const onPlan = () => plan.mutate(request);
+  const stale = isStale(plan.variables, request, (b) => ({ ...b, exclude: asSet(b.exclude) }));
 
   return (
     <Card title="Plano de rebalanceamento">
@@ -671,6 +672,7 @@ function RebalancePanel() {
           </p>
         )}
 
+        {plan.data && stale && <StaleHint action="Gerar plano" />}
         {plan.data && <PlanResult plan={plan.data} />}
 
         <p className="border-t border-hairline pt-3 text-[11px] text-muted">

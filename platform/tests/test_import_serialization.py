@@ -119,3 +119,30 @@ async def test_uploads_while_a_job_waits_share_it(client, tmp_path, monkeypatch)
             "SELECT lock FROM procrastinate_jobs WHERE task_name = 'process_imports'"
             " AND status = 'todo' AND args->>'tenant_id' = %(t)s", t=str(tid))
     assert jobs == [{"lock": f"imports:{tid}"}]
+
+
+async def test_a_book_the_database_refuses_ends_in_error_not_processing(
+        fake_load_b3, tmp_path, monkeypatch):
+    """Migration 9d4e2b7c1f05's incident, by another constraint: load_b3 succeeds,
+    the insert of its book violates the schema, and the job died with its
+    transaction — every import left `processing` for good, behind a page that
+    polls while anything is. They end in `error` (a ref, not the SQL), the book
+    is untouched, and the job still fails loudly."""
+    tid = uuid.uuid4()
+    first = await _upload(tid, tmp_path, "posicao.xlsx")
+    real = b3run.run_module
+
+    def duplicate_marks(ws: Path, args: list[str]) -> subprocess.CompletedProcess:
+        proc = real(ws, args)
+        (ws / "data" / "rf_marks.csv").write_text(MARKS + MARKS.splitlines()[1] + "\n")
+        return proc
+
+    monkeypatch.setattr(b3run, "run_module", duplicate_marks)
+    with pytest.raises(Exception, match="uq_rf_marks"):
+        await tasks.process_imports.func(str(tid))
+
+    async with async_session_maker() as s:
+        imp = await s.get(Import, first)
+    assert imp.status == "error"
+    assert imp.error.startswith("importação falhou (ref ")
+    assert await _count(Trade, tid) == 0

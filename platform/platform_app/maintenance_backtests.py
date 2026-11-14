@@ -43,16 +43,18 @@ import uuid
 from collections import Counter
 from pathlib import Path
 
-from sqlalchemy import func, not_, null, or_, select, update
+from sqlalchemy import func, not_, null, or_, select
 
 from platform_app import tasks
 from platform_app.config import settings
 from platform_app.db import async_session_maker
+from platform_app.jobstatus import (
+    BACKTEST_FINISHED, BACKTEST_INFLIGHT, BacktestStatus, transition,
+)
 from platform_app.models import BacktestRun
 from platform_app.routes_backtest_retention import artifacts_dir
 
 KEY = "sharpe_risk_free"
-INFLIGHT = ("pending", "running")
 # Past SUBPROCESS_TIMEOUT_S the engine is killed and run_backtest writes `error`
 # within seconds; a run still `running` this long after is a dead worker's.
 RUN_MARGIN_S = 300
@@ -98,7 +100,7 @@ def _stale():
 
 def _qualifying(tenants):
     q = select(BacktestRun.id, BacktestRun.tenant_id, BacktestRun.strategy).where(
-        BacktestRun.status == "done", _stale())
+        BacktestRun.status == BacktestStatus.DONE, _stale())
     if tenants:
         q = q.where(BacktestRun.tenant_id.in_(tenants))
     return q.order_by(BacktestRun.created_at, BacktestRun.id)
@@ -125,7 +127,7 @@ async def _backup(rid: uuid.UUID) -> bool:
     longer qualifies (deleted, or finished elsewhere) — nothing is written."""
     async with async_session_maker() as session:
         run = await session.get(BacktestRun, rid)
-        if run is None or run.status != "done":
+        if run is None or run.status != BacktestStatus.DONE:
             return False
         snap = {c: getattr(run, c) for c in _COLUMNS}
         snap["finished_at"] = run.finished_at.isoformat() if run.finished_at else None
@@ -146,20 +148,24 @@ async def _reset(rid: uuid.UUID) -> bool:
     """done → pending, only if the row still qualifies. Metrics and
     artifacts_path stay until the new run overwrites them."""
     async with async_session_maker() as session:
-        res = await session.execute(
-            update(BacktestRun)
-            .where(BacktestRun.id == rid, BacktestRun.status == "done", _stale())
-            .values(status="pending", error=None, finished_at=None)
-            .returning(BacktestRun.id)
-            .execution_options(synchronize_session=False))
-        changed = res.first() is not None
+        changed = await transition(
+            session, BacktestRun, (BacktestRun.id == rid) & _stale(), (BacktestStatus.DONE,),
+            status=BacktestStatus.PENDING, error=None, finished_at=None)
         await session.commit()
     return changed
 
 
-async def _restore(rid: uuid.UUID) -> None:
+async def _restore(rid: uuid.UUID) -> bool:
     """Put the backup back — row first, so a row deleted meanwhile does not get
-    artifacts nothing points at — then drop the backup."""
+    artifacts nothing points at — then drop the backup.
+
+    Never over a `running` row. That is a worker writing this run's directory
+    right now — a run past run_timeout, or a job picked up just as we gave up
+    on it — and the row is its to finish: overwriting it would make the
+    worker's final compare-and-set miss and delete the very artifacts put back
+    here. False then, and nothing is touched, the backup included: the next
+    session's _recover settles it once the run has ended.
+    """
     backup = _backup_dir(rid)
     snap = json.loads((backup / "row.json").read_text())
     finished = snap["finished_at"]
@@ -167,11 +173,13 @@ async def _restore(rid: uuid.UUID) -> None:
     values["metrics"] = null() if snap["metrics"] is None else snap["metrics"]
     values["finished_at"] = datetime.datetime.fromisoformat(finished) if finished else None
     async with async_session_maker() as session:
-        res = await session.execute(
-            update(BacktestRun).where(BacktestRun.id == rid).values(**values)
-            .returning(BacktestRun.id).execution_options(synchronize_session=False))
-        exists = res.first() is not None
+        exists = await transition(session, BacktestRun, BacktestRun.id == rid,
+                                  (BacktestStatus.PENDING, *BACKTEST_FINISHED), **values)
+        running = not exists and await session.scalar(
+            select(BacktestRun.status).where(BacktestRun.id == rid)) == BacktestStatus.RUNNING
         await session.commit()
+    if running:
+        return False
 
     def _files() -> None:
         shutil.rmtree(artifacts_dir(rid), ignore_errors=True)
@@ -180,6 +188,7 @@ async def _restore(rid: uuid.UUID) -> None:
         shutil.rmtree(backup)
 
     await asyncio.to_thread(_files)
+    return True
 
 
 async def _drop_backup(rid: uuid.UUID) -> None:
@@ -217,10 +226,10 @@ async def _wait(rid: uuid.UUID, queue_timeout: float, run_timeout: float) -> str
     waiting_since, running_since, picked_up = time.monotonic(), None, False
     while True:
         status, _, _ = await _state(rid)
-        if status not in INFLIGHT:
+        if status not in BACKTEST_INFLIGHT:
             return None
         now = time.monotonic()
-        if status == "running":
+        if status == BacktestStatus.RUNNING:
             running_since = running_since or now
             if now - running_since > run_timeout:
                 return "timeout"
@@ -239,7 +248,8 @@ async def _settle(rid: uuid.UUID, timeouts: tuple[float, float],
     """Wait out the run, then keep its new result or restore the old one:
     ``("ok" | "failed" | "deleted", why)``. ``requeue``: defer it if it is
     pending with no job — a session killed between the reset and the defer."""
-    if requeue and (await _state(rid))[0] == "pending" and await _live_job(rid) is None:
+    if (requeue and (await _state(rid))[0] == BacktestStatus.PENDING
+            and await _live_job(rid) is None):
         await _defer(rid)
     stopped = await _wait(rid, *timeouts)
     status, has_key, error = await _state(rid)
@@ -247,11 +257,13 @@ async def _settle(rid: uuid.UUID, timeouts: tuple[float, float],
         await asyncio.to_thread(shutil.rmtree, artifacts_dir(rid), True)
         await _drop_backup(rid)
         return "deleted", "run deleted meanwhile"
-    if stopped is None and status == "done" and has_key:
+    if stopped is None and status == BacktestStatus.DONE and has_key:
         await _drop_backup(rid)
         return "ok", ""
-    await _restore(rid)
-    return "failed", stopped or f"{status}: {(error or '').strip()[-300:]}"
+    why = stopped or f"{status}: {(error or '').strip()[-300:]}"
+    if not await _restore(rid):
+        return "failed", f"{why}; still running, backup kept for the next session"
+    return "failed", why
 
 
 # ── the task ──────────────────────────────────────────────────────────────────

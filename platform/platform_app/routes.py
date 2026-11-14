@@ -162,9 +162,9 @@ async def create_imports(
 
     # One job for the whole batch, and per tenant (see defer_process_imports).
     # ponytail: per-request procrastinate pool — imports are rare human actions.
-    async with tasks.app.open_async():
-        await tasks.defer_process_imports(tid)
-
+    await tasks.defer_or_fail(
+        session, created, "importação", lambda: tasks.defer_process_imports(tid),
+        ImportStatus.PENDING, status=ImportStatus.ERROR)
     return [
         {"id": str(i.id), "filename": i.filename, "kind": i.kind, "status": i.status}
         for i in created
@@ -1708,8 +1708,9 @@ async def create_backtest(
     await session.commit()
 
     # ponytail: per-request procrastinate pool — mirrors the imports path.
-    async with tasks.app.open_async():
-        await tasks.run_backtest.defer_async(run_id=str(run.id))
+    await tasks.defer_or_fail(
+        session, [run], "backtest", lambda: tasks.run_backtest.defer_async(run_id=str(run.id)),
+        BacktestStatus.PENDING, status=BacktestStatus.ERROR, finished_at=func.now())
     return _run_dict(run)
 
 

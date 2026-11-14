@@ -11,7 +11,7 @@ import zipfile
 
 import pandas as pd
 import pytest
-from b3_pipeline import storage
+from b3_pipeline import market_storage, storage, us_storage
 from us_pipeline import us_adjust, wiki_archive, wiki_backfill
 from tests.conftest import sqlite_db
 
@@ -151,7 +151,47 @@ def test_the_frozen_dataset_never_claims_a_delisting(tmp_path):
     assert pd.isna(row["delist_reason"])
     assert pd.isna(row["listing_date"])              # declared, not observed
     assert row["first_seen"] == "2018-03-26"         # observed, safe to write
-    assert row["last_seen"] == "2018-03-27"
+    # The directory's column: it dates delistings and fences recycled tickers
+    # with it, and a frozen file has no business setting either.
+    assert pd.isna(row["last_seen"])
+
+
+def test_the_frozen_dataset_does_not_move_the_directorys_last_sighting(tmp_path):
+    conn = sqlite_db(tmp_path)
+    market_storage.upsert_instruments(conn, pd.DataFrame([{
+        "market": "US", "symbol": "AAA", "currency": "USD",
+        "first_seen": "2026-01-05", "last_seen": "2026-09-01"}]))
+    path = _zip(tmp_path, [_row("AAA", "2014-01-02"), _row("AAA", "2018-03-27")])
+    for symbol, bars in wiki_archive.iter_symbols(str(path)):
+        wiki_backfill.ingest_symbol(conn, symbol, bars, PTAX, TODAY)
+    row = storage.read_sql(
+        "SELECT * FROM instruments WHERE symbol='AAA'", conn).iloc[0]
+    assert row["last_seen"] == "2026-09-01"
+    assert row["first_seen"] == "2014-01-02"         # the earliest sighting
+
+
+def test_a_rerun_never_moves_a_newer_cursor_backwards(tmp_path, monkeypatch):
+    """The metered feed priced AAA through last week and gave up on BBB. A
+    re-run of the 2018 archive used to reset the first to 2018 — re-queueing a
+    re-buy — and wipe the second's verdict."""
+    conn = sqlite_db(tmp_path)
+    us_storage.upsert_price_cursor(conn, pd.DataFrame([
+        {"symbol": "AAA", "last_bar": "2026-08-28", "status": "ok",
+         "adjust_state": "split_only", "attempts": 0},
+        {"symbol": "BBB", "status": "dead", "attempts": 3, "error": "Invalid"},
+    ]))
+    monkeypatch.setattr(wiki_backfill.fx_series, "build", lambda d: pd.DataFrame())
+    monkeypatch.setattr(wiki_backfill.fx_series, "load", lambda c: PTAX)
+    path = _zip(tmp_path, [_row("AAA", "2018-03-27"), _row("BBB", "2018-03-27"),
+                           _row("CCC", "2018-03-27")])
+    wiki_backfill.run_pipeline(db_path=str(tmp_path / "engine.sqlite"),
+                               zip_path=str(path), limit=3, today=TODAY)
+
+    cursor = us_storage.load_price_cursor(conn).set_index("symbol")
+    assert cursor.loc["AAA", "last_bar"] == "2026-08-28"
+    assert cursor.loc["AAA", "adjust_state"] == "split_only"
+    assert cursor.loc["BBB", "status"] == "dead"
+    assert cursor.loc["CCC", "last_bar"] == "2018-03-27"   # new rows still land
 
 
 def test_a_truncated_export_is_refused_after_the_stream(tmp_path):

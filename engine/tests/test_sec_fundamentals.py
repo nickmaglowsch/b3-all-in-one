@@ -14,6 +14,7 @@ from __future__ import annotations
 import sqlite3
 
 import pandas as pd
+import pytest
 
 from b3_pipeline import storage
 from us_pipeline.sec_parser import parse_companyfacts
@@ -323,7 +324,7 @@ def test_an_empty_plane_bootstraps_from_the_bulk_archive(tmp_path, monkeypatch):
     assert out["rows"] == 1
 
 
-def test_a_populated_plane_stays_incremental(tmp_path, monkeypatch):
+def test_a_plane_whose_bulk_pass_completed_stays_incremental(tmp_path, monkeypatch):
     """The bulk archive is ~1.5 GB. Re-fetching it weekly to refresh filings that
     move on a quarterly calendar would be a standing cost for nothing."""
     from us_pipeline import us_main
@@ -333,6 +334,7 @@ def test_a_populated_plane_stays_incremental(tmp_path, monkeypatch):
     storage.init_db(conn)
     ingest_company(conn, "0000320193", doc(
         NetIncomeLoss=[fact(96_995e6, start="2022-10-01", **FY23)]), "AAPL")
+    us_main._mark_bulk_done(conn, us_main.FACTS_BULK, "1 filer")
     conn.commit()
     conn.close()
 
@@ -347,6 +349,110 @@ def test_a_populated_plane_stays_incremental(tmp_path, monkeypatch):
 
     out = us_main.run_pipeline(db_path)
     assert out["filers"] == 1 and out["rows"] == 1
+
+
+def _two_filers():
+    return iter([
+        ("0000320193", doc(NetIncomeLoss=[fact(1e6, start="2022-10-01", **FY23)])),
+        ("0000789019", doc(NetIncomeLoss=[fact(2e6, start="2022-10-01", **FY23)])),
+    ])
+
+
+def _offline(monkeypatch, us_main, bulk_calls):
+    def fake_ensure(path, fetch):
+        bulk_calls.append(str(path))
+        return "bulk.zip"
+    monkeypatch.setattr(us_main, "_ensure_bulk", fake_ensure)
+    monkeypatch.setattr(us_main.sec, "fetch_company_tickers", lambda: {})
+    monkeypatch.setattr(us_main.sec, "iter_bulk_facts", lambda p: _two_filers())
+    monkeypatch.setattr(us_main.ticker_pit, "ingest_bulk", lambda c, p: {"pairs": 0})
+    monkeypatch.setattr(us_main.sec, "fetch_company_facts", lambda cik: doc(
+        NetIncomeLoss=[fact(3e6, start="2022-10-01", **FY23)]))
+
+
+def _facts_bulk_calls(calls):
+    return [c for c in calls if c.endswith("sec_companyfacts.zip")]
+
+
+def test_a_smoke_test_does_not_count_as_a_bootstrap(tmp_path, monkeypatch):
+    """`--limit 10` used to leave ten CIKs on the plane, and "any CIK on the
+    plane" was the bootstrap test — so every later run went incremental over
+    those ten and the rest of the archive never landed."""
+    from us_pipeline import us_main
+
+    db_path, calls = str(tmp_path / "us.sqlite"), []
+    _offline(monkeypatch, us_main, calls)
+    us_main.run_pipeline(db_path, limit=1)
+    us_main.run_pipeline(db_path)
+    assert len(_facts_bulk_calls(calls)) == 2, "the second run must bootstrap"
+
+
+def test_a_bulk_pass_that_dies_halfway_is_not_complete(tmp_path, monkeypatch):
+    from us_pipeline import us_main
+
+    db_path, calls = str(tmp_path / "us.sqlite"), []
+    _offline(monkeypatch, us_main, calls)
+
+    def dies():
+        yield next(_two_filers())
+        raise OSError("container killed")
+
+    monkeypatch.setattr(us_main.sec, "iter_bulk_facts", lambda p: dies())
+    with pytest.raises(OSError):
+        us_main.run_pipeline(db_path)
+    assert not us_main._bulk_done(sqlite3.connect(db_path), us_main.FACTS_BULK)
+
+
+def test_a_completed_bulk_pass_switches_to_incremental(tmp_path, monkeypatch):
+    from us_pipeline import us_main
+
+    db_path, calls = str(tmp_path / "us.sqlite"), []
+    _offline(monkeypatch, us_main, calls)
+    first = us_main.run_pipeline(db_path)
+    assert first["complete"] and first["filers"] == 2
+    second = us_main.run_pipeline(db_path)
+    assert len(_facts_bulk_calls(calls)) == 1
+    assert second["filers"] == 2                       # the CIKs, one by one
+
+
+def test_force_bulk_still_takes_the_bulk_pass(tmp_path, monkeypatch):
+    from us_pipeline import us_main
+
+    db_path, calls = str(tmp_path / "us.sqlite"), []
+    _offline(monkeypatch, us_main, calls)
+    us_main.run_pipeline(db_path)
+    seen = []
+    monkeypatch.setattr(us_main.sec, "iter_bulk_facts",
+                        lambda p: seen.append(p) or _two_filers())
+    us_main.run_pipeline(db_path, bulk_zip="given.zip")
+    assert seen == ["given.zip"]
+
+
+def test_a_failed_submissions_pass_is_retried(tmp_path, monkeypatch):
+    """The forward pass writes CIK->ticker rows on every run, so "the history
+    has rows" stopped meaning "the backward pass ran" the first time the
+    backward pass failed — and it was never attempted again."""
+    from us_pipeline import us_main
+
+    db_path, calls = str(tmp_path / "us.sqlite"), []
+    _offline(monkeypatch, us_main, calls)
+    monkeypatch.setattr(us_main.sec, "fetch_company_tickers",
+                        lambda: {"0000320193": "AAPL"})
+    monkeypatch.setattr(us_main.ticker_pit, "MIN_PLAUSIBLE_PAIRS", 1)
+
+    def unavailable(c, p):
+        raise OSError("submissions.zip unavailable")
+
+    monkeypatch.setattr(us_main.ticker_pit, "ingest_bulk", unavailable)
+    us_main.run_pipeline(db_path)
+    assert not storage.read_sql("SELECT * FROM us_ticker_pit",
+                                sqlite3.connect(db_path)).empty
+
+    monkeypatch.setattr(us_main.ticker_pit, "ingest_bulk",
+                        lambda c, p: {"pairs": 1})
+    out = us_main.run_pipeline(db_path)
+    assert out["submissions"] == {"pairs": 1}
+    assert us_main._bulk_done(sqlite3.connect(db_path), us_main.SUBMISSIONS_BULK)
 
 
 def test_a_downloaded_archive_is_reused_not_refetched(tmp_path, monkeypatch):

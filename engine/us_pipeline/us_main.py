@@ -9,11 +9,19 @@ Linear, like the other two pipelines, and it bootstraps itself.
                 list of who trades today.
   incremental   the CIKs already on the plane, refreshed one by one.
 
-**Which one runs is decided by the plane, not by a flag.** An empty plane gets
-the bulk pass; a populated one gets the incremental. That is the difference
-between a scheduled job that works on a box nobody prepared and one that walks an
-empty CIK list forever and reports success — which is what a bulk-only-by-hand
-default would have done, weekly, silently.
+**Which one runs is decided by the plane, not by a flag.** A plane with no
+completed bulk pass gets one; a plane with one gets the incremental. That is the
+difference between a scheduled job that works on a box nobody prepared and one
+that walks an empty CIK list forever and reports success — which is what a
+bulk-only-by-hand default would have done, weekly, silently.
+
+"Completed" is a row in `us_ingest_milestones`, written after the archive's last
+filer, and not an inference from the plane's contents. The inference this
+replaces ("any US CIK on the plane?") was satisfied by the first filer a bulk
+pass wrote, so a pass killed halfway, or a `--limit 10` smoke test, switched
+every later run to incremental over whatever subset had landed — and the
+filers it never reached stayed missing for good. The submissions history had
+the same inference and the same failure.
 
 The archive lands in the same data directory the COTAHIST and CVM downloads use,
 so the volume that already exists to stop those re-downloading covers this too.
@@ -45,6 +53,30 @@ logger = logging.getLogger(__name__)
 # exists to keep those from re-downloading on every container restart.
 BULK_FILENAME = "sec_companyfacts.zip"
 SUBMISSIONS_FILENAME = "sec_submissions.zip"
+
+# `us_ingest_milestones.name` for each bulk pass.
+FACTS_BULK = "sec_companyfacts_bulk"
+SUBMISSIONS_BULK = "sec_submissions_bulk"
+
+
+def _bulk_done(conn, name: str) -> bool:
+    """Whether this bulk pass has ever run to the end on this plane."""
+    return not storage.read_sql(
+        "SELECT name FROM us_ingest_milestones WHERE name = ?",
+        conn, params=(name,)).empty
+
+
+def _mark_bulk_done(conn, name: str, detail: str) -> None:
+    """Record a bulk pass that reached the end of its archive. Only ever called
+    after the last record, so a run killed before then leaves no row."""
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M:%S")
+    storage.execute(
+        conn,
+        "INSERT INTO us_ingest_milestones (name, reached_at, detail)"
+        " VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE"
+        " SET reached_at = excluded.reached_at, detail = excluded.detail",
+        (name, now, detail))
+    conn.commit()
 
 
 def _instrument(cik: str, symbol: str) -> dict:
@@ -122,20 +154,21 @@ def _ensure_bulk(path: Path, fetch) -> str:
 def _refresh_ticker_history(conn, force: bool) -> dict:
     """Keep the CIK->ticker history current, backward and forward.
 
-    The backward pass runs once, on a plane that has none: `submissions.zip` is
+    The backward pass runs until it has completed once: `submissions.zip` is
     the only free source that looks back, and it is the difference between a
     company that stopped filing in 2009 being `LEH` and being `CIK0000806085`.
+    "Has history" is not the test, because the forward pass below writes some
+    on every run — a backward pass that failed once would never be retried.
     The forward pass runs every time and costs one small request.
     """
     out = {}
-    have = storage.read_sql(
-        "SELECT COUNT(*) AS n FROM us_ticker_pit", conn).iloc[0]["n"]
-    if force or not have:
-        logger.info("no CIK->ticker history on the plane — reading submissions")
+    if force or not _bulk_done(conn, SUBMISSIONS_BULK):
+        logger.info("no completed submissions pass on the plane — reading it")
         try:
             out["submissions"] = ticker_pit.ingest_bulk(
                 conn, _ensure_bulk(config.DATA_DIR / SUBMISSIONS_FILENAME,
                                    sec.download_bulk_submissions))
+            _mark_bulk_done(conn, SUBMISSIONS_BULK, str(out["submissions"]))
         except Exception as e:                          # noqa: BLE001
             # Coarse history is better than none, but no history is not a
             # reason to skip the facts: the CIK placeholder still works.
@@ -143,18 +176,38 @@ def _refresh_ticker_history(conn, force: bool) -> dict:
     return out
 
 
+def _ingest_facts(conn, source, label, limit: int) -> dict:
+    """Walk `source`, one filer at a time. `complete` says it reached the end."""
+    facts, failed, rows = 0, [], 0
+    for i, (cik, doc) in enumerate(source, 1):
+        if limit and i > limit:
+            return {"filers": facts, "rows": rows, "failed": failed,
+                    "complete": False}
+        try:
+            if doc is None:
+                doc = sec.fetch_company_facts(cik)
+            rows += ingest_company(conn, cik, doc, label(cik))
+            facts += 1
+        except Exception as e:                      # noqa: BLE001
+            logger.error(f"CIK {cik}: {e}")
+            failed.append(cik)
+        if i % 500 == 0:
+            logger.info(f"  {i:,} filers, {rows:,} rows")
+    return {"filers": facts, "rows": rows, "failed": failed, "complete": True}
+
+
 def run_pipeline(db_path=None, bulk_zip: str = None, limit: int = 0,
                  force_submissions: bool = False) -> dict:
     logger.info(f"US fundamentals -> {storage.describe_target(db_path)}")
-    facts, failed, rows = 0, [], 0
 
     with storage.get_connection(db_path) as conn:
         storage.init_db(conn)
 
-        if bulk_zip is None and not _known_ciks(conn):
-            # Nothing on the plane yet. Walking an empty CIK list would report
-            # success having done nothing, every week, forever.
-            logger.info("no US filers on the plane — bootstrapping from bulk")
+        if bulk_zip is None and not _bulk_done(conn, FACTS_BULK):
+            # No bulk pass has finished here. Walking the CIKs already on the
+            # plane would report success over whatever subset a killed or
+            # smoke-test run left — or over nothing, every week, forever.
+            logger.info("no completed bulk pass on the plane — bootstrapping")
             bulk_zip = _ensure_bulk(config.DATA_DIR / BULK_FILENAME,
                                     sec.download_bulk_facts)
 
@@ -169,34 +222,26 @@ def run_pipeline(db_path=None, bulk_zip: str = None, limit: int = 0,
             logger.warning(f"company_tickers unavailable, ingesting unlabelled: {e}")
             tickers = {}
 
-        def label(cik, current):
+        def label(cik):
             """The label for one filer: its recorded history if there is any,
             otherwise today's snapshot. A filer with neither keeps the
             CIK-prefixed placeholder, and `scripts/us_coverage.py` counts how
             many those are — which is the size of what is left of #38."""
             resolve = ticker_pit.resolver(conn, cik)
-            return resolve if resolve(None) else current
+            return resolve if resolve(None) else tickers.get(cik)
 
         logger.info("Step 2/2: facts...")
         source = (sec.iter_bulk_facts(bulk_zip) if bulk_zip
                   else ((cik, None) for cik in _known_ciks(conn)))
-        for i, (cik, doc) in enumerate(source, 1):
-            if limit and i > limit:
-                break
-            try:
-                if doc is None:
-                    doc = sec.fetch_company_facts(cik)
-                rows += ingest_company(conn, cik, doc,
-                                       label(cik, tickers.get(cik)))
-                facts += 1
-            except Exception as e:                      # noqa: BLE001
-                logger.error(f"CIK {cik}: {e}")
-                failed.append(cik)
-            if i % 500 == 0:
-                logger.info(f"  {i:,} filers, {rows:,} rows")
+        out = _ingest_facts(conn, source, label, limit)
+        if bulk_zip and out["complete"]:
+            # Only here: after the archive's last filer, never on a `--limit`.
+            _mark_bulk_done(conn, FACTS_BULK, f"{out['filers']:,} filers, "
+                                              f"{len(out['failed'])} failed")
 
-    summary = {"filers": facts, "rows": rows, "failed": failed, **history}
-    logger.info(f"Done: {rows:,} rows over {facts:,} filers, {len(failed)} failed")
+    summary = {**out, **history}
+    logger.info(f"Done: {out['rows']:,} rows over {out['filers']:,} filers, "
+                f"{len(out['failed'])} failed")
     return summary
 
 
@@ -207,7 +252,7 @@ def main() -> None:
                     help="use this companyfacts.zip instead of deciding from "
                          "the plane (downloads it if the path does not exist)")
     ap.add_argument("--force-bulk", action="store_true",
-                    help="take the bulk pass even on a populated plane")
+                    help="take the bulk pass even when one has completed")
     ap.add_argument("--force-submissions", action="store_true",
                     help="re-read submissions.zip for the CIK->ticker history "
                          "even when the plane already has some")

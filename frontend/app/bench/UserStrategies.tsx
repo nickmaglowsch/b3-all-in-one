@@ -8,6 +8,8 @@ import { useState } from "react";
 import { errorText } from "@/lib/api";
 import { useDeleteUserStrategy, useUserStrategies } from "@/lib/strategies";
 import { CLOSED, cloneOf, editingOf, type FormMode } from "@/lib/strategyFormMode";
+import type { RowState } from "@/lib/rowConfirm";
+import { useRowConfirm } from "@/lib/useRowConfirm";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -30,7 +32,7 @@ export function UserStrategies({
   const del = useDeleteUserStrategy();
   const rows = (data ?? []).filter((s) => s.kind === "rank_and_hold");
 
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const confirm = useRowConfirm(del);
   const [warnings, setWarnings] = useState<string[]>([]);
 
   const open = (m: FormMode) => {
@@ -119,29 +121,13 @@ export function UserStrategies({
                 <div className="flex shrink-0 items-center gap-1.5">
                   <RowBtn onClick={() => onBacktest(s.name)}>Backtest</RowBtn>
                   <RowBtn onClick={() => open({ kind: "edit", s })}>Editar</RowBtn>
-                  {confirmId === s.id ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          del.mutate(s.id, { onSettled: () => setConfirmId(null) })
-                        }
-                        disabled={del.isPending}
-                        className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
-                      >
-                        Confirmar
-                      </button>
-                      <RowBtn onClick={() => setConfirmId(null)}>Não</RowBtn>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmId(s.id)}
-                      className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-muted hover:text-loss"
-                    >
-                      Excluir
-                    </button>
-                  )}
+                  <DeleteControls
+                    state={confirm.stateOf(s.id)}
+                    locked={confirm.busy}
+                    onArm={() => confirm.arm(s.id)}
+                    onCancel={confirm.cancel}
+                    onConfirm={() => confirm.confirm(s.id)}
+                  />
                 </div>
               </div>
             </li>
@@ -149,6 +135,46 @@ export function UserStrategies({
         </ul>
       )}
     </Card>
+  );
+}
+
+function DeleteControls({
+  state,
+  locked,
+  onArm,
+  onCancel,
+  onConfirm,
+}: {
+  state: RowState;
+  locked: boolean;
+  onArm: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (state === "idle") {
+    return (
+      <button
+        type="button"
+        onClick={onArm}
+        disabled={locked}
+        className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-muted hover:text-loss disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Excluir
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onConfirm}
+        disabled={state === "busy"}
+        className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
+      >
+        Confirmar
+      </button>
+      <RowBtn onClick={onCancel}>Não</RowBtn>
+    </>
   );
 }
 

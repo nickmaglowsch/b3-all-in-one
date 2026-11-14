@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { BacktestRun } from "@/lib/types";
 import { StatusBadge } from "@/components/ui/StatusBadge";
@@ -10,6 +9,8 @@ import { IconChart } from "@/components/icons";
 import { errorText } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { isDone, isFinished } from "@/lib/jobStatus";
+import type { RowState } from "@/lib/rowConfirm";
+import { useRowConfirm } from "@/lib/useRowConfirm";
 import { useDeleteBacktest } from "./lib";
 
 // Rows must be clickable → /bench/run?id=. DataTable (frozen) has no onRowClick, so
@@ -32,9 +33,7 @@ export function RunsList({
 }) {
   const router = useRouter();
   const del = useDeleteBacktest();
-  // One at a time: the confirm is inline, so two open confirms would be two
-  // rows both claiming the next click.
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const confirm = useRowConfirm(del);
   const picked = new Set(selected);
 
   if (loading) {
@@ -96,16 +95,11 @@ export function RunsList({
                 picked={picked.has(r.id)}
                 onOpen={() => router.push(`/bench/run?id=${r.id}`)}
                 onToggle={() => onToggle(r.id)}
-                confirming={confirmId === r.id}
-                onConfirm={() => setConfirmId(r.id)}
-                onCancel={() => setConfirmId(null)}
-                deleting={del.isPending && confirmId === r.id}
-                onDelete={() =>
-                  del.mutate(r.id, {
-                    onSuccess: () => onDeleted(r.id),
-                    onSettled: () => setConfirmId(null),
-                  })
-                }
+                confirm={confirm.stateOf(r.id)}
+                locked={confirm.busy}
+                onConfirm={() => confirm.arm(r.id)}
+                onCancel={confirm.cancel}
+                onDelete={() => confirm.confirm(r.id, onDeleted)}
               />
             ))}
           </tbody>
@@ -120,20 +114,21 @@ function Row({
   picked,
   onOpen,
   onToggle,
-  confirming,
+  confirm,
+  locked,
   onConfirm,
   onCancel,
-  deleting,
   onDelete,
 }: {
   run: BacktestRun;
   picked: boolean;
   onOpen: () => void;
   onToggle: () => void;
-  confirming: boolean;
+  confirm: RowState;
+  /** Another row's delete is in flight. */
+  locked: boolean;
   onConfirm: () => void;
   onCancel: () => void;
-  deleting: boolean;
   onDelete: () => void;
 }) {
   // A run the worker still holds cannot be deleted (the API answers 409): the
@@ -188,10 +183,10 @@ function Row({
         <RowActions
           strategy={run.strategy}
           finished={finished}
-          confirming={confirming}
+          confirm={confirm}
+          locked={locked}
           onConfirm={onConfirm}
           onCancel={onCancel}
-          deleting={deleting}
           onDelete={onDelete}
         />
       </td>
@@ -202,18 +197,18 @@ function Row({
 function RowActions({
   strategy,
   finished,
-  confirming,
+  confirm,
+  locked,
   onConfirm,
   onCancel,
-  deleting,
   onDelete,
 }: {
   strategy: string;
   finished: boolean;
-  confirming: boolean;
+  confirm: RowState;
+  locked: boolean;
   onConfirm: () => void;
   onCancel: () => void;
-  deleting: boolean;
   onDelete: () => void;
 }) {
   // stopPropagation everywhere: the row itself navigates to the tear sheet, and
@@ -223,13 +218,13 @@ function RowActions({
     fn();
   };
 
-  if (confirming) {
+  if (confirm !== "idle") {
     return (
       <span className="flex items-center justify-end gap-1.5">
         <button
           type="button"
           onClick={stop(onDelete)}
-          disabled={deleting}
+          disabled={confirm === "busy"}
           className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
         >
           Confirmar
@@ -249,7 +244,7 @@ function RowActions({
     <button
       type="button"
       onClick={stop(onConfirm)}
-      disabled={!finished}
+      disabled={!finished || locked}
       title={
         finished
           ? "Excluir esta rodada e seus artefatos"

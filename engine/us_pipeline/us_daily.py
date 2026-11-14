@@ -68,10 +68,21 @@ MAX_SESSIONS = 10
 
 
 def last_stored_session(conn) -> datetime.date:
-    """The most recent US bar on the plane, or None if it holds none."""
+    """The most recent split-adjusted US bar on the plane, or None.
+
+    Only the split-adjusted feeds — the bulk dump and this module's own appends
+    (`us_seam.SPLIT_ADJUSTED_PREFIXES`) — because that is the basis the window
+    above is about. `us_prices` writes US bars too, through the latest closed
+    session, for the symbols these feeds do not carry. Counted here, one of its
+    bars from a day this module has not yet fetched moved the cursor past that
+    day: the session was never appended for anyone, and a split executing in
+    the gap was never applied to the history it should have rescaled.
+    """
+    prefixes = us_seam.SPLIT_ADJUSTED_PREFIXES
+    clauses = " OR ".join(["source LIKE ?"] * len(prefixes))
     df = storage.read_sql(
-        "SELECT MAX(date) AS d FROM market_prices WHERE market = ?",
-        conn, params=(MARKET,))
+        f"SELECT MAX(date) AS d FROM market_prices WHERE market = ? AND ({clauses})",
+        conn, params=(MARKET, *(f"{p}%" for p in prefixes)))
     if df.empty or pd.isna(df["d"].iloc[0]):
         return None
     return pd.Timestamp(df["d"].iloc[0]).date()
@@ -196,8 +207,8 @@ def run_pipeline(db_path=None, today=None, max_sessions: int = MAX_SESSIONS) -> 
         last = last_stored_session(conn)
         if last is None:
             raise RuntimeError(
-                "the US plane holds no bars — load the bulk history first; "
-                "this module refreshes, it does not backfill.")
+                "the US plane holds no split-adjusted bars — load the bulk "
+                "history first; this module refreshes, it does not backfill.")
         held = writable_symbols(conn)
         logger.info(f"last stored session {last}, {len(held):,} writable symbols")
 

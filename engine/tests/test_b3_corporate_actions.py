@@ -192,10 +192,11 @@ class TestFetchCashDividendsPaginated:
             "b3_pipeline.b3_corporate_actions.requests.get",
             return_value=_make_response(json_data=payload),
         ):
-            result = fetch_cash_dividends_paginated("PETROBRAS")
+            result, complete = fetch_cash_dividends_paginated("PETROBRAS")
 
         assert isinstance(result, list)
         assert len(result) == 2
+        assert complete
 
     def test_paginates_across_multiple_pages(self):
         """Two-page response: both pages fetched and combined."""
@@ -215,13 +216,14 @@ class TestFetchCashDividendsPaginated:
             "b3_pipeline.b3_corporate_actions.requests.get",
             side_effect=responses,
         ) as mock_get:
-            result = fetch_cash_dividends_paginated("PETROBRAS")
+            result, complete = fetch_cash_dividends_paginated("PETROBRAS")
 
         assert len(result) == 2
+        assert complete
         assert mock_get.call_count == 2
 
     def test_returns_empty_list_on_request_exception(self):
-        """A RequestException should be caught and [] returned."""
+        """A RequestException is caught: nothing fetched, and not complete."""
         import requests as _requests
 
         with patch(
@@ -230,10 +232,10 @@ class TestFetchCashDividendsPaginated:
         ):
             result = fetch_cash_dividends_paginated("FAIL")
 
-        assert result == []
+        assert result == ([], False)
 
     def test_returns_empty_list_on_json_error(self):
-        """A JSONDecodeError should be caught and [] returned."""
+        """A JSONDecodeError is caught: nothing fetched, and not complete."""
         with patch(
             "b3_pipeline.b3_corporate_actions.requests.get",
             return_value=_make_response(
@@ -242,7 +244,7 @@ class TestFetchCashDividendsPaginated:
         ):
             result = fetch_cash_dividends_paginated("FAIL")
 
-        assert result == []
+        assert result == ([], False)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +287,7 @@ class TestFetchAllCorporateActions:
             return_value=company_data,
         ), patch(
             "b3_pipeline.b3_corporate_actions.fetch_cash_dividends_paginated",
-            return_value=[],
+            return_value=([], True),
         ):
             corp_df, stock_df, skipped_df = fetch_all_corporate_actions(
                 ["PETR"], ticker_to_isin={}
@@ -314,7 +316,7 @@ class TestFetchAllCorporateActions:
             return_value=company_data,
         ), patch(
             "b3_pipeline.b3_corporate_actions.fetch_cash_dividends_paginated",
-            return_value=cash_records,
+            return_value=(cash_records, True),
         ):
             corp_df, stock_df, skipped_df = fetch_all_corporate_actions(
                 ["PETR"], ticker_to_isin={"PETR3": "BRPETR3"}
@@ -356,7 +358,7 @@ class TestFetchAllCorporateActions:
             return_value=company_data,
         ), patch(
             "b3_pipeline.b3_corporate_actions.fetch_cash_dividends_paginated",
-            return_value=[],
+            return_value=([], True),
         ):
             corp_df, stock_df, skipped_df = fetch_all_corporate_actions(
                 ["PETR", "PETR"],  # same company name twice to force duplicate

@@ -24,7 +24,7 @@ import warnings
 import pandas as pd
 import pytest
 
-from b3_pipeline import sql_stream, storage
+from b3_pipeline import sql_copy, sql_stream, storage
 
 psycopg = pytest.importorskip("psycopg")
 
@@ -151,8 +151,26 @@ def test_pooling_survives_a_column_it_cannot_hash():
     assert chunk["blob"].tolist() == [[i] for i in range(10)]
 
 
+@pytest.fixture(params=["copy", "cursor"])
+def path(request, monkeypatch):
+    """Which Postgres read the live tests drive: the COPY-and-arrow read every
+    eligible query now takes, or the server-side cursor it falls back to. Both
+    must produce the frame pd.read_sql_query did."""
+    monkeypatch.setattr(sql_stream, "COPY_READ", request.param == "copy")
+    return request.param
+
+
+def _chunk_size(monkeypatch, path: str, rows: int) -> None:
+    """Chunks of about `rows` rows on either path: the cursor fetches by row
+    count, the COPY read cuts its text by bytes (a probe row is ~30 of them)."""
+    if path == "cursor":
+        monkeypatch.setattr(sql_stream, "CHUNK_ROWS", rows)
+    else:
+        monkeypatch.setattr(sql_copy, "COPY_BLOCK_BYTES", rows * 30)
+
+
 @pytest.fixture
-def conn():
+def conn(path):
     c = psycopg.connect(_live_dsn())
     with c.cursor() as cur:
         cur.execute("DROP TABLE IF EXISTS sql_stream_probe")
@@ -191,37 +209,44 @@ def test_streamed_frame_is_identical_to_the_pandas_one(conn):
         storage.read_sql(ORDERED, conn), _pandas_read(conn, ORDERED))
 
 
-def test_it_really_did_take_more_than_one_chunk(conn, monkeypatch):
-    """Guard on the guard: with CHUNK_ROWS above the row count every test below
+def test_it_really_did_take_more_than_one_chunk(conn, path, monkeypatch):
+    """Guard on the guard: with the chunk above the row count every test below
     would exercise the single-chunk path and prove nothing about chunking."""
-    monkeypatch.setattr(sql_stream, "CHUNK_ROWS", 100)
+    _chunk_size(monkeypatch, path, 100)
     _fill(conn, 500)
     calls = []
-    real = pd.DataFrame.from_records
-    monkeypatch.setattr(
-        pd.DataFrame, "from_records",
-        staticmethod(lambda *a, **k: (calls.append(1), real(*a, **k))[1]))
+    if path == "cursor":
+        real = pd.DataFrame.from_records
+        monkeypatch.setattr(
+            pd.DataFrame, "from_records",
+            staticmethod(lambda *a, **k: (calls.append(1), real(*a, **k))[1]))
+    else:
+        real = sql_stream._assemble
+        monkeypatch.setattr(sql_stream, "_assemble",
+                            lambda frames, cols: (calls.extend(frames),
+                                                  real(frames, cols))[1])
     storage.read_sql(ORDERED, conn)
-    assert len(calls) == 5, f"expected 5 chunks of 100, got {len(calls)}"
+    assert len(calls) >= 4, f"expected several chunks, got {len(calls)}"
 
 
-def test_chunk_boundaries_do_not_change_the_frame(conn, monkeypatch):
+def test_chunk_boundaries_do_not_change_the_frame(conn, path, monkeypatch):
     """The same rows, read one chunk or many, must compare equal — values and
     dtypes both."""
     _fill(conn, 500)
     whole = storage.read_sql(ORDERED, conn)
     for chunk in (1, 7, 100, 499, 500, 501):
-        monkeypatch.setattr(sql_stream, "CHUNK_ROWS", chunk)
+        _chunk_size(monkeypatch, path, chunk)
         pd.testing.assert_frame_equal(storage.read_sql(ORDERED, conn), whole)
 
 
-def test_a_column_that_is_all_null_in_one_chunk_still_types_as_float(conn, monkeypatch):
+def test_a_column_that_is_all_null_in_one_chunk_still_types_as_float(
+        conn, path, monkeypatch):
     """The failure chunking could actually cause. `sparse` has values in the
     first 200 rows and NULL after, so with 100-row chunks three whole chunks
     type it as object; concat spreads that to the column and every downstream
     `.rolling()` on it breaks. infer_objects is what puts it back."""
     _fill(conn, 500, sparse_from=200)
-    monkeypatch.setattr(sql_stream, "CHUNK_ROWS", 100)
+    _chunk_size(monkeypatch, path, 100)
     streamed = storage.read_sql(ORDERED, conn)
     assert streamed["sparse"].dtype == _pandas_read(conn, ORDERED)["sparse"].dtype
     assert streamed["sparse"].dtype == "float64"
@@ -285,6 +310,148 @@ def test_kwargs_fall_back_to_pandas(conn):
     _fill(conn, 50)
     df = storage.read_sql(ORDERED, conn, parse_dates=["d"])
     assert pd.api.types.is_datetime64_any_dtype(df["d"])
+
+
+# ── the COPY read specifically ───────────────────────────────────────────────
+#
+# Everything above runs on both paths. What follows is what only the COPY read
+# can get wrong: CSV's spelling of NULL, text that looks like CSV, floats that
+# are not finite, and the queries and sessions it must hand to the cursor.
+
+@pytest.fixture
+def raw_conn():
+    c = psycopg.connect(_live_dsn())
+    yield c
+    c.close()
+
+
+def _both(conn, sql, params=None, monkeypatch=None):
+    """``(copy read, cursor read)`` of one query, asserting which path each took."""
+    took = []
+    real = sql_copy.read
+
+    def spy(*args):
+        frame = real(*args)
+        took.append(frame is not None)
+        return frame
+
+    monkeypatch.setattr(sql_copy, "read", spy)
+    monkeypatch.setattr(sql_stream, "COPY_READ", True)
+    fast = storage.read_sql(sql, conn, params=params)
+    monkeypatch.setattr(sql_stream, "COPY_READ", False)
+    slow = storage.read_sql(sql, conn, params=params)
+    pd.testing.assert_frame_equal(fast, slow, check_exact=True)
+    for i, name in enumerate(slow.columns):  # assert_frame_equal calls None == nan
+        if slow.iloc[:, i].dtype == object:
+            assert ([type(v) for v in fast.iloc[:, i]]
+                    == [type(v) for v in slow.iloc[:, i]]), name
+    return took[0], fast
+
+
+@pytest.fixture
+def typed(raw_conn):
+    """Every type the COPY read accepts, with the values CSV makes awkward."""
+    awkward = ["NA", "null", "", "N/A", "a,b", 'q"uote', "line\nbreak", "ção",
+               " pad ", "NULL", "nan", "\\N"]
+    floats = [0.1, float("nan"), float("inf"), -float("inf"), 1 / 3]
+    numerics = ["0.1000000000000000055511151231257827", "12345678901234567890.5",
+                "NaN", "-0", "3.14159"]
+    with raw_conn.cursor() as cur:
+        cur.execute("CREATE TEMP TABLE typed (i int, s smallint, b bigint, r real,"
+                    " d double precision, n numeric, dt date, t text, v varchar(20),"
+                    " c char(6), void_f double precision, void_t text, void_d date,"
+                    " nan_f double precision, sparse int)")
+        with cur.copy("COPY typed FROM STDIN") as cp:
+            for k in range(120):
+                row = (k, k % 300, 2**62 + k, k / 3, floats[k % 5], numerics[k % 5],
+                       datetime.date(1999, 1, 1) + datetime.timedelta(days=37 * k),
+                       awkward[k % len(awkward)], awkward[(k + 3) % len(awkward)],
+                       "AB" if k % 2 else "ABCDEF", None, None, None,
+                       float("nan"), None if k % 9 else k)
+                if k == 5:                          # one row NULL but for its key
+                    row = (k,) + (None,) * 14
+                cp.write_row(row)
+    raw_conn.commit()
+    return raw_conn
+
+
+def test_copy_read_matches_the_cursor_on_every_type_it_takes(typed, monkeypatch):
+    took, df = _both(typed, "SELECT * FROM typed ORDER BY i", monkeypatch=monkeypatch)
+    assert took, "every column here is a COPY type; the read must not fall back"
+    # The spellings pyarrow would read as NULL by default are values here.
+    assert {"NA", "null", "N/A", "NULL", "nan", ""} <= set(df["t"].dropna())
+    assert df["t"].isna().sum() == 1                 # the one real NULL
+    assert df["void_f"].dtype == object and df["void_f"].iloc[0] is None
+    assert df["nan_f"].dtype == "float64"            # NaN is a value, not NULL
+
+
+def test_copy_read_chunks_by_bytes_and_survives_a_row_longer_than_arrow_block(
+        typed, monkeypatch):
+    whole = storage.read_sql("SELECT * FROM typed ORDER BY i", typed)
+    monkeypatch.setattr(sql_copy, "COPY_BLOCK_BYTES", 300)
+    monkeypatch.setattr(sql_copy, "_ARROW_BLOCK_BYTES", 32)
+    pd.testing.assert_frame_equal(
+        storage.read_sql("SELECT * FROM typed ORDER BY i", typed), whole,
+        check_exact=True)
+
+
+@pytest.mark.parametrize("sql, params", [
+    ("SELECT * FROM typed WHERE i >= :lo AND t <> :t ORDER BY i -- a comment",
+     {"lo": 7, "t": "NA"}),
+    ("SELECT t FROM typed WHERE t LIKE '%a%' ORDER BY i", None),
+    ("SELECT t FROM typed WHERE t LIKE '%a%' AND i > ? ORDER BY i", [3]),
+    ("WITH x AS (SELECT i, dt FROM typed) SELECT * FROM x ORDER BY i", None),
+    ("SELECT count(*) AS n, max(dt) AS m FROM typed", None),
+    ("SELECT * FROM typed WHERE i > 100000", None),
+])
+def test_copy_read_handles_the_shapes_of_query_read_sql_gets(typed, monkeypatch,
+                                                             sql, params):
+    took, _ = _both(typed, sql, params, monkeypatch=monkeypatch)
+    assert took
+
+
+@pytest.mark.parametrize("sql", [
+    "SELECT now() AS ts",                            # timestamptz: not a COPY type
+    "SELECT true AS flag",                           # bool
+    "SELECT ARRAY[1, 2] AS a",
+])
+def test_copy_read_hands_other_types_to_the_cursor(typed, monkeypatch, sql):
+    took, _ = _both(typed, sql, monkeypatch=monkeypatch)
+    assert not took
+
+
+@pytest.mark.parametrize("sql", [
+    "WITH gone AS (DELETE FROM t RETURNING *) SELECT * FROM gone",
+    "SELECT * FROM t FOR SHARE",
+    "SELECT 1; SELECT 2",
+    "INSERT INTO t VALUES (1) RETURNING *",
+    "SHOW TimeZone",
+])
+def test_copy_read_never_wraps_what_is_not_a_plain_read(sql):
+    """Refused on the text alone, before the connection is touched — a wrapper
+    around a write or a second statement would change what runs."""
+    assert sql_copy._plan(None, sql, None) is None
+
+
+def test_copy_read_leaves_the_transaction_usable(typed):
+    with typed.cursor() as cur:
+        cur.execute("CREATE TEMP TABLE scratch (x int)")
+        cur.execute("INSERT INTO scratch VALUES (1), (2)")
+    # Uncommitted rows are visible: COPY runs on the caller's own connection.
+    assert storage.read_sql("SELECT x FROM scratch ORDER BY x", typed)["x"].tolist() == [1, 2]
+    with typed.cursor() as cur:
+        cur.execute("SELECT count(*) FROM scratch")
+        assert cur.fetchone()[0] == 2
+    typed.rollback()
+
+
+def test_copy_read_falls_back_when_dates_are_not_iso(typed, monkeypatch):
+    with typed.cursor() as cur:
+        cur.execute("SET DateStyle = 'SQL, DMY'")
+    took, df = _both(typed, "SELECT i, dt FROM typed ORDER BY i",
+                     monkeypatch=monkeypatch)
+    assert not took
+    assert df["dt"].iloc[0] == datetime.date(1999, 1, 1)
 
 
 def test_sqlite_does_not_take_the_server_side_cursor(monkeypatch, tmp_path):

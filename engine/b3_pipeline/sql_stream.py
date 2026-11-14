@@ -29,6 +29,11 @@ read is an order of magnitude bigger than B3's. ``_pool_objects`` collapses the
 per-row ``str`` and ``datetime.date`` instances the driver mints onto one object
 per distinct value, and ``_assemble`` concatenates the chunks a column at a time
 so the answer never exists twice. Neither changes a value or a dtype.
+
+A query whose columns are all plain types does not come through here at all
+on Postgres: ``sql_copy`` reads it with ``COPY`` and pyarrow, ~3x faster, and
+hands its chunks to the same pooling and assembly. This module is what it
+declines to — and what it falls back to.
 """
 from __future__ import annotations
 
@@ -53,8 +58,11 @@ _names = itertools.count()
 # would grow to the row count and cost more than it saves, so it gives up.
 _POOL_MAX = 200_000
 
+# Off switch for sql_copy, for a test that has to drive the cursor path.
+COPY_READ = True
 
-def _pool_objects(chunk: pd.DataFrame, pools: dict) -> None:
+
+def _pool_objects(chunk: pd.DataFrame, pools: dict, skip=()) -> None:
     """Point each object column's values at one shared object per distinct value.
 
     The driver builds a *new* Python object per row: a 30-million-row read of the
@@ -69,9 +77,11 @@ def _pool_objects(chunk: pd.DataFrame, pools: dict) -> None:
     *are* the objects the first chunk produced), the column keeps its object
     dtype, and pandas never sees the categorical this borrows its factorize from.
     Only the object count drops, from one per row to one per distinct value.
+    ``skip`` names columns the caller has pooled already (the columnar read's
+    dates), which would otherwise be hashed a second time for nothing.
     """
     for name in chunk.columns:
-        if chunk[name].dtype != object:
+        if name in skip or chunk[name].dtype != object:
             continue
         pool = pools.setdefault(name, {})
         if pool is None:                      # gave up on this column earlier
@@ -164,6 +174,12 @@ def read_dataframe(conn, sql: str, params=None,
     if not postgres:
         return read_chunked(
             pd.read_sql_query(sql, conn, params=params, chunksize=CHUNK_ROWS))
+    if COPY_READ:
+        # Lazy: sql_copy builds on this module.
+        from . import sql_copy
+        frame = sql_copy.read(conn, sql, params)
+        if frame is not None:
+            return frame
     return _server_side(conn, sql, params)
 
 

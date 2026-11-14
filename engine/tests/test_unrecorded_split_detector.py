@@ -193,3 +193,91 @@ def test_expanding_pctrank_scores_a_missing_month_as_zero_not_nan():
     v[15] = np.nan
     s = pd.Series(v, index=pd.date_range("2005-01-31", periods=20, freq="ME"))
     assert _expanding_pctrank(s).iloc[15] == 0.0
+
+
+# ── the cross-column prefilter ───────────────────────────────────────────────
+#
+# detect_and_fix_unrecorded runs the per-column search only on the names
+# `_candidate_columns` passes. Skipping a column is only sound if the prefilter
+# never drops one the search would have fixed, so the check is the whole
+# function against itself with the prefilter switched off.
+
+def _adversarial_panel(seed: int, days: int = 400, names: int = 60):
+    """Names seeded to make the detector fire, refuse, and nearly fire."""
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2010-01-01", periods=days)
+    raw = 30 * np.exp(np.cumsum(rng.normal(0, 0.02, (days, names)), axis=0))
+    vol = rng.lognormal(14, 0.4, (days, names))
+    for c in range(names):
+        t = int(rng.integers(3, days - 3))
+        n = int(rng.choice([2, 3, 4, 5, 8, 10, 7]))       # 7 is no split ratio
+        kind = c % 6
+        if kind == 0:
+            raw[t:, c] /= n                                # forward split
+        elif kind == 1:
+            raw[t:, c] *= n                                # reverse split
+        elif kind == 2:
+            raw[t, c] /= n                                 # one-day glitch
+        elif kind == 3:
+            raw[t:, c] /= n
+            vol[t, c] *= 10                                # crash on a spike
+        elif kind == 4:
+            raw[t:, c] /= n * (1 + rng.normal(0, 0.03))    # near a ratio
+        if rng.random() < 0.3:                             # listed late, gone early
+            lo, hi = sorted(rng.integers(0, days, 2))
+            raw[:lo, c] = np.nan
+            raw[hi:, c] = np.nan
+    cols = [f"T{c:03d}" for c in range(names)]
+    close = pd.DataFrame(raw, idx, cols)
+    adj = close.copy()
+    # Some names already carry an adjustment, and each frame has holes the other
+    # does not — the per-column path drops and intersects around both.
+    adj.iloc[:, ::7] = adj.iloc[:, ::7].to_numpy() * np.linspace(0.5, 1, days)[:, None]
+    adj = adj.mask(rng.random(adj.shape) < 0.02)
+    close = close.mask(rng.random(close.shape) < 0.02)
+    return adj, close, pd.DataFrame(vol, idx, cols)
+
+
+def test_prefilter_changes_no_result(monkeypatch):
+    from backtests.core import splits
+
+    for seed in range(6):
+        adj, close, vol = _adversarial_panel(seed)
+        for fv in (vol, None):
+            fast = detect_and_fix_unrecorded(adj, close, fv)
+            with monkeypatch.context() as m:
+                m.setattr(splits, "_candidate_columns",
+                          lambda a, c: list(a.columns))
+                every = detect_and_fix_unrecorded(adj, close, fv)
+            pd.testing.assert_frame_equal(fast, every, check_exact=True)
+
+
+def test_prefilter_actually_filters_and_keeps_every_fixed_name():
+    """Guard on the guard: a prefilter that passed every column would make the
+    test above vacuous, and one that passed none would fix nothing."""
+    from backtests.core import splits
+
+    adj, close, vol = _adversarial_panel(0)
+    picked = set(splits._candidate_columns(adj, close))
+    fixed = detect_and_fix_unrecorded(adj, close, vol)
+    changed = {c for c in adj.columns
+               if not fixed[c].equals(adj[c])}
+    assert changed, "the panel should make the detector fire"
+    assert changed <= picked
+    assert len(picked) < len(adj.columns)
+
+
+def test_prefilter_works_across_column_blocks(monkeypatch):
+    """The prefilter walks the frame a block of columns at a time; a split in
+    the last name of one block and the first of the next must both be seen."""
+    from backtests.core import splits
+
+    monkeypatch.setattr(splits, "_CANDIDATE_BLOCK", 2)
+    idx = pd.date_range("2020-01-01", periods=30, freq="B")
+    flat = [20.0] * 30
+    split = [20.0] * 15 + [10.0] * 15
+    px = pd.DataFrame({"A": flat, "B": split, "C": split, "D": flat}, index=idx)
+    assert splits._candidate_columns(px, px) == ["B", "C"]
+    fixed = detect_and_fix_unrecorded(px.copy(), px)
+    assert np.isclose(fixed["B"].iloc[0], 10.0) and np.isclose(fixed["C"].iloc[0], 10.0)
+    assert np.isclose(fixed["A"].iloc[0], 20.0)

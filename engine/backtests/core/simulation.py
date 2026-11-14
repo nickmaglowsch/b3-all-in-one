@@ -60,7 +60,7 @@ def _execute_rebalance(
     """
     # 1. Identify current weights and determine buys/sells (pure diff)
     sells, buys = compute_trades(positions, target_weights, portfolio_nav)
-    ledger.realise_write_offs(positions)
+    ledger.realise_write_offs(positions, when)
 
     # Turnover is the gross BRL traded: every sell is positive, every buy value is
     # positive for a long and negative for an opened short — abs() folds both.
@@ -331,6 +331,9 @@ def run_simulation(
             break
 
         if not live:
+            # A name can die on a hold row too; its loss is this period's.
+            pt_ledger.realise_write_offs(pt_pos, date)
+            ledger.realise_write_offs(at_pos, date)
             pretax_values.append(pt_nav)
             aftertax_values.append(at_nav)
             tax_paid_list.append(0.0)

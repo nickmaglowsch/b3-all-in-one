@@ -119,6 +119,65 @@ def _find_events(
     ]
 
 
+def _candidate_columns(adj_close: pd.DataFrame, close_px: pd.DataFrame) -> list:
+    """The columns `_find_events` could find anything in, from one pass over all.
+
+    `_find_events` is vectorised along a column, but the caller paid a Python
+    loop across columns for it — `dropna`, `reindex`, `intersection` and three
+    rolling medians per name, for the handful of names in a market that ever
+    print a split-shaped bar. This applies its first test, the one that rejects
+    nearly everything, to the whole frame at once: adj and raw moved by the same
+    ratio, and that ratio sits near 1/N or N.
+
+    Same bars, same arithmetic. The per-column path compares each price to the
+    previous bar where *both* adj and raw are present (it drops the rest and
+    intersects); masking the others out and forward-filling the shifted frame
+    reaches that same previous bar, so every ratio here is the very division
+    `_find_events` performs. The tolerances are widened slightly all the same:
+    this is a superset test, and a column it passes only costs the old loop.
+
+    A block of columns at a time: the arithmetic makes several frame-sized
+    temporaries, and on a whole-market panel that would be a few hundred MB for
+    a pass whose answer is a short list of names.
+    """
+    cols = list(adj_close.columns)
+    # Looked up as the loop looked it up — by name, aligned on adj's dates — so a
+    # name missing from close_px still raises the KeyError it always did.
+    raw_all = close_px[cols].reindex(adj_close.index)
+    tol = _SPLIT_TOLERANCE * 1.01
+    out = []
+    for lo in range(0, len(cols), _CANDIDATE_BLOCK):
+        block = cols[lo:lo + _CANDIDATE_BLOCK]
+        adj = adj_close[block].to_numpy(dtype=float, copy=True)
+        raw = raw_all[block].to_numpy(dtype=float, copy=True)
+        missing = np.isnan(adj) | np.isnan(raw)
+        adj[missing] = np.nan
+        raw[missing] = np.nan
+        with np.errstate(invalid="ignore", divide="ignore"):
+            ar = adj / _previous(adj)
+            rr = raw / _previous(raw)
+            del adj, raw
+            ok = np.isfinite(ar) & np.isfinite(rr) & (rr != 0)
+            ok &= np.abs(ar - rr) / np.maximum(np.abs(rr), 0.001) <= 0.05 * 1.01
+            near = np.zeros(ar.shape, dtype=bool)
+            for n in _SPLIT_RATIOS:
+                near |= np.abs(ar - 1.0 / n) * n < tol
+                near |= np.abs(ar - float(n)) / n < tol
+        hit = (ok & near).any(axis=0)
+        out.extend(c for c, h in zip(block, hit) if h)
+    return out
+
+
+# Columns per block of `_candidate_columns`: ~6k sessions x 128 names is ~6 MB a
+# temporary.
+_CANDIDATE_BLOCK = 128
+
+
+def _previous(a: np.ndarray) -> np.ndarray:
+    """The last non-NaN value strictly before each row, per column (NaN if none)."""
+    return pd.DataFrame(a).shift(1).ffill().to_numpy()
+
+
 def detect_and_fix_unrecorded(
     adj_close: pd.DataFrame,
     close_px: pd.DataFrame,
@@ -152,7 +211,7 @@ def detect_and_fix_unrecorded(
     corrected = adj_close.copy()
     total_fixes = 0
 
-    for col in corrected.columns:
+    for col in _candidate_columns(adj_close, close_px):
         adj_s = corrected[col].dropna()
         raw_s = close_px[col].reindex(adj_s.index).dropna()
 

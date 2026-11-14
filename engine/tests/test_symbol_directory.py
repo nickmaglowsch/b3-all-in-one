@@ -151,10 +151,10 @@ def test_etfs_are_kept_as_their_own_kind(tmp_path):
     assert rows.loc[syms[0], "kind"] == "EQUITY"
 
 
-def test_a_delisted_symbol_that_returns_is_not_resurrected_by_accident(tmp_path):
-    """Relistings happen. The row is updated in place with a fresh last_seen; the
-    delisting date it already carries is the reader's business, not a reason to
-    duplicate the symbol."""
+def test_a_delisted_symbol_that_returns_is_updated_in_place(tmp_path):
+    """Relistings happen. The row is updated in place with a fresh last_seen
+    rather than duplicated; that this directory's own delisting is then
+    withdrawn is pinned in test_us_lifecycle."""
     conn = sqlite_db(tmp_path)
     syms = many(6_000)
     sd.apply_snapshot(conn, sd.parse_directory(directory(syms)), "2026-01-05")

@@ -44,6 +44,7 @@ import logging
 import pandas as pd
 from b3_pipeline import market_storage, storage
 
+from . import us_lifecycle as lifecycle
 from .alphavantage import Client
 from .av_parsers import parse_listing_status
 
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 MARKET = "US"
 SOURCE = "alphavantage-listing-status"
-DELIST_REASON = "alpha vantage listing status"
+DELIST_REASON = lifecycle.LISTING_REASON
 
 # The consolidated US market has not had fewer than five thousand listed symbols
 # in years. Same floor and same reason as symbol_directory's.
@@ -60,11 +61,6 @@ MIN_PLAUSIBLE_ACTIVE = 5_000
 # A share of the currently-live US instruments. A legitimate run adds delistings
 # in single digits; anything near this is the vendor having a bad day.
 MAX_NEW_DELISTINGS_PCT = 0.02
-
-# A delisting date the vendor claims can legitimately sit a few days before the
-# last day the directory saw the symbol trade — settlement date versus last
-# trade. Beyond this the two are describing different companies.
-SETTLEMENT_SLACK_DAYS = 5
 
 
 def fetch(client: Client, state: str) -> pd.DataFrame:
@@ -100,34 +96,6 @@ def _check(active: pd.DataFrame, delisted: pd.DataFrame, new_delistings: int,
             "single digits. Nothing was written.")
 
 
-def _resolve(row, known: dict) -> tuple:
-    """One delisted claim -> (delisting_date, verdict).
-
-    Verdict is "write", "conflict" (the claim contradicts what the plane
-    watched happen) or "skip".
-    """
-    claim = row["delisting_date"]
-    if pd.isna(claim):
-        return None, "skip"
-    seen = known.get(row["symbol"])
-    if seen is None:
-        return claim, "write"
-    last_seen = seen["last_seen"]
-    if pd.isna(last_seen):
-        return claim, "write"
-    if claim >= last_seen:
-        return claim, "write"
-    if (last_seen - claim).days <= SETTLEMENT_SLACK_DAYS:
-        # Settlement versus last trade. The observed day is the one the plane
-        # can prove, so it wins.
-        return last_seen, "write"
-    # The claim predates trading the plane actually recorded. That is not a
-    # date disagreement, it is two companies under one ticker — a recycled
-    # symbol — and merging them would put one company's fundamentals on the
-    # other's prices. Doing nothing is the correct outcome.
-    return None, "conflict"
-
-
 def _plan(active: pd.DataFrame, delisted: pd.DataFrame, known: dict) -> tuple:
     """The two row sets this run wants to write, plus the claims it refuses.
 
@@ -137,6 +105,9 @@ def _plan(active: pd.DataFrame, delisted: pd.DataFrame, known: dict) -> tuple:
     in a single frame would blank the seen symbol's name and venue with the
     NaNs the other row forced into existence — and the same hazard is why
     clearing a delisting needs a frame of its own.
+
+    What each claim may change is `us_lifecycle`'s to say: `claim_delisted`
+    for the dead file, `withdraw_claim` for the live one.
     """
     live_today = set(active["symbol"]) if not active.empty else set()
     seen, unseen, revived, conflicts = [], [], [], []
@@ -147,45 +118,27 @@ def _plan(active: pd.DataFrame, delisted: pd.DataFrame, known: dict) -> tuple:
         if row["symbol"] in live_today:
             continue
         prior = known.get(row["symbol"])
-        # A delisting the directory watched happen is proof; this feed is a
-        # record. Never restate one with the other.
-        if _foreign_delisting(prior):
-            continue
-        date, verdict = _resolve(row, known)
+        change, verdict = lifecycle.claim_delisted(prior, row["delisting_date"])
         if verdict == "conflict":
             conflicts.append(row["symbol"])
-            continue
-        if verdict == "skip":
-            continue
-        extra = {"delisting_date": date, "delist_reason": DELIST_REASON}
-        (seen if prior is not None else unseen).append(
-            {**_columns(row, prior is None), **extra})
+        if change:
+            (seen if prior is not None else unseen).append(
+                {**_columns(row, prior is None), **change})
 
     for row in active.to_dict("records"):
         prior = known.get(row["symbol"])
         # A stale snapshot must not resurrect a name the directory watched die.
         # Only this module's own claims are ever self-corrected.
-        if _foreign_delisting(prior):
+        if lifecycle.foreign_delisting(prior):
             continue
-        if prior is not None and not pd.isna(prior["delisting_date"]):
-            # This feed said delisted before and says trading now. Leaving the
-            # stale claim would keep a symbol that trades out of every
-            # point-in-time universe, which is the same bug in the other
-            # direction, so the earlier claim is withdrawn.
-            revived.append({**_columns(row, False),
-                            "delisting_date": None, "delist_reason": None})
+        withdrawn = lifecycle.withdraw_claim(prior)
+        if withdrawn:
+            revived.append({**_columns(row, False), **withdrawn})
             continue
         (seen if prior is not None else unseen).append(
             _columns(row, prior is None))
 
     return seen, unseen, revived, conflicts
-
-
-def _foreign_delisting(prior) -> bool:
-    """True when another writer has already recorded this symbol as delisted."""
-    return (prior is not None
-            and not pd.isna(prior["delisting_date"])
-            and prior["delist_reason"] != DELIST_REASON)
 
 
 def reconcile(conn, active: pd.DataFrame, delisted: pd.DataFrame,
@@ -249,8 +202,8 @@ def _by_symbol(frame: pd.DataFrame) -> dict:
     every one of them alive for the length of the run. At ~13,000 US symbols
     that measured ~19 MB retained and ~2.1 s to build, against ~5 MB and ~0.3 s
     here, in the same worker whose memory limit a backtest already crowds.
-    Nothing downstream needs a Series: `_plan`, `_resolve` and
-    `_foreign_delisting` only ever index a row by column name.
+    Nothing downstream needs a Series: `_plan` and the `us_lifecycle`
+    transitions only ever index a row by column name.
     """
     return {r["symbol"]: r for r in frame.to_dict("records")}
 

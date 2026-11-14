@@ -1,5 +1,6 @@
 """POST /whatif — replay the tenant's REAL cash flows through an alternative
-strategy (spec/05 Feature 2).
+strategy (spec/05 Feature 2). POST queues the replay and the worker runs it
+(tasks_whatif); here the job is run in-process, then polled like the page does.
 
 Seeds a tiny tenant (a few 2023 trades + positions), then replays them through
 MomSharpe (price-only, runs on the 2023-2025 price plane with benchmarks stubbed
@@ -67,8 +68,14 @@ async def test_whatif_replays_real_flows(client):
 
     r = await client.post(
         "/whatif", json={"strategy_ids": [STRATEGY], "freq": "ME"}, headers=headers)
-    assert r.status_code == 200, r.text
-    body = r.json()
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "pending"
+    from platform_app import tasks_whatif
+    run_id = r.json()["id"]
+    assert (await tasks_whatif.run_whatif.func(run_id=run_id))["status"] == "done"
+    polled = (await client.get(f"/whatif/{run_id}", headers=headers)).json()
+    assert polled["status"] == "done", polled
+    body = polled["result"]
 
     # Point comparison: same money in (buys − sells − income), real book today.
     # net invested = 25000 + 35000 + 22400 − 9000 = 73400

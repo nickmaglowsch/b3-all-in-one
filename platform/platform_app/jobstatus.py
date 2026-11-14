@@ -1,7 +1,7 @@
 """The `status` column of each job table, and the one way a worker moves it.
 
-Three tables carry a job's life in a plain string column — backtest_runs,
-imports, ingest_runs — and the strings used to be spelled out wherever a route,
+Four tables carry a job's life in a plain string column — backtest_runs,
+imports, ingest_runs, whatif_runs — and the strings used to be spelled out wherever a route,
 a task, the boot sweep or the MCP schema needed one. Nothing tied them together,
 so nothing said which moves were legal either: a task wrote `running` over
 whatever the row held, and a final write landed on a row a purge had already
@@ -37,6 +37,14 @@ class ImportStatus(StrEnum):
     ERROR = "error"
 
 
+class WhatIfStatus(StrEnum):
+    """whatif_runs: pending → running → done | error (routes_whatif, tasks_whatif)."""
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    ERROR = "error"
+
+
 class IngestStatus(StrEnum):
     """ingest_runs: running → done | error (tasks_ingest). Born running."""
     RUNNING = "running"
@@ -51,6 +59,7 @@ BACKTEST_FINISHED = (BacktestStatus.DONE, BacktestStatus.ERROR)
 IMPORT_INFLIGHT = (ImportStatus.PENDING, ImportStatus.PROCESSING)
 IMPORT_FINISHED = (ImportStatus.DONE, ImportStatus.ERROR)
 INGEST_FINISHED = (IngestStatus.DONE, IngestStatus.ERROR)
+WHATIF_INFLIGHT = (WhatIfStatus.PENDING, WhatIfStatus.RUNNING)
 
 
 def check_sql(statuses: type[StrEnum]) -> str:

@@ -17,7 +17,7 @@ import sys
 
 from sqlalchemy import func
 
-from platform_app import enginerun
+from platform_app import enginerun, tasks_sleeves
 from platform_app.config import settings
 from platform_app.db import async_session_maker
 from platform_app.jobstatus import IngestStatus, transition
@@ -114,11 +114,19 @@ async def ingest_prices(timestamp: int = 0) -> dict:
     --skip-corporate-actions — which left dividend total-return adjustment missing
     and only detector-inferred splits in place.
     """
-    return await _record_ingest("prices", [
+    out = await _record_ingest("prices", [
         "b3_pipeline.main",
         "--force-download",
         "--start-year", str(settings.ingest_start_year),
     ])
+    # The plane moved: every strategy sleeve's stored weights are now stale.
+    # Best effort — the prices landed either way, and the midnight run and the
+    # API's stale reads both queue the same refresh.
+    try:
+        await tasks_sleeves.defer_warm_open()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ingest] could not queue {tasks_sleeves.WARM}: {e}", file=sys.stderr, flush=True)
+    return out
 
 
 def _ingest_task(kind: str, module: str, cron: str | None):

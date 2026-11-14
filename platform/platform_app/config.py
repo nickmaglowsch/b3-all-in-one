@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # constraint, and a skipped day is a day of backfill that never happens.
     ingest_us_prices_cron: str = "0 5 * * *"
     ingest_spx_cron: str = "30 5 * * 1-5"
+    # Strategy sleeves' advised weights (tasks_sleeves): just after the UTC date
+    # turns, when every stored answer becomes a day old. Also run after each
+    # price ingest, and whenever the API serves a stale one.
+    warm_sleeves_cron: str = "10 0 * * *"
     environment: str = "development"
     frontend_url: str = "http://localhost:3000"
     allowed_origins: str = "http://localhost:3000"

@@ -14,17 +14,19 @@ import time
 import uuid
 
 import pytest
+import pytest_asyncio
 
 from platform_app import routes
 from platform_app.db import async_session_maker
 from platform_app.models import PortfolioSleeve
+from tests.conftest import reset_sleeve_weights
 
 
-@pytest.fixture
-def clear_sleeve_cache():
-    routes._SLEEVE_WEIGHTS_CACHE.clear()
+@pytest_asyncio.fixture(loop_scope="session")
+async def clear_sleeve_cache():
+    await reset_sleeve_weights()
     yield
-    routes._SLEEVE_WEIGHTS_CACHE.clear()
+    await reset_sleeve_weights()
 
 
 async def _seed_sleeves(tid, refs_pcts):
@@ -125,7 +127,7 @@ async def test_ticker_sleeves_are_their_own_weight_and_never_shell_out(
 
 @pytest.mark.asyncio(loop_scope="session")
 async def test_a_cached_sleeve_is_not_re_advised(monkeypatch, clear_sleeve_cache):
-    """The per-day cache has to keep working now that the calls are gathered."""
+    """The stored answers have to keep working now that the calls are gathered."""
     tid = uuid.uuid4()
     await _seed_sleeves(tid, [("A", 50.0), ("B", 50.0)])
 

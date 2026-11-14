@@ -33,8 +33,9 @@ def test_periodic_tasks_are_registered_on_the_ingest_queue():
                             "ingest_instruments", "ingest_crypto",
                             "ingest_us_fundamentals", "ingest_us_symbols",
                             "ingest_us_listing", "ingest_us_prices",
-                            "ingest_us_daily", "ingest_spx"}
+                            "ingest_us_daily", "ingest_spx", "warm_sleeve_weights"}
     assert by_name["ingest_prices"].cron == settings.ingest_prices_cron
+    assert by_name["warm_sleeve_weights"].cron == settings.warm_sleeves_cron
     assert by_name["ingest_fundamentals"].cron == settings.ingest_fundamentals_cron
     assert by_name["ingest_instruments"].cron == settings.ingest_instruments_cron
     assert by_name["ingest_crypto"].cron == settings.ingest_crypto_cron
@@ -308,3 +309,21 @@ async def test_an_expired_market_status_is_served_while_one_refresh_runs(client,
     r = await client.get("/market/status", headers=h)
     assert r.json()["prices"]["max_date"] == today
     routes._market_status_cache = None
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_a_landed_price_ingest_queues_the_sleeve_weights_refresh(monkeypatch):
+    """The plane moved, so every stored strategy-sleeve answer is stale; the
+    ingest worker is the one to recompute them, right after the prices land."""
+    from platform_app import tasks_sleeves
+
+    queued = []
+
+    async def fake_defer():
+        queued.append(1)
+
+    monkeypatch.setattr(enginerun, "run_module", lambda args, timeout_s=None:
+                        __import__("subprocess").CompletedProcess(args, 0, "", ""))
+    monkeypatch.setattr(tasks_sleeves, "defer_warm_open", fake_defer)
+    await tasks_ingest.ingest_prices.func(timestamp=0)
+    assert queued == [1]

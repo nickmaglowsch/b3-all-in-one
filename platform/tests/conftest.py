@@ -169,3 +169,18 @@ async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+async def reset_sleeve_weights() -> None:
+    """Forget every stored strategy-sleeve answer, in memory and in the table.
+    Tests reuse strategy names ("A", "MomSharpe"), and a stored answer outlives
+    the request that computed it — that is its point (platform_app.sleeve_weights)."""
+    from sqlalchemy import delete
+
+    from platform_app import sleeve_weights
+    from platform_app.db import async_session_maker
+
+    sleeve_weights.clear_memory()
+    async with async_session_maker() as s:
+        await s.execute(delete(sleeve_weights.SleeveWeights))
+        await s.commit()

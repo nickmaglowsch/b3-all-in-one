@@ -23,7 +23,7 @@ from platform_app import enginerun
 from platform_app.config import settings
 from platform_app.db import async_session_maker, close_engine_pool
 from platform_app.models import Position, Trade
-from tests.conftest import TEST_DB, auth
+from tests.conftest import TEST_DB, auth, reset_sleeve_weights
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -464,7 +464,7 @@ async def test_a_strategy_sleeve_next_to_an_off_b3_one(client, plane, monkeypatc
         return advised
 
     monkeypatch.setattr(routes, "_advise_strategy", fake_advise)
-    monkeypatch.setattr(routes, "_SLEEVE_WEIGHTS_CACHE", {})
+    await reset_sleeve_weights()
     h = await _user(client, "plan-strategy")
     await _seed_petr4(client, h)
     await _sleeves(client, h, [{"strategy_ref": "MomSharpe", "target_pct": 70},
@@ -472,7 +472,7 @@ async def test_a_strategy_sleeve_next_to_an_off_b3_one(client, plane, monkeypatc
     assert (await _plan(client, h, new_cash=0))["trades"] == {"sells": [], "buys": []}
     # Half of the strategy's book in cash: half of PETR4 goes, never more.
     advised = {"weights": {"PETR4": 0.5}}
-    monkeypatch.setattr(routes, "_SLEEVE_WEIGHTS_CACHE", {})
+    await reset_sleeve_weights()
     plan = await _plan(client, h, new_cash=0)
     assert [(s["ticker"], s["qty"]) for s in plan["trades"]["sells"]] == [("PETR4", 50)]
 

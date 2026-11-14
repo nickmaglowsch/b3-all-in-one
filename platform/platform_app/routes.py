@@ -24,7 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app import (
-    b3run, darf, enginerun, portfolio_sleeves, rebalance_plan, specstore,
+    b3run, darf, enginerun, portfolio_sleeves, rebalance_plan, sleeve_weights, specstore,
     subprocs, tasks,
 )
 from platform_app.billing import (
@@ -459,17 +459,9 @@ async def put_sleeves(
 
 
 # ── Combined target + rebalance advisor (spec/05 Features 1 & 3) ──────────────
-# advise_weights per strategy sleeve is deterministic for a given day's data, so
-# cache the JSON per (strategy, date, freq). ponytail: process-lifetime dict keyed
-# by the calendar day — same lifecycle as _STRATEGIES_CACHE. USER refs also carry
-# (tenant_id, updated_at) so two tenants' same-named specs can't collide and a
-# same-day edit busts the entry; built-in refs keep the shared 3-tuple key.
-_SLEEVE_WEIGHTS_CACHE: dict[tuple, dict] = {}
-
-# Every key here embeds a date or an updated_at, so entries are never reused past
-# the day they were written — without a bound the dict just grows by
-# (tenants x strategies) per day until the process restarts. Dropping the whole
-# thing on overflow is fine: it is a cache, and the next call refills what it needs.
+# A strategy sleeve's advised weights are a 10-20 s engine run, kept per family in
+# Postgres and served stale while the ingest worker refreshes them — see
+# sleeve_weights.py. _CACHE_MAX bounds the in-process memos below (the gallery).
 _CACHE_MAX = 1024
 
 
@@ -505,8 +497,8 @@ async def _advise_strategy(strategy: str, freq: str, extra_env: dict | None = No
     freq='ME' is the default path and passes no params; a non-default cadence is
     threaded as ``--params rebalance_freq`` through the engine script. extra_env
     points the registry at the tenant's user specs when the strategy is a user ref."""
-    params = None if freq == "ME" else {"rebalance_freq": freq}
-    return await _advise(strategy=strategy, params=params, extra_env=extra_env)
+    return await _advise(strategy=strategy, params=sleeve_weights.advise_params(freq),
+                         extra_env=extra_env)
 
 
 # ── Per-tenant portfolio settings (spec/05 Features 3 & 4) ────────────────────
@@ -540,61 +532,40 @@ async def _combined_target(
         raise HTTPException(409, "no sleeves configured — PUT /portfolio/sleeves first")
 
     # A sleeve ref may be one of the tenant's user strategies — materialize them
-    # and point the engine subprocess at the dir. updated_at keys the cache so a
-    # same-day edit isn't served stale and two tenants never collide.
+    # and point the engine subprocess at the dir. Its edit stamp is part of its
+    # family, so an edit is never served the previous version's weights.
     user_rows = (await session.scalars(
         select(UserStrategy).where(UserStrategy.tenant_id == tid)
     )).all()
     extra_env = specstore.specs_env(user_rows, tid)
     user_upd = {r.name: r.updated_at.isoformat() if r.updated_at else "" for r in user_rows}
 
-    today = date.today().isoformat()
-
-    def _key(ref: str) -> tuple:
+    def _family(ref: str) -> str:
         if ref in user_upd:
-            return (ref, today, freq, str(tid), user_upd[ref])
-        return (ref, today, freq)
+            return sleeve_weights.family(ref, freq, tid, user_upd[ref])
+        return sleeve_weights.family(ref, freq)
 
     # Split cash and tickers out first: CASH_CDI is the risk-free sleeve and a
     # ticker is its own target weight, so neither has anything to advise and
     # neither may reach the engine as a strategy.
     cash_weight, by_ref, combined, off_b3, b3_assets = portfolio_sleeves.split_sleeves(sleeves)
-    equity = [(ref, pct, _key(ref)) for ref, pct in by_ref]  # (sleeve_ref, pct, cache_key)
+    equity = [(ref, pct, _family(ref)) for ref, pct in by_ref]
 
-    # Each sleeve is a separate engine subprocess that builds its own market
-    # plane, and they are independent — one sleeve's weights depend only on its
-    # own strategy. Awaiting them in a loop made a cold three-sleeve portfolio
-    # pay three full plane builds end to end. Gathered, the wall clock is the
-    # slowest sleeve. Cache hits are resolved before dispatch so a warm sleeve
-    # costs nothing — and copied out, not re-read after the await: any other
-    # request's bounded() can empty the shared dict meanwhile, and a hit gone
-    # missing read as "needs fundamentals" (a 422 for a strategy that needs none).
-    advised = {key: hit for _ref, _pct, key in equity
-               if (hit := _SLEEVE_WEIGHTS_CACHE.get(key)) is not None}
-    todo = [(ref, key) for ref, _pct, key in equity if key not in advised]
-    if todo:
-        await session.commit()  # no connection held across the subprocesses
-        results = await asyncio.gather(
-            *(_advise_strategy(ref, freq, extra_env or None) for ref, _key_ in todo),
-            return_exceptions=True,
-        )
-        for (ref, key), res in zip(todo, results):
-            if isinstance(res, BaseException):
-                continue          # classified below, so one failure is not fatal here
-            advised[key] = bounded(_SLEEVE_WEIGHTS_CACHE, _CACHE_MAX)[key] = res
-        # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
-        # others mid-flight; anything that is not that is still a real failure.
-        failures = {ref: res for (ref, _k), res in zip(todo, results)
-                    if isinstance(res, BaseException)}
-        for ref, exc in failures.items():
-            if not isinstance(exc, enginerun.EngineNeedsFundamentals):
-                raise exc
-    else:
-        failures = {}
+    # Stored answers first, fresh or not; a stale one is served and refreshed in
+    # the background. Only a family with no answer at all reaches the engine here.
+    today, plane = date.today(), await sleeve_weights.plane_date()
+    stored = await sleeve_weights.lookup(session, [fam for _r, _p, fam in equity])
+    advised = {fam: e.payload for fam, e in stored.items()}
+    if any(not e.fresh(today, plane) for e in stored.values()):
+        sleeve_weights.refresh_soon(today, plane)
+
+    todo = [(ref, fam, tid if ref in user_upd else None)
+            for ref, _pct, fam in equity if fam not in advised]
+    failures = await _advise_missing(session, todo, freq, extra_env, (today, plane), advised)
 
     missing: list[str] = []   # strategies that need fundamentals not yet ingested
-    for ref, pct, key in equity:
-        adv = advised.get(key)
+    for ref, pct, fam in equity:
+        adv = advised.get(fam)
         if adv is None:
             exc = failures.get(ref)
             missing.append(getattr(exc, "strategy", None) or ref)
@@ -604,6 +575,35 @@ async def _combined_target(
     if missing:
         raise HTTPException(422, _needs_funds_msg(missing))
     return combined, cash_weight, off_b3, b3_assets
+
+
+async def _advise_missing(session: AsyncSession, todo: list[tuple], freq: str,
+                          extra_env: dict, stamp: tuple, advised: dict) -> dict:
+    """Compute and store the (ref, family, owner) sleeves nothing was stored for,
+    into ``advised``; the needs-fundamentals failures by ref, for the 422.
+
+    Each sleeve is a separate engine subprocess that builds its own market plane,
+    and they are independent — gathered, the wall clock is the slowest."""
+    if not todo:
+        return {}
+    await session.commit()  # no connection held across the subprocesses
+    results = await asyncio.gather(
+        *(_advise_strategy(ref, freq, extra_env or None) for ref, _fam, _owner in todo),
+        return_exceptions=True,
+    )
+    failures = {}
+    for (ref, fam, owner), res in zip(todo, results):
+        if isinstance(res, BaseException):
+            failures[ref] = res  # classified below, so one failure is not fatal here
+            continue
+        advised[fam] = res
+        await sleeve_weights.store(session, fam, owner, *stamp, res)
+    # return_exceptions keeps a needs-fundamentals sleeve from cancelling the
+    # others mid-flight; anything that is not that is still a real failure.
+    for exc in failures.values():
+        if not isinstance(exc, enginerun.EngineNeedsFundamentals):
+            raise exc
+    return failures
 
 
 async def _positions_json(session: AsyncSession, tid: uuid.UUID) -> dict[str, dict]:

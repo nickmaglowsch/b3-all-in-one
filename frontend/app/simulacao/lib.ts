@@ -1,9 +1,10 @@
 "use client";
 
 // Simulação-local hooks, types and shaping for the what-if replay
-// (POST /whatif). Formatters live in lib/format.
+// (POST /whatif queues it, GET /whatif/{id} answers it). Formatters live in lib/format.
 import { useMutation } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { pollJob } from "@/lib/pollJob";
 import type { Dated } from "@/lib/chartRange";
 import type { Flows } from "@/lib/chartMode";
 // Same queryKey as the bench gallery, so the fetch is shared.
@@ -37,11 +38,40 @@ export interface WhatIfBody {
   freq?: string;
 }
 
+/** A queued replay, as GET /whatif/{id} returns it. */
+export interface WhatIfRun {
+  id: string;
+  status: "pending" | "running" | "done" | "error";
+  error: string | null;
+  result: WhatIfResult | null;
+}
+
+const POLL_MS = 2000;
+// Four full backtests on a busy worker is minutes, not hours; past this the
+// page says so rather than spinning forever.
+const GIVE_UP_MS = 15 * 60_000;
+
+/** Queue the replay, then poll it until the worker is done. Still one mutation
+ *  to the page: pending while the job runs, `data` the result, `error` its failure. */
+export async function runWhatIf(body: WhatIfBody): Promise<WhatIfResult> {
+  const run = await pollJob<WhatIfRun>(
+    () => api<WhatIfRun>("/whatif", { method: "POST", body: JSON.stringify(body) }),
+    (id) => api<WhatIfRun>(`/whatif/${id}`),
+    {
+      everyMs: POLL_MS,
+      giveUpMs: GIVE_UP_MS,
+      timedOut: () =>
+        new ApiError(504, "A simulação está demorando mais que o normal — tente de novo em alguns minutos."),
+    },
+  );
+  if (run.status === "error" || !run.result) {
+    throw new ApiError(500, run.error ?? "Falha ao rodar a simulação.");
+  }
+  return run.result;
+}
+
 export function useRunWhatIf() {
-  return useMutation({
-    mutationFn: (body: WhatIfBody) =>
-      api<WhatIfResult>("/whatif", { method: "POST", body: JSON.stringify(body) }),
-  });
+  return useMutation({ mutationFn: (body: WhatIfBody) => runWhatIf(body) });
 }
 
 // ── formatters + shaping ──────────────────────────────────────────────────────

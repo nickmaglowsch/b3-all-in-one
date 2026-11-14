@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     # backtest is the slow case — but bounded, so a wedged child can't hold a
     # request thread or one of the worker's two slots forever.
     subprocess_timeout_s: int = 600
+    # The API runs its taxcore/engine scripts in forked children of interpreters
+    # that already imported pandas (subprocs.Zygote) — about half a second off
+    # every such request. Off => a cold `python script.py` per call, as before.
+    subprocess_zygotes: bool = True
     # Ingestion runs on its own clock: a first full COTAHIST backfill is hours of
     # download + parse, so the per-request cap above would kill it. Bounded anyway
     # so a stalled B3 download cannot hold the ingest worker forever.

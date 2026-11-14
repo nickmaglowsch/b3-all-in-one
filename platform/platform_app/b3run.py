@@ -50,6 +50,14 @@ def _taxcore_python() -> list[str]:
     return subprocs.interpreter(settings.taxcore_python, TAXCORE)
 
 
+# taxcore's scripts import pandas and openpyxl first thing — see zygote_server.py.
+TAXCORE_PRELOAD = ("pandas", "numpy", "openpyxl")
+
+
+def warm() -> subprocs.Warm:
+    return subprocs.Warm(_taxcore_python(), TAXCORE_PRELOAD)
+
+
 def workspace_root(tenant_id: object) -> Path:
     """Parent dir for a tenant's throwaway workspaces.
 
@@ -99,6 +107,7 @@ def run_module(ws: Path, module_args: list[str]) -> subprocess.CompletedProcess:
         env={**os.environ, "PYTHONPATH": str(ws), "PYTHONWARNINGS": "ignore"},
         timeout_s=settings.subprocess_timeout_s,
         label=module_args[0],
+        warm=warm(),
     )
 
 

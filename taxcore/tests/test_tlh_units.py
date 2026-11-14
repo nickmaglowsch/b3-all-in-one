@@ -259,19 +259,17 @@ def _decision(**over):
     d = {"status": "TLH recomendado", "rationale": "porque sim",
          "gross_after": 30_000.0, "pnl_after": 5_000.0, "carry_used": 0.0,
          "target_loss": -5_000.0, "final_gross": 40_000.0, "final_pnl": 0.0,
-         "ir": 0.0}
+         "ir": 0.0, "carry_after": 0.0}
     return {**d, **over}
 
 
-def test_overharvesting_shows_up_as_carry_gained_not_as_carry_spent():
-    """carry_used only ever counts the carry a plan consumes. A plan that harvests
-    past zero *adds* to the carryforward, and carry_after is the only field that
-    says so."""
+def test_build_result_passes_the_decision_through():
     result = build_result(
         [], {"AÇÃO": 1_000.0, "FII": 0.0},
         {"AÇÃO": {"gross": 0.0, "pnl": 0.0}, "FII": {"gross": 0.0, "pnl": 0.0}},
-        [], [], {"AÇÃO": _decision(final_pnl=-2_000.0, carry_used=0.0)})
-    assert result["buckets"]["AÇÃO"]["carry_after"] == pytest.approx(3_000.0)
+        [], [], {"AÇÃO": _decision(final_pnl=-2_000.0, carry_after=3_000.0)})
+    b = result["buckets"]["AÇÃO"]
+    assert (b["carry_after"], b["final_pnl"], b["status"]) == (3_000.0, -2_000.0, "TLH recomendado")
 
 
 def test_the_report_says_so_plainly_when_no_sell_was_proposed():

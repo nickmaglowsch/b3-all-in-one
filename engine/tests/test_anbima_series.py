@@ -192,3 +192,35 @@ def test_a_dead_anbima_trips_the_breaker_instead_of_stalling_the_backfill(monkey
     assert len(calls) == 1 + anbima_series.GIVE_UP_AFTER
     assert len(e.value.result.rows) == 1          # what it got is kept
     assert len(e.value.result.failed) == anbima_series.GIVE_UP_AFTER
+    assert e.value.result.attempted == frozenset(calls)
+
+
+def test_a_tripped_breaker_keeps_the_owed_days_it_never_asked_about(tmp_path, monkeypatch):
+    """Old holes sort first in a chunk, so an outage long enough to trip the
+    breaker leaves the rest of them unasked. `_store` used to clear every pending
+    day of the chunk that was not in `failed` — those included — and they sit
+    behind MAX(date), where the resume never looks again."""
+    import datetime
+
+    today = datetime.date.today()
+    owed = anbima_series.weekdays(datetime.date(2024, 1, 1), datetime.date(2024, 3, 1))
+    assert len(owed) > anbima_series.GIVE_UP_AFTER
+    asked = []
+
+    def dead(day, p2=False):
+        asked.append(day)
+        raise FetchFailed("timeout")
+
+    monkeypatch.setattr(anbima_series, "fetch_day", dead)
+    monkeypatch.setattr(anbima_series.time, "sleep", lambda s: None)
+    conn = sqlite3.connect(str(tmp_path / "plane.sqlite"))
+    storage.init_db(conn)
+    storage.upsert_external_prices(conn, anbima_series.level_rows(
+        ["$IMAB"], [pd.Timestamp(today)], [100.0], anbima_series.SOURCE_IMA))
+    for day in owed:
+        storage.record_external_failure(conn, anbima_series.SOURCE_IMA, day, "earlier outage")
+
+    with pytest.raises(anbima_series.GaveUp):
+        anbima_series._ingest_ima(conn, today)
+    assert asked == owed[:anbima_series.GIVE_UP_AFTER]
+    assert storage.pending_external_failures(conn, anbima_series.SOURCE_IMA) == set(owed)

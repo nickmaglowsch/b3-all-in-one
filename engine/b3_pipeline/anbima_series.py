@@ -162,11 +162,13 @@ def fetch_day(day: datetime.date, p2: bool = False) -> pd.DataFrame:
 
 def backfill(days, p2: bool = False, pause: float = REQUEST_PAUSE_S) -> BackfillResult:
     """`days` in `external_prices` shape, surviving the ones that fail — up to
-    GIVE_UP_AFTER in a row, where it raises GaveUp with what it has."""
-    frames, failed, streak = [], {}, 0
+    GIVE_UP_AFTER in a row, where it raises GaveUp with what it has. Either way
+    the result says which days were asked: after a trip, not all of them."""
+    frames, failed, attempted, streak = [], {}, [], 0
     for i, day in enumerate(days):
         if i and pause:
             time.sleep(pause)
+        attempted.append(day)
         try:
             df = fetch_day(day, p2)
         except FetchFailed as e:
@@ -176,22 +178,22 @@ def backfill(days, p2: bool = False, pause: float = REQUEST_PAUSE_S) -> Backfill
             if streak >= GIVE_UP_AFTER:
                 raise GaveUp(f"ANBIMA failed {streak} requests in a row, last for "
                              f"{day}; stopping this run",
-                             _result(frames, failed, p2)) from e
+                             _result(frames, failed, attempted, p2)) from e
             continue
         streak = 0
         if not df.empty:
             frames.append(df)
-    return _result(frames, failed, p2)
+    return _result(frames, failed, attempted, p2)
 
 
-def _result(frames: list, failed: dict, p2: bool) -> BackfillResult:
+def _result(frames: list, failed: dict, attempted: list, p2: bool) -> BackfillResult:
     if not frames:
-        return BackfillResult(pd.DataFrame(), failed)
+        return BackfillResult(pd.DataFrame(), failed, frozenset(attempted))
     df = pd.concat(frames, ignore_index=True)
     return BackfillResult(
         level_rows(df["ticker"].to_numpy(), df["date"].to_numpy(),
                    df["close"].to_numpy(), SOURCE_P2 if p2 else SOURCE_IMA),
-        failed)
+        failed, frozenset(attempted))
 
 
 def weekdays(start: datetime.date, end: datetime.date) -> list[datetime.date]:
@@ -258,12 +260,15 @@ def _ingest_ima(conn, today: datetime.date) -> None:
 
 
 def _store(conn, chunk, result: BackfillResult, pending: set) -> None:
+    """Rows, then the ledger. Only a day that was asked is settled: one the
+    breaker never reached is still owed, and if it is an old hole behind the
+    newest stored date the ledger is the only thing that remembers it."""
     if not result.rows.empty:
         storage.upsert_external_prices(conn, result.rows)
     for day in chunk:
         if day in result.failed:
             storage.record_external_failure(conn, SOURCE_IMA, day, result.failed[day])
-        elif day in pending:
+        elif day in pending and day in result.attempted:
             storage.clear_external_failure(conn, SOURCE_IMA, day)
 
 

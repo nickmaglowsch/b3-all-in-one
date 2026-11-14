@@ -50,9 +50,15 @@ class BackfillResult(NamedTuple):
     `failed` is the retry queue. It is returned rather than logged because the
     caller is the only layer that can durably record it, and a failure that is
     only logged is a failure that is lost at the end of the run.
+
+    `attempted` is the days a request was actually sent for. Only those are
+    settled either way; a loader that stops early (anbima_series.GaveUp) never
+    asked about the rest, and clearing their debt would forget it. Empty means
+    nothing is known to have been asked, so nothing gets cleared.
     """
     rows: pd.DataFrame
     failed: dict
+    attempted: frozenset = frozenset()
 
 # The file's own column names. Only the ones we keep are named here.
 _COL_DATE = "RptDt"
@@ -246,14 +252,14 @@ def backfill(days, tickers=None) -> BackfillResult:
 
     if not frames:
         logger.warning(f"No external prices found across {len(days)} days")
-        return BackfillResult(pd.DataFrame(), failed)
+        return BackfillResult(pd.DataFrame(), failed, frozenset(days))
 
     out = pd.concat(frames, ignore_index=True)
     logger.info(
         f"Fetched {len(out):,} external price rows for "
         f"{out['ticker'].nunique()} tickers ({out['date'].min()} to {out['date'].max()})"
     )
-    return BackfillResult(out, failed)
+    return BackfillResult(out, failed, frozenset(days))
 
 
 def demo() -> None:

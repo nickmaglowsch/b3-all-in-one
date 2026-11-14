@@ -187,7 +187,7 @@ async def test_a_run_that_survived_a_failed_step_says_which(monkeypatch, capsys)
 async def test_market_status_reports_staleness(client, monkeypatch):
     """/market/status must say the plane is behind. Positions are marked from it,
     so 'stale' is the difference between a stated fact and a silent lie."""
-    from platform_app import routes
+    from platform_app import routes_market_status as routes
 
     routes._market_status_cache = None
     # UTC, matching the route's basis — a local date() is a day out either side of
@@ -220,7 +220,7 @@ async def test_market_status_survives_an_absent_market_plane(client, monkeypatch
     aggregating a missing table raises. The endpoint that exists to report "there
     is no data yet" must not 500 on exactly that case — the dashboard polls it on
     every page."""
-    from platform_app import routes
+    from platform_app import routes_market_status as routes
 
     routes._market_status_cache = None
 
@@ -274,3 +274,37 @@ async def test_each_ingest_task_is_wired_to_its_module(monkeypatch, kind):
     result = await task.func(timestamp=0)
     assert seen == [INGEST_MODULES[kind]]
     assert (result["kind"], result["status"]) == (kind, "done")
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_an_expired_market_status_is_served_while_one_refresh_runs(client, monkeypatch):
+    """The aggregate behind /market/status is seconds on a full plane. An
+    expired entry must answer at once and recompute in the background — once,
+    however many tabs poll meanwhile — never inline on a request."""
+    import asyncio
+
+    from platform_app import routes_market_status as routes
+
+    today = datetime.datetime.now(datetime.UTC).date().isoformat()
+    expired = datetime.datetime.now(datetime.UTC) - routes._MARKET_STATUS_TTL * 2
+    routes._market_status_cache = (expired, await _fake_status("2020-01-02"))
+    calls, gate = [], asyncio.Event()
+
+    async def slow():
+        calls.append(1)
+        await gate.wait()
+        return await _fake_status(today)
+
+    monkeypatch.setattr(routes, "_market_status_uncached", slow)
+    token = (await client.post("/auth/dev-login")).json()["access_token"]
+    h = {"Authorization": f"Bearer {token}"}
+    for _ in range(3):
+        r = await asyncio.wait_for(client.get("/market/status", headers=h), 5)
+        assert r.json()["prices"]["max_date"] == "2020-01-02"   # the stale one
+    await asyncio.sleep(0)
+    assert calls == [1]
+    gate.set()
+    await routes._market_status_refresh
+    r = await client.get("/market/status", headers=h)
+    assert r.json()["prices"]["max_date"] == today
+    routes._market_status_cache = None

@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { CHART, SERIES, TICK_STYLE } from "./theme";
+import { CHART, SERIES, TICK_STYLE, oneLine } from "./theme";
 import { ChartTooltip } from "./ChartTooltip";
 import { NoData } from "./NoData";
 
@@ -70,8 +70,8 @@ export function AreaSeries({
             tick={TICK_STYLE}
             tickLine={false}
             axisLine={false}
-            width={56}
-            tickFormatter={valueFormat}
+            width={72}
+            tickFormatter={(v: number) => oneLine(valueFormat ? valueFormat(v) : String(v))}
           />
           <Tooltip
             cursor={{ stroke: CHART.axis, strokeDasharray: "3 3" }}
@@ -86,6 +86,8 @@ export function AreaSeries({
             stroke={color}
             strokeWidth={2}
             fill={`url(#${gid})`}
+            // Same reason as LineSeries: a sparse series must still be a line.
+            connectNulls
             isAnimationActive={false}
           />
         </AreaChart>

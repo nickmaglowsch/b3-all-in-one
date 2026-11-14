@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Pager, usePageSize, usePaged } from "@/components/ui/Pager";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { SortControl } from "@/components/ui/SortControl";
 import { SortHeader, type Dir } from "@/components/ui/SortHeader";
@@ -275,6 +276,10 @@ export function PositionsTable({
     },
   ];
 
+  // Fifteen rows is one laptop screen; a phone's stacked cards get five.
+  const pageSize = usePageSize(15, 5);
+  const paged = usePaged(rows, pageSize, `${filter}|${sort.key}|${sort.dir}`);
+
   return (
     <div aria-busy={historyLoading || undefined}>
       <div className="mb-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -316,10 +321,11 @@ export function PositionsTable({
       )}
       <DataTable
         columns={columns}
-        rows={rows}
+        rows={paged.items}
         getRowKey={(p) => p.ticker}
         label="Posições da carteira"
       />
+      <Pager {...paged} onPage={paged.setPage} />
     </div>
   );
 }

@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import type { TradesPage } from "@/lib/types";
 import { Card } from "@/components/ui/Card";
+import { Pager } from "@/components/ui/Pager";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { SortControl } from "@/components/ui/SortControl";
 import { SortHeader, type Dir } from "@/components/ui/SortHeader";
@@ -13,15 +14,15 @@ import { Money } from "@/components/ui/Money";
 import { EmptyState, RetryButton } from "@/components/ui/EmptyState";
 import { LoadingStatus, Skeleton } from "@/components/ui/Skeleton";
 import { IconChart } from "@/components/icons";
-import { formatDate, formatInt, formatQty } from "@/lib/format";
+import { formatDate, formatQty } from "@/lib/format";
 import type { Trade } from "@/lib/types";
 
-const PAGE_SIZES = [50, 100, 250];
+const PAGE_SIZES = [20, 50, 100];
 const TITLE = "Negociações";
 
 /** First-page query shape. The portfolio page reuses this so its "does this book
  *  have any trades" gate and this table share one request. */
-export const TRADES_DEFAULTS = { limit: 50, sort: "date", dir: "desc" } as const;
+export const TRADES_DEFAULTS = { limit: 20, sort: "date", dir: "desc" } as const;
 
 type SortKey = "date" | "side" | "ticker" | "market" | "broker" | "qty" | "price" | "amount";
 
@@ -78,17 +79,18 @@ export function TradesSection() {
   // ticker is one request, not six.
   const [filterInput, setFilterInput] = useState("");
   const [filter, setFilter] = useState("");
+  // Only when the filter really changes: this also ran on mount, and the
+  // setOffset(0) inside threw away a page turned in the first 300ms — which,
+  // now that the table mounts when its tab is opened, is a real click.
   useEffect(() => {
+    const next = filterInput.trim();
+    if (next === filter) return;
     const t = setTimeout(() => {
-      setFilter(filterInput.trim());
+      setFilter(next);
       setOffset(0);
     }, 300);
     return () => clearTimeout(t);
-  }, [filterInput]);
-  // Focus must not sit on a button that the click just disabled. Hand it to the
-  // sibling that is still live, and let the status line announce the new range.
-  const prevRef = useRef<HTMLButtonElement>(null);
-  const nextRef = useRef<HTMLButtonElement>(null);
+  }, [filterInput, filter]);
 
   // Sorting is server-side: ordering only the rows already fetched answers
   // "largest trade on this page", which is not what a column header promises.
@@ -254,8 +256,6 @@ export function TradesSection() {
 
   const from = offset + 1;
   const to = Math.min(offset + limit, page.total);
-  const canPrev = offset > 0;
-  const canNext = offset + limit < page.total;
   const pageNo = Math.floor(offset / limit) + 1;
   const pages = Math.max(1, Math.ceil(page.total / limit));
 
@@ -300,44 +300,15 @@ export function TradesSection() {
         getRowKey={(t, i) => `${t.source_file}-${offset + i}`}
         label="Histórico de negociações"
       />
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
-        <p
-          role="status"
-          aria-live="polite"
-          className="font-mono text-xs text-muted"
-        >
-          {formatInt(from)}–{formatInt(to)} de {formatInt(page.total)} · página{" "}
-          {formatInt(pageNo)} de {formatInt(pages)}
-        </p>
-        <div className="flex items-center gap-2">
-          <button
-            ref={prevRef}
-            type="button"
-            disabled={!canPrev}
-            onClick={() => {
-              const next = Math.max(0, offset - limit);
-              setOffset(next);
-              if (next === 0) nextRef.current?.focus();
-            }}
-            className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Anterior
-          </button>
-          <button
-            ref={nextRef}
-            type="button"
-            disabled={!canNext}
-            onClick={() => {
-              const next = offset + limit;
-              setOffset(next);
-              if (next + limit >= page.total) prevRef.current?.focus();
-            }}
-            className="rounded-md border border-hairline px-3 py-1.5 text-sm font-medium text-ink transition-colors hover:bg-hairline/40 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Próxima
-          </button>
-        </div>
-      </div>
+      <Pager
+        page={pageNo}
+        pages={pages}
+        from={from}
+        to={to}
+        total={page.total}
+        onPage={(p) => setOffset((p - 1) * limit)}
+        className="mt-4"
+      />
     </Card>,
   );
 }

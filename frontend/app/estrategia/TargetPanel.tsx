@@ -7,6 +7,7 @@
 // B3 (US, crypto) has no known position, so it is listed after the B3 rows with
 // its weight in the whole target and no drift (platform rebalance_plan.py).
 import { Card } from "@/components/ui/Card";
+import { Pager, usePageSize, usePaged } from "@/components/ui/Pager";
 import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
@@ -104,7 +105,7 @@ export function TargetPanel() {
           </p>
           <DivergingBars data={bars} valueFormat={compactBRL} height={Math.max(200, bars.length * 26)} />
         </div>
-        <DataTable columns={columns} rows={[...sorted, ...outside]} getRowKey={(r) => r.ticker} label="Desvio por ativo" />
+        <DriftTable columns={columns} rows={[...sorted, ...outside]} />
         {outside.length > 0 && (
           <p className="text-[11px] text-muted">
             Peso alvo e atual dos ativos da B3: % da carteira da B3, comparada com a parte
@@ -114,6 +115,19 @@ export function TargetPanel() {
         )}
       </div>
     </Card>
+  );
+}
+
+// Largest drift first, ten at a time: the bars above already carry the shape
+// of the whole book, and thirty rows under them pushed Rebalanceamento a
+// screen and a half away.
+function DriftTable({ columns, rows }: { columns: Column<DriftRow>[]; rows: DriftRow[] }) {
+  const paged = usePaged(rows, usePageSize(10, 5));
+  return (
+    <div>
+      <DataTable columns={columns} rows={paged.items} getRowKey={(r) => r.ticker} label="Desvio por ativo" />
+      <Pager {...paged} onPage={paged.setPage} />
+    </div>
   );
 }
 

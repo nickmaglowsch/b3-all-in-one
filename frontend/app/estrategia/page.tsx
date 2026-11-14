@@ -8,7 +8,7 @@ import { DataTable, type Column } from "@/components/ui/DataTable";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Money } from "@/components/ui/Money";
 import { LoadFailure } from "@/components/ui/EmptyState";
-import { SectionNav } from "@/components/ui/SectionNav";
+import { Tabs, useTab } from "@/components/ui/Tabs";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconCompass } from "@/components/icons";
 import { StaleHint } from "@/components/ui/StaleHint";
@@ -56,67 +56,51 @@ import { SettingsPanel } from "./Settings";
 import { SleeveRows } from "./SleeveRows";
 import { TargetPanel, Warnings } from "./TargetPanel";
 
-const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
+const TAB_IDS = ["sleeves", "configuracoes", "alvo", "plano"];
 
 export default function EstrategiaPage() {
   const sleeves = useSleeves();
   const hasSleeves = (sleeves.data?.length ?? 0) > 0;
+  // Alvo/rebalanceamento need saved sleeves: with none they leave the strip and useTab
+  // (`?aba=alvo` → Sleeves); kept while loading or failed, so a retry opens on Alvo.
+  const withSleeveTabs = hasSleeves || sleeves.isLoading || sleeves.isError;
+  const [tab, setTab] = useTab(TAB_IDS.slice(0, withSleeveTabs ? 4 : 2));
+  const needsSleeves = (body: React.ReactNode) => (sleeves.isLoading ? <Skeleton className="h-40 w-full" /> : body);
 
   return (
     <>
       <PageHeader eyebrow="Alocação" title="Estratégia" />
 
-      <SectionNav
-        items={[
-          { id: "sleeves", label: "Sleeves" },
-          { id: "carteiras", label: "Minhas carteiras" },
-          { id: "configuracoes", label: "Configurações" },
-          ...(hasSleeves
-            ? [
-                { id: "alvo", label: "Alvo x atual" },
-                { id: "plano", label: "Rebalanceamento" },
-              ]
-            : []),
-        ]}
-      />
-
-      <div className="space-y-4">
-        {/* Without the saved sleeves the editor would open empty — and saving an
-            empty-looking editor is how a real target gets overwritten. The
-            settings behind it share the gate, so they go with it. */}
-        {sleeves.isError ? (
-          <Card title="Sleeves">
-            <LoadFailure
-              error={sleeves.error}
-              icon={<IconCompass size={28} />}
-              title="Não foi possível carregar seus sleeves."
-              offerTitle={(nome) => `Sleeves, alvo e rebalanceamento vêm com o módulo ${nome}.`}
-              onRetry={() => sleeves.refetch()}
-            />
-          </Card>
-        ) : (
-          <>
-            <div id="sleeves" className={ANCHOR}>
-              <SleevesEditor />
-            </div>
-            <div id="configuracoes" className={ANCHOR}>
-              <SettingsPanel />
-            </div>
-          </>
-        )}
-        {sleeves.isLoading ? (
-          <Skeleton className="h-40 w-full" />
-        ) : hasSleeves ? (
-          <>
-            <div id="alvo" className={ANCHOR}>
-              <TargetPanel />
-            </div>
-            <div id="plano" className={ANCHOR}>
-              <RebalancePanel />
-            </div>
-          </>
-        ) : null}
-      </div>
+      {/* Without the saved sleeves the editor would open empty — and saving an
+          empty-looking editor is how a real target gets overwritten. The
+          settings behind it share the gate, so they go with it. */}
+      {sleeves.isError ? (
+        <Card title="Sleeves">
+          <LoadFailure
+            error={sleeves.error}
+            icon={<IconCompass size={28} />}
+            title="Não foi possível carregar seus sleeves."
+            offerTitle={(nome) => `Sleeves, alvo e rebalanceamento vêm com o módulo ${nome}.`}
+            onRetry={() => sleeves.refetch()}
+          />
+        </Card>
+      ) : (
+        <Tabs
+          label="Seções da estratégia"
+          active={tab}
+          onChange={setTab}
+          tabs={[
+            { id: "sleeves", label: "Sleeves e carteiras", content: <SleevesEditor /> },
+            { id: "configuracoes", label: "Configurações", content: <SettingsPanel /> },
+            ...(withSleeveTabs
+              ? [
+                  { id: "alvo", label: "Alvo x atual", content: needsSleeves(<TargetPanel />) },
+                  { id: "plano", label: "Rebalanceamento", content: needsSleeves(<RebalancePanel />) },
+                ]
+              : []),
+          ]}
+        />
+      )}
     </>
   );
 }
@@ -215,6 +199,8 @@ function SleevesEditor() {
   return (
     <div className="space-y-4">
     <Card
+      // Editar in "Minhas carteiras" scrolls back here; clears the sticky strip.
+      id="sleeves" className="scroll-mt-28 md:scroll-mt-16"
       title={carteira ? "Sleeves · editando carteira salva" : "Sleeves"}
       action={
         <span
@@ -422,7 +408,7 @@ function MinhasCarteiras({
   };
 
   return (
-    <Card id="carteiras" className={ANCHOR} title="Minhas carteiras">
+    <Card title="Minhas carteiras">
       {userStrats.isLoading ? (
         <Skeleton className="h-20 w-full" />
       ) : userStrats.isError ? (

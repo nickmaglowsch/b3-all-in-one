@@ -25,3 +25,8 @@ export const TICK_STYLE = {
   fontSize: 11,
   fontFamily: "var(--font-plex-mono)",
 } as const;
+
+/** Recharts word-wraps an axis tick to the axis width, so "R$ 180 mil" broke
+ *  into "R$ 180" over "mil" — two lines per tick, stacked into the next one.
+ *  Non-breaking spaces keep a label one label. */
+export const oneLine = (label: string) => label.replace(/ /g, "\u00a0");

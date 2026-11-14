@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import type { BacktestRun } from "@/lib/types";
+import { Pager, usePageSize, usePaged } from "@/components/ui/Pager";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -35,6 +36,10 @@ export function RunsList({
   const del = useDeleteBacktest();
   const confirm = useRowConfirm(del);
   const picked = new Set(selected);
+  // Newest first, ten at a time. Picks for the comparison are ids, so they
+  // survive paging back to find an older run. Keyed on the newest run: a run
+  // just queued lands on page 1, so a reader left on page 3 goes back to see it.
+  const paged = usePaged(runs, usePageSize(10, 5), runs[0]?.id ?? "");
 
   if (loading) {
     return (
@@ -88,7 +93,7 @@ export function RunsList({
             </tr>
           </thead>
           <tbody>
-            {runs.map((r) => (
+            {paged.items.map((r) => (
               <Row
                 key={r.id}
                 run={r}
@@ -105,6 +110,7 @@ export function RunsList({
           </tbody>
         </table>
       </div>
+      <Pager {...paged} onPage={paged.setPage} />
     </div>
   );
 }

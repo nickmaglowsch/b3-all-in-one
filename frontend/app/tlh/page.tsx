@@ -10,14 +10,14 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { TickerChip } from "@/components/ui/TickerChip";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { SectionNav } from "@/components/ui/SectionNav";
+import { Tabs, useTab } from "@/components/ui/Tabs";
 import { IconAlert } from "@/components/icons";
 import { StaleHint } from "@/components/ui/StaleHint";
 import { asSet, isStale } from "@/lib/staleResult";
 import { SituationPanel, type TlhPlan } from "./situation";
 import { PlanResult } from "./plan";
 
-const ANCHOR = "scroll-mt-28 md:scroll-mt-16";
+const TLH_TABS = ["situacao", "reduzir", "simular"];
 
 interface SellDraft {
   ticker: string;
@@ -87,6 +87,7 @@ export default function TlhPage() {
     plan.mutate(planRequest(sells, exclude));
   }
   const planStale = isStale(plan.variables, planRequest(sells, exclude), planKey);
+  const [tab, setTab] = useTab(TLH_TABS);
 
   return (
     <>
@@ -97,61 +98,72 @@ export default function TlhPage() {
         Plano informativo — execute por sua conta na sua corretora.
       </p>
 
-      <SectionNav
-        items={[
-          { id: "situacao", label: "Situação do mês" },
-          { id: "reduzir", label: "Reduzir IR" },
-          { id: "simular", label: "Simular vendas" },
-          ...(plan.isPending || plan.data ? [{ id: "plano", label: "Plano" }] : []),
+      <Tabs
+        label="Seções da colheita"
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          {
+            id: "situacao",
+            label: "Situação do mês",
+            content: (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <SituationPanel situation={situation} plan={plan.data} />
+              </div>
+            ),
+          },
+          {
+            // After the fact: sales already made this month.
+            id: "reduzir",
+            label: "Reduzir IR",
+            content: <ReduceSection held={held} exclude={exclude} setExclude={setExclude} />,
+          },
+          {
+            id: "simular",
+            label: "Simular vendas",
+            badge: sells.length ? sells.length : undefined,
+            content: (
+              <>
+                <Card title="Simular vendas" className="mb-6">
+                  <SellsBuilder
+                    held={held}
+                    loading={positions.isPending}
+                    sells={sells}
+                    setSells={setSells}
+                    rowError={rowError}
+                    heldQty={heldQty}
+                  />
+
+                  <ExcludePicker held={held} exclude={exclude} setExclude={setExclude} />
+
+                  <div className="mt-4 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={submit}
+                      disabled={anyInvalid || plan.isPending}
+                      className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90 disabled:opacity-60"
+                    >
+                      {plan.isPending ? "Planejando…" : "Planejar"}
+                    </button>
+                    {sells.length === 0 && (
+                      <span className="text-xs text-muted">
+                        Adicione ao menos uma venda para simular.
+                      </span>
+                    )}
+                  </div>
+
+                  {plan.isError && (
+                    <PlanError error={plan.error} fallback="Não foi possível montar o plano." />
+                  )}
+                </Card>
+
+                {/* The plan lands under its own inputs, in the same tab. */}
+                <PlanSlot pending={plan.isPending} plan={plan.data} stale={planStale} action="Planejar" />
+              </>
+            ),
+          },
         ]}
       />
-
-      {/* Situation panel */}
-      <div id="situacao" className={`mb-6 grid gap-4 sm:grid-cols-2 ${ANCHOR}`}>
-        <SituationPanel situation={situation} plan={plan.data} />
-      </div>
-
-      {/* After the fact: sales already made this month */}
-      <ReduceSection held={held} exclude={exclude} setExclude={setExclude} />
-
-      {/* Sells builder */}
-      <Card id="simular" title="Simular vendas" className={`mb-6 ${ANCHOR}`}>
-        <SellsBuilder
-          held={held}
-          loading={positions.isPending}
-          sells={sells}
-          setSells={setSells}
-          rowError={rowError}
-          heldQty={heldQty}
-        />
-
-        <ExcludePicker held={held} exclude={exclude} setExclude={setExclude} />
-
-        <div className="mt-4 flex items-center gap-3">
-          <button
-            type="button"
-            onClick={submit}
-            disabled={anyInvalid || plan.isPending}
-            className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90 disabled:opacity-60"
-          >
-            {plan.isPending ? "Planejando…" : "Planejar"}
-          </button>
-          {sells.length === 0 && (
-            <span className="text-xs text-muted">
-              Adicione ao menos uma venda para simular.
-            </span>
-          )}
-        </div>
-
-        {plan.isError && (
-          <PlanError error={plan.error} fallback="Não foi possível montar o plano." />
-        )}
-      </Card>
-
-      {/* Plan output */}
-      <div id="plano" className={ANCHOR}>
-        <PlanSlot pending={plan.isPending} plan={plan.data} stale={planStale} action="Planejar" />
-      </div>
     </>
   );
 }
@@ -213,7 +225,7 @@ function ReduceSection({
   const stale = isStale(reduce.variables, request, planKey);
   return (
     <>
-      <Card id="reduzir" title="Reduzir IR do mês" className={`mb-6 ${ANCHOR}`}>
+      <Card title="Reduzir IR do mês" className={shown ? "mb-6" : ""}>
         <p className="text-sm text-muted">
           Já vendeu com lucro neste mês? Veja quais posições em prejuízo vender
           hoje para compensar o ganho já realizado — e o que recomprar no
@@ -238,7 +250,7 @@ function ReduceSection({
         )}
       </Card>
 
-      <div id="reduzir-plano" className={`${ANCHOR} ${shown ? "mb-6" : ""}`}>
+      <div>
         <PlanSlot
           pending={reduce.isPending}
           plan={reduce.data}

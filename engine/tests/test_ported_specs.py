@@ -91,6 +91,35 @@ def test_simple_mean_reversion_sticky_holds_book_through_a_thin_month():
     pdt.assert_series_equal(tw.iloc[3], tw.iloc[2], check_names=False)
 
 
+def test_sticky_does_not_revive_the_book_a_regime_park_sold():
+    """A park sells the book into CDI, so CDI is the previous book from then on.
+    `sticky` used to remember the pre-park picks across any number of parked
+    months and buy them back on the first thin month after — a book no rebalance
+    had chosen for as long as the regime was off."""
+    cols = [f"T{i:02d}" for i in range(10)]
+    idx = _grid(6, cols)
+    ret = pd.DataFrame(0.0, index=idx, columns=cols)
+    ret.iloc[1] = [-0.30, -0.25, -0.20, -0.15, -0.10, -0.05, 0.05, 0.10, 0.15, 0.20]
+
+    shared = _base(idx, cols, ret)
+    shared["cdi_monthly"] = pd.Series(0.01, index=idx)
+    # offset 1: row 3 reads row 2's drawdown and parks; row 4 is back on.
+    shared["bench_drawdown"] = pd.Series([0.0, 0.0, 0.6, 0.0, 0.0, 0.0], index=idx)
+    shared["adtv"].iloc[3, 2:] = 0.0     # row 4 reads a month only 2 names clear
+    spec = _spec("simple_mean_reversion.yaml")
+    spec["regime"] = {"add_ibov": False,
+                      "inputs": {"deep": {"flag": "bench_drawdown", "gt": 0.5}},
+                      "rules": [{"deep": True, "park": True}, {"default": True}]}
+
+    _, tw = RankAndHold(spec).generate_signals(shared, {})
+
+    assert tw.iloc[2]["CDI_ASSET"] == 0.0 and tw.iloc[2].sum() == pytest.approx(1.0)
+    assert tw.iloc[3]["CDI_ASSET"] == 1.0
+    assert tw.iloc[4]["CDI_ASSET"] == 1.0, "a thin month after a park stays parked"
+    assert (tw.iloc[4].drop("CDI_ASSET") == 0.0).all()
+    assert tw.iloc[5]["CDI_ASSET"] == 0.0, "a full month re-ranks as usual"
+
+
 # ── FrogInPan ─────────────────────────────────────────────────────────────────
 
 def test_frog_in_pan_ranks_momentum_plus_win_rate_and_masks_glitches():

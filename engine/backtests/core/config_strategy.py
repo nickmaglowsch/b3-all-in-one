@@ -221,7 +221,9 @@ class RankAndHold(_SpecStrategy):
             if regime:
                 action = _regime_action(regime, shared_data, i, ret.index, top_pct)
                 if action is None:
+                    # The park sold the book: `sticky` now holds CDI, not old picks.
                     tw.iloc[i, cash_loc] = 1.0
+                    prev_sel = []
                     continue
                 eff_top_pct, exposure = action
 

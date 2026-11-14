@@ -133,3 +133,37 @@ def test_an_isento_gain_beside_a_bdr_loss_spends_no_carry():
     assert d["status"] == Status.NENHUM and "isento" in d["rationale"]
     assert d["pnl_after"] == pytest.approx(500.0)
     assert (d["carry_used"], d["carry_after"]) == (0.0, pytest.approx(500.0))
+
+
+def test_a_harvest_that_would_cost_the_isencao_is_never_recommended():
+    """The BDR gain is what owes here; the ações line is isento at R$15k gross.
+    Selling VALE3 to harvest its loss adds R$11k of ações gross — past R$20k —
+    and the R$3k ações gain loses its isenção: IR goes from R$150 to R$450. A
+    plan that raises the bill is not a plan; say there is no candidate."""
+    d, plan = _decide(timeline(NADA), [
+        {"cls": "AÇÃO", "sell_value": 15_000.0, "pnl": 3_000.0},
+        {"cls": "BDR", "sell_value": 5_000.0, "pnl": 1_000.0}],
+        losers(("VALE3", 400, 30.0, 27.5)))
+    assert d["status"] is Status.SEM_CANDIDATOS
+    assert plan == []
+    assert d["ir"] == pytest.approx(150.0)
+    assert d["final_gross"] == pytest.approx(15_000.0)
+    assert "isenção" in d["rationale"]
+
+
+def test_an_isento_month_harvests_only_what_fits_under_the_limit():
+    """R$1k of BDR gain owes R$150; the R$3k ações gain is isento at R$15k gross.
+    Aimed at the R$1k base alone, the greedy sells 13 shares (R$975 of loss) and
+    the ações line just nets them against its own isento gain: IR unchanged. So
+    the retry aims at base + isento gain (R$4k) over what fits in the R$5k of
+    room: 53 shares, R$3,975 of loss, R$1,325 of gross. The ações line ends at
+    −R$975, which shelters all but R$25 of the BDR gain, and stays isento."""
+    d, plan = _decide(timeline(NADA), [
+        {"cls": "AÇÃO", "sell_value": 15_000.0, "pnl": 3_000.0},
+        {"cls": "BDR", "sell_value": 5_000.0, "pnl": 1_000.0}],
+        losers(("VALE3", 200, 100.0, 25.0)))
+    assert d["status"] is Status.RECOMENDADO
+    assert [(p["ticker"], p["qty"]) for p in plan] == [("VALE3", 53.0)]
+    assert d["final_gross"] == pytest.approx(15_000.0 + 53 * 25.0)
+    assert d["final_gross"] <= 20_000.0
+    assert d["ir"] == pytest.approx(25.0 * 0.15)

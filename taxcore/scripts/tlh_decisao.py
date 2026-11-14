@@ -12,11 +12,12 @@ sells, and again with the harvest — and the status is read off what it says.
 """
 from __future__ import annotations
 
+import math
 from enum import Enum
 
 import pandas as pd
 
-from scripts.apuracao import monthly_apuracao
+from scripts.apuracao import ISENCAO_LIMIT, monthly_apuracao
 
 
 class Status(str, Enum):
@@ -66,6 +67,7 @@ def apurar_mes(grade: pd.DataFrame, bucket: str) -> dict:
             "pnl": sum(r["pnl"] for r in mes),
             "base": sum(r["base"] for r in mes), "ir": sum(r["ir"] for r in mes),
             "ativo": any(r["ativo"] for r in mes), "carry_inicial": inicial,
+            "pnl_isencao": mes[0]["pnl"],
             "carry_after": mes[0]["carry"],
             "carry_used": max(0.0, inicial - mes[0]["carry"])}
 
@@ -91,6 +93,15 @@ def _por_que_nada(m: dict) -> str:
     return "Mês já tem PnL ≤ 0 — nada a tributar (prejuízo vai pro carry)."
 
 
+def _por_que_sem_plano(m: dict) -> str:
+    if m["isento"]:
+        return (f"Colher prejuízo em ações levaria as vendas brutas do mês acima de "
+                f"R$ {ISENCAO_LIMIT:,.2f} e custaria a isenção do ganho em ações — o IR "
+                f"subiria. IR estimado sem plano: R$ {m['ir']:,.2f}.")
+    return (f"Nenhuma colheita disponível reduz o IR do mês. "
+            f"IR estimado: R$ {m['ir']:,.2f}.")
+
+
 def decidir(bucket: str, grade: pd.DataFrame, vendas: list[dict],
             candidatos, harvest) -> tuple[dict | None, list[dict]]:
     """(verdict, harvest plan) for one bucket, or (None, []) with nothing to plan.
@@ -112,12 +123,60 @@ def decidir(bucket: str, grade: pd.DataFrame, vendas: list[dict],
                         f"Sem posições em prejuízo no bucket {bucket} que cubram "
                         f"R$ {residual:,.2f}. IR estimado: R$ {antes['ir']:,.2f}.",
                         antes, antes, -residual), []
-    plan = harvest(-residual, losers)
-    colhido = [{"cls": p.get("cls", bucket), "sell_value": p["price"] * p["qty"],
-                "pnl": p["realized_loss"]} for p in plan]
-    depois = apurar_mes(com_vendas(grade, proprias + colhido), bucket)
+    plan, depois = _plano(bucket, grade, proprias, antes, losers, harvest)
+    if not plan:
+        return _decisao(Status.SEM_CANDIDATOS, _por_que_sem_plano(antes),
+                        antes, antes, -residual), []
     harvested = sum(p["realized_loss"] for p in plan)
     return _decisao(Status.RECOMENDADO,
                     f"Ganho residual após carry: R$ {residual:,.2f}. Plano realiza "
                     f"R$ {harvested:+,.2f} em perdas, levando PnL final a "
                     f"R$ {depois['pnl']:+,.2f}.", antes, depois, -residual), plan
+
+
+def _colher(bucket, grade, proprias, losers, harvest, alvo) -> tuple[list, dict]:
+    """The greedy's plan over `losers` and the month as it would close with it."""
+    plan = harvest(alvo, losers)
+    colhido = [{"cls": p.get("cls", bucket), "sell_value": p["price"] * p["qty"],
+                "pnl": p["realized_loss"]} for p in plan]
+    return plan, apurar_mes(com_vendas(grade, proprias + colhido), bucket)
+
+
+def _plano(bucket, grade, proprias, antes, losers, harvest) -> tuple[list, dict]:
+    """A harvest that lowers the month's IR, or ([], antes) when none does.
+
+    Each harvested ação adds to the ações gross the isenção reads. When the ações
+    line was isento before the harvest — the IR owed is the BDR/ETF line's — a
+    plan that pushes that gross past the limit taxes the ações gain it was
+    sheltering and can raise the bill. And the ações line nets its own isento
+    gain before any of its loss reaches the pool, so a target of the taxable base
+    alone undershoots. So: the greedy's plan if it lowers the IR; else, in an
+    isento month, the greedy over losers cut down to what still fits under the
+    limit, aimed at the base plus that isento gain; else nothing.
+    """
+    alvo = -antes["base"]
+    plan, depois = _colher(bucket, grade, proprias, losers, harvest, alvo)
+    if depois["ir"] < antes["ir"] - 0.005:
+        return plan, depois
+    if bucket == "AÇÃO" and antes["isento"]:
+        cabem = dentro_da_isencao(losers, ISENCAO_LIMIT - antes["gross"])
+        alvo -= max(0.0, antes["pnl_isencao"])
+        plan, depois = _colher(bucket, grade, proprias, cabem, harvest, alvo)
+        if plan and depois["ir"] < antes["ir"] - 0.005:
+            return plan, depois
+    return [], antes
+
+
+def dentro_da_isencao(losers: pd.DataFrame, folga: float) -> pd.DataFrame:
+    """`losers`, worst first, cut down to whole shares whose sale fits in `folga`
+    reais of ações gross — the room left under the isenção limit."""
+    linhas = []
+    for _, r in losers.iterrows():
+        qty = min(float(r["qty"]), float(math.floor(max(folga, 0.0) / r["price"])))
+        if qty < 1:
+            continue
+        perda = qty * (r["price"] - r["avg_cost"])
+        linhas.append({**r.to_dict(), "qty": qty, "max_loss": perda,
+                       "unrealized_pnl": perda})
+        folga -= qty * r["price"]
+    return pd.DataFrame(linhas, columns=losers.columns)

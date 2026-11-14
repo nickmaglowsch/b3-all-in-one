@@ -202,3 +202,31 @@ def test_the_cli_parses_a_name_list(plane, capsys):
 
     assert json.loads(capsys.readouterr().out) == {
         "ipca": {"2024-01-02": 1.02}, "offline": False}
+
+
+def test_a_sqlite_plane_is_read_one_connection_at_a_time(plane, monkeypatch):
+    """Connections opened at once on a SQLite plane collide on its WAL switch
+    ("database is locked" in CI); only a Postgres plane is read concurrently."""
+    import threading
+    import time
+
+    from backtests.core import data
+
+    live, peak, lock = 0, 0, threading.Lock()
+    real = data.download_benchmark
+
+    def counting(*a, **k):
+        nonlocal live, peak
+        with lock:
+            live += 1
+            peak = max(peak, live)
+        try:
+            time.sleep(0.02)
+            return real(*a, **k)
+        finally:
+            with lock:
+                live -= 1
+
+    monkeypatch.setattr(data, "download_benchmark", counting)
+    _load_bench_series().series("2024-01-01", "2024-01-31", ["ibov", "cdi", "ipca", "selic"])
+    assert peak == 1

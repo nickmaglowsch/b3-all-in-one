@@ -77,6 +77,7 @@ def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
     empty means "the plane has no rows yet" and a typo means "this chart will
     silently lose a line", and the caller has to be able to tell them apart.
     """
+    from b3_pipeline import storage
     from backtests.core import markets
     from backtests.core.data import download_benchmark
 
@@ -85,9 +86,13 @@ def series(start: str, end: str, names=DEFAULT_NAMES) -> dict:
         return download_benchmark(symbol, start, end, market=market)
 
     # Independent reads, each on its own connection: the bench asks for all
-    # sixteen at once, and in sequence that was the whole of its latency.
+    # sixteen at once, and in sequence that was the whole of its latency. On
+    # Postgres only — a SQLite plane is a local file with nothing to overlap,
+    # and connections opened at once collide on its `PRAGMA journal_mode=WAL`
+    # ("database is locked").
     targets = [BENCHMARKS[name] for name in names]       # KeyError before any I/O
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    workers = 4 if storage.using_postgres() else 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         levels = list(pool.map(read, names))
 
     out: dict = {}

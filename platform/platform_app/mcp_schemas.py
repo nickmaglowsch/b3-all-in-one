@@ -7,6 +7,8 @@ it, and what comes back.
 """
 from __future__ import annotations
 
+from platform_app.jobstatus import BacktestStatus
+
 # Not a oneOf: several clients flatten or drop it, and pydantic gives the model a
 # precise message when a sleeve carries both keys or neither.
 _SLEEVE = {
@@ -149,7 +151,7 @@ TOOLS = [
           "The user's runs as a leaderboard: filter by strategy/status and rank by a "
           "metric (after-tax by default). The way to compare variants and baselines.",
           {"strategy": {"type": "string"},
-           "status": {"type": "string", "enum": ["pending", "running", "done", "error"]},
+           "status": {"type": "string", "enum": [s.value for s in BacktestStatus]},
            "sort_by": {"type": "string", "enum": _METRIC},
            "basis": {"type": "string", "enum": ["aftertax", "pretax"]},
            "limit": {"type": "integer", "minimum": 1, "maximum": 100}}),

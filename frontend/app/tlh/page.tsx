@@ -12,6 +12,8 @@ import { TickerChip } from "@/components/ui/TickerChip";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { IconAlert } from "@/components/icons";
+import { StaleHint } from "@/components/ui/StaleHint";
+import { asSet, isStale } from "@/lib/staleResult";
 import { SituationPanel, type TlhPlan } from "./situation";
 import { PlanResult } from "./plan";
 
@@ -33,6 +35,14 @@ function postPlan(body: PlanRequest) {
     body: JSON.stringify(body),
   });
 }
+
+// What the button would send now — also what the plan on screen is compared to,
+// so an edited sell or exclusion flags that plan as answering older inputs.
+const planRequest = (sells: SellDraft[], exclude: string[]): PlanRequest => ({
+  sells: sells.map((r) => ({ ticker: r.ticker, qty: Number(r.qty) })),
+  exclude: exclude.length ? exclude : undefined,
+});
+const planKey = (b: PlanRequest) => ({ ...b, exclude: asSet(b.exclude) });
 
 export default function TlhPage() {
   const positions = usePositions();
@@ -74,11 +84,9 @@ export default function TlhPage() {
 
   function submit() {
     if (anyInvalid) return;
-    plan.mutate({
-      sells: sells.map((r) => ({ ticker: r.ticker, qty: Number(r.qty) })),
-      exclude: exclude.length ? exclude : undefined,
-    });
+    plan.mutate(planRequest(sells, exclude));
   }
+  const planStale = isStale(plan.variables, planRequest(sells, exclude), planKey);
 
   return (
     <>
@@ -142,12 +150,34 @@ export default function TlhPage() {
 
       {/* Plan output */}
       <div id="plano" className={ANCHOR}>
-        {plan.isPending ? (
-          <Skeleton className="h-64 w-full" />
-        ) : plan.data ? (
-          <PlanResult plan={plan.data} />
-        ) : null}
+        <PlanSlot pending={plan.isPending} plan={plan.data} stale={planStale} action="Planejar" />
       </div>
+    </>
+  );
+}
+
+// A plan's slot: a skeleton while it is computed, then the plan — flagged when
+// the inputs above have changed since it was asked for.
+function PlanSlot({
+  pending,
+  plan,
+  stale,
+  action,
+  ...result
+}: {
+  pending: boolean;
+  plan?: TlhPlan;
+  stale: boolean;
+  action: string;
+  title?: string;
+  empty?: string;
+}) {
+  if (pending) return <Skeleton className="h-64 w-full" />;
+  if (!plan) return null;
+  return (
+    <>
+      {stale && <StaleHint action={action} />}
+      <PlanResult plan={plan} {...result} />
     </>
   );
 }
@@ -179,6 +209,8 @@ function ReduceSection({
 }) {
   const reduce = useMutation({ mutationFn: postPlan });
   const shown = reduce.isPending || reduce.data;
+  const request = planRequest([], exclude);
+  const stale = isStale(reduce.variables, request, planKey);
   return (
     <>
       <Card id="reduzir" title="Reduzir IR do mês" className={`mb-6 ${ANCHOR}`}>
@@ -193,9 +225,7 @@ function ReduceSection({
         <div className="mt-4 flex items-center gap-3">
           <button
             type="button"
-            onClick={() =>
-              reduce.mutate({ sells: [], exclude: exclude.length ? exclude : undefined })
-            }
+            onClick={() => reduce.mutate(request)}
             disabled={reduce.isPending}
             className="rounded-md bg-navy px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-navy/90 disabled:opacity-60"
           >
@@ -209,15 +239,14 @@ function ReduceSection({
       </Card>
 
       <div id="reduzir-plano" className={`${ANCHOR} ${shown ? "mb-6" : ""}`}>
-        {reduce.isPending ? (
-          <Skeleton className="h-64 w-full" />
-        ) : reduce.data ? (
-          <PlanResult
-            plan={reduce.data}
-            title="Reduzir IR"
-            empty="Nenhuma venda realizada neste mês — não há lucro a compensar."
-          />
-        ) : null}
+        <PlanSlot
+          pending={reduce.isPending}
+          plan={reduce.data}
+          stale={stale}
+          action="Ver operações"
+          title="Reduzir IR"
+          empty="Nenhuma venda realizada neste mês — não há lucro a compensar."
+        />
       </div>
     </>
   );

@@ -28,7 +28,7 @@ from typing import NamedTuple
 import pandas as pd
 import requests
 
-from . import config
+from . import config, storage
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +50,15 @@ class BackfillResult(NamedTuple):
     `failed` is the retry queue. It is returned rather than logged because the
     caller is the only layer that can durably record it, and a failure that is
     only logged is a failure that is lost at the end of the run.
+
+    `attempted` is the days a request was actually sent for. Only those are
+    settled either way; a loader that stops early (anbima_series.GaveUp) never
+    asked about the rest, and clearing their debt would forget it. Empty means
+    nothing is known to have been asked, so nothing gets cleared.
     """
     rows: pd.DataFrame
     failed: dict
+    attempted: frozenset = frozenset()
 
 # The file's own column names. Only the ones we keep are named here.
 _COL_DATE = "RptDt"
@@ -246,14 +252,32 @@ def backfill(days, tickers=None) -> BackfillResult:
 
     if not frames:
         logger.warning(f"No external prices found across {len(days)} days")
-        return BackfillResult(pd.DataFrame(), failed)
+        return BackfillResult(pd.DataFrame(), failed, frozenset(days))
 
     out = pd.concat(frames, ignore_index=True)
     logger.info(
         f"Fetched {len(out):,} external price rows for "
         f"{out['ticker'].nunique()} tickers ({out['date'].min()} to {out['date'].max()})"
     )
-    return BackfillResult(out, failed)
+    return BackfillResult(out, failed, frozenset(days))
+
+
+def store_result(conn, source: str, result: BackfillResult, pending: set) -> None:
+    """Write one fetch into `external_prices` and settle `source`'s failure ledger.
+
+    The order is the point. Failures go on the books first: once rows are stored
+    the next run resumes from them, and a failed day behind its window is owed
+    only in the ledger, so a run killed between the two writes must not have
+    written the rows alone. Debts are cleared last, once the rows that pay them
+    are in. A day that answered — with rows or an empty holiday file — is settled
+    either way; only a day that was asked (`attempted`) can be.
+    """
+    for day, error in result.failed.items():
+        storage.record_external_failure(conn, source, day, error)
+    if not result.rows.empty:
+        storage.upsert_external_prices(conn, result.rows)
+    for day in sorted((pending & result.attempted) - result.failed.keys()):
+        storage.clear_external_failure(conn, source, day)
 
 
 def demo() -> None:

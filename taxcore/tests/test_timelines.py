@@ -1,9 +1,10 @@
 """The two event timelines the cost-basis walks consume, pinned frame-for-frame.
 
 `load_b3.derive_positions` and `irpf_2026.build_timeline` each merge trades and
-corporate-action events into one chronological frame, then walk it in preço
-médio. Within one date the walk depends on row order, so the frame itself —
-values, dtypes, column order, row order, index — is the contract. Each test runs
+corporate-action events into one chronological frame of the same shape (kind
+buy/sell/qty_event/amort, qty, amount, broker; positions adds market), then walk
+it with the one preço médio walk, `preco_medio.caminhar`. The frame is the
+contract — values, dtypes, column order, row order, index — so each test runs
 the production builder against a row-by-row reference (the original iterrows
 construction, kept here as the oracle) on the vendored fixtures and on a small
 book of edge cases: same-day ties (whose buy leg must come first — see
@@ -39,10 +40,11 @@ def reference_position_timeline(trades, cash_events, consolidate):
             _FRACTIONAL_RE, _ROUND_LOT, regex=True)
     rows = []
     for _, r in t.sort_values("date", kind="stable").iterrows():
+        sq = float(r["signed_qty"])
         rows.append({"ticker": r["ticker"], "date": pd.to_datetime(r["date"]),
-                     "kind": "trade", "sq": float(r["signed_qty"]),
-                     "price": float(r["price"]), "amount": 0.0,
-                     "market": r["market"]})
+                     "kind": "buy" if sq > 0 else "sell", "qty": abs(sq),
+                     "amount": abs(sq) * float(r["price"]),
+                     "broker": r.get("broker", ""), "market": r["market"]})
     if cash_events is not None and not cash_events.empty:
         ce = cash_events.copy()
         if consolidate:
@@ -58,16 +60,18 @@ def reference_position_timeline(trades, cash_events, consolidate):
         for _, r in qty_evs.iterrows():
             rows.append({"ticker": r["ticker"], "date": pd.to_datetime(r["date"]),
                          "kind": "qty_event",
-                         "sq": float(r["qty"]) if pd.notna(r["qty"]) else 0.0,
-                         "price": 0.0, "amount": _custo(r), "market": None})
+                         "qty": float(r["qty"]) if pd.notna(r["qty"]) else 0.0,
+                         "amount": _custo(r), "broker": r.get("broker", ""),
+                         "market": None})
         for _, r in amort_evs.iterrows():
             rows.append({"ticker": r["ticker"], "date": pd.to_datetime(r["date"]),
-                         "kind": "amort", "sq": 0.0, "price": 0.0,
+                         "kind": "amort", "qty": 0.0,
                          "amount": float(r["amount"]) if pd.notna(r["amount"]) else 0.0,
-                         "market": None})
+                         "broker": r.get("broker", ""), "market": None})
     timeline = pd.DataFrame(rows).dropna(subset=["date", "ticker"])
-    timeline["__order"] = timeline["kind"].map({"trade": 0, "qty_event": 1, "amort": 2})
-    timeline["__leg"] = np.where(timeline["sq"] < 0, 1, 0)
+    timeline["__order"] = timeline["kind"].map(
+        {"buy": 0, "sell": 0, "qty_event": 1, "amort": 2})
+    timeline["__leg"] = np.where((timeline["kind"] == "sell") | (timeline["qty"] < 0), 1, 0)
     return (timeline.sort_values(["ticker", "date", "__order", "__leg"])
             .reset_index(drop=True))
 

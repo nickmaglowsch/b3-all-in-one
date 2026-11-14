@@ -12,7 +12,6 @@ export function UploadZone() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<string[]>([]);
 
   const mut = useMutation({
     mutationFn: (files: File[]) => {
@@ -20,17 +19,18 @@ export function UploadZone() {
       for (const f of files) fd.append("files", f);
       return api<Created[]>("/imports", { method: "POST", body: fd });
     },
-    onSuccess: () => {
-      setPending([]);
-      qc.invalidateQueries({ queryKey: ["imports"] });
-    },
-    onError: (e) => {
-      setPending([]);
-      setError(errorText(e, "Falha ao enviar os arquivos."));
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["imports"] }),
+    onError: (e) => setError(errorText(e, "Falha ao enviar os arquivos.")),
   });
 
+  // One upload at a time. A second drop used to start a second POST, and the
+  // first one's settle then hid the second's "Enviando" line. The names shown
+  // are the request's own variables, so they cannot belong to another upload.
+  const busy = mut.isPending;
+  const sending = busy ? (mut.variables ?? []).map((f) => f.name) : [];
+
   function submit(list: FileList | File[] | null) {
+    if (busy) return;
     setError(null);
     const all = list ? Array.from(list) : [];
     if (all.length === 0) return;
@@ -45,16 +45,21 @@ export function UploadZone() {
       );
     }
     if (accepted.length === 0) return;
-    setPending(accepted.map((f) => f.name));
     mut.mutate(accepted);
   }
+
+  const pick = () => {
+    if (!busy) inputRef.current?.click();
+  };
 
   return (
     <div>
       <div
         onDragOver={(e) => {
+          // preventDefault even while busy: otherwise the browser opens the
+          // dropped file in place of the app.
           e.preventDefault();
-          setDragging(true);
+          setDragging(!busy);
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={(e) => {
@@ -62,17 +67,14 @@ export function UploadZone() {
           setDragging(false);
           submit(e.dataTransfer.files);
         }}
-        onClick={() => inputRef.current?.click()}
+        onClick={pick}
         role="button"
         tabIndex={0}
+        aria-disabled={busy}
         onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") inputRef.current?.click();
+          if (e.key === "Enter" || e.key === " ") pick();
         }}
-        className={`flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-6 py-12 text-center transition-colors ${
-          dragging
-            ? "border-navy bg-navy/[0.04]"
-            : "border-hairline bg-panel hover:border-navy/40"
-        }`}
+        className={`flex flex-col items-center justify-center rounded-lg border border-dashed px-6 py-12 text-center transition-colors ${dropZoneTone(busy, dragging)}`}
       >
         <div className="mb-3 text-muted">
           <IconUpload size={28} />
@@ -81,7 +83,9 @@ export function UploadZone() {
           Arraste seus extratos .xlsx aqui ou clique para escolher
         </p>
         <p className="mt-1 text-sm text-muted">
-          Aceita vários arquivos de negociação e movimentação da B3.
+          {busy
+            ? "Aguarde este envio terminar para mandar outros arquivos."
+            : "Aceita vários arquivos de negociação e movimentação da B3."}
         </p>
         <input
           ref={inputRef}
@@ -89,6 +93,7 @@ export function UploadZone() {
           accept=".xlsx"
           multiple
           hidden
+          disabled={busy}
           onChange={(e) => {
             submit(e.target.files);
             e.target.value = ""; // allow re-selecting the same file
@@ -103,14 +108,21 @@ export function UploadZone() {
         </p>
       )}
 
-      {mut.isPending && pending.length > 0 && (
+      {sending.length > 0 && (
         <div className="mt-3 flex items-center gap-2 rounded-md border border-hairline bg-panel px-3 py-2 text-sm text-status-processing">
           <IconSpinner size={15} />
           <span className="text-muted">
-            Enviando {pending.length} arquivo(s): {pending.join(", ")}
+            Enviando {sending.length} arquivo(s): {sending.join(", ")}
           </span>
         </div>
       )}
     </div>
   );
+}
+
+function dropZoneTone(busy: boolean, dragging: boolean) {
+  if (busy) return "cursor-not-allowed border-hairline bg-panel opacity-60";
+  return dragging
+    ? "cursor-pointer border-navy bg-navy/[0.04]"
+    : "cursor-pointer border-hairline bg-panel hover:border-navy/40";
 }

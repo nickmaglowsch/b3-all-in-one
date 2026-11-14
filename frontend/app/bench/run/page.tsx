@@ -21,6 +21,7 @@ import {
 import type { UseQueryResult } from "@tanstack/react-query";
 import { EmptyState, LoadFailure, RetryButton } from "@/components/ui/EmptyState";
 import type { BacktestCurves, BacktestRun } from "@/lib/types";
+import { isDone, type BacktestStatus } from "@/lib/jobStatus";
 import { CurveChart } from "../CurveChart";
 import { curveRows, useBacktest, useCurves } from "../lib";
 
@@ -38,7 +39,7 @@ export default function TearSheetPage() {
 function TearSheetView() {
   const id = useSearchParams().get("id") ?? "";
   const run = useBacktest(id);
-  const done = run.data?.status === "done";
+  const done = isDone(run.data?.status);
   const curves = useCurves(id, done);
 
   return (
@@ -80,10 +81,14 @@ function RunBody({
   run: UseQueryResult<BacktestRun>;
   curves: UseQueryResult<BacktestCurves>;
 }) {
-  if (run.isLoading) return <LoadingSkeleton />;
-  // Not ErrorCard: a request that failed (a 402, a swept run) is not a run that
-  // failed, and "Backtest falhou" would say it was.
-  if (run.error) {
+  // The cached run first: React Query keeps `data` when a *refetch* fails, and
+  // one failed poll of a running backtest is no reason to swap its progress (or
+  // its numbers) for an alarm.
+  const data = run.data;
+  if (!data) {
+    // Not ErrorCard: a request that failed (a 402, a swept run) is not a run that
+    // failed, and "Backtest falhou" would say it was.
+    if (!run.error) return <LoadingSkeleton />;
     return (
       <LoadFailure
         error={run.error}
@@ -93,13 +98,11 @@ function RunBody({
       />
     );
   }
-  if (run.data?.status === "error") {
-    return <ErrorCard text={run.data.error ?? "O backtest falhou sem mensagem."} />;
+  if (data.status === "error") {
+    return <ErrorCard text={data.error ?? "O backtest falhou sem mensagem."} />;
   }
-  if (run.data?.status !== "done") {
-    return <PendingCard status={run.data?.status ?? "pending"} />;
-  }
-  return <TearSheet run={run.data} curves={curves} />;
+  if (!isDone(data.status)) return <PendingCard status={data.status} />;
+  return <TearSheet run={data} curves={curves} />;
 }
 
 /**
@@ -355,11 +358,11 @@ function ErrorCard({ text }: { text: string }) {
   );
 }
 
-function PendingCard({ status }: { status: string }) {
+function PendingCard({ status }: { status: BacktestStatus }) {
   return (
     <Card>
       <div className="flex flex-col items-center justify-center gap-3 py-12 text-center">
-        <StatusBadge status={status as BacktestRun["status"]} />
+        <StatusBadge status={status} />
         <p className="text-sm text-muted">
           Rodando a simulação — as métricas e curvas aparecem ao concluir.
         </p>

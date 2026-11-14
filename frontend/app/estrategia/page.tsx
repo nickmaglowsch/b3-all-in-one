@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import Link from "next/link";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
@@ -11,6 +11,8 @@ import { LoadFailure } from "@/components/ui/EmptyState";
 import { SectionNav } from "@/components/ui/SectionNav";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { IconCompass } from "@/components/icons";
+import { StaleHint } from "@/components/ui/StaleHint";
+import { asSet, isStale } from "@/lib/staleResult";
 import { errorText } from "@/lib/api";
 import { compactBRL, formatDate, formatInstantDate } from "@/lib/format";
 import type { UserStrategy } from "@/lib/types";
@@ -22,9 +24,18 @@ import {
   rowToSleeve,
   specToRows,
   withUid,
-  type LiveSleeve,
   type SleeveRow as Row,
 } from "@/lib/portfolioSleeves";
+import {
+  carteiraOf,
+  specOf,
+  editorReducer,
+  INITIAL,
+  justSaved,
+  needsSync,
+  type Editor,
+  type EditorAction,
+} from "@/lib/sleevesEditor";
 import {
   useDeleteUserStrategy,
   usePromoteStrategy,
@@ -112,37 +123,55 @@ export default function EstrategiaPage() {
 
 // ── sleeves editor ──────────────────────────────────────────────────────────
 
+const loadOf = (u: UserStrategy): EditorAction => ({
+  type: "load",
+  id: u.id,
+  spec: u.spec,
+  name: u.name,
+  desc: typeof u.spec.description === "string" ? u.spec.description : "",
+  rows: withUid(specToRows(u.spec)),
+});
+
+// The name and description the form shows: a carteira in the editor keeps its own
+// in the reducer; "Salvar como estratégia" over the live rows is plain state.
+function useNames(editor: Editor, dispatch: (a: EditorAction) => void) {
+  const [liveName, setLiveName] = useState("");
+  const [liveDesc, setLiveDesc] = useState("");
+  if (editor.mode === "carteira") {
+    return {
+      name: editor.name,
+      desc: editor.desc,
+      setName: (name: string) => dispatch({ type: "field", name }),
+      setDesc: (desc: string) => dispatch({ type: "field", desc }),
+    };
+  }
+  return { name: liveName, desc: liveDesc, setName: setLiveName, setDesc: setLiveDesc };
+}
+
 function SleevesEditor() {
   const sleeves = useSleeves();
   const strategies = useStrategies();
   const save = useSaveSleeves();
   const saveStrat = useSaveUserStrategy();
-  const [rows, setRows] = useState<Row[]>([]);
-  const [dirty, setDirty] = useState(false);
-  const [syncedFrom, setSyncedFrom] = useState<LiveSleeve[] | null>(null);
-  // "Salvar como estratégia" form — shares `rows` with the live-target editor.
-  const [name, setName] = useState("");
-  const [desc, setDesc] = useState("");
-  const [editId, setEditId] = useState<string | undefined>();
-  const [editSpec, setEditSpec] = useState<Record<string, unknown>>({});
-  // The live sleeves as they stood when "Editar" borrowed the rows for a saved
-  // carteira. The rows are shared, so without this a cancelled edit left the
-  // carteira's mix sitting in the live editor — dirty, so never reseeded, and
-  // one "Salvar" away from becoming the rebalance target.
-  const [live, setLive] = useState<{ rows: Row[]; dirty: boolean } | null>(null);
+  // Live sleeves or a borrowed carteira: lib/sleevesEditor.ts says why one union.
+  const [editor, dispatch] = useReducer(editorReducer, INITIAL);
+  const { rows } = editor;
+  const carteira = carteiraOf(editor);
+  const editId = carteira?.id;
+  const { name, desc, setName, setDesc } = useNames(editor, dispatch);
 
   // Seed the editor from server data on first load and after each save (when not
   // mid-edit). Adjusting state during render — guarded by reference identity so it
   // runs once per new server payload — is the React-endorsed alternative to an effect.
-  if (sleeves.data && sleeves.data !== syncedFrom && !dirty) {
-    setSyncedFrom(sleeves.data);
-    setRows(withUid(liveToRows(sleeves.data)));
+  const server = sleeves.data;
+  if (needsSync(editor, server)) {
+    dispatch({ type: "server", data: server, rows: withUid(liveToRows(server)) });
   }
 
   const { sum, sumOk, hasDup, sleevesValid } = checkRows(rows);
   // While a saved carteira is in the editor its rows are not the live target, so
   // the live "Salvar" stays off until the edit ends.
-  const canSave = sleevesValid && !save.isPending && !editId;
+  const canSave = sleevesValid && !save.isPending && !carteira;
   // A carteira backtests on the B3 plane under B3 tax rules: US and crypto
   // assets stay live-only, and the form says so rather than letting the API refuse.
   const offB3 = offB3Rows(rows);
@@ -150,62 +179,43 @@ function SleevesEditor() {
     sleevesValid && name.trim() !== "" && !saveStrat.isPending && offB3.length === 0;
 
   const loadStrategy = (u: UserStrategy) => {
-    // Only the first "Editar" snapshots: switching between carteiras mid-edit
-    // must still restore the live rows, not the previous carteira's.
-    if (!editId) setLive({ rows, dirty });
-    setDirty(true);
-    setRows(withUid(specToRows(u.spec)));
-    setName(u.name);
-    setDesc(typeof u.spec.description === "string" ? u.spec.description : "");
-    setEditId(u.id);
-    setEditSpec(u.spec);
+    dispatch(loadOf(u));
     saveStrat.reset();
     document
       .getElementById("sleeves")
       ?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  // Leave carteira-editing mode and hand the editor back to the live sleeves:
-  // the rows as they were (a pending live edit survives), or — if they were
-  // clean — a reseed from the server, which may have moved since (Ativar).
-  const endEdit = () => {
-    setName("");
-    setDesc("");
-    setEditId(undefined);
-    setEditSpec({});
-    if (!live) return;
-    if (live.dirty) {
-      setRows(live.rows);
-    } else {
-      setDirty(false);
-      setSyncedFrom(null);
-    }
-    setLive(null);
-  };
-
+  // A successful Atualizar ends the edit it saved, not whichever is open by then;
+  // a new carteira clears the save-as form instead.
   const onSaveStrat = () =>
     saveStrat.mutate(
+      { id: editId, body: portfolioBody(name, desc, rows, specOf(editor)) },
       {
-        id: editId,
-        body: portfolioBody(name, desc, rows, editSpec),
+        onSuccess: (_r, { id }) => {
+          if (id) return dispatch({ type: "end", id });
+          setName("");
+          setDesc("");
+        },
       },
-      { onSuccess: endEdit },
     );
 
-  const edit = (patch: (rs: Row[]) => Row[]) => {
-    setDirty(true);
-    setRows(patch);
-  };
+  const edit = (patch: (rs: Row[]) => Row[]) => dispatch({ type: "edit", patch });
   const setField = (i: number, patch: Partial<Row>) =>
     edit((rs) => rs.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
+  // `sent` is these rows by reference: anything typed while the PUT is in flight
+  // is a newer edit, and the reducer keeps it dirty instead of reseeding over it.
   const onSave = () =>
-    save.mutate(rows.map(rowToSleeve), { onSuccess: () => setDirty(false) });
+    save.mutate(rows.map(rowToSleeve), {
+      onSuccess: () => dispatch({ type: "liveSaved", sent: rows }),
+    });
+  const saved = justSaved(editor);
 
   return (
     <div className="space-y-4">
     <Card
-      title={editId ? "Sleeves · editando carteira salva" : "Sleeves"}
+      title={carteira ? "Sleeves · editando carteira salva" : "Sleeves"}
       action={
         <span
           className={`font-mono text-[11px] ${sumOk ? "text-muted" : "text-loss"}`}
@@ -256,30 +266,32 @@ function SleevesEditor() {
               {errorText(save.error, "Falha ao salvar os sleeves.")}
             </p>
           )}
-          {save.isSuccess && !dirty && (
-            <p className="text-xs text-gain">Sleeves salvos.</p>
-          )}
-          <Warnings warnings={save.data?.warnings} />
+          {saved && <p className="text-xs text-gain">Sleeves salvos.</p>}
+          {saved && <Warnings warnings={save.data?.warnings} />}
 
           <StrategySaveForm
             name={name}
             setName={setName}
             desc={desc}
             setDesc={setDesc}
-            editing={!!editId}
+            editing={!!carteira}
             offB3={offB3}
             saveStrat={saveStrat}
             canSave={canSaveStrat}
             onSave={onSaveStrat}
             onCancel={() => {
-              endEdit();
+              dispatch({ type: "end" });
               saveStrat.reset();
             }}
           />
         </div>
       )}
     </Card>
-    <MinhasCarteiras onEdit={loadStrategy} activeEditId={editId} />
+    <MinhasCarteiras
+      onEdit={loadStrategy}
+      onDeleted={(id) => dispatch({ type: "deleted", id })}
+      activeEditId={editId}
+    />
     </div>
   );
 }
@@ -297,7 +309,7 @@ function checkRows(rows: Row[]) {
 
 // "Salvar como estratégia" / "Editar carteira": names the editor's rows as a
 // saved fixed_weight carteira. Cancelar and a successful Atualizar both end the
-// edit, which hands the rows back to the live sleeves (SleevesEditor.endEdit).
+// edit, which hands the rows back to the live sleeves (lib/sleevesEditor.ts).
 function StrategySaveForm({
   name,
   setName,
@@ -348,11 +360,14 @@ function StrategySaveForm({
         >
           {saveStrat.isPending ? "Salvando…" : label}
         </button>
+        {/* Off while Atualizar is in flight: its success ends this edit anyway,
+            and a Cancelar under it would reset the mutation it is waiting on. */}
         {editing && (
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md border border-hairline px-3 py-1.5 text-xs text-muted hover:bg-hairline/40"
+            disabled={saveStrat.isPending}
+            className="rounded-md border border-hairline px-3 py-1.5 text-xs text-muted hover:bg-hairline/40 disabled:cursor-not-allowed disabled:opacity-40"
           >
             Cancelar
           </button>
@@ -384,14 +399,17 @@ function StrategySaveForm({
 
 function MinhasCarteiras({
   onEdit,
+  onDeleted,
   activeEditId,
 }: {
   onEdit: (u: UserStrategy) => void;
+  // Ends an edit of the carteira just deleted — Atualizar would PUT to a gone id.
+  onDeleted: (id: string) => void;
   activeEditId?: string;
 }) {
   const userStrats = useUserStrategies();
   const promote = usePromoteStrategy();
-  const del = useDeleteUserStrategy();
+  const del = useDeleteUserStrategy(onDeleted);
   const backtest = useCreateBacktest();
 
   const portfolios = (userStrats.data ?? []).filter(
@@ -592,11 +610,10 @@ function RebalancePanel() {
   const toggle = (t: string) =>
     setExclude((xs) => (xs.includes(t) ? xs.filter((x) => x !== t) : [...xs, t]));
 
-  const onPlan = () =>
-    plan.mutate({
-      new_cash: parseFloat(newCash) || 0,
-      exclude: exclude.length ? exclude : undefined,
-    });
+  // What "Gerar plano" would send now; the plan on screen is checked against it.
+  const request = { new_cash: parseFloat(newCash) || 0, exclude: exclude.length ? exclude : undefined };
+  const onPlan = () => plan.mutate(request);
+  const stale = isStale(plan.variables, request, (b) => ({ ...b, exclude: asSet(b.exclude) }));
 
   return (
     <Card title="Plano de rebalanceamento">
@@ -655,6 +672,7 @@ function RebalancePanel() {
           </p>
         )}
 
+        {plan.data && stale && <StaleHint action="Gerar plano" />}
         {plan.data && <PlanResult plan={plan.data} />}
 
         <p className="border-t border-hairline pt-3 text-[11px] text-muted">

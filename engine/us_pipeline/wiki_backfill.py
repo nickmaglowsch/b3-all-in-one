@@ -45,8 +45,19 @@ dividend guard apply to this file too.
 **What it deliberately does not write.** No `listing_date`, `delisting_date` or
 `delist_reason`, for the reason the dump gives too: a symbol's absence from a
 frozen file is a fact about the file, not about the company. Apple did
-not delist in March 2018. `first_seen` and `last_seen` are observations of this
-file and are safe.
+not delist in March 2018.
+
+Nor `last_seen`, for the same reason one step removed. `symbol_directory` owns
+it (see the table in `us_listing`) and reads it back as "the last day this plane
+watched the symbol trade": a live symbol that later drops out of the directory
+is delisted *at* its `last_seen`, and `us_listing` refuses any vendor claim that
+predates it as a recycled ticker. A 2018 date written there by a frozen file
+would date a 2026 delisting to 2018, or make the directory "watch" a symbol it
+never saw and then claim its death under its own name. `first_seen` is still
+written: it is the earliest sighting, `upsert_instruments` keeps the minimum of
+every writer's, and nothing infers anything from it.
+
+Nor a cursor over one that exists: see `_seed_cursor`.
 
 **Why these symbols are not fenced off from the metered feed.** The dump's
 symbols land in `us_seam.covered_symbols` so `us_prices` never re-prices them
@@ -132,13 +143,13 @@ def to_market_rows(symbol: str, bars: pd.DataFrame,
 
 
 def _instrument_row(symbol: str, bars: pd.DataFrame) -> dict:
-    """One `instruments` row. Observed bounds only — see the module docstring."""
+    """One `instruments` row: the earliest sighting and nothing the directory
+    owns — see the module docstring."""
     return {
         "market": MARKET,
         "symbol": symbol,
         "currency": archive.CURRENCY,
         "first_seen": bars["date"].min(),
-        "last_seen": bars["date"].max(),
     }
 
 
@@ -160,6 +171,20 @@ def ingest_symbol(conn, symbol: str, bars: pd.DataFrame, rates: pd.Series,
         "status": "ok",
         "error": None,
     }}
+
+
+def _seed_cursor(conn, cursors: pd.DataFrame) -> int:
+    """Write cursor rows for symbols that have none; never touch one that does.
+
+    This file's row says "priced through 2018", and upserting it over a row the
+    metered feed wrote last night moved that cursor backwards: `last_bar` back to
+    2018 (so the symbol was re-bought), a `retry` or `dead` verdict cleared, the
+    `adjust_state` receipt replaced by this file's. A cursor describes the newest
+    thing that happened to a symbol, and a re-run of a 2018 archive never is.
+    """
+    have = set(us_storage.load_price_cursor(conn)["symbol"])
+    fresh = cursors[~cursors["symbol"].isin(have)]
+    return us_storage.upsert_price_cursor(conn, fresh) if not fresh.empty else 0
 
 
 def _check_complete(symbols: int, rows: int, newest: str, limit: int) -> None:
@@ -232,11 +257,11 @@ def run_pipeline(db_path=None, zip_path=None, limit: int = 0, today=None,
                 # Batched for the bulk loaders' reason: the file is already on
                 # disk, so a re-run costs one read, and three thousand
                 # single-row upserts would dominate the runtime.
-                us_storage.upsert_price_cursor(conn, pd.DataFrame(cursors))
+                _seed_cursor(conn, pd.DataFrame(cursors))
                 cursors = []
                 logger.info(f"  {symbols:,} symbols, {rows:,} rows")
         if cursors:
-            us_storage.upsert_price_cursor(conn, pd.DataFrame(cursors))
+            _seed_cursor(conn, pd.DataFrame(cursors))
 
         _check_complete(symbols, rows, newest, limit)
 

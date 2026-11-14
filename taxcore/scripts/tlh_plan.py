@@ -41,7 +41,8 @@ import pandas as pd
 from scripts._common import price_lookup as latest_prices
 from scripts.apuracao import ALIQUOTA, ISENCAO_LIMIT, monthly_apuracao  # one copy of the rules
 from scripts.irpf_2026 import asset_class, build_timeline
-from scripts.realizacao import linha_grade, grade_mensal, realizar
+from scripts.realizacao import grade_mensal, realizar
+from scripts.tlh_decisao import Status, decidir
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
@@ -49,35 +50,46 @@ POSITIONS = DATA / "positions.csv"
 REPORTS = ROOT / "reports"
 
 
-def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
-    """Walk inception → today.
+def historico(tl: pd.DataFrame) -> tuple[dict, dict, pd.DataFrame]:
+    """Walk inception → today: (carry, mtd, grade).
 
-    Returns:
-      carry: {"AÇÃO": x, "FII": y} — running prejuízo at the *start* of
-             the current calendar month.
-      mtd:   {"AÇÃO": {"gross": ..., "pnl": ...}, "FII": ...} for trades
-             already executed in the current month.
+    carry: {"AÇÃO": x, "FII": y} — running prejuízo at the *start* of the
+           current calendar month.
+    mtd:   {"AÇÃO": {"gross": ..., "pnl": ...}, "FII": ...} for trades already
+           executed in the current month. "AÇÃO" is the operações comuns bucket:
+           its pnl adds the BDR and ETF de renda variável lines, which spend the
+           same carry, while its gross stays the ações line's — the vendas brutas
+           the R$ 20k isenção reads.
+    grade: the monthly grid monthly_apuracao reads, current month last — what
+           tlh_decisao puts the hypothetical month to.
 
     Current per-ticker PM is read separately from positions.csv (canonical;
     `build_timeline` filters by market and misses some in-kind transfers
     and corporate actions that load_b3 handles).
 
     The carry is the IRPF report's own: the same walk (realizacao) and the same
-    apuração, so the "AÇÃO" bucket is the whole operações comuns bucket — BDR and
-    ETF losses included — and day trades never touch it. A future-dated sale is
-    a data anomaly and is ignored rather than taxed early.
+    apuração, and day trades never touch it. A future-dated sale is a data
+    anomaly and is ignored rather than taxed early.
     """
     cur = pd.Timestamp.today().normalize().to_period("M")
     realized = realizar(tl)
-    periodo = realized["date"].dt.to_period("M")
-    historico = monthly_apuracao(grade_mensal(realized[periodo < cur], asset_class, cur.year),
-                                 ("AÇÃO", "FII", "BDR_ETF"))
-    carry = {cls: next(r["carry"] for r in reversed(historico) if r["classe"] == cls)
+    grade = grade_mensal(realized[realized["date"].dt.to_period("M") <= cur],
+                         asset_class, cur.year)
+    grade = grade[grade["year"] * 12 + grade["month"] <= cur.year * 12 + cur.month]
+    grade = grade.reset_index(drop=True)
+    anterior = monthly_apuracao(grade.iloc[:-1], ("AÇÃO", "FII", "BDR_ETF"))
+    carry = {cls: next((r["carry"] for r in reversed(anterior) if r["classe"] == cls), 0.0)
              for cls in ("AÇÃO", "FII")}
-    linha = linha_grade(realized, asset_class)
-    mtd = {cls: {"gross": float(realized.loc[(periodo == cur) & (linha == cls), "sell_value"].sum()),
-                 "pnl": float(realized.loc[(periodo == cur) & (linha == cls), "pnl"].sum())}
-           for cls in ("AÇÃO", "FII")}
+    mes = grade.iloc[-1]
+    mtd = {"AÇÃO": {"gross": float(mes["AÇÃO_gross"]),
+                    "pnl": float(mes["AÇÃO_pnl"] + mes["BDR_pnl"] + mes["ETF_RV_pnl"])},
+           "FII": {"gross": float(mes["FII_gross"]), "pnl": float(mes["FII_pnl"])}}
+    return carry, mtd, grade
+
+
+def walk_history(tl: pd.DataFrame) -> tuple[dict, dict]:
+    """(carry, mtd) — see `historico`."""
+    carry, mtd, _grade = historico(tl)
     return carry, mtd
 
 
@@ -175,10 +187,10 @@ def build_result(sells_realized: list[dict], carry: dict, mtd: dict,
             "gross_after": d["gross_after"],
             "pnl_after": d["pnl_after"],
             "carry_used": d["carry_used"],
-            # Prejuízo left after the plan. Selling at a loss consumes no carry
-            # and *adds* to it, which carry_used alone never showed. Derived, so
-            # it is one formula rather than a sixth field each branch can forget.
-            "carry_after": carry[cls] - d["carry_used"] + max(0.0, -d["final_pnl"]),
+            # Prejuízo left after the plan, as the apuração closes the month.
+            # Selling at a loss consumes no carry and *adds* to it, which
+            # carry_used alone never showed.
+            "carry_after": d["carry_after"],
             "target_loss": d["target_loss"],
             "final_gross": d["final_gross"],
             "final_pnl": d["final_pnl"],
@@ -332,7 +344,7 @@ def render_report(sells_realized: list[dict], carry: dict, mtd: dict,
         w(f"- Prejuízo acumulado disponível: R$ {carry[cls]:,.2f}")
         w(f"- Status: **{d['status']}**")
         w(f"- {d['rationale']}")
-        if d["status"] == "TLH recomendado" and d["target_loss"]:
+        if d["status"] == Status.RECOMENDADO and d["target_loss"]:
             w(f"- Alvo de perdas a realizar: **R$ {d['target_loss']:+,.2f}**")
 
     # --- Plano de execução ---
@@ -414,7 +426,7 @@ def main(argv: list[str]) -> int:
         return 1
 
     tl = build_timeline()
-    carry, mtd = walk_history(tl)
+    carry, mtd, grade = historico(tl)
     pm_now = load_positions()
     prices = latest_prices()
     if prices.empty:
@@ -450,96 +462,17 @@ def main(argv: list[str]) -> int:
     if sells and not sells_realized:
         return 1
 
-    # --- Decide per bucket ---
+    # --- Decide per bucket: the month as monthly_apuracao would close it ---
+    vendidos = exclude | {s["ticker"] for s in sells_realized}
     decision: dict[str, dict] = {}
-    plan_acoes: list[dict] = []
-    plan_fii: list[dict] = []
-
+    plans: dict[str, list[dict]] = {}
     for cls in ("AÇÃO", "FII"):
-        rate = ALIQUOTA[cls]
-        bucket_sells = [s for s in sells_realized if s["cls"] == cls]
-        if not bucket_sells and mtd[cls]["gross"] == 0:
-            continue  # nothing to plan for this bucket
-        sell_gross = sum(s["sell_value"] for s in bucket_sells)
-        sell_pnl = sum(s["pnl"] for s in bucket_sells)
-        gross_after = mtd[cls]["gross"] + sell_gross
-        pnl_after = mtd[cls]["pnl"] + sell_pnl
-        c = carry[cls]
-
-        # No-op cases
-        if cls == "AÇÃO" and gross_after <= ISENCAO_LIMIT:
-            decision[cls] = {
-                "gross_after": gross_after, "pnl_after": pnl_after,
-                "status": "Nenhum TLH necessário",
-                "rationale": (f"Vendas brutas do mês ({gross_after:,.2f}) ≤ "
-                              f"R$ 20.000 → mês isento. Lucro vai para "
-                              f"Rendimentos Isentos código 20 no IRPF."),
-                "target_loss": 0.0, "carry_used": 0.0,
-                "final_gross": gross_after, "final_pnl": pnl_after, "ir": 0.0,
-            }
-            continue
-        if pnl_after <= 0:
-            decision[cls] = {
-                "gross_after": gross_after, "pnl_after": pnl_after,
-                "status": "Nenhum TLH necessário",
-                "rationale": ("Mês já tem PnL ≤ 0 — nada a tributar "
-                              "(prejuízo vai pro carry)."),
-                "target_loss": 0.0, "carry_used": 0.0,
-                "final_gross": gross_after, "final_pnl": pnl_after, "ir": 0.0,
-            }
-            continue
-        if c >= pnl_after:
-            decision[cls] = {
-                "gross_after": gross_after, "pnl_after": pnl_after,
-                "status": "Nenhum TLH necessário",
-                "rationale": (f"Prejuízo acumulado (R$ {c:,.2f}) já cobre o "
-                              f"ganho do mês (R$ {pnl_after:,.2f}). Carry "
-                              f"consumido absorve tudo."),
-                "target_loss": 0.0, "carry_used": pnl_after,
-                "final_gross": gross_after, "final_pnl": pnl_after, "ir": 0.0,
-            }
-            continue
-
-        # TLH needed: need to harvest enough loss to bring (pnl_after - carry)
-        # down to zero. Target loss = -(pnl_after - c).
-        residual = pnl_after - c
-        target_loss = -residual
-        losers = find_losers(pm_now, prices, cls,
-                             exclude | {s["ticker"] for s in bucket_sells})
-        if losers.empty:
-            decision[cls] = {
-                "gross_after": gross_after, "pnl_after": pnl_after,
-                "status": "TLH desejável mas sem candidatos",
-                "rationale": (f"Sem posições em prejuízo no bucket {cls} "
-                              f"que cubram R$ {residual:,.2f}. IR estimado: "
-                              f"R$ {residual * rate:,.2f}."),
-                "target_loss": target_loss, "carry_used": c,
-                "final_gross": gross_after, "final_pnl": pnl_after,
-                "ir": residual * rate,
-            }
-            continue
-        plan = harvest(target_loss, losers)
-        harvested = sum(p["realized_loss"] for p in plan)
-        final_pnl = pnl_after + harvested
-        # carry available consumes remaining positive PnL if any
-        carry_used = min(c, max(0.0, final_pnl))
-        final_taxable = max(0.0, final_pnl - carry_used)
-        ir = final_taxable * rate
-        gross_after_total = gross_after + sum(p["price"] * p["qty"] for p in plan)
-        decision[cls] = {
-            "gross_after": gross_after, "pnl_after": pnl_after,
-            "status": "TLH recomendado",
-            "rationale": (f"Ganho residual após carry: R$ {residual:,.2f}. "
-                          f"Plano realiza R$ {harvested:+,.2f} em perdas, "
-                          f"levando PnL final a R$ {final_pnl:+,.2f}."),
-            "target_loss": target_loss, "carry_used": carry_used,
-            "final_gross": gross_after_total, "final_pnl": final_pnl,
-            "ir": ir,
-        }
-        if cls == "AÇÃO":
-            plan_acoes = plan
-        else:
-            plan_fii = plan
+        d, plans[cls] = decidir(
+            cls, grade, sells_realized,
+            lambda cls=cls: find_losers(pm_now, prices, cls, vendidos), harvest)
+        if d is not None:
+            decision[cls] = d
+    plan_acoes, plan_fii = plans["AÇÃO"], plans["FII"]
 
     if args.json:
         result = build_result(sells_realized, carry, mtd,

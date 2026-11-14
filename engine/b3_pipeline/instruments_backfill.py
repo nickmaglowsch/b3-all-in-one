@@ -93,7 +93,10 @@ def run(db_path=None) -> int:
     """Backfill `instruments` for B3. Returns rows written.
 
     Idempotent: it rebuilds every row from the current plane and upserts, so a
-    later COTAHIST year or a fresh FCA download simply moves the bounds.
+    later COTAHIST year or a fresh FCA download widens the bounds. Only widens:
+    `first_seen`/`last_seen` never move inwards (market_storage._OBSERVED_BOUNDS),
+    so after a price history is shrunk or corrected, clear those two columns for
+    the affected rows before re-running if the bounds must follow it.
     """
     with storage.get_connection(db_path) as conn:
         rows = build(conn)

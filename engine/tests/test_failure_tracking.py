@@ -145,7 +145,8 @@ def retry_world(monkeypatch, tmp_path):
     monkeypatch.setattr(b3, "parse_stock_dividends",
                         lambda divs: (one, one, pd.DataFrame()))
     monkeypatch.setattr(b3, "fetch_cash_dividends_paginated",
-                        lambda name: writes.append(("cash_fetch", name)) or [{"c": 1}])
+                        lambda name, **kw: writes.append(("cash_fetch", name))
+                        or ([{"c": 1}], True))
     monkeypatch.setattr(b3, "parse_cash_dividends",
                         lambda divs, code, isin_map: writes.append(("cash_parse", code)) or one)
     for fn in ("upsert_corporate_actions", "upsert_stock_actions", "upsert_skipped_events"):
@@ -180,3 +181,95 @@ def test_retry_failures_nested_logs_as_a_pipeline_step(retry_world, caplog):
     msgs = [r.getMessage() for r in caplog.records]
     assert "  Retrying OKAY..." in msgs and "  Retry still failed for DEAD" in msgs
     assert not any("Successfully" in m for m in msgs)
+
+
+# ── The ledger settles only what was fetched *and* stored ────────────────────
+
+COMPANY, CASH = "GetListedSupplementCompany", "GetListedCashDividends"
+
+
+def _open(conn) -> set:
+    return {(f["company_code"], f["endpoint"]) for f in storage.get_unresolved_failures(conn)}
+
+
+def test_a_retry_that_dies_storing_leaves_the_failure_open(retry_world, monkeypatch):
+    """The row used to be marked resolved before the actions were stored, so a
+    store that raised left a company marked fetched with nothing written."""
+    conn, _ = retry_world
+
+    def broken(c, df):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(pipeline.storage, "upsert_stock_actions", broken)
+    with pytest.raises(RuntimeError):
+        pipeline._retry_failures(conn, storage.get_unresolved_failures(conn))
+    assert _open(conn) == {("DEAD", COMPANY), ("OKAY", COMPANY)}
+
+
+def test_a_retry_whose_cash_pages_fail_again_keeps_only_that_debt(retry_world, monkeypatch):
+    conn, _ = retry_world
+    storage.record_fetch_failure(conn, "OKAY", CASH, "page 2: timeout")
+    asked = []
+
+    def partial(name, conn=None, company_code=None):
+        asked.append(company_code)
+        storage.record_fetch_failure(conn, company_code, CASH, "page 2: timeout")
+        return [{"c": 1}], False
+    monkeypatch.setattr(pipeline.b3_corporate_actions, "fetch_cash_dividends_paginated",
+                        partial)
+    pipeline._retry_failures(conn, storage.get_unresolved_failures(conn))
+    assert asked == ["OKAY"], "one refetch per company, not one per owed endpoint"
+    assert _open(conn) == {("DEAD", COMPANY), ("OKAY", CASH)}
+
+
+def test_a_failed_cash_page_is_recorded_with_what_came_before_it(monkeypatch):
+    """It used to `break` with the pages it had and say nothing: a company's
+    dividend history silently cut short, and never asked for again."""
+    import requests
+
+    conn = _in_memory_conn()
+    storage.init_db(conn, rebuild=False)
+    b3 = pipeline.b3_corporate_actions
+    pages = iter([{"page": {"totalPages": 2}, "results": [{"r": 1}]},
+                  requests.ConnectionError("reset")])
+
+    class _Resp:
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            if isinstance(self.body, Exception):
+                raise self.body
+
+        def json(self):
+            return self.body
+    monkeypatch.setattr(b3.requests, "get", lambda *a, **k: _Resp(next(pages)))
+    monkeypatch.setattr(b3.time, "sleep", lambda s: None)
+
+    records, complete = b3.fetch_cash_dividends_paginated(
+        "PETROBRAS", conn=conn, company_code="PETR")
+    assert (records, complete) == ([{"r": 1}], False)
+    assert _open(conn) == {("PETR", CASH)}
+
+
+def test_a_full_step6_fetch_pays_an_open_failure_once_stored(tmp_path, monkeypatch):
+    """Step 6 refetches every company. A success there used to leave an earlier
+    failure open, so step 9b fetched the same company a second time that run."""
+    db = tmp_path / "step6.sqlite"
+    monkeypatch.setattr(storage, "get_connection", lambda: sqlite3.connect(db))
+    conn = sqlite3.connect(db)
+    storage.init_db(conn, rebuild=False)
+    for code, endpoint in (("PETR", COMPANY), ("PETR", CASH), ("VALE", CASH)):
+        storage.record_fetch_failure(conn, code, endpoint, "last night")
+    b3 = pipeline.b3_corporate_actions
+    monkeypatch.setattr(b3, "fetch_company_data",
+                        lambda code, conn=None: {"tradingName": code, "stockDividends": []})
+    monkeypatch.setattr(b3, "fetch_cash_dividends_paginated",
+                        lambda name, conn=None, company_code=None: ([], name == "PETR"))
+    monkeypatch.setattr(b3.time, "sleep", lambda s: None)
+
+    paid: dict = {}
+    b3.fetch_all_corporate_actions(["PETR", "VALE"], {}, fetched=paid)
+    assert paid == {"PETR": (COMPANY, CASH), "VALE": (COMPANY,)}
+    assert len(_open(conn)) == 3, "nothing is resolved before the store"
+    pipeline._resolve_paid(conn, paid)
+    assert _open(conn) == {("VALE", CASH)}

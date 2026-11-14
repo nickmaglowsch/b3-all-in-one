@@ -9,6 +9,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_URL, api, errorText } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import { claudeCodeCommand, mcpJsonConfig, mcpUrl } from "@/lib/mcp";
+import type { RowState } from "@/lib/rowConfirm";
+import { useRowConfirm } from "@/lib/useRowConfirm";
 import { Card } from "@/components/ui/Card";
 import { LoadFailure } from "@/components/ui/EmptyState";
 import { Field, inputCls } from "./Field";
@@ -170,7 +172,7 @@ function Snippet({ label, text }: { label: string; text: string }) {
 
 function TokenList({ tokens }: { tokens: McpToken[] }) {
   const revoke = useRevokeToken();
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const confirm = useRowConfirm(revoke);
   if (tokens.length === 0) return null;
 
   return (
@@ -193,20 +195,38 @@ function TokenList({ tokens }: { tokens: McpToken[] }) {
               {t.last_used_at ? `último uso ${formatDateTime(t.last_used_at)}` : "nunca usado"}
             </p>
           </div>
-          <button
-            type="button"
-            disabled={revoke.isPending}
-            onClick={() =>
-              confirmId === t.id
-                ? revoke.mutate(t.id, { onSettled: () => setConfirmId(null) })
-                : setConfirmId(t.id)
-            }
-            className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
-          >
-            {confirmId === t.id ? "Confirmar revogação" : "Revogar"}
-          </button>
+          <RevokeButton
+            state={confirm.stateOf(t.id)}
+            locked={confirm.busy}
+            onArm={() => confirm.arm(t.id)}
+            onConfirm={() => confirm.confirm(t.id)}
+          />
         </li>
       ))}
     </ul>
+  );
+}
+
+// One button, two clicks: Revogar arms it, the second click revokes.
+function RevokeButton({
+  state,
+  locked,
+  onArm,
+  onConfirm,
+}: {
+  state: RowState;
+  locked: boolean;
+  onArm: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={locked}
+      onClick={state === "idle" ? onArm : onConfirm}
+      className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
+    >
+      {state === "idle" ? "Revogar" : "Confirmar revogação"}
+    </button>
   );
 }

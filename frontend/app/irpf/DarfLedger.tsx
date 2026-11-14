@@ -107,13 +107,24 @@ function Ledger({ year }: { year: number }) {
   const save = useMutation({
     mutationFn: (rows: object[]) =>
       api(`/irpf/darf?year=${year}`, { method: "PUT", body: JSON.stringify(rows) }),
-    onSuccess: () => {
-      setEditing(null);
-      return qc.invalidateQueries({ queryKey: ["darf", year] });
-    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["darf", year] }),
   });
   // A background refetch is just as stale a base as an unfinished save.
   const busy = save.isPending || ledger.isFetching;
+
+  // Opening another month's form, or cancelling, starts over: the last save's
+  // error was about that one. Never reset a pending save — that would drop
+  // `busy` while the write is still in flight.
+  const open = (key: string | null) => {
+    if (save.isError) save.reset();
+    setEditing(key);
+  };
+  // A saved payment closes its own form. A "Remover" elsewhere used to close
+  // whichever form happened to be open.
+  const savePayment = (key: string, row: object) =>
+    save.mutate([...others(key), row], {
+      onSuccess: () => setEditing((e) => (e === key ? null : e)),
+    });
 
   function others(exclude: string) {
     return (ledger.data?.meses ?? [])
@@ -237,7 +248,7 @@ function Ledger({ year }: { year: number }) {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => setEditing(editing === key ? null : key)}
+                        onClick={() => open(editing === key ? null : key)}
                         className="rounded-md border border-hairline px-2.5 py-1 text-xs font-medium text-muted hover:bg-hairline/40 hover:text-ink"
                       >
                         Registrar pagamento
@@ -261,8 +272,8 @@ function Ledger({ year }: { year: number }) {
             key={key}
             mes={m}
             pending={busy}
-            onCancel={() => setEditing(null)}
-            onSave={(row) => save.mutate([...others(key), row])}
+            onCancel={() => open(null)}
+            onSave={(row) => savePayment(key, row)}
           />
         );
       })}

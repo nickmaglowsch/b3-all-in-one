@@ -1,5 +1,18 @@
 """
 Generic backtest simulation engine.
+
+The weight-frame contract. No cash is held (NAV is the sum of the positions), so
+a live row is a whole book summing to 1, anything uninvested on CDI_ASSET (less
+is dropped from NAV, and warned about; more is leverage). An all-zero row never
+means "sell everything". Split by inception, the first row with any weight:
+
+  before it   not started: skipped; the curve starts at inception
+  after it    hold: returns accrue, nothing trades, no tax is paid (write-offs
+              are still realised); a never-funded book buys its last live book
+
+Off-months, thin months and "no signal" all arrive as that one row; what a
+strategy emits when it cannot form a book is its own policy: teva_iafd raises,
+besst_quality holds, RankAndHold holds or parks, mean_reversion parks in CDI.
 """
 
 import math
@@ -60,7 +73,7 @@ def _execute_rebalance(
     """
     # 1. Identify current weights and determine buys/sells (pure diff)
     sells, buys = compute_trades(positions, target_weights, portfolio_nav)
-    ledger.realise_write_offs(positions)
+    ledger.realise_write_offs(positions, when)
 
     # Turnover is the gross BRL traded: every sell is positive, every buy value is
     # positive for a long and negative for an opened short — abs() folds both.
@@ -138,10 +151,8 @@ def _execute_rebalance(
 
 
 def _row_book(t_weights: pd.Series, last_book, nav: float):
-    """(targets, live, last live book) for a row. An all-zero row holds — but a
-    book never funded yet (initial_capital=0, the what-if replay) has nothing
-    to hold and would read as bankrupt, so it buys the last live book with the
-    cash that has arrived. A rebalance_months book holds for months at a time."""
+    """(targets, live, last live book) for a row. A book never funded yet (the
+    what-if replay) has nothing to hold, so it buys the last live book instead."""
     if t_weights.abs().sum() != 0:
         return t_weights, True, t_weights
     if nav == 0 and last_book is not None:
@@ -226,12 +237,7 @@ def run_simulation(
     last_book = None        # the last live target row, for a never-funded hold row
     deployed = 0.0          # BRL of dated flows already deployed (Series path only)
 
-    # Contract guard: NAV is defined as the sum of position values and this engine
-    # does NOT hold uninvested cash. So any live rebalance row whose target weights
-    # sum to < 1 has that gap silently dropped from NAV — a fake drawdown that
-    # compounds every rebalance. Warn loudly rather than fail silently; strategies
-    # must park the residual in CDI_ASSET. (Rows that sum to 0 are held; rows > 1
-    # are the separate leverage case, not flagged here.)
+    # The contract's < 1 guard (module docstring): warn, never fail silently.
     _row_sums = target_weights.fillna(0.0).sum(axis=1)
     _under = (_row_sums > 1e-9) & (_row_sums < 1.0 - 1e-4)
     if bool(_under.any()):
@@ -248,8 +254,7 @@ def run_simulation(
         # Target weights should have been calculated using data from i-1 (no lookahead)
         t_weights = target_weights.iloc[i].fillna(0.0)
 
-        # Before inception, an all-zero row means the strategy hasn't started yet
-        if t_weights.abs().sum() == 0 and not initialized:
+        if t_weights.abs().sum() == 0 and not initialized:     # not started yet
             continue
 
         ret_row = returns_matrix.iloc[i]
@@ -283,11 +288,7 @@ def run_simulation(
         pt_nav = sum(p["current_value"] for p in pt_pos.values())
         at_nav = sum(p["current_value"] for p in at_pos.values())
 
-        # After inception, an all-zero target row means "no valid targets this
-        # period" — hold current positions. Rebalancing to zero would liquidate
-        # everything, and since sale proceeds aren't tracked as cash
-        # (NAV = sum of position values), NAV would collapse to 0 and fake a
-        # margin call on the next step.
+        # After inception an all-zero row holds (module docstring).
         t_weights, live, last_book = _row_book(t_weights, last_book, pt_nav + at_nav)
 
         # ── Step 1b: Periodic buy-in (aporte) ────
@@ -331,6 +332,9 @@ def run_simulation(
             break
 
         if not live:
+            # A name can die on a hold row too; its loss is this period's.
+            pt_ledger.realise_write_offs(pt_pos, date)
+            ledger.realise_write_offs(at_pos, date)
             pretax_values.append(pt_nav)
             aftertax_values.append(at_nav)
             tax_paid_list.append(0.0)

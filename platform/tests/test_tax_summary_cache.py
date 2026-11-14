@@ -19,8 +19,9 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import delete
 
+from platform_app import routes, tasks
 from platform_app.db import async_session_maker
-from platform_app.models import Import, TaxSummary
+from platform_app.models import Import, TaxSummary, Trade
 from platform_app.routes import _month_key, _tax_summary_payload
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
@@ -119,3 +120,58 @@ async def test_one_tenants_apuracao_never_answers_for_another(session):
     await session.commit()
     assert (await _tax_summary_payload(session, a))["stale"] is False
     assert (await _tax_summary_payload(session, b))["stale_reason"] == "import"
+
+
+# One row of load_b3's trades.csv, the shape tasks._replace_book inserts.
+_REBUILT = {"date": "2025-03-11", "side": "C", "market": "Mercado à Vista", "maturity": "",
+            "broker": "XP", "ticker": "VALE3", "qty": "10.0", "price": "60.0",
+            "amount": "600.0", "__source_file": "neg.xlsx", "signed_qty": "10.0"}
+
+
+async def _refresh(session, monkeypatch, tid, *, rebuild_mid_run: bool) -> dict:
+    """POST /portfolio/tax-summary/refresh with tlh_plan stubbed; optionally a
+    process_imports rebuild lands while it "runs" — exactly what the real task
+    does, lock and all, in its own transaction."""
+    session.add(Trade(tenant_id=tid, ticker="PETR4", qty=100.0, signed_qty=100.0))
+    await session.commit()
+
+    async def tlh_plan(s, t, sells, exclude=None):
+        await s.commit()  # as the real one: no connection held across the run
+        if rebuild_mid_run:
+            async with async_session_maker() as worker:
+                await tasks.xact_lock(worker, "imports", t)
+                await tasks._replace_book(worker, t, [_REBUILT], [], [], [])
+                await worker.commit()
+        return plan(_month_key(datetime.date.today()))
+
+    monkeypatch.setattr(routes, "_run_tlh_plan", tlh_plan)
+    try:
+        return await routes.refresh_tax_summary(tenant=(None, tid), session=session)
+    finally:
+        await session.execute(delete(Trade).where(Trade.tenant_id == tid))
+        await session.commit()
+
+
+async def _stored(tid):
+    async with async_session_maker() as s:
+        return await s.get(TaxSummary, tid)
+
+
+async def test_a_refresh_stores_a_fresh_summary(session, monkeypatch):
+    tid = uuid.uuid4()
+    out = await _refresh(session, monkeypatch, tid, rebuild_mid_run=False)
+    assert (out["stale"], out["stale_reason"]) == (False, None)
+    assert await _stored(tid) is not None
+
+
+async def test_a_book_replaced_mid_apuracao_is_not_cached_as_fresh(session, monkeypatch):
+    """The refresh reads the book, lets go of its connection and runs tlh_plan
+    for seconds before it upserts. process_imports replacing the book in that
+    window drops the cached row — and the refresh then wrote a summary of the
+    book that had just been replaced, reporting itself fresh. Now it notices
+    (max(trades.id) moved) and hands the figure back marked stale, uncached."""
+    tid = uuid.uuid4()
+    out = await _refresh(session, monkeypatch, tid, rebuild_mid_run=True)
+    assert (out["stale"], out["stale_reason"]) == (True, "import")
+    assert out["payload"]["owed"] is not None and out["computed_at"]
+    assert await _stored(tid) is None

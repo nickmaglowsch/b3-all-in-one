@@ -22,6 +22,16 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+# The `fetch_failures` ledger is keyed (company_code, endpoint): one company owes
+# each page separately, and a cash-dividend walk cut short is its own debt.
+ENDPOINT_COMPANY = "GetListedSupplementCompany"
+ENDPOINT_CASH = "GetListedCashDividends"
+
+# The three frames a company's fetch yields, by their columns.
+CORP_COLS = ["isin_code", "event_date", "event_type", "value", "factor", "source"]
+STOCK_COLS = ["isin_code", "ex_date", "action_type", "factor", "source"]
+SKIPPED_COLS = ["isin_code", "event_date", "label", "factor", "source", "reason"]
+
 
 def _encode_payload(payload: dict) -> str:
     """Encode a dictionary as base64 string for B3 API."""
@@ -108,35 +118,35 @@ def fetch_company_data(trading_name: str, conn=None) -> Optional[dict]:
         return None
 
 
-def _record_failure(conn, trading_name: str, message: str) -> None:
+def _record_failure(conn, company_code: str, message: str,
+                    endpoint: str = ENDPOINT_COMPANY) -> None:
     """Best-effort: a failure to track the failure must not mask the None."""
     if conn is None:
         return
     from . import storage as _storage
 
     try:
-        _storage.record_fetch_failure(
-            conn, trading_name, "GetListedSupplementCompany", message
-        )
+        _storage.record_fetch_failure(conn, company_code, endpoint, message)
     except Exception as track_err:
         logger.debug(f"Failed to record fetch failure: {track_err}")
 
 
 def fetch_cash_dividends_paginated(
-    trading_name: str, page_size: int = 100
-) -> List[dict]:
+    trading_name: str, page_size: int = 100, conn=None, company_code: str = None,
+) -> Tuple[List[dict], bool]:
     """
-    Fetch all cash dividends with pagination.
+    Fetch all cash dividends with pagination: (records, complete).
 
     The GetListedCashDividends endpoint returns paginated results with
-    totalRecords and totalPages fields.
+    totalRecords and totalPages fields. A page that fails ends the walk with
+    the pages before it, which is a partial history and says so: `complete` is
+    False and, given `conn`, the failure is recorded under `company_code` and
+    ENDPOINT_CASH. It used to `break` silently, and a company's dividends cut
+    short at page 2 looked exactly like a company with one page of them.
 
     Args:
         trading_name: Company trading name (e.g., 'PETROBRAS')
         page_size: Number of records per page
-
-    Returns:
-        List of all dividend records
     """
     all_results = []
     page_number = 1
@@ -172,16 +182,21 @@ def fetch_cash_dividends_paginated(
             if page_number <= total_pages:
                 time.sleep(config.RATE_LIMIT_DELAY)
 
-        except requests.RequestException as e:
+        except (requests.RequestException, ValueError) as e:   # JSONDecodeError is one
             logger.warning(
                 f"Failed to fetch dividends page {page_number} for {trading_name}: {e}"
             )
-            break
-        except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Failed to parse dividends for {trading_name}: {e}")
-            break
+            _record_failure(conn, company_code or trading_name,
+                            f"page {page_number}: {e}", ENDPOINT_CASH)
+            return all_results, False
 
-    return all_results
+    return all_results, True
+
+
+def paid_endpoints(cash_complete: bool) -> tuple:
+    """The ledger rows a company's fetch has paid once it is stored: the company
+    page always (a None never gets this far), the cash pages only if all came."""
+    return (ENDPOINT_COMPANY, ENDPOINT_CASH) if cash_complete else (ENDPOINT_COMPANY,)
 
 
 def parse_cash_dividends(
@@ -416,7 +431,7 @@ def parse_stock_dividends(
 def _fetch_one_company(
     name: str,
     ticker_to_isin: dict,
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+):
     """
     Fetch and parse all corporate action data for one company code.
 
@@ -424,20 +439,21 @@ def _fetch_one_company(
     CNPJ upsert) and closes it before returning. Safe to call from a thread.
 
     Returns:
-        (corp_df, stock_df, skipped_df) — may all be empty DataFrames on failure.
+        (corp_df, stock_df, skipped_df, paid) — the frames may all be empty on
+        failure; `paid` is `paid_endpoints`, or () when the company page failed.
     """
     from . import storage as _storage
     from . import cvm_storage as _cvm_storage
 
-    _empty_corp = pd.DataFrame(columns=["isin_code", "event_date", "event_type", "value", "factor", "source"])
-    _empty_stock = pd.DataFrame(columns=["isin_code", "ex_date", "action_type", "factor", "source"])
-    _empty_skipped = pd.DataFrame(columns=["isin_code", "event_date", "label", "factor", "source", "reason"])
+    _empty_corp = pd.DataFrame(columns=CORP_COLS)
+    _empty_stock = pd.DataFrame(columns=STOCK_COLS)
+    _empty_skipped = pd.DataFrame(columns=SKIPPED_COLS)
 
     thread_conn = _storage.get_connection()
     try:
         company_data = fetch_company_data(name, conn=thread_conn)
         if company_data is None:
-            return _empty_corp, _empty_stock, _empty_skipped
+            return _empty_corp, _empty_stock, _empty_skipped, ()
 
         # Persist ticker mapping via codeCVM (B3 API does not return cnpj directly).
         # cvm_companies rows are pre-populated by the CVM pipeline (cnpj + cvm_code);
@@ -474,8 +490,10 @@ def _fetch_one_company(
         time.sleep(config.RATE_LIMIT_DELAY)
 
         # Cash dividends — separate paginated endpoint
+        cash_complete = True
         if full_trading_name:
-            cash_divs = fetch_cash_dividends_paginated(full_trading_name)
+            cash_divs, cash_complete = fetch_cash_dividends_paginated(
+                full_trading_name, conn=thread_conn, company_code=name)
             if cash_divs:
                 corp_df = parse_cash_dividends(cash_divs, name, ticker_to_isin)
                 if not corp_df.empty:
@@ -486,7 +504,7 @@ def _fetch_one_company(
         final_stock = pd.concat(stock_parts, ignore_index=True) if stock_parts else _empty_stock
         final_skipped = pd.concat(skipped_parts, ignore_index=True) if skipped_parts else _empty_skipped
 
-        return final_corp, final_stock, final_skipped
+        return final_corp, final_stock, final_skipped, paid_endpoints(cash_complete)
 
     finally:
         thread_conn.close()
@@ -496,6 +514,7 @@ def fetch_all_corporate_actions(
     trading_names: List[str],
     ticker_to_isin: dict,
     conn=None,  # kept for backward compat; workers open per-thread connections
+    fetched: Optional[dict] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     Fetch all corporate actions for multiple trading names.
@@ -505,10 +524,14 @@ def fetch_all_corporate_actions(
         ticker_to_isin: Dictionary mapping tickers to ISINs
         conn: Optional SQLite connection for failure tracking (Phase 4).
               No longer used internally — workers open their own per-thread connections.
+        fetched: filled with {company code: `paid_endpoints`}, () where the
+              company page failed. Not resolved here: the caller stores the
+              frames first, and only then may it close the ledger rows they pay.
 
     Returns:
         Tuple of (corporate_actions_df, stock_actions_df, skipped_events_df)
     """
+    fetched = {} if fetched is None else fetched
     all_corp_actions: List[pd.DataFrame] = []
     all_stock_actions: List[pd.DataFrame] = []
     all_skipped_events: List[pd.DataFrame] = []
@@ -532,82 +555,32 @@ def fetch_all_corporate_actions(
                 logger.info(f"Fetching corporate actions: {current}/{total} ({name})")
 
             try:
-                corp_df, stock_df, skipped_df = future.result()
+                corp_df, stock_df, skipped_df, paid = future.result()
             except Exception as exc:
                 logger.warning(f"Worker failed for {name}: {exc}")
                 continue
 
-            if not corp_df.empty:
-                all_corp_actions.append(corp_df)
-            if not stock_df.empty:
-                all_stock_actions.append(stock_df)
-            if not skipped_df.empty:
-                all_skipped_events.append(skipped_df)
+            fetched[name] = paid
+            all_corp_actions.append(corp_df)
+            all_stock_actions.append(stock_df)
+            all_skipped_events.append(skipped_df)
 
-    valid_corp = [
-        df for df in all_corp_actions if not df.empty and not df.isna().all().all()
-    ]
-    valid_stock = [
-        df for df in all_stock_actions if not df.empty and not df.isna().all().all()
-    ]
-    valid_skipped = [
-        df for df in all_skipped_events if not df.empty and not df.isna().all().all()
-    ]
+    return (_combine(all_corp_actions, CORP_COLS, ["isin_code", "event_date", "event_type"],
+                     "corporate actions"),
+            _combine(all_stock_actions, STOCK_COLS, ["isin_code", "ex_date", "action_type"],
+                     "stock actions"),
+            _combine(all_skipped_events, SKIPPED_COLS, ["isin_code", "event_date", "label"],
+                     "skipped events"))
 
-    final_corp = (
-        pd.concat(valid_corp, ignore_index=True)
-        if valid_corp
-        else pd.DataFrame(
-            columns=[
-                "isin_code",
-                "event_date",
-                "event_type",
-                "value",
-                "factor",
-                "source",
-            ]
-        )
-    )
-    final_stock = (
-        pd.concat(valid_stock, ignore_index=True)
-        if valid_stock
-        else pd.DataFrame(
-            columns=[
-                "isin_code",
-                "ex_date",
-                "action_type",
-                "factor",
-                "source",
-            ]
-        )
-    )
-    final_skipped = (
-        pd.concat(valid_skipped, ignore_index=True)
-        if valid_skipped
-        else pd.DataFrame(
-            columns=["isin_code", "event_date", "label", "factor", "source", "reason"]
-        )
-    )
 
-    if not final_corp.empty:
-        final_corp = final_corp.drop_duplicates(
-            subset=["isin_code", "event_date", "event_type"], keep="last"
-        )
-        logger.info(f"Total corporate actions: {len(final_corp)}")
-
-    if not final_stock.empty:
-        final_stock = final_stock.drop_duplicates(
-            subset=["isin_code", "ex_date", "action_type"], keep="last"
-        )
-        logger.info(f"Total stock actions: {len(final_stock)}")
-
-    if not final_skipped.empty:
-        final_skipped = final_skipped.drop_duplicates(
-            subset=["isin_code", "event_date", "label"], keep="last"
-        )
-        logger.info(f"Total skipped events: {len(final_skipped)}")
-
-    return final_corp, final_stock, final_skipped
+def _combine(parts: List[pd.DataFrame], cols: list, key: list, noun: str) -> pd.DataFrame:
+    """One kind of frame across every company, deduplicated on its key."""
+    parts = [df for df in parts if not df.empty and not df.isna().all().all()]
+    if not parts:
+        return pd.DataFrame(columns=cols)
+    out = pd.concat(parts, ignore_index=True).drop_duplicates(subset=key, keep="last")
+    logger.info(f"Total {noun}: {len(out)}")
+    return out
 
 
 def fetch_all_b3_listed_companies(page_size: int = 100) -> List[dict]:

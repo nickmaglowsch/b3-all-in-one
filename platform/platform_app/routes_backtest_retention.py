@@ -36,19 +36,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from platform_app.config import settings
 from platform_app.db import get_async_session
+from platform_app.jobstatus import BACKTEST_FINISHED, BACKTEST_INFLIGHT
 from platform_app.models import BacktestRun
 from platform_app.tenancy import get_current_tenant, get_owned
 
 backtest_retention_router = APIRouter(prefix="/backtests", tags=["backtests"])
 
 # A finished run is the only kind that can go. `pending`/`running` belong to the
-# worker: tasks.run_backtest holds the row in its own session across a subprocess
-# that runs for minutes, and deleting it underneath would either resurrect the
-# row on the worker's next commit or blow up its flush — while the engine keeps
-# writing artifacts into a directory nothing points at any more. The quota only
+# worker: tasks.run_backtest is minutes into a subprocess writing its artifacts,
+# and a row deleted underneath only finds out at the end (its final write is a
+# compare-and-set that then drops the directory — the purge path, not a button
+# to offer for a run someone is waiting on). The quota only
 # counts runs in flight (routes.inflight_backtests), so refusing here also means
 # deletion can never be a way to slip past admission control.
-FINISHED = ("done", "error")
+FINISHED = BACKTEST_FINISHED
 
 # Ceiling on `keep`, mirroring the listing's own `le=500`: the parameter exists to
 # protect the recent runs, and a number past the page that shows them is asking
@@ -93,7 +94,7 @@ def _parse_statuses(status: str | None) -> list[str]:
     if not status:
         return list(FINISHED)
     asked = [s.strip() for s in status.split(",") if s.strip()]
-    inflight = [s for s in asked if s in ("pending", "running")]
+    inflight = [s for s in asked if s in BACKTEST_INFLIGHT]
     if inflight:
         raise HTTPException(
             422, f"rodadas em andamento não podem ser excluídas: {', '.join(inflight)}")

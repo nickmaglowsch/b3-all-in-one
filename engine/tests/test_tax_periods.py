@@ -98,10 +98,76 @@ def test_a_write_off_still_nets_within_the_period_for_crypto():
     ledger = tax.Ledger(tax.Rule(rate=0.15, exemption=None, carry=tax.NONE))
     book = {"DEAD": {"cost_basis": 10_000.0, "current_value": 0.0},
             "A": {"cost_basis": 10_000.0, "current_value": 40_000.0}}
-    ledger.realise_write_offs(book)
+    ledger.realise_write_offs(book, JAN)
     assert "DEAD" not in book              # the ghost position is gone
     ledger.accrue(JAN, {"A": 40_000.0}, book)
     assert ledger.close() == pytest.approx(0.15 * (30_000.0 - 10_000.0))
+
+
+# ── A write-off belongs to the period of its date ─────────────────────────────
+
+def _dead(cost: float) -> dict:
+    return {"DEAD": {"cost_basis": cost, "current_value": 0.0}}
+
+
+def test_a_write_off_on_the_first_row_of_a_month_is_that_months_loss():
+    """The rebalance books write-offs before `accrue`, and `accrue` was where the
+    period rolled — so a name found dead on February's first row netted against
+    January's gain, and January's tax was never charged."""
+    ledger = _acoes()
+    ledger.accrue(JAN, {"A": 30_000.0}, _book(20_000.0, 30_000.0))     # +10k, taxable
+    ledger.realise_write_offs(_dead(10_000.0), FEB)
+    assert ledger.accrue(FEB, {}, {}) == pytest.approx(0.15 * 10_000.0)
+    ledger.close()
+    assert ledger.carry == pytest.approx(10_000.0)
+
+
+def test_a_write_off_that_rolls_the_period_leaves_the_bill_for_the_next_payment():
+    """A hold row realises its write-offs too, and rolling the period there
+    settles the one it closes. Nothing is paid on a hold row: the bill waits for
+    the next rebalance, or for `close` when none comes."""
+    ledger = _acoes()
+    ledger.accrue(JAN, {"A": 30_000.0}, _book(20_000.0, 30_000.0))
+    ledger.realise_write_offs(_dead(10_000.0), FEB)
+    assert ledger.carry == 0.0                        # January is settled...
+    assert ledger.close() == pytest.approx(0.15 * 10_000.0)    # ...and still owed
+    assert ledger.carry == pytest.approx(10_000.0)
+
+
+def test_nothing_to_write_off_leaves_the_period_alone():
+    ledger = _acoes()
+    ledger.accrue(JAN, {"A": 30_000.0}, _book(20_000.0, 30_000.0))
+    ledger.realise_write_offs(_book(1.0, 1.0), FEB)
+    assert ledger.accrue(JAN, {}, {}) == 0.0          # January is still open
+
+
+@pytest.mark.parametrize("death, tax_2023", [
+    ("2023-12-29", 0.0),                    # dies in 2023: nets the 2023 gain
+    ("2024-01-31", 0.15 * 12_500.0),        # dies in 2024: cannot reach back
+])
+def test_a_position_that_dies_on_a_hold_row_is_lost_in_the_year_it_died(death, tax_2023):
+    """End to end, exterior (the year nets and nothing crosses it). The gain is
+    taken in November 2023; B is then wiped out on a hold row. Its loss belongs
+    to the year it died in. It used to wait for the next live row and land in
+    whatever period was still open there — 2023 either way, which erased the tax
+    on a January death; and rolling at the live row alone would have pushed a
+    December death into 2024."""
+    from backtests.core.simulation import run_simulation
+
+    idx = pd.DatetimeIndex(["2023-10-31", "2023-11-30", "2023-12-29",
+                            "2024-01-31", "2024-02-29"])
+    ret = pd.DataFrame(0.0, index=idx, columns=["A", "B"])
+    ret.loc["2023-11-30", "A"] = 1.0
+    ret.loc[death, "B"] = -1.0
+    w = pd.DataFrame({"A": [0.5, 0.5, 0.0, 0.0, 1.0],
+                      "B": [0.5, 0.5, 0.0, 0.0, 0.0]}, index=idx)
+    out = run_simulation(ret, w, initial_capital=100_000, tax_rate=0.15,
+                         monthly_sales_exemption=None, tax_period=tax.ANNUAL,
+                         loss_carry=tax.PERIOD)
+    # November sells 25k of A that cost 12.5k; B's write-off is 75k of basis.
+    # 2023's bill is paid on the first rebalance after the year closed.
+    assert out["tax_paid"].sum() == pytest.approx(tax_2023)
+    assert out["tax_paid"].loc["2024-02-29"] == pytest.approx(tax_2023)
 
 
 # ── Exterior: the year nets and settles once ──────────────────────────────────
@@ -152,8 +218,8 @@ def test_a_class_with_no_isencao_is_not_a_class_with_a_zero_one():
     zero_rule = tax.Ledger(tax.Rule(rate=0.15, exemption=0.0))
     for ledger in (none_rule, zero_rule):
         ledger.accrue(JAN, {"A": 0.0}, _book(10_000.0, 0.0))
-    none_rule.realise_write_offs({"D": {"cost_basis": 1_000.0, "current_value": 0.0}})
-    zero_rule.realise_write_offs({"D": {"cost_basis": 1_000.0, "current_value": 0.0}})
+    none_rule.realise_write_offs({"D": {"cost_basis": 1_000.0, "current_value": 0.0}}, JAN)
+    zero_rule.realise_write_offs({"D": {"cost_basis": 1_000.0, "current_value": 0.0}}, JAN)
     none_rule.close()
     zero_rule.close()
     assert none_rule.carry == zero_rule.carry == pytest.approx(1_000.0)

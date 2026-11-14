@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from platform_app import mcp_results, routes
 from platform_app.config import settings
 from platform_app.db import async_session_maker
+from platform_app.jobstatus import BACKTEST_INFLIGHT
 from platform_app.mcp_guide import GUIDE
 from platform_app.mcp_results import ToolError
 from platform_app.models import BacktestRun, User, UserStrategy
@@ -164,7 +165,7 @@ async def _wait_for(run_id: str, tid: uuid.UUID, seconds: int) -> dict:
         async with async_session_maker() as s:
             run = await s.get(BacktestRun, uuid.UUID(run_id))
             d = routes._run_dict(run) if run is not None and run.tenant_id == tid else None
-        if d is None or d["status"] not in ("pending", "running") or loop.time() >= deadline:
+        if d is None or d["status"] not in BACKTEST_INFLIGHT or loop.time() >= deadline:
             return d
         await asyncio.sleep(_POLL_S)
 
@@ -172,7 +173,7 @@ async def _wait_for(run_id: str, tid: uuid.UUID, seconds: int) -> dict:
 def _run_summary(d: dict) -> dict:
     out = mcp_results.summarize(d)
     out["bench_url"] = f"{settings.frontend_url}/bench/run?id={d['id']}"
-    if out["status"] in ("pending", "running"):
+    if out["status"] in BACKTEST_INFLIGHT:
         out["next"] = "still running — call get_backtest with wait_seconds to wait for it"
     return out
 
@@ -193,7 +194,7 @@ async def get_backtest(ctx: Ctx, args: dict) -> dict:
     run_id = str(args.get("run_id", ""))
     d = await routes.get_backtest(run_id, ctx.tenant, ctx.session)
     wait = _wait_seconds(args, 0)
-    if wait and d["status"] in ("pending", "running"):
+    if wait and d["status"] in BACKTEST_INFLIGHT:
         d = await _wait_for(run_id, ctx.tid, wait) or d
     out = _run_summary(d)
     if args.get("full_metrics"):

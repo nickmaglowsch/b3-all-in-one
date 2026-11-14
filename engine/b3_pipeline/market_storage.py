@@ -143,7 +143,8 @@ DDL = [
 
 def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
                   cols: list[str], stage_coltypes: str, stage_name: str,
-                  update_cols: list[str] | None = None) -> int:
+                  update_cols: list[str] | None = None,
+                  merge: dict[str, str] | None = None) -> int:
     """Upsert `df[cols]` into `table` on `key`, on either backend.
 
     Factored out because the three multi-market tables want exactly the pattern
@@ -159,6 +160,10 @@ def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
     has, NULL where the caller knew nothing. That difference is the whole point:
     a writer that only knows some of the columns must be able to say so, or it
     erases what another writer knew. See `upsert_instruments`.
+
+    `merge` replaces `excluded.<col>` with an expression for the columns it
+    names — how a column that must only ever move one way says so. Plain SQL
+    that both backends evaluate identically; see `_OBSERVED_BOUNDS`.
     """
     from . import storage
 
@@ -173,11 +178,12 @@ def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
             f"{key} — an INSERT that can only ever conflict is a caller bug, "
             "not a no-op worth hiding.")
 
+    new = {c: (merge or {}).get(c, f"excluded.{c}") for c in value_cols}
     placeholders = ", ".join("?" for _ in cols)
-    updates_sqlite = ", ".join(f"{c} = excluded.{c}" for c in value_cols)
+    updates = ", ".join(f"{c} = {new[c]}" for c in value_cols)
     sql = (
         f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders}) "      # noqa: S608
-        f"ON CONFLICT({', '.join(key)}) DO UPDATE SET {updates_sqlite}"
+        f"ON CONFLICT({', '.join(key)}) DO UPDATE SET {updates}"
     )
     records = storage.df_records(df[cols])
     rows = [[r[c] for c in cols] for r in records]
@@ -190,9 +196,8 @@ def _upsert_frame(conn, table: str, df: pd.DataFrame, key: list[str],
         )
         collist = ", ".join(cols)
         keylist = ", ".join(key)
-        updates = ", ".join(f"{c} = excluded.{c}" for c in value_cols)
         unchanged = " OR ".join(
-            f"{table}.{c} IS DISTINCT FROM excluded.{c}" for c in value_cols)
+            f"{table}.{c} IS DISTINCT FROM {new[c]}" for c in value_cols)
         storage.execute(conn, f"""
             INSERT INTO {table} ({collist})
             SELECT {collist} FROM (
@@ -221,6 +226,24 @@ _INSTRUMENTS_STAGE_TYPES = (
     " delist_reason TEXT, first_seen DATE, last_seen DATE,"
     " is_worthless BIGINT, is_test_issue BIGINT"
 )
+
+# The observed bounds are sightings, so they only ever widen: `first_seen` is
+# the earliest any writer saw the instrument trade and `last_seen` the latest.
+# Enforced here rather than trusted to every writer because two of them already
+# got it wrong — the symbol directory reset a returning symbol's `first_seen` to
+# the day it came back, and the frozen WIKI file wrote a 2018 `last_seen` over
+# the directory's 2026 one, which is the date a later delisting is stamped with.
+#
+# CASE rather than MIN/MAX/LEAST/GREATEST because those disagree about NULL
+# between the two backends (SQLite's scalar MAX returns NULL if any argument is;
+# Postgres' GREATEST ignores them). Here a NULL on either side keeps the other,
+# so an unknown bound never erases a known one. Dates compare correctly on both:
+# DATE on Postgres, ISO-8601 text on SQLite.
+_OBSERVED_BOUNDS = {
+    col: (f"CASE WHEN instruments.{col} IS NULL OR excluded.{col} {op}"
+          f" instruments.{col} THEN excluded.{col} ELSE instruments.{col} END")
+    for col, op in (("first_seen", "<"), ("last_seen", ">"))
+}
 
 
 def upsert_instruments(conn, df: pd.DataFrame) -> int:
@@ -266,6 +289,7 @@ def upsert_instruments(conn, df: pd.DataFrame) -> int:
     n = _upsert_frame(
         conn, "instruments", df, ["market", "symbol"], INSTRUMENT_COLUMNS,
         _INSTRUMENTS_STAGE_TYPES, "_instr_stage", update_cols=supplied,
+        merge=_OBSERVED_BOUNDS,
     )
     logger.info(f"Upserted {n:,} instrument records")
     return n

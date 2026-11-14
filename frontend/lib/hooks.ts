@@ -3,7 +3,7 @@
 import { useSyncExternalStore } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, getPortfolioId, subscribePortfolio } from "./api";
-import { mesmoConjunto } from "./modules";
+import { pollEvery, type Confirm } from "./checkoutConfirm";
 import type {
   Health,
   IncomeRow,
@@ -101,20 +101,17 @@ export function useActiveBook(): ActiveBook {
   return { state: "pending" };
 }
 
-// `esperandoMudancaDe` is the billed set we submitted against — [] coming back
-// from a first checkout, the current set after changing an existing subscription.
-// Either way only the webhook writes entitlements, so poll until the billed set
-// moves off that one. Capped so an abandoned checkout doesn't poll forever.
-export function useSubscription(esperandoMudancaDe?: string[] | null) {
+// While /assinatura waits for the Stripe webhook (lib/checkoutConfirm.ts), poll
+// until the billed set moves off the one the change was sent against — for at
+// most ESPERA_MS of wall clock from that wait's start. Not a count of fetches:
+// that count lives on the ["subscription"] cache entry, which /carteiras shares
+// and which never resets, so a second change in one session got few polls or none.
+export function useSubscription(confirm?: Confirm) {
   return useQuery({
     queryKey: ["subscription"],
     queryFn: () => api<Subscription>("/billing"),
     refetchInterval: (q) =>
-      esperandoMudancaDe &&
-      mesmoConjunto(q.state.data?.billed_modules ?? [], esperandoMudancaDe) &&
-      q.state.dataUpdateCount < 12
-        ? 2000
-        : false,
+      confirm ? pollEvery(confirm, q.state.data?.billed_modules, Date.now()) : false,
   });
 }
 

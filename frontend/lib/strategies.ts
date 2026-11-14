@@ -59,14 +59,18 @@ export function useSaveUserStrategy() {
   });
 }
 
-export function useDeleteUserStrategy() {
+// `onDeleted` is hook-level on purpose: a callback passed to mutate() fires only
+// for the latest call, and a screen holding an edit of the deleted strategy must
+// hear about every delete, not just the last one.
+export function useDeleteUserStrategy(onDeleted?: (id: string) => void) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
       api<{ deleted: string }>(`/strategies/user/${id}`, { method: "DELETE" }),
-    onSuccess: () => {
+    onSuccess: (_r, id) => {
       qc.invalidateQueries({ queryKey: ["user-strategies"] });
       qc.invalidateQueries({ queryKey: ["strategies"] });
+      onDeleted?.(id);
     },
   });
 }

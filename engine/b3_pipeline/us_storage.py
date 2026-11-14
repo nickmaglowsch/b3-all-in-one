@@ -61,12 +61,10 @@ INDEX_FUNDAMENTALS_PIT_US_CIK = (
 )
 INDEX_FUNDAMENTALS_PIT_US_TICKER = (
     "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_us_ticker"
-    " ON fundamentals_pit_us(ticker);"
-)
+    " ON fundamentals_pit_us(ticker);")
 INDEX_FUNDAMENTALS_PIT_US_FILING_DATE = (
     "CREATE INDEX IF NOT EXISTS idx_fundamentals_pit_us_filing_date"
-    " ON fundamentals_pit_us(filing_date);"
-)
+    " ON fundamentals_pit_us(filing_date);")
 
 
 # Where the per-symbol price backfill has got to.
@@ -145,11 +143,9 @@ CREATE TABLE IF NOT EXISTS us_ticker_pit (
 """
 
 INDEX_US_TICKER_PIT_CIK = (
-    "CREATE INDEX IF NOT EXISTS idx_us_ticker_pit_cik ON us_ticker_pit(cik);"
-)
+    "CREATE INDEX IF NOT EXISTS idx_us_ticker_pit_cik ON us_ticker_pit(cik);")
 INDEX_US_TICKER_PIT_TICKER = (
-    "CREATE INDEX IF NOT EXISTS idx_us_ticker_pit_ticker ON us_ticker_pit(ticker);"
-)
+    "CREATE INDEX IF NOT EXISTS idx_us_ticker_pit_ticker ON us_ticker_pit(ticker);")
 
 
 # Splits and dividends, kept rather than re-fetched.
@@ -178,6 +174,15 @@ INDEX_US_CORPORATE_ACTIONS_SYMBOL = (
     "CREATE INDEX IF NOT EXISTS idx_us_corporate_actions_symbol"
     " ON us_corporate_actions(symbol);"
 )
+
+
+# Bulk passes that ran to their end, by name — read by `us_main` instead of
+# inferring "bootstrapped" from its own output. See `us_main._bulk_done`.
+SCHEMA_US_INGEST_MILESTONES = """
+CREATE TABLE IF NOT EXISTS us_ingest_milestones (
+    name TEXT NOT NULL PRIMARY KEY, reached_at TIMESTAMP NOT NULL, detail TEXT
+);
+"""
 
 
 FUNDAMENTALS_PIT_US_COLUMNS = [
@@ -238,6 +243,7 @@ DDL = [
     INDEX_US_TICKER_PIT_TICKER,
     SCHEMA_US_CORPORATE_ACTIONS,
     INDEX_US_CORPORATE_ACTIONS_SYMBOL,
+    SCHEMA_US_INGEST_MILESTONES,
 ]
 
 

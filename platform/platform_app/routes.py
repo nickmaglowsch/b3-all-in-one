@@ -32,6 +32,7 @@ from platform_app.billing import (
 )
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool, xact_lock
+from platform_app.jobstatus import BACKTEST_INFLIGHT, BacktestStatus, ImportStatus
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, DarfPayment,
     Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
@@ -144,7 +145,7 @@ async def create_imports(
         pending.append((path, data))
         imp = Import(
             tenant_id=tid, filename=name, stored_path=str(path),
-            kind=_detect_kind(name), status="pending",
+            kind=_detect_kind(name), status=ImportStatus.PENDING,
         )
         session.add(imp)
         created.append(imp)
@@ -161,9 +162,9 @@ async def create_imports(
 
     # One job for the whole batch, and per tenant (see defer_process_imports).
     # ponytail: per-request procrastinate pool — imports are rare human actions.
-    async with tasks.app.open_async():
-        await tasks.defer_process_imports(tid)
-
+    await tasks.defer_or_fail(
+        session, created, "importação", lambda: tasks.defer_process_imports(tid),
+        ImportStatus.PENDING, status=ImportStatus.ERROR)
     return [
         {"id": str(i.id), "filename": i.filename, "kind": i.kind, "status": i.status}
         for i in created
@@ -1253,6 +1254,13 @@ async def get_tax_summary(
     return await _tax_summary_payload(session, tid)
 
 
+async def _book_version(session: AsyncSession, tid: uuid.UUID) -> int | None:
+    """max(Trade.id): a full rebuild is delete+insert and ids come from a
+    sequence, so every rebuild moves it (to None for a book emptied). None =
+    no trades."""
+    return await session.scalar(select(func.max(Trade.id)).where(Trade.tenant_id == tid))
+
+
 # One apuração per tenant at a time. Each is a multi-second subprocess that
 # dumps the whole book to CSV while holding a pooled connection, and the button
 # that fires it sits on a page-load surface — two tabs, or a held-down click,
@@ -1267,10 +1275,8 @@ async def refresh_tax_summary(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
-    has_trades = await session.scalar(
-        select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
-    )
-    if not has_trades:
+    book = await _book_version(session, tid)
+    if book is None:
         # tlh_plan over an empty book has nothing to apurar. A 422 keeps this
         # consistent with /portfolio/index, whose 422 the frontend already reads
         # as "no history yet" rather than as a fault.
@@ -1289,6 +1295,15 @@ async def refresh_tax_summary(
         payload = await _run_tlh_plan(session, tid, [])
         payload["owed"] = _owed_today(payload)
 
+        # process_imports replaces the book and drops this row under the same
+        # lock, so a rebuild either landed before the check below or waits for
+        # this commit and then drops what it stored. Unlocked, one landing while
+        # tlh_plan ran was overwritten by a summary of the book it replaced.
+        await xact_lock(session, "imports", tid)
+        if await _book_version(session, tid) != book:
+            await session.rollback()
+            return {"payload": payload, "computed_at": started.isoformat(),
+                    "stale": True, "stale_reason": "import"}
         # Upsert, not read-modify-write: two refreshes racing on a tenant with no
         # cached row would both see None and both INSERT the same primary key.
         await session.execute(
@@ -1641,7 +1656,7 @@ async def inflight_backtests(session: AsyncSession, user) -> int:
     managed = select(Portfolio.id).where(Portfolio.owner_id == user.id)
     return await session.scalar(
         select(func.count()).select_from(BacktestRun).where(
-            BacktestRun.status.in_(("pending", "running")),
+            BacktestRun.status.in_(BACKTEST_INFLIGHT),
             BacktestRun.created_at > func.now() - datetime.timedelta(days=1),
             (BacktestRun.tenant_id == user.id) | BacktestRun.tenant_id.in_(managed),
         )
@@ -1681,7 +1696,7 @@ async def create_backtest(
     if body.strategy not in known:
         raise HTTPException(404, f"unknown strategy: {body.strategy}")
     run = BacktestRun(
-        tenant_id=tid, strategy=body.strategy, status="pending",
+        tenant_id=tid, strategy=body.strategy, status=BacktestStatus.PENDING,
         # isoformat, not the date object: this column is JSONB, and the engine
         # reads start/end back as strings.
         params={"params": body.params or {},
@@ -1693,8 +1708,9 @@ async def create_backtest(
     await session.commit()
 
     # ponytail: per-request procrastinate pool — mirrors the imports path.
-    async with tasks.app.open_async():
-        await tasks.run_backtest.defer_async(run_id=str(run.id))
+    await tasks.defer_or_fail(
+        session, [run], "backtest", lambda: tasks.run_backtest.defer_async(run_id=str(run.id)),
+        BacktestStatus.PENDING, status=BacktestStatus.ERROR, finished_at=func.now())
     return _run_dict(run)
 
 

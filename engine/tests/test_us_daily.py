@@ -269,6 +269,35 @@ def test_a_symbol_the_universe_does_not_carry_is_not_written_to(tmp_path):
     assert "GHOST" not in us_daily.writable_symbols(conn)
 
 
+def test_a_metered_bar_newer_than_the_daily_feed_does_not_move_the_cursor(tmp_path):
+    """`us_prices` writes US bars through the latest closed session for the
+    symbols this feed does not carry. Counted as "stored", one of them skipped
+    every session between it and the daily feed's own last append — and the
+    splits executing in that gap."""
+    path, conn = _plane(tmp_path)   # split-adjusted history ends 2026-08-28
+    market_storage.upsert_market_prices(conn, pd.DataFrame([
+        {"market": "US", "symbol": "TAIL", "date": "2026-09-01", "open": 5.0,
+         "high": 5.0, "low": 5.0, "close": 5.0, "volume": 1.0,
+         "split_adj_close": 5.0, "adj_close": 5.0,
+         "source": "alphavantage-time-series-daily:total_return"},
+        {"market": "US", "symbol": "DEAD", "date": "2018-03-27", "open": 9.0,
+         "high": 9.0, "low": 9.0, "close": 9.0, "volume": 1.0,
+         "split_adj_close": 9.0, "adj_close": 9.0,
+         "source": "wiki-prices:total_return"}]))
+    conn.commit()
+    assert us_daily.last_stored_session(conn) == D(2026, 8, 28)
+
+
+def test_the_daily_feeds_own_appends_do_move_the_cursor(tmp_path):
+    path, conn = _plane(tmp_path)
+    market_storage.upsert_market_prices(conn, pd.DataFrame([
+        {"market": "US", "symbol": "AAPL", "date": "2026-08-31", "open": 1.0,
+         "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0,
+         "split_adj_close": 1.0, "adj_close": 1.0, "source": us_daily.SOURCE}]))
+    conn.commit()
+    assert us_daily.last_stored_session(conn) == D(2026, 8, 31)
+
+
 def test_the_split_window_starts_after_the_last_stored_session(tmp_path, monkeypatch):
     """The load-time trap, pinned. A back-adjusted history already contains every
     split up to the day it was cut, so a run that asked for a fixed lookback

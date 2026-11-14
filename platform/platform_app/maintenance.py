@@ -78,9 +78,9 @@ async def _queued_import_tenants() -> set[str]:
 async def _defer_import(tid: uuid.UUID, missing: list[str] | None,
                         queued: set[str], dry_run: bool) -> str:
     if missing:
-        # process_imports would die copying the first absent extract and leave
-        # every one of the tenant's imports `processing` — worse than the old
-        # numbers they have now. Listed for a human instead.
+        # process_imports would die copying the first absent extract and turn
+        # every one of the tenant's imports to `error` — worse than the `done`
+        # they show now over the same book. Listed for a human instead.
         log(f"tenant={tid} has {len(missing)} extract(s) missing on disk, e.g. {missing[0]}")
         return "skipped_missing_files"
     if str(tid) in queued:

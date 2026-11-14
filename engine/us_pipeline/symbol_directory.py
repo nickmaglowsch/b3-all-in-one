@@ -26,7 +26,9 @@ import io
 import logging
 
 import pandas as pd
-from b3_pipeline import market_storage, storage
+from b3_pipeline import storage
+
+from . import us_lifecycle as lifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -88,19 +90,28 @@ def fetch_directory() -> pd.DataFrame:
     return parse_directory(r.text)
 
 
-def _live_symbols(conn) -> pd.DataFrame:
-    return storage.read_sql(
-        "SELECT symbol, first_seen, last_seen FROM instruments"
-        " WHERE market = ? AND delisting_date IS NULL", conn, params=[MARKET])
+def _known(conn) -> dict:
+    """Every US instrument the plane holds, live or not, as `{symbol: row}`.
+
+    Not just the live ones. Reading only those is what made a delisted symbol
+    that reappeared look like a first sighting: its real `first_seen` was never
+    read, and its delisting never cleared.
+    """
+    df = storage.read_sql(
+        "SELECT symbol, first_seen, last_seen, delisting_date, delist_reason"
+        " FROM instruments WHERE market = ?", conn, params=[MARKET])
+    return {r["symbol"]: r for r in df.to_dict("records")}
 
 
 def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
     """Fold one day's directory into `instruments`.
 
-    Present today: alive, `last_seen` moved to today, `first_seen` set on the
-    first sighting. Test issues are recorded but flagged, never silently dropped
-    — a symbol that vanishes from the file because it was a test issue and a
-    symbol that vanishes because it delisted must not look the same later.
+    Present today: alive, `last_seen` moved to today, `first_seen` kept from the
+    first sighting — and, if this directory had recorded the symbol delisted,
+    revived (`us_lifecycle.observe_present`). Test issues are recorded but
+    flagged, never silently dropped — a symbol that vanishes from the file
+    because it was a test issue and a symbol that vanishes because it delisted
+    must not look the same later.
 
     Previously alive and absent today: delisted, dated at the last day it *was*
     seen rather than today, because that is the last day the plane can prove it
@@ -108,7 +119,7 @@ def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
 
     Refuses an implausibly small snapshot rather than delisting the market.
 
-    Both writes are narrow on purpose: `upsert_instruments` touches only the
+    Every write is narrow on purpose: `upsert_instruments` touches only the
     columns it is handed, so this job never restates the CIK the SEC ingest
     owns or the listing interval the listing-status feed owns.
     """
@@ -119,35 +130,26 @@ def apply_snapshot(conn, snapshot: pd.DataFrame, as_of) -> dict:
             "download rather than a market-wide delisting. Nothing was written.")
 
     as_of = pd.Timestamp(as_of).date()
-    known = _live_symbols(conn)
-    first_seen = dict(zip(known["symbol"], known["first_seen"])) if not known.empty else {}
+    known = _known(conn)
+    present = [{
+        "market": MARKET, "symbol": r["symbol"], "currency": "USD",
+        "name": r["name"], "venue": r["venue"],
+        "kind": "ETF" if r["is_etf"] else "EQUITY",
+        "is_test_issue": int(r["is_test"]),
+        **lifecycle.observe_present(known.get(r["symbol"]), as_of),
+    } for r in snapshot.to_dict("records")]
+    revived = sum("delisting_date" in row for row in present)
 
-    present = pd.DataFrame({
-        "market": MARKET,
-        "symbol": snapshot["symbol"],
-        "name": snapshot["name"],
-        "venue": snapshot["venue"],
-        "currency": "USD",
-        "kind": snapshot["is_etf"].map({True: "ETF", False: "EQUITY"}),
-        "is_test_issue": snapshot["is_test"].astype(int),
-        "first_seen": [first_seen.get(s) or as_of for s in snapshot["symbol"]],
-        "last_seen": as_of,
-    })
-    market_storage.upsert_instruments(conn, present)
-
-    gone = set(known["symbol"]) - set(snapshot["symbol"]) if not known.empty else set()
-    if gone:
-        rows = known[known["symbol"].isin(gone)]
-        market_storage.upsert_instruments(conn, pd.DataFrame({
-            "market": MARKET,
-            "symbol": rows["symbol"],
-            "currency": "USD",
-            # The last day the plane can prove it traded, not today.
-            "delisting_date": rows["last_seen"],
-            "delist_reason": "absent from the consolidated symbol directory",
-        }))
-    logger.info(f"{as_of}: {len(present):,} listed, {len(gone):,} newly delisted")
-    return {"listed": len(present), "delisted": len(gone), "as_of": str(as_of)}
+    listed = set(snapshot["symbol"])
+    absent = {s: lifecycle.observe_absent(prior)
+              for s, prior in known.items() if s not in listed}
+    gone = [{"market": MARKET, "symbol": s, "currency": "USD", **change}
+            for s, change in absent.items() if change]
+    lifecycle.write(conn, present + gone)
+    logger.info(f"{as_of}: {len(present):,} listed, {len(gone):,} newly delisted, "
+                f"{revived:,} revived")
+    return {"listed": len(present), "delisted": len(gone), "revived": revived,
+            "as_of": str(as_of)}
 
 
 def run_pipeline(db_path=None, as_of=None) -> dict:

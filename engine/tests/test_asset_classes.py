@@ -176,7 +176,7 @@ def test_a_fii_write_off_lands_on_the_fii_line():
     ledger = _b3_ledger()
     positions = {"HGLG11": {"cost_basis": 1_000.0, "current_value": 0.0},
                  "PETR4": {"cost_basis": 30_000.0, "current_value": 32_000.0}}
-    ledger.realise_write_offs(positions)
+    ledger.realise_write_offs(positions, pd.Timestamp("2024-01-31"))
     assert "HGLG11" not in positions
     ledger.accrue(pd.Timestamp("2024-01-31"), {"PETR4": 32_000.0}, positions)
     assert ledger.close() == pytest.approx(0.15 * 2_000.0)
@@ -194,10 +194,11 @@ def test_simultaneous_write_offs_book_as_one_sum(market, names):
     ledger = tax.market_ledger(s["tax_rate"], s["monthly_sales_exemption"],
                                s["tax_period"], s["loss_carry"], s["asset_classes"])
     line = next(iter(ledger.rules))
-    ledger.realise_write_offs({"OLD": {"cost_basis": 0.1, "current_value": 0.0}})
+    when = pd.Timestamp("2024-01-31")
+    ledger.realise_write_offs({"OLD": {"cost_basis": 0.1, "current_value": 0.0}}, when)
     positions = {names[0]: {"cost_basis": 0.2, "current_value": 0.0},
                  names[1]: {"cost_basis": 0.3, "current_value": 0.0}}
-    ledger.realise_write_offs(positions)
+    ledger.realise_write_offs(positions, when)
     assert positions == {}
     assert (0.1 + 0.2) + 0.3 != 0.1 + (0.2 + 0.3)     # the case is a real one
     assert ledger._totals[line][2] == 0.1 + (0.2 + 0.3)

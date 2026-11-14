@@ -167,6 +167,12 @@ class Ledger:
     closes. `accrue` returns the bill for the period that just ended, which is
     zero on every row but the first of a new period.
 
+    Every booking rolls the period first (`_roll`), so a write-off on the first
+    row of a month lands in that month — it used to land in the one before,
+    because `accrue` was the only thing that rolled and it runs after the
+    write-offs. A roll outside `accrue` (a write-off on a hold row) settles the
+    closed period into `_due`, and the next payment collects it.
+
     One `Rule` is one line for every sale (US, crypto, the pre-tax book). A dict
     of rules is a market apurated per asset class, with `classify` naming the
     line each column's sales land on — B3, through `market_ledger`. All lines
@@ -183,6 +189,7 @@ class Ledger:
         self._pool = {name: r.pool or name for name, r in self.rules.items()}
         self._carry = dict.fromkeys(self._pool.values(), 0.0)
         self._open = None
+        self._due = 0.0         # settled, not yet paid
         self._reset()
 
     def _reset(self) -> None:
@@ -194,14 +201,23 @@ class Ledger:
         """The prejuízo a compensar, across every loss pool."""
         return sum(self._carry.values())
 
-    def realise_write_offs(self, positions: dict) -> None:
-        """Drop wiped-out positions and book the loss in the open period.
+    def _roll(self, when) -> None:
+        """Open the period `when` falls in, settling the one it leaves."""
+        key = self._key(when)
+        if self._open is not None and key != self._open:
+            self._due += self._settle()
+        self._open = key
+
+    def realise_write_offs(self, positions: dict, when) -> None:
+        """Drop wiped-out positions and book the loss in `when`'s period.
 
         Into the period, not straight into the carry. A write-off is a loss
         realised on a date, so it nets against gains in the same period even for
         a class that carries nothing forward — which is what `monthly_apuracao`
         does, and what the old code (which added it to the carry regardless)
         gave crypto for free. On the line of the class that was written off.
+        With nothing to write off the period is left alone: a hold row only
+        touches the ledger when a position died on it.
         """
         # Grouped by line, and booked as each group's one sum: on a single-line
         # ledger that is exactly the old L + (a + b), not (L + a) + b — float
@@ -210,16 +226,15 @@ class Ledger:
         dead: dict = {}
         for t in [t for t, p in positions.items() if p["current_value"] == 0]:
             dead.setdefault(self._classify(t), {})[t] = positions.pop(t)
+        if dead:
+            self._roll(when)
         for name, group in dead.items():
             self._totals[name][2] += universe.realise_write_offs(group)
 
     def accrue(self, when, sales: dict, positions: dict) -> float:
         """Book one rebalance. Returns the tax now due for the previous period."""
-        key = self._key(when)
-        due = 0.0
-        if self._open is not None and key != self._open:
-            due = self._settle()
-        self._open = key
+        self._roll(when)
+        due, self._due = self._due, 0.0
 
         by_line: dict = {}
         for t, amount in sales.items():
@@ -232,7 +247,8 @@ class Ledger:
 
     def close(self) -> float:
         """Settle whatever period is still open. The end of the run."""
-        return self._settle() if self._open is not None else 0.0
+        due, self._due = self._due, 0.0
+        return due + self._settle() if self._open is not None else due
 
     def _line(self, name: str) -> tuple:
         """(pnl, isento gain) of one line in the closing period — taxcore `_linha`.

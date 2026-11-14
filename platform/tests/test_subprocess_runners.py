@@ -294,8 +294,12 @@ SHELLED_MODULES = {"load_b3", "irpf_2026", "tlh_plan"}
 # irpf_proventos out of irpf_2026 when both hit the quality gate's size ratchet;
 # ativos_b3 (ticker classes), realizacao (the shared preço médio walk) and
 # relatorio_rv (the Renda Variável section) likewise, for irpf_2026 and tlh_plan.
+# preco_medio (the one position walk load_b3 and realizacao share), renda_fixa (the
+# RF label table and contract walk load_b3 and irpf_2026 share) and tlh_decisao
+# (tlh_plan's verdict, read off monthly_apuracao) came out of the same ratchet.
 IMPORTED_MODULES = {"_common", "apuracao", "b3_rules", "b3_options", "irpf_proventos",
-                    "ativos_b3", "realizacao", "relatorio_rv"}
+                    "ativos_b3", "realizacao", "relatorio_rv", "preco_medio",
+                    "renda_fixa", "tlh_decisao"}
 
 
 def test_seed_workspace_copies_only_what_the_shelled_modules_import(tmp_path):

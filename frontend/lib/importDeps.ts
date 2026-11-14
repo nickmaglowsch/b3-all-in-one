@@ -7,7 +7,10 @@
 // An exclusion list rather than an inclusion one: a new book-scoped query is
 // refreshed by default, which is the safe way for this to be wrong.
 //
-// Pure and import-free, because `npm test` runs this file through `node --test`.
+// Pure, and imports only ./jobStatus.ts, because `npm test` runs this file
+// through `node --test`.
+
+import { isBusy } from "./jobStatus.ts";
 
 /** Query keys (their first segment) whose data does not come from the extracts:
  *  the login, the catalogues baked into the image, backtests of the platform's
@@ -34,14 +37,11 @@ export function dependsOnImports(queryKey: readonly unknown[]): boolean {
   return !NOT_FROM_IMPORTS.has(String(queryKey[0]));
 }
 
-export const isBusyImport = (status: string) =>
-  status === "pending" || status === "processing" || status === "running";
-
 /** Each import's id → whether it was still being processed. */
 export type ImportSnapshot = Map<string, boolean>;
 
 export function snapshotImports(rows: { id: string; status: string }[]): ImportSnapshot {
-  return new Map(rows.map((r) => [r.id, isBusyImport(r.status)]));
+  return new Map(rows.map((r) => [r.id, isBusy(r.status)]));
 }
 
 /**
@@ -55,5 +55,5 @@ export function importsSettledSince(
   rows: { id: string; status: string }[],
 ): boolean {
   if (prev === null) return false;
-  return rows.some((r) => !isBusyImport(r.status) && prev.get(r.id) !== false);
+  return rows.some((r) => !isBusy(r.status) && prev.get(r.id) !== false);
 }

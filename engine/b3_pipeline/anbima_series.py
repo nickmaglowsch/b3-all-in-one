@@ -46,7 +46,7 @@ import pandas as pd
 import requests
 
 from . import storage
-from .external_prices import BackfillResult, FetchFailed, _num, level_rows
+from .external_prices import BackfillResult, FetchFailed, _num, level_rows, store_result
 
 logger = logging.getLogger(__name__)
 
@@ -162,11 +162,13 @@ def fetch_day(day: datetime.date, p2: bool = False) -> pd.DataFrame:
 
 def backfill(days, p2: bool = False, pause: float = REQUEST_PAUSE_S) -> BackfillResult:
     """`days` in `external_prices` shape, surviving the ones that fail — up to
-    GIVE_UP_AFTER in a row, where it raises GaveUp with what it has."""
-    frames, failed, streak = [], {}, 0
+    GIVE_UP_AFTER in a row, where it raises GaveUp with what it has. Either way
+    the result says which days were asked: after a trip, not all of them."""
+    frames, failed, attempted, streak = [], {}, [], 0
     for i, day in enumerate(days):
         if i and pause:
             time.sleep(pause)
+        attempted.append(day)
         try:
             df = fetch_day(day, p2)
         except FetchFailed as e:
@@ -176,22 +178,22 @@ def backfill(days, p2: bool = False, pause: float = REQUEST_PAUSE_S) -> Backfill
             if streak >= GIVE_UP_AFTER:
                 raise GaveUp(f"ANBIMA failed {streak} requests in a row, last for "
                              f"{day}; stopping this run",
-                             _result(frames, failed, p2)) from e
+                             _result(frames, failed, attempted, p2)) from e
             continue
         streak = 0
         if not df.empty:
             frames.append(df)
-    return _result(frames, failed, p2)
+    return _result(frames, failed, attempted, p2)
 
 
-def _result(frames: list, failed: dict, p2: bool) -> BackfillResult:
+def _result(frames: list, failed: dict, attempted: list, p2: bool) -> BackfillResult:
     if not frames:
-        return BackfillResult(pd.DataFrame(), failed)
+        return BackfillResult(pd.DataFrame(), failed, frozenset(attempted))
     df = pd.concat(frames, ignore_index=True)
     return BackfillResult(
         level_rows(df["ticker"].to_numpy(), df["date"].to_numpy(),
                    df["close"].to_numpy(), SOURCE_P2 if p2 else SOURCE_IMA),
-        failed)
+        failed, frozenset(attempted))
 
 
 def weekdays(start: datetime.date, end: datetime.date) -> list[datetime.date]:
@@ -247,24 +249,15 @@ def _ingest_ima(conn, today: datetime.date) -> None:
             result = backfill(chunk)
         except GaveUp as e:
             # Store and record what the chunk got before the breaker tripped,
-            # then stop: the caller logs it as this step's failure.
+            # then stop: the caller logs it as this step's failure. The days it
+            # never reached were not asked, so their debt stays on the books.
             result, gave_up = e.result, e
-        _store(conn, chunk, result, pending)
+        store_result(conn, SOURCE_IMA, result, pending)
         failed += len(result.failed)
         if gave_up:
             raise gave_up
     if failed:
         logger.warning(f"{failed} ANBIMA day(s) failed and are queued for retry")
-
-
-def _store(conn, chunk, result: BackfillResult, pending: set) -> None:
-    if not result.rows.empty:
-        storage.upsert_external_prices(conn, result.rows)
-    for day in chunk:
-        if day in result.failed:
-            storage.record_external_failure(conn, SOURCE_IMA, day, result.failed[day])
-        elif day in pending:
-            storage.clear_external_failure(conn, SOURCE_IMA, day)
 
 
 def _ingest_p2(conn, today: datetime.date) -> None:

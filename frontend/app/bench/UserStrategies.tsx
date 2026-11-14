@@ -5,60 +5,56 @@
 // "Backtest" only selects it in the run panel above — the existing RunPanel path
 // runs it unchanged.
 import { useState } from "react";
-import type { Strategy, UserStrategy } from "@/lib/types";
 import { errorText } from "@/lib/api";
 import { useDeleteUserStrategy, useUserStrategies } from "@/lib/strategies";
+import { CLOSED, cloneOf, editingOf, type FormMode } from "@/lib/strategyFormMode";
+import type { RowState } from "@/lib/rowConfirm";
+import { useRowConfirm } from "@/lib/useRowConfirm";
 import { Card } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { StrategyForm } from "./StrategyForm";
 import { OriginBadge, RuleBadge } from "./StrategyGallery";
 
+// The form's mode is BenchPage's (lib/strategyFormMode.ts): Clonar lives in a
+// sibling, and one value is what keeps "editing X" and "cloned from Y" from both
+// being true.
 export function UserStrategies({
   onBacktest,
-  cloneFrom,
-  onConsumeClone,
+  mode,
+  setMode,
 }: {
   onBacktest: (name: string) => void;
-  cloneFrom: Strategy | null;
-  onConsumeClone: () => void;
+  mode: FormMode;
+  setMode: (m: FormMode) => void;
 }) {
   const { data, isLoading } = useUserStrategies();
   const del = useDeleteUserStrategy();
   const rows = (data ?? []).filter((s) => s.kind === "rank_and_hold");
 
-  const [openLocal, setOpenLocal] = useState(false);
-  const [editing, setEditing] = useState<UserStrategy | null>(null);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const confirm = useRowConfirm(del);
   const [warnings, setWarnings] = useState<string[]>([]);
 
-  // Clonar comes from the gallery (a sibling), and the parent already holds that
-  // choice in `cloneFrom`. So the form's open state is DERIVED from it rather
-  // than copied into local state by an effect: mirroring a prop into state means
-  // two sources of truth for one fact, a render with the stale one, and a
-  // cascade to reconcile them. Whoever closes the form clears the parent's copy.
-  const clone = cloneFrom;
-  const open = openLocal || clone !== null;
-
-  function close() {
-    setOpenLocal(false);
-    setEditing(null);
-    onConsumeClone();
-  }
+  const open = (m: FormMode) => {
+    setWarnings([]);
+    setMode(m);
+  };
 
   const delMsg = del.error ? errorText(del.error, "Falha ao excluir.") : null;
 
-  if (open) {
+  if (mode.kind !== "closed") {
+    const editing = editingOf(mode);
+    const clone = cloneOf(mode);
     return (
       <Card title={editing ? "Editar estratégia" : "Nova estratégia"}>
         <StrategyForm
           key={editing?.id ?? clone?.name ?? "new"}
           editing={editing}
           clone={clone}
-          onClose={close}
+          onClose={() => setMode(CLOSED)}
           onSaved={(w) => {
             setWarnings(w);
-            close();
+            setMode(CLOSED);
           }}
         />
       </Card>
@@ -71,11 +67,7 @@ export function UserStrategies({
       action={
         <button
           type="button"
-          onClick={() => {
-            setEditing(null);
-            setWarnings([]);
-            setOpenLocal(true);
-          }}
+          onClick={() => open({ kind: "new" })}
           className="rounded-md bg-navy px-3 py-1.5 text-xs font-semibold text-white hover:bg-navy/90"
         >
           Nova estratégia
@@ -128,40 +120,14 @@ export function UserStrategies({
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5">
                   <RowBtn onClick={() => onBacktest(s.name)}>Backtest</RowBtn>
-                  <RowBtn
-                    onClick={() => {
-                      // No clone to clear: when cloneFrom is set the form is
-                      // already open, so this list is not on screen.
-                      setEditing(s);
-                      setWarnings([]);
-                      setOpenLocal(true);
-                    }}
-                  >
-                    Editar
-                  </RowBtn>
-                  {confirmId === s.id ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          del.mutate(s.id, { onSettled: () => setConfirmId(null) })
-                        }
-                        disabled={del.isPending}
-                        className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
-                      >
-                        Confirmar
-                      </button>
-                      <RowBtn onClick={() => setConfirmId(null)}>Não</RowBtn>
-                    </>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmId(s.id)}
-                      className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-muted hover:text-loss"
-                    >
-                      Excluir
-                    </button>
-                  )}
+                  <RowBtn onClick={() => open({ kind: "edit", s })}>Editar</RowBtn>
+                  <DeleteControls
+                    state={confirm.stateOf(s.id)}
+                    locked={confirm.busy}
+                    onArm={() => confirm.arm(s.id)}
+                    onCancel={confirm.cancel}
+                    onConfirm={() => confirm.confirm(s.id)}
+                  />
                 </div>
               </div>
             </li>
@@ -169,6 +135,46 @@ export function UserStrategies({
         </ul>
       )}
     </Card>
+  );
+}
+
+function DeleteControls({
+  state,
+  locked,
+  onArm,
+  onCancel,
+  onConfirm,
+}: {
+  state: RowState;
+  locked: boolean;
+  onArm: () => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (state === "idle") {
+    return (
+      <button
+        type="button"
+        onClick={onArm}
+        disabled={locked}
+        className="rounded-md border border-hairline bg-paper px-2 py-1 text-xs font-medium text-muted hover:text-loss disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        Excluir
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onConfirm}
+        disabled={state === "busy"}
+        className="rounded-md border border-loss/40 bg-paper px-2 py-1 text-xs font-medium text-loss hover:bg-loss/10 disabled:opacity-60"
+      >
+        Confirmar
+      </button>
+      <RowBtn onClick={onCancel}>Não</RowBtn>
+    </>
   );
 }
 

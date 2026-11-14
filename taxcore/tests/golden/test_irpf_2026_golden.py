@@ -44,7 +44,7 @@ def test_json_apuracao_agrees_with_the_markdown_it_renders(tmp_path):
     assert [d["month"] for d in payload["darf"]] == list(range(1, 13))
     assert sum(d["imposto"] for d in payload["darf"]) == pytest.approx(
         sum(r["ir"] for r in payload["apuracao"]))
-    assert set(payload["avisos"]) == {"descoberto", "fii_presumido", "carry_inicial"}
+    assert set(payload["avisos"]) == {"descoberto", "orfaos", "fii_presumido", "carry_inicial"}
 
     def total(classe):
         return sum(r["ir"] for r in payload["apuracao"] if r["classe"] == classe)

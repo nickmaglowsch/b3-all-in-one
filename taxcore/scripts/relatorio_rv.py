@@ -21,6 +21,12 @@ def avisos(rv: dict, tl) -> dict:
                         "qty": float(d["descoberto"]),
                         "valor": float(d["descoberto"] * d["sell_price"])}
                        for _, d in desc.iterrows()],
+        # A split or bonus credited to a position the history shows as flat, or
+        # a debit of more than it shows as held: booked so the quantity matches
+        # custody, at a cost (zero, for a split) only the missing history could
+        # confirm.
+        "orfaos": [{"date": o["date"].date().isoformat(), "ticker": o["ticker"],
+                    "qty": o["qty"]} for o in rv.get("orfaos", [])],
         "fii_presumido": sorted({t for t in tl["ticker"].astype(str) if fii_presumido(t)}),
         "carry_inicial": rv["carry_inicial"],
     }
@@ -91,6 +97,16 @@ def _avisos(w, av: dict) -> None:
         w("|---|---|---|---|")
         for d in av["descoberto"]:
             w(f"| {d['date']} | {d['ticker']} | {d['qty']:g} | R$ {d['valor']:,.2f} |")
+    if av["orfaos"]:
+        w("\n⚠ **Eventos sem posição que os explique** — desdobro, bonificação ou "
+          "grupamento sobre uma posição que o histórico importado mostra zerada, "
+          "ou débito maior que ela. A quantidade foi lançada para bater com a "
+          "custódia, mas o custo depende do histórico que falta. Complete o "
+          "histórico antes de declarar.\n")
+        w("| Data | Ticker | Qtde |")
+        w("|---|---|---|")
+        for o in av["orfaos"]:
+            w(f"| {o['date']} | {o['ticker']} | {o['qty']:g} |")
     if av["fii_presumido"]:
         w(f"\n⚠ **Classificação presumida**: {', '.join(av['fii_presumido'])} terminam em "
           f"11 e não estão nas listas de ETFs, units ou FIIs conhecidos "

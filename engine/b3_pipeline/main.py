@@ -187,19 +187,11 @@ def run_pipeline(
                 f"Fetching {len(fetch)} external price day(s) up to {today} "
                 f"({len(stored)} already stored, {len(retries)} retried)")
 
+            # Record what broke, store the rows, then forget what was paid — in
+            # that order, or a run killed mid-write loses a failure that only
+            # the ledger remembers (see store_result).
             result = external_prices.backfill(fetch)
-            if not result.rows.empty:
-                storage.upsert_external_prices(conn, result.rows)
-
-            # Record what broke and forget what did not. A day that answered —
-            # with rows or with an empty holiday file — is settled either way;
-            # only a day B3 refused to answer stays on the books.
-            for day in fetch:
-                if day in result.failed:
-                    storage.record_external_failure(
-                        conn, source, day, result.failed[day])
-                elif day in pending:
-                    storage.clear_external_failure(conn, source, day)
+            external_prices.store_result(conn, source, result, pending)
 
             if result.failed:
                 logger.warning(
@@ -224,9 +216,10 @@ def run_pipeline(
                 logger.info(f"Fetching data for {len(ticker_roots)} company codes")
 
                 ticker_to_isin = storage.get_ticker_isin_map(conn)
+                paid: dict = {}
                 corporate_actions, stock_actions, skipped_events = (
                     b3_corporate_actions.fetch_all_corporate_actions(
-                        ticker_roots, ticker_to_isin, conn=conn
+                        ticker_roots, ticker_to_isin, conn=conn, fetched=paid
                     )
                 )
 
@@ -241,6 +234,9 @@ def run_pipeline(
                     logger.info(
                         f"Stored {len(skipped_events)} skipped events for manual review"
                     )
+                # Stored, so this run's fetches may now pay what earlier runs
+                # owed — and step 9b retries only what failed tonight.
+                _resolve_paid(conn, paid)
         else:
             logger.info("")
             logger.info("Step 6/9: Skipping corporate actions fetch...")
@@ -350,28 +346,39 @@ def _run_update_cnpj_map() -> None:
 
 
 def _retry_failures(conn, failures: list, nested: bool = False) -> None:
-    """Re-fetch each recorded failure; resolve and store the ones that now answer.
+    """Re-fetch each company with a recorded failure; store what now answers,
+    then resolve what that store paid — in that order, or a store that raises
+    leaves a company marked fetched with nothing written. One refetch per
+    company, however many of its endpoints are owed.
 
     `nested` is the run_pipeline step 9b flavour: indented, terser log lines.
     """
     ticker_to_isin = storage.get_ticker_isin_map(conn)
     indent = "  " if nested else ""
-    for failure in failures:
-        company_code = failure["company_code"]
+    for company_code in dict.fromkeys(f["company_code"] for f in failures):
         logger.info(f"{indent}Retrying {company_code}...")
         company_data = b3_corporate_actions.fetch_company_data(company_code, conn=conn)
         if company_data is None:
             logger.warning(f"  Retry still failed for {company_code}" if nested
                            else f"Retry failed for {company_code}")
             continue
-        storage.resolve_fetch_failure(conn, company_code, failure["endpoint"])
         if not nested:
             logger.info(f"Successfully fetched {company_code}")
-        _store_company_actions(conn, company_data, company_code, ticker_to_isin)
+        paid = _store_company_actions(conn, company_data, company_code, ticker_to_isin)
+        _resolve_paid(conn, {company_code: paid})
+
+
+def _resolve_paid(conn, paid: dict) -> None:
+    """Close the open failures that stored fetches have paid ({company: endpoints},
+    `b3_corporate_actions.paid_endpoints`). Only ever after the store."""
+    for f in storage.get_unresolved_failures(conn):
+        if f["endpoint"] in paid.get(f["company_code"], ()):
+            storage.resolve_fetch_failure(conn, f["company_code"], f["endpoint"])
 
 
 def _store_company_actions(conn, company_data: dict, company_code: str,
-                           ticker_to_isin: dict) -> None:
+                           ticker_to_isin: dict) -> tuple:
+    """Store one company's actions; return the ledger endpoints that paid."""
     stock_divs = company_data.get("stockDividends", [])
     if stock_divs:
         corp_df, stock_df, skipped_df = b3_corporate_actions.parse_stock_dividends(
@@ -386,16 +393,17 @@ def _store_company_actions(conn, company_data: dict, company_code: str,
 
     # Also fetch cash dividends for recovered companies
     full_trading_name = company_data.get("tradingName", "").strip()
+    cash_complete = True
     if full_trading_name:
-        cash_divs = b3_corporate_actions.fetch_cash_dividends_paginated(
-            full_trading_name
-        )
+        cash_divs, cash_complete = b3_corporate_actions.fetch_cash_dividends_paginated(
+            full_trading_name, conn=conn, company_code=company_code)
         if cash_divs:
             corp_df = b3_corporate_actions.parse_cash_dividends(
                 cash_divs, company_code, ticker_to_isin
             )
             if not corp_df.empty:
                 storage.upsert_corporate_actions(conn, corp_df)
+    return b3_corporate_actions.paid_endpoints(cash_complete)
 
 
 def retry_failed_companies() -> None:
@@ -437,18 +445,10 @@ Examples:
         """,
     )
 
-    arg_parser.add_argument(
-        "--rebuild",
-        action="store_true",
-        help="Drop and recreate database tables before processing",
-    )
-
-    arg_parser.add_argument(
-        "--year",
-        type=int,
-        default=None,
-        help="Process only the specified year",
-    )
+    arg_parser.add_argument("--rebuild", action="store_true",
+                            help="Drop and recreate database tables before processing")
+    arg_parser.add_argument("--year", type=int, default=None,
+                            help="Process only the specified year")
 
     arg_parser.add_argument(
         "--start-year",
@@ -491,12 +491,7 @@ Examples:
              "immutable and are never re-downloaded.",
     )
 
-    arg_parser.add_argument(
-        "--verbose",
-        "-v",
-        action="store_true",
-        help="Enable debug logging",
-    )
+    arg_parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
 
     args = arg_parser.parse_args()
 

@@ -1,10 +1,18 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useBrowserValue, useSubscription } from "@/lib/hooks";
 import { formatInstantDate } from "@/lib/format";
+import {
+  confirmView,
+  ESPERA_MS,
+  esperando,
+  IDLE,
+  vence,
+  type Confirm,
+} from "@/lib/checkoutConfirm";
 import {
   alternaModulo,
   AVULSOS,
@@ -12,7 +20,6 @@ import {
   BUNDLE,
   cartInicial,
   EMPRESARIAL,
-  mesmoConjunto,
   nadaAMudar,
   nomeDe,
   precoDoCarrinho,
@@ -22,14 +29,53 @@ import type { Subscription } from "@/lib/types";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { Card } from "@/components/ui/Card";
 
-// Stripe hands the browser back with ?checkout=ok|cancelado, and the paywall sends
-// ?ligar=<módulo>. Read them once on mount (no useSearchParams => no Suspense
-// boundary needed for a static route).
+// The paywall sends ?ligar=<módulo>. Read on mount (no useSearchParams => no
+// Suspense boundary needed for a static route).
 //
-// A browser value, not React state; the query string does not change under this
-// page.
+// A browser value, not React state; nothing on this page changes `ligar`.
 function useQueryParam(name: string) {
   return useBrowserValue(() => new URLSearchParams(window.location.search).get(name), null);
+}
+
+type Retorno = { outcome: string | null; at: number };
+
+const lerRetorno = (lido: { current: Retorno | null }) =>
+  (lido.current ??= {
+    outcome: new URLSearchParams(window.location.search).get("checkout"),
+    at: Date.now(),
+  });
+
+/** Stripe hands the browser back with ?checkout=ok|cancelado. Read once, then
+ *  dropped from the address bar: left there, a reload or a bookmark replays
+ *  "confirmando com o Stripe" over a subscription that settled long ago. The ref
+ *  holds that first read — with the param gone, reading the URL again on the next
+ *  render would answer null. `at` is when the page saw it: the start of the wait
+ *  for a checkout that came back "ok". */
+function useCheckoutReturn() {
+  const lido = useRef<Retorno | null>(null);
+  const retorno = useBrowserValue(() => lerRetorno(lido), null);
+  useEffect(() => {
+    // Read here too, so the drop below can never run before the first read.
+    lerRetorno(lido);
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("checkout")) return;
+    url.searchParams.delete("checkout");
+    window.history.replaceState(null, "", url);
+  }, []);
+  return retorno;
+}
+
+/** Waiting turns into timedOut on the clock, not on a render: this ticks once,
+ *  when the wait that started at `since` runs out. */
+function usePrazo(c: Confirm): Confirm {
+  const [agora, setAgora] = useState(0);
+  const since = c.kind === "waiting" ? c.since : null;
+  useEffect(() => {
+    if (since === null) return;
+    const t = setTimeout(() => setAgora(Date.now()), since + ESPERA_MS - Date.now());
+    return () => clearTimeout(t);
+  }, [since]);
+  return vence(c, agora);
 }
 
 function Aviso({ children, tone }: { children: string; tone?: "erro" }) {
@@ -46,17 +92,23 @@ function Aviso({ children, tone }: { children: string; tone?: "erro" }) {
 }
 
 function Avisos({
-  confirmando,
+  confirmacao,
   outcome,
   error,
 }: {
-  confirmando: boolean;
+  confirmacao: Confirm["kind"];
   outcome: string | null;
   error: unknown;
 }) {
   return (
     <>
-      {confirmando && <Aviso>Recebido — confirmando com o Stripe…</Aviso>}
+      {confirmacao === "waiting" && <Aviso>Recebido — confirmando com o Stripe…</Aviso>}
+      {confirmacao === "timedOut" && (
+        <Aviso>
+          O Stripe ainda não confirmou a mudança. Costuma levar segundos; às vezes demora
+          alguns minutos. Recarregue a página daqui a pouco para ver o que você assina.
+        </Aviso>
+      )}
       {outcome === "cancelado" && <Aviso>Checkout cancelado. Nada foi cobrado.</Aviso>}
       {error && (
         <Aviso tone="erro">
@@ -190,14 +242,14 @@ const destino = (cart: string[], changeable?: boolean) =>
     ? { path: "/billing/modules", method: "PUT" as const, modules: cart }
     : { path: "/billing/checkout", modules: cart };
 
-/** O conjunto cobrado contra o qual a mudança foi enviada: [] voltando do
- *  checkout, o carrinho atual depois de alterar a assinatura viva. Só o webhook
- *  escreve entitlement, então a tela espera o cobrado sair desse conjunto. */
-const esperandoPor = (enviado: string[] | null, outcome: string | null) =>
-  enviado ?? (outcome === "ok" ? [] : null);
+/** Voltando do checkout com "ok", a espera é pelo cobrado sair de [], e começa
+ *  quando a página leu o retorno. */
+const doRetorno = (r: Retorno | null): Confirm =>
+  r?.outcome === "ok" ? esperando([], r.at) : IDLE;
 
-const aindaEsperando = (esperando: string[] | null, billed?: string[]) =>
-  !!esperando && mesmoConjunto(billed ?? [], esperando);
+/** `from` é o cobrado no momento do clique, levado nas variáveis da mutação: lido
+ *  no onSuccess, seria o do render em que a resposta chegou. */
+type Envio = { path: string; method?: "PUT"; modules?: string[]; from: string[] };
 
 function Portal({ sub, onClick, pending }: { sub?: Subscription; onClick: () => void; pending: boolean }) {
   if (!sub?.manageable) return null;
@@ -243,12 +295,13 @@ function Assinar({
 }
 
 export default function AssinaturaPage() {
-  const outcome = useQueryParam("checkout");
+  const retorno = useCheckoutReturn();
   const ligar = useQueryParam("ligar");
 
-  const [enviadoSobre, setEnviadoSobre] = useState<string[] | null>(null);
-  const esperando = esperandoPor(enviadoSobre, outcome);
-  const sub = useSubscription(esperando);
+  // Uma mudança enviada daqui manda; sem ela, o que o retorno do checkout diz.
+  const [enviado, setEnviado] = useState<Confirm | null>(null);
+  const confirm = usePrazo(enviado ?? doRetorno(retorno));
+  const sub = useSubscription(confirm);
   const billed = sub.data?.billed_modules;
 
   // O carrinho parte do que já é cobrado — assinar de novo é "adicionar um
@@ -262,32 +315,45 @@ export default function AssinaturaPage() {
   // the modules of a live subscription happens server-side and answers
   // {changed}, and then we wait for the webhook like after a checkout.
   const go = useMutation({
-    mutationFn: (body: { path: string; method?: "PUT"; modules?: string[] }) =>
+    mutationFn: (body: Envio) =>
       api<{ url?: string; changed?: boolean }>(body.path, {
         method: body.method ?? "POST",
         body: body.modules ? JSON.stringify({ modules: body.modules }) : undefined,
       }),
-    onSuccess: (r) => {
+    onSuccess: (r, body) => {
       if (r.url) window.location.href = r.url;
-      else if (r.changed) setEnviadoSobre(billed ?? []);
+      else if (r.changed) setEnviado(esperando(body.from, Date.now()));
     },
   });
 
-
+  // A redirect to Stripe is under way from the moment the URL arrives until the
+  // page unloads; the buttons stay off for all of it, not just while the POST was
+  // in flight. Coming Back from Stripe can restore this page from the bfcache
+  // with that state intact, so a restored page forgets the redirect.
+  const saindo = !!go.data?.url;
+  const ocupado = go.isPending || saindo;
+  const { reset } = go;
+  useEffect(() => {
+    const voltou = (e: PageTransitionEvent) => {
+      if (e.persisted) reset();
+    };
+    window.addEventListener("pageshow", voltou);
+    return () => window.removeEventListener("pageshow", voltou);
+  }, [reset]);
 
   return (
     <>
       <PageHeader title="Assinatura" eyebrow="Conta">
         <Portal
           sub={sub.data}
-          pending={go.isPending}
-          onClick={() => go.mutate({ path: "/billing/portal" })}
+          pending={ocupado}
+          onClick={() => go.mutate({ path: "/billing/portal", from: billed ?? [] })}
         />
       </PageHeader>
 
       <Avisos
-        confirmando={aindaEsperando(esperando, billed)}
-        outcome={outcome}
+        confirmacao={confirmView(confirm, billed)}
+        outcome={retorno?.outcome ?? null}
         error={go.error}
       />
       <Ligados sub={sub.data} />
@@ -296,8 +362,10 @@ export default function AssinaturaPage() {
         cart={cart}
         igual={nadaAMudar(cart, sub.data)}
         alterar={!!sub.data?.changeable}
-        pending={go.isPending}
-        onClick={() => go.mutate(destino(cart, sub.data?.changeable))}
+        pending={ocupado}
+        onClick={() =>
+          go.mutate({ ...destino(cart, sub.data?.changeable), from: billed ?? [] })
+        }
       />
     </>
   );

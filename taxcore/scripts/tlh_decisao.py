@@ -172,6 +172,8 @@ def dentro_da_isencao(losers: pd.DataFrame, folga: float) -> pd.DataFrame:
     reais of ações gross — the room left under the isenção limit."""
     linhas = []
     for _, r in losers.iterrows():
+        if not r["price"] > 0:
+            continue  # a suspended ticker printed at R$0: no sale to size
         qty = min(float(r["qty"]), float(math.floor(max(folga, 0.0) / r["price"])))
         if qty < 1:
             continue

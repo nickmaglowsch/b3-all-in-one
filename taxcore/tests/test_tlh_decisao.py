@@ -167,3 +167,18 @@ def test_an_isento_month_harvests_only_what_fits_under_the_limit():
     assert d["final_gross"] == pytest.approx(15_000.0 + 53 * 25.0)
     assert d["final_gross"] <= 20_000.0
     assert d["ir"] == pytest.approx(25.0 * 0.15)
+
+
+def test_a_loser_priced_zero_never_breaks_the_capped_retry():
+    """A suspended ticker printed at R$0 in the snapshot is still a "loser"; the
+    retry that sizes losers to the room under the limit must skip it, not divide
+    by its price — the platform's tax-summary refresh runs this path."""
+    d, plan = _decide(timeline(NADA), [
+        {"cls": "AÇÃO", "sell_value": 15_000.0, "pnl": 3_000.0},
+        {"cls": "BDR", "sell_value": 5_000.0, "pnl": 1_000.0}],
+        losers(("VALE3", 400, 30.0, 27.5), ("OIBR3", 10, 1.0, 0.0)))
+    assert d["status"] is Status.SEM_CANDIDATOS
+    assert plan == []
+    from scripts.tlh_decisao import dentro_da_isencao
+    assert dentro_da_isencao(losers(("A", 10, 5.0, 0.0)), 100.0).empty
+    assert dentro_da_isencao(losers(("A", 10, 5.0, 4.0)), 0.0).empty

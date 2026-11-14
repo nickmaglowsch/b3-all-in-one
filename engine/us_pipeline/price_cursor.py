@@ -25,8 +25,9 @@ brought back from `dead` by hand — `UPDATE us_price_cursor SET status = 'retry
 attempts = 0 WHERE symbol = ...` — which is deliberate: the only way out of a
 terminal state should be a person deciding the vendor changed its mind.
 
-`attempts` is the length of the current failure streak — failures and empty
-answers since the last success — and is what the thresholds below count.
+`attempts` is the length of the current failure streak: attempts in a row that
+ended the same way (refused, empty, or failed otherwise) since the last success.
+The thresholds below count it; a different kind of failure starts it again.
 """
 
 import enum
@@ -94,11 +95,31 @@ def status_of(row) -> CursorStatus:
         return CursorStatus.OK
 
 
-def _streak(row) -> int:
+def _tag(outcome: Outcome) -> str:
+    return f"[{outcome.value}]"
+
+
+def _attempts(row) -> int:
+    """The stored failure count, whatever the failures were."""
     if row is None or status_of(row) is CursorStatus.OK:
         return 0
     value = row.get("attempts")
     return 0 if value is None or pd.isna(value) else int(value)
+
+
+def _streak(row, outcome: Outcome) -> int:
+    """How many attempts in a row ended the way this one did.
+
+    Per kind, not per failure: `dead` and `no_data` are verdicts about the
+    symbol, and only a run of the *same* answer earns one. Two throttles and a
+    BadRequest are not three refusals — a throttle is exactly when a misread
+    envelope is likely. The kind of the last failure rides at the front of the
+    stored error (`_tag`); a row without it, written before the tag existed,
+    starts a new streak, which errs towards retrying.
+    """
+    if row is None or not str(row.get("error") or "").startswith(_tag(outcome)):
+        return 0
+    return _attempts(row)
 
 
 def _failure_status(outcome: Outcome, attempts: int) -> CursorStatus:
@@ -122,11 +143,12 @@ def next_cursor(prior, symbol: str, outcome: Outcome, observed=None,
     if outcome in (Outcome.BARS, Outcome.ACTIONS):
         return {**row, "status": CursorStatus.OK.value, "attempts": 0,
                 "error": None}
-    attempts = _streak(prior) + 1
+    attempts = _streak(prior, outcome) + 1
     if outcome is Outcome.EMPTY and error is None:
         error = "the vendor returned no bars"
     return {**row, "status": _failure_status(outcome, attempts).value,
-            "attempts": attempts, "error": (error or "")[:500] or None}
+            "attempts": attempts,
+            "error": f"{_tag(outcome)} {error or ''}".rstrip()[:500]}
 
 
 # ── The scheduler ─────────────────────────────────────────────────────────────
@@ -254,7 +276,7 @@ def select_work(universe, cursor: pd.DataFrame, *, budget: int, today,
             buckets[work[0]].append(work[1])
 
     retry = sorted(buckets["retry"],
-                   key=lambda item: _streak(state.get(item[0])))
+                   key=lambda item: _attempts(state.get(item[0])))
     retry, fresh, stale_bars, stale_actions = us_seam.demote_bulk_priced(
         (retry, buckets["fresh"], buckets["stale_bars"],
          buckets["stale_actions"] + buckets["no_data"]), bulk_covered)

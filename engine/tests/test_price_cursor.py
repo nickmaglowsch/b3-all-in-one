@@ -176,3 +176,28 @@ def test_legacy_rows_schedule_as_before(status):
                         "actions_fetched_at": None})
     assert pc.select_work(["A"], cursor, budget=3, today=TODAY) == [
         ("A", True, True)]
+
+
+def test_only_a_run_of_the_same_answer_writes_a_symbol_off():
+    """Two throttles and a BadRequest are not three refusals: a throttle is when
+    a misread envelope is likeliest. Same for empties then a refusal."""
+    row = None
+    for outcome in (Outcome.FAILED, Outcome.FAILED, Outcome.BAD_REQUEST):
+        row = pc.next_cursor(row, "XYZ", outcome, error="boom")
+    assert (row["status"], row["attempts"]) == ("retry", 1)
+
+    row = None
+    for outcome in (Outcome.EMPTY, Outcome.EMPTY, Outcome.BAD_REQUEST):
+        row = pc.next_cursor(row, "XYZ", outcome)
+    assert (row["status"], row["attempts"]) == ("retry", 1)
+
+    for _ in range(2):
+        row = pc.next_cursor(row, "XYZ", Outcome.BAD_REQUEST, error="Invalid API call")
+    assert (row["status"], row["attempts"]) == ("dead", 3)
+    assert "Invalid API call" in row["error"]
+
+
+def test_a_row_from_before_the_tag_starts_a_new_streak():
+    old = {"status": "retry", "attempts": 2, "error": "Invalid API call"}
+    row = pc.next_cursor(old, "XYZ", Outcome.BAD_REQUEST, error="Invalid API call")
+    assert (row["status"], row["attempts"]) == ("retry", 1)

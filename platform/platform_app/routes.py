@@ -1254,6 +1254,13 @@ async def get_tax_summary(
     return await _tax_summary_payload(session, tid)
 
 
+async def _book_version(session: AsyncSession, tid: uuid.UUID) -> int | None:
+    """max(Trade.id): a full rebuild is delete+insert and ids come from a
+    sequence, so every rebuild moves it (to None for a book emptied). None =
+    no trades."""
+    return await session.scalar(select(func.max(Trade.id)).where(Trade.tenant_id == tid))
+
+
 # One apuração per tenant at a time. Each is a multi-second subprocess that
 # dumps the whole book to CSV while holding a pooled connection, and the button
 # that fires it sits on a page-load surface — two tabs, or a held-down click,
@@ -1268,10 +1275,8 @@ async def refresh_tax_summary(
     session: AsyncSession = Depends(get_async_session),
 ) -> dict:
     _user, tid = tenant
-    has_trades = await session.scalar(
-        select(func.count()).select_from(Trade).where(Trade.tenant_id == tid)
-    )
-    if not has_trades:
+    book = await _book_version(session, tid)
+    if book is None:
         # tlh_plan over an empty book has nothing to apurar. A 422 keeps this
         # consistent with /portfolio/index, whose 422 the frontend already reads
         # as "no history yet" rather than as a fault.
@@ -1290,6 +1295,15 @@ async def refresh_tax_summary(
         payload = await _run_tlh_plan(session, tid, [])
         payload["owed"] = _owed_today(payload)
 
+        # process_imports replaces the book and drops this row under the same
+        # lock, so a rebuild either landed before the check below or waits for
+        # this commit and then drops what it stored. Unlocked, one landing while
+        # tlh_plan ran was overwritten by a summary of the book it replaced.
+        await xact_lock(session, "imports", tid)
+        if await _book_version(session, tid) != book:
+            await session.rollback()
+            return {"payload": payload, "computed_at": started.isoformat(),
+                    "stale": True, "stale_reason": "import"}
         # Upsert, not read-modify-write: two refreshes racing on a tenant with no
         # cached row would both see None and both INSERT the same primary key.
         await session.execute(

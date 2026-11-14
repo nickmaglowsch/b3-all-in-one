@@ -46,7 +46,7 @@ import pandas as pd
 import requests
 
 from . import storage
-from .external_prices import BackfillResult, FetchFailed, _num, level_rows
+from .external_prices import BackfillResult, FetchFailed, _num, level_rows, store_result
 
 logger = logging.getLogger(__name__)
 
@@ -249,27 +249,15 @@ def _ingest_ima(conn, today: datetime.date) -> None:
             result = backfill(chunk)
         except GaveUp as e:
             # Store and record what the chunk got before the breaker tripped,
-            # then stop: the caller logs it as this step's failure.
+            # then stop: the caller logs it as this step's failure. The days it
+            # never reached were not asked, so their debt stays on the books.
             result, gave_up = e.result, e
-        _store(conn, chunk, result, pending)
+        store_result(conn, SOURCE_IMA, result, pending)
         failed += len(result.failed)
         if gave_up:
             raise gave_up
     if failed:
         logger.warning(f"{failed} ANBIMA day(s) failed and are queued for retry")
-
-
-def _store(conn, chunk, result: BackfillResult, pending: set) -> None:
-    """Rows, then the ledger. Only a day that was asked is settled: one the
-    breaker never reached is still owed, and if it is an old hole behind the
-    newest stored date the ledger is the only thing that remembers it."""
-    if not result.rows.empty:
-        storage.upsert_external_prices(conn, result.rows)
-    for day in chunk:
-        if day in result.failed:
-            storage.record_external_failure(conn, SOURCE_IMA, day, result.failed[day])
-        elif day in pending and day in result.attempted:
-            storage.clear_external_failure(conn, SOURCE_IMA, day)
 
 
 def _ingest_p2(conn, today: datetime.date) -> None:

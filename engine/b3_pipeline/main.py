@@ -187,19 +187,11 @@ def run_pipeline(
                 f"Fetching {len(fetch)} external price day(s) up to {today} "
                 f"({len(stored)} already stored, {len(retries)} retried)")
 
+            # Record what broke, store the rows, then forget what was paid — in
+            # that order, or a run killed mid-write loses a failure that only
+            # the ledger remembers (see store_result).
             result = external_prices.backfill(fetch)
-            if not result.rows.empty:
-                storage.upsert_external_prices(conn, result.rows)
-
-            # Record what broke and forget what did not. A day that answered —
-            # with rows or with an empty holiday file — is settled either way;
-            # only a day B3 refused to answer stays on the books.
-            for day in fetch:
-                if day in result.failed:
-                    storage.record_external_failure(
-                        conn, source, day, result.failed[day])
-                elif day in pending:
-                    storage.clear_external_failure(conn, source, day)
+            external_prices.store_result(conn, source, result, pending)
 
             if result.failed:
                 logger.warning(

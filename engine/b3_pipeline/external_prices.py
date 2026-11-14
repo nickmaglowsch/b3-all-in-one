@@ -28,7 +28,7 @@ from typing import NamedTuple
 import pandas as pd
 import requests
 
-from . import config
+from . import config, storage
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +260,24 @@ def backfill(days, tickers=None) -> BackfillResult:
         f"{out['ticker'].nunique()} tickers ({out['date'].min()} to {out['date'].max()})"
     )
     return BackfillResult(out, failed, frozenset(days))
+
+
+def store_result(conn, source: str, result: BackfillResult, pending: set) -> None:
+    """Write one fetch into `external_prices` and settle `source`'s failure ledger.
+
+    The order is the point. Failures go on the books first: once rows are stored
+    the next run resumes from them, and a failed day behind its window is owed
+    only in the ledger, so a run killed between the two writes must not have
+    written the rows alone. Debts are cleared last, once the rows that pay them
+    are in. A day that answered — with rows or an empty holiday file — is settled
+    either way; only a day that was asked (`attempted`) can be.
+    """
+    for day, error in result.failed.items():
+        storage.record_external_failure(conn, source, day, error)
+    if not result.rows.empty:
+        storage.upsert_external_prices(conn, result.rows)
+    for day in sorted((pending & result.attempted) - result.failed.keys()):
+        storage.clear_external_failure(conn, source, day)
 
 
 def demo() -> None:

@@ -317,15 +317,7 @@ def test_a_day_lost_to_an_outage_is_recovered_by_a_later_run(conn, monkeypatch):
                 _file_for(day), config.RENDA_FIXA_ETFS)
         monkeypatch.setattr(external_prices, "fetch_day", fake_fetch)
 
-        result = external_prices.backfill(fetch)
-        if not result.rows.empty:
-            storage.upsert_external_prices(conn, result.rows)
-        for day in fetch:
-            if day in result.failed:
-                storage.record_external_failure(
-                    conn, source, day, result.failed[day])
-            elif day in pending:
-                storage.clear_external_failure(conn, source, day)
+        external_prices.store_result(conn, source, external_prices.backfill(fetch), pending)
         return fetch, abandoned
 
     # Run 1: B3 unreachable. The day is owed, and recorded as owed.
@@ -342,3 +334,24 @@ def test_a_day_lost_to_an_outage_is_recovered_by_a_later_run(conn, monkeypatch):
     assert outage_day in storage.stored_external_dates(conn, start, source)
     assert storage.pending_external_failures(conn, source) == set(), \
         "the debt should be cleared once paid"
+
+
+def test_a_run_that_dies_writing_rows_has_already_recorded_what_failed(conn, monkeypatch):
+    """Failures go on the books before the rows do. Once rows are stored the next
+    run is no longer a first run, its window shrinks back to the heal window, and
+    a failed day older than that lives only in the ledger: a run killed between
+    the two writes used to lose it. And a debt is cleared only after the rows
+    that pay it are written, so the same crash cannot forget a paid-for day."""
+    source = external_prices.SOURCE
+    paid, broken = DAY, DAY - datetime.timedelta(days=1)
+    storage.record_external_failure(conn, source, paid, "earlier outage")
+    rows = external_prices.parse_file(_file_for(paid), config.RENDA_FIXA_ETFS)
+    result = external_prices.BackfillResult(rows, {broken: "timeout"},
+                                            frozenset({paid, broken}))
+
+    def killed(*_a, **_k):
+        raise RuntimeError("killed mid-write")
+    monkeypatch.setattr(storage, "upsert_external_prices", killed)
+    with pytest.raises(RuntimeError):
+        external_prices.store_result(conn, source, result, {paid})
+    assert storage.pending_external_failures(conn, source) == {paid, broken}

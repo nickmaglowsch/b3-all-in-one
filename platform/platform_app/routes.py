@@ -32,6 +32,7 @@ from platform_app.billing import (
 )
 from platform_app.config import settings
 from platform_app.db import get_async_session, get_engine_pool, xact_lock
+from platform_app.jobstatus import BACKTEST_INFLIGHT, BacktestStatus, ImportStatus
 from platform_app.models import (
     AssetClassOverride, BacktestRun, CashEvent, CostBasisOverride, DarfPayment,
     Import, IngestRun, Portfolio, PortfolioSleeve, Position, RebalanceSettings,
@@ -144,7 +145,7 @@ async def create_imports(
         pending.append((path, data))
         imp = Import(
             tenant_id=tid, filename=name, stored_path=str(path),
-            kind=_detect_kind(name), status="pending",
+            kind=_detect_kind(name), status=ImportStatus.PENDING,
         )
         session.add(imp)
         created.append(imp)
@@ -1641,7 +1642,7 @@ async def inflight_backtests(session: AsyncSession, user) -> int:
     managed = select(Portfolio.id).where(Portfolio.owner_id == user.id)
     return await session.scalar(
         select(func.count()).select_from(BacktestRun).where(
-            BacktestRun.status.in_(("pending", "running")),
+            BacktestRun.status.in_(BACKTEST_INFLIGHT),
             BacktestRun.created_at > func.now() - datetime.timedelta(days=1),
             (BacktestRun.tenant_id == user.id) | BacktestRun.tenant_id.in_(managed),
         )
@@ -1681,7 +1682,7 @@ async def create_backtest(
     if body.strategy not in known:
         raise HTTPException(404, f"unknown strategy: {body.strategy}")
     run = BacktestRun(
-        tenant_id=tid, strategy=body.strategy, status="pending",
+        tenant_id=tid, strategy=body.strategy, status=BacktestStatus.PENDING,
         # isoformat, not the date object: this column is JSONB, and the engine
         # reads start/end back as strings.
         params={"params": body.params or {},

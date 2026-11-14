@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from platform_app.db import Base
+from platform_app.jobstatus import BacktestStatus, ImportStatus, IngestStatus, check_sql
 from platform_app.mcp_models import McpToken  # noqa: F401  (registers the table)
 
 
@@ -92,14 +93,15 @@ def _tenant_col(index: bool = True) -> Mapped[uuid.UUID]:
 
 class Import(Base):
     __tablename__ = "imports"
-    __table_args__ = (Index("ix_imports_tenant_created", "tenant_id", "created_at"),)
+    __table_args__ = (Index("ix_imports_tenant_created", "tenant_id", "created_at"),
+                      CheckConstraint(check_sql(ImportStatus), name="ck_imports_status"))
 
     id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
     filename: Mapped[str] = mapped_column(String, nullable=False)
     stored_path: Mapped[str] = mapped_column(String, nullable=False)
     kind: Mapped[str] = mapped_column(String, nullable=False)  # negociacao|movimentacao|unknown
-    status: Mapped[str] = mapped_column(String, nullable=False, default="pending")
+    status: Mapped[str] = mapped_column(String, nullable=False, default=ImportStatus.PENDING)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     parser_version: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(
@@ -184,15 +186,14 @@ class BacktestRun(Base):
     __tablename__ = "backtest_runs"
     __table_args__ = (
         Index("ix_backtest_runs_tenant_created", "tenant_id", text("created_at DESC")),
+        CheckConstraint(check_sql(BacktestStatus), name="ck_backtest_runs_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
     tenant_id: Mapped[uuid.UUID] = _tenant_col(index=False)
     strategy: Mapped[str] = mapped_column(String, nullable=False)
     params: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    status: Mapped[str] = mapped_column(  # pending|running|done|error
-        String, nullable=False, default="pending"
-    )
+    status: Mapped[str] = mapped_column(String, nullable=False, default=BacktestStatus.PENDING)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     artifacts_path: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -200,8 +201,7 @@ class BacktestRun(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     finished_at: Mapped[datetime.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+        DateTime(timezone=True), nullable=True)
 
 
 class PortfolioSleeve(Base):
@@ -363,17 +363,17 @@ class IngestRun(Base):
     __table_args__ = (
         # The only read is "latest run per kind" (GET /market/status).
         Index("ix_ingest_runs_kind_started", "kind", text("started_at DESC")),
+        CheckConstraint(check_sql(IngestStatus), name="ck_ingest_runs_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
     kind: Mapped[str] = mapped_column(String, nullable=False)  # prices | fundamentals
-    status: Mapped[str] = mapped_column(String, nullable=False)  # running|done|error
+    status: Mapped[str] = mapped_column(String, nullable=False)
     started_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
     finished_at: Mapped[datetime.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+        DateTime(timezone=True), nullable=True)
     # Tail of the subprocess output on failure. Never returned to tenants — it
     # carries server paths (see the same reasoning in privacy._INTERNAL_COLUMNS).
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

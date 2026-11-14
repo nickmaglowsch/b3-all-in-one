@@ -12,13 +12,15 @@ module nobody imports is a cron that silently never fires.
 """
 
 import asyncio
-import datetime
 import re
 import sys
+
+from sqlalchemy import func
 
 from platform_app import enginerun
 from platform_app.config import settings
 from platform_app.db import async_session_maker
+from platform_app.jobstatus import IngestStatus, transition
 from platform_app.models import IngestRun
 from platform_app.tasks import app
 
@@ -63,7 +65,7 @@ async def _record_ingest(kind: str, args: list[str]) -> dict:
     ingest`.
     """
     async with async_session_maker() as session:
-        run = IngestRun(kind=kind, status="running")
+        run = IngestRun(kind=kind, status=IngestStatus.RUNNING)
         session.add(run)
         await session.commit()
         run_id = run.id
@@ -71,25 +73,25 @@ async def _record_ingest(kind: str, args: list[str]) -> dict:
     proc = await asyncio.to_thread(enginerun.run_module, args)
 
     if proc.returncode == 0:
-        status = "done"
+        status = IngestStatus.DONE
         output = f"{proc.stdout or ''}\n{proc.stderr or ''}"
         detail = "\n".join(
             ln for ln in output.splitlines() if _ERROR_LINE.search(ln))[-4000:]
     else:
-        status = "error"
+        status = IngestStatus.ERROR
         detail = (proc.stderr or proc.stdout)[-4000:]
+    # Compare-and-set from running, on the database's clock (started_at's): a row
+    # the next ingest worker's boot sweep already closed keeps that verdict.
     async with async_session_maker() as session:
-        row = await session.get(IngestRun, run_id)
-        row.finished_at = datetime.datetime.now(datetime.timezone.utc)
-        row.status = status
-        row.error = detail or None
+        await transition(session, IngestRun, IngestRun.id == run_id, (IngestStatus.RUNNING,),
+                         status=status, error=detail or None, finished_at=func.now())
         await session.commit()
 
     print(f"[ingest] {kind}: {status} (exit {proc.returncode}, ingest_runs {run_id})"
           + (f"\n{detail}" if detail else ""), file=sys.stderr, flush=True)
     if proc.returncode != 0:
         raise IngestFailed(kind, run_id, detail)
-    return {"kind": kind, "status": status, "run_id": str(run_id)}
+    return {"kind": kind, "status": str(status), "run_id": str(run_id)}
 
 
 @app.periodic(cron=settings.ingest_prices_cron)

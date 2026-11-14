@@ -103,8 +103,10 @@ export default function ImportsPage() {
 
         {/* First visit: the how-to is the page. Once something is imported it
             is a reference, folded to one line so the list is not a screen
-            below the upload zone. */}
-        {rows.length === 0 ? (
+            below the upload zone. Folded while loading too: most visits are
+            returning ones, and opening it until the list lands made the page
+            jump up under the reader. */}
+        {q.isSuccess && rows.length === 0 ? (
           <Card title="Onde baixar os extratos">
             <HowTo />
           </Card>

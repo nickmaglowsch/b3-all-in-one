@@ -158,7 +158,7 @@ Three worlds this is explicitly **not**. It is not the dark glassy fintech dashb
 A warm neutral ground with a single cool accent, plus two purpose-built data palettes that never mix with the interface palette.
 
 ### Primary
-- **Oscilloscope Navy** (`{colors.navy}`): The only interface accent. It marks where you are (active sidebar item, active section-nav tab, focus border on inputs) and what you can do (primary button fill, the check glyphs in the paywall's feature list). It is also the wordmark's Q: the mark is not set beside "Quantax" but *is* its first letter, a stroked ring fitted to Archivo 800's cap height and stem, with "uantax" following in ink. In dark mode it lightens to #5a8fd9 to hold contrast against the warm ground — which means the accent is a whisper against ink in light mode (1.25:1) and an obvious blue in dark (2.98:1). It never fills a card, tints a heading, or colours a data series.
+- **Oscilloscope Navy** (`{colors.navy}`): The only interface accent. It marks where you are (active sidebar item, active page tab, focus border on inputs) and what you can do (primary button fill, the check glyphs in the paywall's feature list). It is also the wordmark's Q: the mark is not set beside "Quantax" but *is* its first letter, a stroked ring fitted to Archivo 800's cap height and stem, with "uantax" following in ink. In dark mode it lightens to #5a8fd9 to hold contrast against the warm ground — which means the accent is a whisper against ink in light mode (1.25:1) and an obvious blue in dark (2.98:1). It never fills a card, tints a heading, or colours a data series.
 
 ### Neutral
 - **Bench Paper** (`{colors.paper}`): The page plane, and the fill inside inputs, secondary buttons, and ticker chips. Warm off-white, so a true-white panel reads as raised without any shadow. Dark mode: #1f1d1a.
@@ -218,7 +218,7 @@ The product is Brazilian-Portuguese only, and number formatting is part of the v
 
 A fixed 240px sidebar (`w-60`) on the left from the `md` breakpoint up, with content in a 1152px max-width column (`max-w-6xl`) centred in the remaining space. The landing and login routes opt out of the shell entirely — they render full-bleed with no sidebar.
 
-Content padding is 16px on mobile and 32px from `md` up. Pages open with a `PageHeader` — which wraps its actions under the title rather than pushing the page sideways — and a 20px gap beneath it, 24px from `md`. The primary page object is a vertical stack of cards; long pages get a sticky `SectionNav` under the top bar, and their anchor targets carry `scroll-mt-28 md:scroll-mt-16` to clear it.
+Content padding is 16px on mobile and 32px from `md` up. Pages open with a `PageHeader` — which wraps its actions under the title rather than pushing the page sideways — and a 20px gap beneath it, 24px from `md`. The primary page object is a vertical stack of cards, and the budget is small scrolling: a page whose sections would stack past a couple of screens splits them into `Tabs` — one panel on screen at a time, the tab in `?aba=`, a sticky strip under the top bar — rather than stacking them under a strip of anchor links. Lists held in memory page through `Pager` (`usePaged`, with a smaller page below `md`, where rows are stacked cards) instead of rendering whole or scrolling inside a fixed-height box.
 
 ### Mobile
 
@@ -286,7 +286,7 @@ Full-radius pill, 2px/8px padding, 12px medium. Colour comes from the fixed stat
 The smallest object in the system and one of its signatures: 4px radius, Etched Rule border on Bench Paper, 11px Plex Mono medium, uppercase, tight leading, 2px/6px padding. It reads as a data token rather than a control, which is exactly why its radius is smaller than everything else.
 
 ### Navigation
-Sidebar items are 14px medium at 8px/12px padding with an 18px leading icon and a 6px radius. Resting state is Legend Grey; hover washes `hairline/40` and darkens the label to ink; the active item takes a navy tint at 6% with navy text and `aria-current="page"`. The section nav uses the identical treatment at 12px, sticky under the top bar. Active state is always signalled by both the tint and the text colour, never the tint alone.
+Sidebar items are 14px medium at 8px/12px padding with an 18px leading icon and a 6px radius. Resting state is Legend Grey; hover washes `hairline/40` and darkens the label to ink; the active item takes a navy tint at 6% with navy text and `aria-current="page"`. Active state is always signalled by both the tint and the text colour, never the tint alone. Page tabs are the one other "where you are" marker and use a different shape for a different level: 14px medium, Legend Grey at rest, and the active tab takes navy text over a 2px navy underline sitting on the strip's hairline, with `aria-selected`. Two signals here too — colour and the rule — never colour alone.
 
 ### Chart Tooltip
 Panel surface, hairline border, 6px radius, `shadow-sm`, 12px. The label line is 11px mono in Legend Grey; each row is a 8px round series swatch, the series name in Legend Grey, and the value right-aligned in mono `tnum` ink. This is the one component where a shadow is currently used inside the app.

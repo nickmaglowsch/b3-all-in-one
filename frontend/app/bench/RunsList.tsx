@@ -37,8 +37,9 @@ export function RunsList({
   const confirm = useRowConfirm(del);
   const picked = new Set(selected);
   // Newest first, ten at a time. Picks for the comparison are ids, so they
-  // survive paging back to find an older run.
-  const paged = usePaged(runs, usePageSize(10, 5));
+  // survive paging back to find an older run. Keyed on the newest run: a run
+  // just queued lands on page 1, so a reader left on page 3 goes back to see it.
+  const paged = usePaged(runs, usePageSize(10, 5), runs[0]?.id ?? "");
 
   if (loading) {
     return (

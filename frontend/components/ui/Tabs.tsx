@@ -55,7 +55,10 @@ export function useTab(ids: string[], param = TAB_PARAM) {
       // stay a plain link.
       if (id === first) url.searchParams.delete(param);
       else url.searchParams.set(param, id);
-      window.history.replaceState(window.history.state, "", url);
+      // `null`, not `history.state`: Next's patched replaceState treats a state
+      // carrying its own marker as an internal call and skips syncing the
+      // router, so useSearchParams would never see `?aba=`.
+      window.history.replaceState(null, "", url);
       listeners.forEach((l) => l());
     },
     [first, param],
@@ -66,7 +69,7 @@ export function useTab(ids: string[], param = TAB_PARAM) {
 export function Tabs({
   label,
   tabs,
-  active,
+  active: requested,
   onChange,
   trailing,
 }: {
@@ -79,7 +82,12 @@ export function Tabs({
   trailing?: React.ReactNode;
 }) {
   const ids = tabs.map((t) => t.id);
+  // The caller's id may name a tab that is not rendered right now — a
+  // bookmarked `?aba=alvo` on a book with no sleeves. Without this fallback no
+  // tab was selected, no panel shown and the tablist had no tab stop at all.
+  const active = pickTab(ids, requested);
   const top = useRef<HTMLDivElement>(null);
+  const mounted = useRef(false);
   const list = useRef<HTMLDivElement>(null);
 
   // Mount-on-first-visit, adjusted during render (React's "derive state from a
@@ -87,23 +95,28 @@ export function Tabs({
   const [seen, setSeen] = useState<Set<string>>(() => new Set([active]));
   if (!seen.has(active)) setSeen(new Set(seen).add(active));
 
-  // Six tabs do not fit across 375px, so the strip scrolls — keep the active
-  // one inside it, including when the page opens on `?aba=` of a far tab.
-  // `block: "nearest"` so this only ever scrolls the strip, never the page.
+  // On every change of tab, whoever made it — a click here, or the page
+  // switching tabs itself (Bench sends a queued run to Rodadas):
+  //  - Six tabs do not fit across 375px, so the strip scrolls; keep the active
+  //    one inside it. `block: "nearest"` only ever scrolls the strip.
+  //  - The strip is sticky, so switching from deep inside a long panel would
+  //    leave the new one starting above the fold. Bring its top back into
+  //    view — only when we are past it, and never on first mount, where the
+  //    browser's own scroll restoration is in charge.
   useEffect(() => {
     list.current
       ?.querySelector(`[data-tab="${active}"]`)
       ?.scrollIntoView({ inline: "nearest", block: "nearest" });
+    const el = top.current;
+    if (mounted.current && el && el.getBoundingClientRect().top < 0) {
+      el.scrollIntoView({ block: "start" });
+    }
+    mounted.current = true;
   }, [active]);
 
   const go = (id: string, focus = false) => {
     onChange(id);
     if (focus) list.current?.querySelector<HTMLElement>(`[data-tab="${id}"]`)?.focus();
-    // The strip is sticky. Switching from deep inside a long panel would leave
-    // the new one starting above the fold, so bring its top back into view —
-    // only when we are past it, never scrolling *down* to it.
-    const el = top.current;
-    if (el && el.getBoundingClientRect().top < 0) el.scrollIntoView({ block: "start" });
   };
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -124,7 +137,7 @@ export function Tabs({
       <div ref={top} aria-hidden className="scroll-mt-14 md:scroll-mt-0" />
       {/* Full-bleed on a phone like a native segmented strip: `-mx-4 px-4`
           cancels main's gutter and gives it back inside the scroller. */}
-      <div className="sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 -mx-4 mb-4 flex items-end gap-3 border-b border-hairline bg-paper/90 px-4 backdrop-blur-md md:top-0 md:mx-0 md:px-0 md:backdrop-blur-none print:hidden">
+      <div className="sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 -mx-4 mb-4 flex flex-wrap items-end gap-x-3 border-b border-hairline bg-paper/90 px-4 backdrop-blur-md md:top-0 md:mx-0 md:px-0 md:backdrop-blur-none print:hidden">
         <div
           ref={list}
           role="tablist"
@@ -161,7 +174,15 @@ export function Tabs({
             );
           })}
         </div>
-        {trailing && <div className="hidden shrink-0 pb-2.5 sm:block">{trailing}</div>}
+        {/* Beside the tabs from `sm`; on a phone its own row above them (below
+            would part the active underline from the strip's rule), so the
+            client's name (or the alarm that it is missing) is in every
+            screenshot of every tab, at any width. */}
+        {trailing && (
+          <div className="order-first basis-full pt-2 sm:order-none sm:basis-auto sm:shrink-0 sm:pb-2.5 sm:pt-0">
+            {trailing}
+          </div>
+        )}
       </div>
 
       {tabs.map(

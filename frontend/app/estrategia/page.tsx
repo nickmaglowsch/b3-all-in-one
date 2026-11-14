@@ -61,13 +61,11 @@ const TAB_IDS = ["sleeves", "configuracoes", "alvo", "plano"];
 export default function EstrategiaPage() {
   const sleeves = useSleeves();
   const hasSleeves = (sleeves.data?.length ?? 0) > 0;
-  const [tab, setTab] = useTab(TAB_IDS);
-
-  // Alvo and rebalanceamento read the saved sleeves; until there are some they
-  // have nothing to say, so they stay out of the strip rather than opening on
-  // an empty panel.
-  const needsSleeves = (body: React.ReactNode) =>
-    sleeves.isLoading ? <Skeleton className="h-40 w-full" /> : body;
+  // Alvo and rebalanceamento read the saved sleeves: with none they stay off the
+  // strip, and out of useTab, so a bookmarked `?aba=alvo` lands on Sleeves.
+  const withSleeveTabs = hasSleeves || sleeves.isLoading;
+  const [tab, setTab] = useTab(TAB_IDS.slice(0, withSleeveTabs ? 4 : 2));
+  const needsSleeves = (body: React.ReactNode) => (sleeves.isLoading ? <Skeleton className="h-40 w-full" /> : body);
 
   return (
     <>
@@ -94,7 +92,7 @@ export default function EstrategiaPage() {
           tabs={[
             { id: "sleeves", label: "Sleeves e carteiras", content: <SleevesEditor /> },
             { id: "configuracoes", label: "Configurações", content: <SettingsPanel /> },
-            ...(hasSleeves || sleeves.isLoading
+            ...(withSleeveTabs
               ? [
                   { id: "alvo", label: "Alvo x atual", content: needsSleeves(<TargetPanel />) },
                   { id: "plano", label: "Rebalanceamento", content: needsSleeves(<RebalancePanel />) },
@@ -201,6 +199,8 @@ function SleevesEditor() {
   return (
     <div className="space-y-4">
     <Card
+      // Editar in "Minhas carteiras" scrolls back here; clears the sticky strip.
+      id="sleeves" className="scroll-mt-28 md:scroll-mt-16"
       title={carteira ? "Sleeves · editando carteira salva" : "Sleeves"}
       action={
         <span

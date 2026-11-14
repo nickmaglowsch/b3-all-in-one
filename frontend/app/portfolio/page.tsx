@@ -19,11 +19,15 @@ import { IndexSection } from "./IndexSection";
 import { TaxSection } from "./TaxSection";
 import { IncomeSection } from "./IncomeSection";
 import { TradesSection, TRADES_DEFAULTS } from "./TradesSection";
-import { Overview } from "./Overview";
+import { NextSteps, Overview } from "./Overview";
 
 // Tab order is reading order: what the book is, what it owes this month, how it
 // did, then the rows behind those answers.
 const TAB_IDS = ["geral", "imposto", "rentabilidade", "posicoes", "proventos", "negociacoes"];
+// Visão geral is the allocation of open positions. A book with none — fully
+// liquidated this month, the case with the largest DARF it will ever owe — has
+// nothing to show there, so the page opens on Situação fiscal instead.
+const tabsFor = (hasPositions: boolean) => (hasPositions ? TAB_IDS : TAB_IDS.slice(1));
 
 function Stat({
   label,
@@ -88,7 +92,6 @@ export default function PortfolioPage() {
           ? undefined
           : "Carteira";
 
-  const [tab, setTab] = useTab(TAB_IDS);
   const q = usePositions();
 
   // One request for the whole book — never one per row.
@@ -154,6 +157,7 @@ export default function PortfolioPage() {
   const allocTotal = markets.reduce((s, m) => s + m.value, 0);
 
   const hasPositions = positions.length > 0;
+  const [tab, setTab] = useTab(tabsFor(hasPositions));
   const hasAnyData =
     hasPositions ||
     (income.data?.length ?? 0) > 0 ||
@@ -320,7 +324,7 @@ export default function PortfolioPage() {
                 label: "Visão geral",
                 content: (
                   <Overview
-                    markets={hasPositions ? markets : []}
+                    markets={markets}
                     total={allocTotal}
                     priced={priced.length}
                     count={positions.length}
@@ -378,8 +382,14 @@ export default function PortfolioPage() {
                 badge: countBadge(tradeProbe.data?.total),
                 content: <TradesSection />,
               },
-            ]}
+            ].filter((t) => tabsFor(hasPositions).includes(t.id))}
           />
+
+          {/* The loop is the product: this page is where someone decides, and
+              the next step is always one of these three. Outside the panels,
+              so every tab ends on it — ending on a pagination control instead
+              was the surface behaving like a standalone tool. */}
+          <NextSteps />
         </>
       )}
     </>

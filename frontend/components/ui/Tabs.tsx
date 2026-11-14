@@ -70,15 +70,22 @@ export function useTab(ids: string[], param = TAB_PARAM) {
   // imported — the page would jump to it on its own and hide what the reader
   // had just done. Callers pass only the ids they render.
   //
-  // Only on this hook's own page. Back/forward changes the URL while the page
-  // being left is still mounted and subscribed to popstate: Bench would read
-  // Portfólio's `?aba=posicoes` as a stray of its own and rewrite the URL the
-  // reader is arriving at.
+  // Decided from the URL as it is when the effect runs, never from the value
+  // read during render, and only on this hook's own page:
+  //  - In a client-side navigation Next renders the incoming page before it
+  //    pushes the new URL, so render time sees the *outgoing* page's `?aba=`.
+  //    Trusting it stripped a valid `?aba=` off every link that carried one.
+  //  - Back/forward is the opposite: the URL changes while the page being left
+  //    is still mounted and hears popstate, and Bench would read Portfólio's
+  //    `?aba=posicoes` as a stray of its own. The pathname check stops that.
   const pathname = usePathname();
-  const stray = requested !== null && requested !== active;
+  const key = ids.join(",");
   useEffect(() => {
-    if (stray && window.location.pathname === pathname) select(active);
-  }, [stray, active, select, pathname]);
+    if (window.location.pathname !== pathname) return;
+    const now = new URLSearchParams(window.location.search).get(param);
+    const shown = key.split(",");
+    if (now !== null && !shown.includes(now)) select(shown[0]);
+  }, [requested, key, param, pathname, select]);
   return [active, select] as const;
 }
 

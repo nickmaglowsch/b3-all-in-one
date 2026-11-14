@@ -61,9 +61,9 @@ const TAB_IDS = ["sleeves", "configuracoes", "alvo", "plano"];
 export default function EstrategiaPage() {
   const sleeves = useSleeves();
   const hasSleeves = (sleeves.data?.length ?? 0) > 0;
-  // Alvo and rebalanceamento read the saved sleeves: with none they stay off the
-  // strip, and out of useTab, so a bookmarked `?aba=alvo` lands on Sleeves.
-  const withSleeveTabs = hasSleeves || sleeves.isLoading;
+  // Alvo/rebalanceamento need saved sleeves: with none they leave the strip and useTab
+  // (`?aba=alvo` → Sleeves); kept while loading or failed, so a retry opens on Alvo.
+  const withSleeveTabs = hasSleeves || sleeves.isLoading || sleeves.isError;
   const [tab, setTab] = useTab(TAB_IDS.slice(0, withSleeveTabs ? 4 : 2));
   const needsSleeves = (body: React.ReactNode) => (sleeves.isLoading ? <Skeleton className="h-40 w-full" /> : body);
 

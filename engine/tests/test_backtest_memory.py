@@ -88,6 +88,44 @@ def test_an_alias_is_the_same_object_not_a_copy():
     assert bundle["bench_px"] is frame
 
 
+def test_a_build_that_raises_leaves_the_key_deferred():
+    """The thunk used to be popped before it ran, so one failed build made the
+    key vanish: `in` said False and the next read was a bare KeyError naming the
+    key, not the error that actually happened."""
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("plane unavailable")
+        return "frame"
+
+    bundle = memory.LazyShared()
+    bundle.defer("panel", flaky)
+    with pytest.raises(OSError):
+        bundle["panel"]
+    assert "panel" in bundle
+    assert bundle.deferred_keys() == {"panel"}
+    assert bundle["panel"] == "frame"
+    assert calls == [1, 1]
+
+    forced = memory.LazyShared({"ret": 1})
+    forced.defer("panel", lambda: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        dict(forced)
+    assert forced.deferred_keys() == {"panel"}
+
+
+def test_get_does_not_hide_a_keyerror_raised_inside_a_build():
+    """`get` is for an absent key. A build that raises KeyError (a frame reading
+    a column that is not there) is a bug, and `get` used to answer it None."""
+    bundle = memory.LazyShared({"ret": {}})
+    bundle.defer("panel", lambda: bundle["ret"]["missing_column"])
+    with pytest.raises(KeyError, match="missing_column"):
+        bundle.get("panel")
+    assert bundle.get("absent", "dflt") == "dflt"
+
+
 # ── the budget ────────────────────────────────────────────────────────────────
 
 def test_the_budget_comes_off_the_env_when_it_is_set(monkeypatch):

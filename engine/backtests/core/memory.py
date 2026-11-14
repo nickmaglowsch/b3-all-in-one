@@ -274,18 +274,29 @@ class LazyShared(dict):
             build = self._thunks.pop(key)
         except KeyError:
             raise KeyError(key) from None
-        value = build()
+        value = self._build(key, build)
         self[key] = value
         return value
+
+    def _build(self, key, build):
+        """Run one thunk. Popped before it runs (a build that reads its own key
+        gets a KeyError, not a recursion), so a build that raises puts it back:
+        the key stays deferred and `in` the bundle, and the next read retries
+        rather than reporting a bare KeyError for a frame that was registered."""
+        try:
+            return build()
+        except BaseException:
+            self._thunks.setdefault(key, build)
+            raise
 
     def __contains__(self, key) -> bool:
         return dict.__contains__(self, key) or key in self._thunks
 
     def get(self, key, default=None):
-        try:
-            return self[key]
-        except KeyError:
-            return default
+        # Membership, not `except KeyError`: only an absent key is a default. A
+        # KeyError raised inside a build is that build's bug, and answering it
+        # with None hid it from whoever called `get`.
+        return self[key] if key in self else default
 
     def setdefault(self, key, default=None):
         if key in self:
@@ -306,7 +317,7 @@ class LazyShared(dict):
         while self._thunks:
             key, build = self._thunks.popitem()
             if not dict.__contains__(self, key):
-                dict.__setitem__(self, key, build())
+                dict.__setitem__(self, key, self._build(key, build))
 
     def __iter__(self):
         self._force()

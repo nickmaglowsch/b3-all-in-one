@@ -15,7 +15,11 @@ import { TAB_PARAM, pickTab, stepTab } from "@/lib/tabs";
  *
  * Panels mount the first time they are opened and then stay mounted (hidden),
  * so a tab's own state — a trades page, a filter, a plan just computed — is
- * still there when you come back, and an unopened tab costs no request.
+ * still there when you come back, and an unopened tab costs no request. One
+ * exception: a page opened on a `?aba=` link renders its first tab for a frame
+ * before the URL is read (prerender, or Next rendering the incoming page
+ * before it pushes the URL), so that first panel mounts — hidden — and runs
+ * its queries. Accepted: the page's own data, and nothing writes.
  */
 
 export interface TabDef {

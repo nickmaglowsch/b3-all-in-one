@@ -90,6 +90,7 @@ import pandas as pd
 
 from scripts import b3_rules
 from scripts.b3_options import EMPTY_OPT_STATS, process_option_activity
+from scripts.preco_medio import caminhar
 
 ROOT = Path(__file__).resolve().parent.parent
 IMPORTS_DIR = ROOT / "b3_imports"
@@ -642,12 +643,14 @@ def _position_timeline(
 ) -> pd.DataFrame:
     """Trades + qty_events + amortizations as one frame, in walk order.
 
-    Each row carries:
-      kind ∈ {trade, qty_event, amort}
-      sq    = signed quantity change (buys+, sells-, qty_event signed already)
-      price = trade price (only used for kind=trade buys)
-      amount = cost moved: deducted on kind=amort, added on kind=qty_event
-               (a bonificação's custo atribuído, qty × price; 0 otherwise)
+    The shape irpf_2026.build_timeline gives realizacao, so the two surfaces run
+    one walk (preco_medio.caminhar). Each row carries:
+      kind ∈ {buy, sell, qty_event, amort}
+      qty    = unsigned on a trade, signed on a qty_event, 0 on an amort
+      amount = value of a trade (qty × price); the cost a qty_event brings in
+               (a bonificação's custo atribuído, qty × price; 0 otherwise); the
+               principal an amort returns
+      broker = the intermediary — a day trade is one only at the same one
       market = trade rows only; events leave it NaN
     """
     def canonical(tickers: pd.Series) -> pd.Series:
@@ -658,14 +661,16 @@ def _position_timeline(
             return tickers
         return tickers.astype(str).str.replace(_FRACTIONAL_RE, _ROUND_LOT, regex=True)
 
-    def frame(df: pd.DataFrame, kind: str, **cols) -> pd.DataFrame:
+    def frame(df: pd.DataFrame, kind, **cols) -> pd.DataFrame:
         return pd.DataFrame({"ticker": canonical(df["ticker"]),
                              "date": pd.to_datetime(df["date"]), "kind": kind,
-                             "sq": 0.0, "price": 0.0, "amount": 0.0, **cols})
+                             "qty": 0.0, "amount": 0.0,
+                             "broker": df.get("broker", ""), **cols})
 
     t = trades.sort_values("date", kind="stable")
-    parts = [frame(t, "trade", sq=t["signed_qty"].astype(float),
-                   price=t["price"].astype(float), market=t["market"])]
+    sq = t["signed_qty"].astype(float)
+    parts = [frame(t, np.where(sq > 0, "buy", "sell"), qty=sq.abs(),
+                   amount=sq.abs() * t["price"].astype(float), market=t["market"])]
 
     if cash_events is not None and not cash_events.empty:
         ce = cash_events
@@ -677,29 +682,35 @@ def _position_timeline(
             # Backwards compat: older cash_events.csv without event_category.
             qty_evs = ce.iloc[0:0]
             amort_evs = ce[ce.get("is_amortization", pd.Series(False, index=ce.index)).fillna(False)]
-        sq = qty_evs["qty"].astype(float).fillna(0.0)
+        ev_qty = qty_evs["qty"].astype(float).fillna(0.0)
         unit = pd.to_numeric(qty_evs.get("price", 0.0), errors="coerce")
         parts += [
-            frame(qty_evs, "qty_event", sq=sq, amount=(sq * unit).fillna(0.0)),
+            frame(qty_evs, "qty_event", qty=ev_qty, amount=(ev_qty * unit).fillna(0.0)),
             frame(amort_evs, "amort", amount=amort_evs["amount"].astype(float).fillna(0.0)),
         ]
 
     timeline = pd.concat([p for p in parts if not p.empty], ignore_index=True)
     timeline = timeline.dropna(subset=["date", "ticker"])
-    # Within a single date, apply trades first, then qty_events, then amorts
-    # (so a split applies to post-trade qty, and an amort applies after).
-    kind_order = {"trade": 0, "qty_event": 1, "amort": 2}
+    # The walk applies a day's trades before its events and takes each day's
+    # buys before its sells (preco_medio); the frame is laid out in that order
+    # too, so it reads the way it is walked: trades, then qty_events, then
+    # amorts, and credits before debits. No extract records a time of
+    # day, so a same-day round trip arrives in arbitrary order — and walked
+    # sell-first, the sell has no inventory to come off.
+    kind_order = {"buy": 0, "sell": 0, "qty_event": 1, "amort": 2}
     timeline["__order"] = timeline["kind"].map(kind_order)
-    # And within the day's trades, buys before sells. No extract records a time
-    # of day, so a same-day round trip — a day trade, or shares bought in the
-    # morning to deliver against a call assigned that afternoon — arrives in
-    # arbitrary order, and walked sell-first the sell has no inventory to come
-    # off: derive_positions drops it as an orphan and leaves the buy standing as
-    # a holding that was already sold. Buy-first can invent nothing, and it is
-    # the order realizacao._realizar_dia has always used for a day's trades.
-    timeline["__leg"] = np.where(timeline["sq"] < 0, 1, 0)
+    timeline["__leg"] = np.where((timeline["kind"] == "sell") | (timeline["qty"] < 0), 1, 0)
     return (timeline.sort_values(["ticker", "date", "__order", "__leg"])
             .reset_index(drop=True))
+
+
+def _market_label(group: pd.DataFrame) -> str:
+    """The round-lot label when the ticker traded there at all, else the first
+    one it traded under — the display rule consolidate_fractional also uses."""
+    markets = group["market"].dropna().tolist() if "market" in group else []
+    if "Mercado à Vista" in markets or not markets:
+        return "Mercado à Vista"
+    return markets[0]
 
 
 def derive_positions(
@@ -709,10 +720,12 @@ def derive_positions(
 ) -> tuple[pd.DataFrame, list[str]]:
     """Reduce trades + corporate-action events into current holdings.
 
-    Uses average-cost accounting (preço médio):
-      - Buys add (qty * price) to cost basis and increase qty.
-      - Sells reduce cost basis by (sold_qty * current_avg_cost), preserving
-        the running avg. Brazilian Receita uses this same convention for IR.
+    The preço médio walk is preco_medio.caminhar, the one the IRPF report's
+    Bens e Direitos and apuração run, so positions.csv cannot hold a different
+    cost from the one the report declares:
+      - Buys add their value to cost; sells take cost at the running preço
+        médio. A same-day buy and sell at one broker is a day trade and leaves
+        the swing preço médio alone.
       - Amortizations (Amortização / FII or CRI principal returns) reduce
         cost basis by the amount received; qty is unchanged.
       - qty_events change qty; cost moves only by a bonificação's custo
@@ -724,9 +737,10 @@ def derive_positions(
     the parent applies equally to fractional holdings.
 
     Returns (positions_df, tickers_with_incomplete_history). The second
-    element is non-empty when the loaded data shows a sell with no prior
-    buy — meaning earlier trades exist outside the report's date range, so
-    the cost basis for that ticker is unreliable.
+    element names every ticker whose history the walk could not close: a sale
+    of more than it held (a buy before the report's date range), or a
+    corporate action on a position it did not have — so the cost basis for
+    that ticker is unreliable.
     """
     cols = ["ticker", "qty", "avg_cost", "total_cost", "market"]
     if trades.empty:
@@ -737,64 +751,16 @@ def derive_positions(
 
     out_rows: list[dict] = []
     incomplete: list[str] = []
-    for ticker, group in timeline.groupby("ticker"):
-        qty = 0.0
-        cost = 0.0
-        market = None
-        had_orphan_sell = False
-        for _, ev in group.iterrows():
-            kind = ev["kind"]
-            if kind == "trade":
-                sq = ev["sq"]
-                price = ev["price"]
-                if market is None and ev["market"] is not None:
-                    market = ev["market"]
-                elif ev["market"] == "Mercado à Vista":
-                    # Prefer the round-lot label for display.
-                    market = "Mercado à Vista"
-                if sq > 0:
-                    cost += sq * price
-                    qty += sq
-                elif qty > 0:
-                    # A sale larger than the holding: the excess has no cost
-                    # basis in this data. Clamped and flagged, as irpf_2026
-                    # clamps it — a negative position would carry a negative
-                    # cost into the next buy's preço médio.
-                    had_orphan_sell = had_orphan_sell or -sq > qty + 1e-9
-                    sq = max(sq, -qty)
-                    cost += sq * cost / qty  # sq < 0
-                    qty += sq
-                else:
-                    had_orphan_sell = True
-            elif kind == "qty_event":
-                # Corporate action: qty moves, cost only by a bonificação's
-                # custo atribuído (amount); avg_cost = cost / new_qty. If we have
-                # no inventory at the time of the event, the event came in
-                # for a position that was opened/closed outside this data —
-                # treat as orphan and skip rather than going negative.
-                if qty + ev["sq"] > 1e-9:
-                    qty += ev["sq"]
-                    cost += ev["amount"]
-                elif qty == 0 and ev["sq"] > 0:
-                    # Bonus/split arriving without prior inventory: ignore
-                    # (no cost basis to attribute it to).
-                    had_orphan_sell = True
-                # Else: a debit larger than current qty → flag and clamp.
-                else:
-                    had_orphan_sell = True
-                    qty = max(0.0, qty + ev["sq"])
-            elif kind == "amort":
-                # Amortization returns principal: drop cost basis, qty stays.
-                cost = max(0.0, cost - ev["amount"])
-        if had_orphan_sell:
+    for ticker, group, pos, vendas, orfaos in caminhar(timeline):
+        if orfaos or any(v["descoberto"] > 1e-9 for v in vendas):
             incomplete.append(ticker)
-        if qty > 1e-6:
+        if pos.qty > 1e-6:
             out_rows.append({
                 "ticker": ticker,
-                "qty": round(qty, 6),
-                "avg_cost": round(cost / qty, 4),
-                "total_cost": round(cost, 2),
-                "market": market or "Mercado à Vista",
+                "qty": round(pos.qty, 6),
+                "avg_cost": round(pos.cost / pos.qty, 4),
+                "total_cost": round(pos.cost, 2),
+                "market": _market_label(group),
             })
     df = (
         pd.DataFrame(out_rows).sort_values("ticker").reset_index(drop=True)

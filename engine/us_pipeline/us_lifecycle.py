@@ -82,10 +82,13 @@ def foreign_delisting(prior) -> bool:
 
 def observe_present(prior, as_of) -> dict:
     """The columns a sighting in today's directory writes."""
-    row = {"first_seen": as_of, "last_seen": as_of}
-    if _delisted_by(prior, DIRECTORY_REASON) and _within_relist_window(prior, as_of):
-        row.update(CLEARED)
-    return row
+    if not _delisted_by(prior, DIRECTORY_REASON):
+        return {"first_seen": as_of, "last_seen": as_of}
+    if _within_relist_window(prior, as_of):
+        return {"first_seen": as_of, "last_seen": as_of, **CLEARED}
+    # A recycled ticker: the row is the old company's, which stopped trading at
+    # its delisting date. Moving `last_seen` past it would describe neither.
+    return {"first_seen": as_of}
 
 
 def _within_relist_window(prior, as_of) -> bool:

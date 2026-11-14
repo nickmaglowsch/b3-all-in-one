@@ -82,6 +82,7 @@ def test_a_ticker_back_after_the_relist_window_is_a_different_company(tmp_path):
     assert out["revived"] == 0
     assert row["delisting_date"] == "2021-03-01"
     assert row["delist_reason"] == lc.DIRECTORY_REASON
+    assert row["last_seen"] == "2021-03-01"  # the old company's last day
 
 
 def test_a_symbol_back_inside_the_relist_window_is_revived():

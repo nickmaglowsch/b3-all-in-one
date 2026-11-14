@@ -153,3 +153,59 @@ async def test_warm_refreshes_what_is_stale_and_survives_a_failure(monkeypatch):
         got = await sleeve_weights.lookup(s, [sleeve_weights.family("Stale", "ME")])
     entry = got[sleeve_weights.family("Stale", "ME")]
     assert entry.day == TODAY and entry.payload == {"weights": {"Stale3": 1.0}}
+
+
+async def test_a_refresh_written_by_another_process_is_served(monkeypatch, _clean):
+    """The ingest worker refreshes the table, not this process's memo: once the
+    memo is stale, the table must be read again — without anyone clearing it."""
+    from sqlalchemy import text
+
+    calls: list = []
+    monkeypatch.setattr(routes, "_advise_strategy", counting(calls))
+    fam = sleeve_weights.family("A", "ME")
+    await _store(fam, TODAY - datetime.timedelta(days=1), {"weights": {"OLD3": 1.0}})
+    tid = await _book("A")
+    assert await _target(tid) == {"OLD3": 1.0}
+    async with async_session_maker() as s:          # the worker, by raw SQL
+        await s.execute(text("UPDATE sleeve_weights SET day = :d, plane = :p,"
+                             " payload = CAST(:w AS jsonb) WHERE family = :f"),
+                        {"d": TODAY, "p": await sleeve_weights.plane_date(),
+                         "w": '{"weights": {"NEW3": 1.0}}', "f": fam})
+        await s.commit()
+    assert await _target(tid) == {"NEW3": 1.0}
+    assert calls == []
+
+
+async def test_editing_a_part_of_a_user_portfolio_is_a_new_answer(monkeypatch, _clean):
+    """A user portfolio is built from the tenant's other user strategies, so an
+    edit to any of them must not leave the portfolio's stored weights in place."""
+    calls: list = []
+    monkeypatch.setattr(routes, "_advise_strategy", counting(calls))
+    tid = await _book("Port")
+    async with async_session_maker() as s:
+        part = UserStrategy(tenant_id=tid, name="Part", kind="rank_and_hold", spec={})
+        s.add_all([UserStrategy(tenant_id=tid, name="Port", kind="fixed_weight", spec={}),
+                   part])
+        await s.commit()
+    await _target(tid)
+    async with async_session_maker() as s:
+        part = await s.get(UserStrategy, part.id)
+        part.updated_at = part.updated_at + datetime.timedelta(seconds=5)
+        await s.commit()
+    await _target(tid)
+    assert calls == [("Port", "ME"), ("Port", "ME")]
+
+
+async def test_prune_drops_only_old_families_nobody_needs():
+    keep, gone, young = (sleeve_weights.family(r, "ME") for r in ("Keep", "Gone", "Young"))
+    for fam in (keep, gone, young):
+        await _store(fam, TODAY, {"weights": {}})
+    from sqlalchemy import text
+    async with async_session_maker() as s:
+        await s.execute(text("UPDATE sleeve_weights SET computed_at = now() - interval '10 days'"
+                             " WHERE family IN (:a, :b)"), {"a": keep, "b": gone})
+        await s.commit()
+        n = await sleeve_weights.prune(s, {keep}, datetime.timedelta(days=3))
+        sleeve_weights.clear_memory()
+        left = set(await sleeve_weights.lookup(s, [keep, gone, young]))
+    assert n == 1 and left == {keep, young}

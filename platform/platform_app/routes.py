@@ -532,17 +532,18 @@ async def _combined_target(
         raise HTTPException(409, "no sleeves configured — PUT /portfolio/sleeves first")
 
     # A sleeve ref may be one of the tenant's user strategies — materialize them
-    # and point the engine subprocess at the dir. Its edit stamp is part of its
-    # family, so an edit is never served the previous version's weights.
+    # and point the engine subprocess at the dir. The tenant's latest edit is
+    # part of its family, so an edit (to it, or to a strategy a user portfolio
+    # is built from) is never served the previous version's weights.
     user_rows = (await session.scalars(
         select(UserStrategy).where(UserStrategy.tenant_id == tid)
     )).all()
     extra_env = specstore.specs_env(user_rows, tid)
-    user_upd = {r.name: r.updated_at.isoformat() if r.updated_at else "" for r in user_rows}
+    user_names, stamp = {r.name for r in user_rows}, sleeve_weights.user_stamp(user_rows)
 
     def _family(ref: str) -> str:
-        if ref in user_upd:
-            return sleeve_weights.family(ref, freq, tid, user_upd[ref])
+        if ref in user_names:
+            return sleeve_weights.family(ref, freq, tid, stamp)
         return sleeve_weights.family(ref, freq)
 
     # Split cash and tickers out first: CASH_CDI is the risk-free sleeve and a
@@ -551,15 +552,14 @@ async def _combined_target(
     cash_weight, by_ref, combined, off_b3, b3_assets = portfolio_sleeves.split_sleeves(sleeves)
     equity = [(ref, pct, _family(ref)) for ref, pct in by_ref]
 
-    # Stored answers first, fresh or not; a stale one is served and refreshed in
-    # the background. Only a family with no answer at all reaches the engine here.
+    # Stored answers first, a stale one served and refreshed in the background.
     today, plane = date.today(), await sleeve_weights.plane_date()
-    stored = await sleeve_weights.lookup(session, [fam for _r, _p, fam in equity])
+    stored = await sleeve_weights.lookup(session, [fam for _r, _p, fam in equity], today, plane)
     advised = {fam: e.payload for fam, e in stored.items()}
     if any(not e.fresh(today, plane) for e in stored.values()):
         sleeve_weights.refresh_soon(today, plane)
 
-    todo = [(ref, fam, tid if ref in user_upd else None)
+    todo = [(ref, fam, tid if ref in user_names else None)
             for ref, _pct, fam in equity if fam not in advised]
     failures = await _advise_missing(session, todo, freq, extra_env, (today, plane), advised)
 
@@ -579,11 +579,9 @@ async def _combined_target(
 
 async def _advise_missing(session: AsyncSession, todo: list[tuple], freq: str,
                           extra_env: dict, stamp: tuple, advised: dict) -> dict:
-    """Compute and store the (ref, family, owner) sleeves nothing was stored for,
-    into ``advised``; the needs-fundamentals failures by ref, for the 422.
-
-    Each sleeve is a separate engine subprocess that builds its own market plane,
-    and they are independent — gathered, the wall clock is the slowest."""
+    """Compute, store and add to ``advised`` the (ref, family, owner) sleeves with
+    no stored answer — gathered, they are independent plane builds. Returns the
+    needs-fundamentals failures by ref, for the 422."""
     if not todo:
         return {}
     await session.commit()  # no connection held across the subprocesses
@@ -747,9 +745,8 @@ async def create_rebalance_plan(
                     target[tu] = w
         return await _advise(weights=target, positions=positions, nav_cash=new_cash)
 
-    # The off-B3 buys need only the aporte's split, so they are priced while the
-    # B3 book goes through its (sequential) valuation and pricing passes.
-    priced, off_trades = await asyncio.gather(
+    # The off-B3 buys need only the aporte's split: priced alongside the B3 book.
+    priced, off_trades = await subprocs.gather_all(
         _b3_priced(), _off_b3_buys(split, off_b3, off_cash, frozen))
     trades = priced.get("trades") or {"sells": [], "buys": [], "nav": 0.0}
     # Belt-and-suspenders: frozen / cash-CDI tickers never appear in a trade.

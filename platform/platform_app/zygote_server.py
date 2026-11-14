@@ -90,9 +90,19 @@ def _exit_code(e: SystemExit) -> int:
     return 1
 
 
-def _execute(argv: list[str]) -> int:
-    """Run the script or module as __main__; its exit status."""
+# Not an exit status: the runner dies by SIGINT itself, as CPython does on an
+# uncaught KeyboardInterrupt, so the caller sees the same -2 a cold run gives.
+_SIGINT = object()
+
+
+def _execute(argv: list[str]):
+    """Run the script or module as __main__; its exit status (or _SIGINT)."""
     import runpy
+    if argv[0] != "-m" and not os.path.exists(argv[0]):
+        # The interpreter's own refusal, and its status (2), not a traceback.
+        print(f"python: can't open file {os.path.abspath(argv[0])!r}: "
+              "[Errno 2] No such file or directory", file=sys.stderr)
+        return 2
     try:
         if argv[0] == "-m":
             sys.argv = [argv[1], *argv[2:]]
@@ -103,9 +113,25 @@ def _execute(argv: list[str]) -> int:
         return 0
     except SystemExit as e:
         return _exit_code(e)
+    except KeyboardInterrupt:
+        traceback.print_exc()
+        return _SIGINT
     except BaseException:  # noqa: BLE001 — a script's crash is its exit status
         traceback.print_exc()
         return 1
+
+
+def _shutdown() -> None:
+    """What interpreter shutdown does before the process ends: wait for the
+    non-daemon threads, then run the atexit handlers. os._exit skips both."""
+    import atexit
+    import threading
+    for step in (getattr(threading, "_shutdown", None), atexit._run_exitfuncs):
+        try:
+            if step is not None:
+                step()
+        except BaseException:  # noqa: BLE001
+            pass
 
 
 def _run(req: dict, fds: tuple[int, int, int], base_path: list[str]) -> None:
@@ -113,16 +139,16 @@ def _run(req: dict, fds: tuple[int, int, int], base_path: list[str]) -> None:
     code = 1
     try:
         code = _execute(_setup(req, fds, base_path))
-        try:
-            import atexit
-            atexit._run_exitfuncs()  # what interpreter shutdown would have run
-        except BaseException:  # noqa: BLE001
-            pass
+        _shutdown()
     finally:
         try:
             sys.stdout.flush()
             sys.stderr.flush()
         finally:
+            if code is _SIGINT:
+                signal.signal(signal.SIGINT, signal.SIG_DFL)
+                os.kill(os.getpid(), signal.SIGINT)
+                code = 1
             os._exit(code & 0xFF)  # as the interpreter does: sys.exit(-1) is 255
 
 

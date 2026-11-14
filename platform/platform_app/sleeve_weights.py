@@ -15,7 +15,7 @@ edit stamp for a user strategy — lives in this table, one row per family, and:
     edit stamp is part of the family): computed inline once, then stored.
 
 The refresh is tasks_sleeves.warm_sleeve_weights, on the ingest worker: after
-each price ingest, after the UTC day rolls over, and whenever a request finds a
+each ingest that lands, after the UTC day rolls over, and whenever a request finds a
 stale entry. Nothing here imports the engine; computing is the caller's.
 
 Apart from models.py only because that module is at its size ceiling; it is
@@ -33,7 +33,7 @@ import uuid
 from typing import NamedTuple
 
 from fastapi_users_db_sqlalchemy.generics import GUID
-from sqlalchemy import Date, DateTime, Text, func, select
+from sqlalchemy import Date, DateTime, Text, delete, func, select, true
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Mapped, mapped_column
@@ -51,7 +51,8 @@ class SleeveWeights(Base):
     family: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(GUID, index=True, nullable=True)
     day: Mapped[datetime.date] = mapped_column(Date, nullable=False)
-    plane: Mapped[datetime.date | None] = mapped_column(Date, nullable=True)
+    # Every price plane's last session when computed (plane_date()).
+    plane: Mapped[str | None] = mapped_column(Text, nullable=True)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     computed_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now())
@@ -60,15 +61,16 @@ class SleeveWeights(Base):
 class Entry(NamedTuple):
     """One family's latest answer."""
     day: datetime.date
-    plane: datetime.date | None
+    plane: str | None
     payload: dict
 
-    def fresh(self, today: datetime.date, plane: datetime.date | None) -> bool:
+    def fresh(self, today: datetime.date, plane: str | None) -> bool:
         return self.day == today and self.plane == plane
 
 
-# Read-through over the table: a hit here skips even the indexed SELECT. Bounded
-# like the API's other memos; dropping it costs one query to refill.
+# Read-through over the table, for fresh answers only: a stale one is re-read,
+# because the refresh that replaces it is written by another process (the
+# ingest worker) and only the table sees it. Bounded like the API's other memos.
 _MEM: dict[str, Entry] = {}
 _MEM_MAX = 1024
 
@@ -78,13 +80,20 @@ def clear_memory() -> None:
 
 
 def family(ref: str, freq: str, tid: uuid.UUID | None = None,
-           updated_at: str | None = None) -> str:
+           user_stamp: str | None = None) -> str:
     """The cache identity of a sleeve. A user strategy's carries its tenant (two
-    tenants' same-named specs are different strategies) and its edit stamp (an
-    edit is a new strategy, never served the old one's weights)."""
+    tenants' same-named specs are different strategies) and the tenant's latest
+    user-strategy edit (an edit is a new strategy — and a user portfolio is built
+    from the tenant's other user strategies, so editing one of those is too)."""
     if tid is None:
         return json.dumps([ref, freq])
-    return json.dumps([ref, freq, str(tid), updated_at or ""])
+    return json.dumps([ref, freq, str(tid), user_stamp or ""])
+
+
+def user_stamp(rows) -> str:
+    """The tenant's latest user-strategy edit, over ``rows`` (UserStrategy)."""
+    stamps = [r.updated_at for r in rows if r.updated_at]
+    return max(stamps).isoformat() if stamps else ""
 
 
 def advise_params(freq: str) -> dict | None:
@@ -92,27 +101,41 @@ def advise_params(freq: str) -> dict | None:
     return None if freq == "ME" else {"rebalance_freq": freq}
 
 
-async def plane_date() -> datetime.date | None:
-    """The price plane's last session — what a fresh entry was computed against.
-    None when the plane cannot be read (the entry then only ages by the day)."""
+# Each plane's last session. A strategy may trade B3, the US or crypto, and each
+# is refreshed by its own ingest at its own hour, so the stamp names all three.
+# Every arm is one probe of a (market, date) / (date) index.
+_PLANE_SQL = """
+SELECT (SELECT max(date) FROM prices) AS b3,
+       (SELECT max(date) FROM market_prices WHERE market = 'US') AS us,
+       (SELECT max(date) FROM market_prices WHERE market = 'CRYPTO') AS crypto
+"""
+
+
+async def plane_date() -> str | None:
+    """What a fresh entry was computed against: every price plane's last
+    session. None when the plane cannot be read (an entry then ages by the day)."""
     try:
         pool = await get_engine_pool()
-        return await pool.fetchval("SELECT max(date) FROM prices")
+        row = await pool.fetchrow(_PLANE_SQL)
     except Exception:  # noqa: BLE001 — an unreadable plane is not this module's error
         return None
+    return " ".join(f"{k}={row[k].isoformat() if row[k] else '-'}" for k in ("b3", "us", "crypto"))
 
 
-async def lookup(session, families: list[str]) -> dict[str, Entry]:
-    """The stored entry of each family that has one."""
-    out = {f: _MEM[f] for f in families if f in _MEM}
+async def lookup(session, families: list[str], today: datetime.date | None = None,
+                 plane: str | None = None) -> dict[str, Entry]:
+    """The stored entry of each family that has one. With ``today``, only a
+    fresh memo is trusted; anything older is read again from the table."""
+    out = {f: e for f in families if (e := _MEM.get(f)) is not None
+           and (today is None or e.fresh(today, plane))}
     missing = [f for f in families if f not in out]
     if missing:
         rows = (await session.execute(
             select(SleeveWeights.family, SleeveWeights.day, SleeveWeights.plane,
                    SleeveWeights.payload)
             .where(SleeveWeights.family.in_(missing)))).all()
-        for fam, day, plane, payload in rows:
-            out[fam] = _remember(fam, Entry(day, plane, payload))
+        for fam, day, plane_, payload in rows:
+            out[fam] = _remember(fam, Entry(day, plane_, payload))
     return out
 
 
@@ -123,8 +146,18 @@ def _remember(fam: str, entry: Entry) -> Entry:
     return entry
 
 
+async def prune(session, keep: set[str], older_than: datetime.timedelta) -> int:
+    """Drop the families nothing needs any more (an edited strategy's previous
+    stamp, a strategy no sleeve holds) once they are ``older_than``."""
+    res = await session.execute(delete(SleeveWeights).where(
+        SleeveWeights.family.not_in(keep) if keep else true(),
+        SleeveWeights.computed_at < func.now() - older_than))
+    await session.commit()
+    return res.rowcount or 0
+
+
 async def store(session, fam: str, tid: uuid.UUID | None, day: datetime.date,
-                plane: datetime.date | None, payload: dict) -> None:
+                plane: str | None, payload: dict) -> None:
     """Upsert the family's latest answer and commit."""
     values = {"day": day, "plane": plane, "payload": payload, "tenant_id": tid,
               "computed_at": func.now()}
@@ -141,7 +174,7 @@ _requested: set[tuple] = set()
 _pending: set[asyncio.Task] = set()
 
 
-def refresh_soon(today: datetime.date, plane: datetime.date | None) -> None:
+def refresh_soon(today: datetime.date, plane: str | None) -> None:
     """Ask the ingest worker to recompute stale families, off the request."""
     key = (today, plane)
     if key in _requested:

@@ -126,3 +126,132 @@ def test_the_zygote_exits_with_its_parent(tmp_path):
     assert proc.stdout.readline().strip() == b"ready"
     proc.stdin.close()
     assert proc.wait(10) == 0
+
+
+SCRIPT_MORE = """\
+import os, sys, threading, time
+mode = sys.argv[1]
+if mode == "thread":
+    def late():
+        time.sleep(0.3)
+        print("thread-finished", flush=True)
+    threading.Thread(target=late).start()
+    print("main-done", flush=True)
+elif mode == "interrupt":
+    raise KeyboardInterrupt
+elif mode == "count":
+    with open(sys.argv[2], "a") as fh:
+        fh.write("ran\\n")
+    time.sleep(30)
+"""
+
+
+def test_non_daemon_threads_finish_before_the_exit(warm, tmp_path):
+    (tmp_path / "m.py").write_text(SCRIPT_MORE)
+    p = _run(warm, [str(tmp_path / "m.py"), "thread"], tmp_path)
+    assert p.returncode == 0
+    assert p.stdout.split() == ["main-done", "thread-finished"]
+
+
+def test_the_interpreters_own_exit_codes(warm, tmp_path):
+    (tmp_path / "m.py").write_text(SCRIPT_MORE)
+    assert _run(warm, [str(tmp_path / "missing.py")], tmp_path).returncode == 2
+    assert _run(warm, [str(tmp_path / "m.py"), "interrupt"], tmp_path).returncode == -2
+
+
+def test_a_call_the_zygote_lost_is_a_failure_never_a_second_run(warm, tmp_path):
+    """Once the request is in, the script may have run: a zygote that dies
+    mid-call is answered as a killed child, not retried warm or cold."""
+    import threading
+    import time
+
+    (tmp_path / "m.py").write_text(SCRIPT_MORE)
+    log = tmp_path / "ran.log"
+    z = subprocs._zygotes[warm.key]
+
+    def kill_soon():
+        while not log.exists():
+            time.sleep(0.01)
+        import os
+        import signal as sig
+        for pid in _children(z.proc.pid):     # the call's supervisor and runner
+            os.kill(pid, sig.SIGKILL)
+
+    threading.Thread(target=kill_soon, daemon=True).start()
+    p = _run(warm, [str(tmp_path / "m.py"), "count", str(log)], tmp_path)
+    assert p.returncode < 0
+    assert log.read_text() == "ran\n"
+
+
+def _children(pid: int) -> list[int]:
+    """Every descendant of ``pid`` (the supervisors and runners)."""
+    import subprocess as sp
+    out = sp.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
+    kids = [int(k) for k in out]
+    return kids + [g for k in kids for g in _children(k)]
+
+
+def test_a_zygote_that_never_says_ready_leaves_nothing_behind(tmp_path, monkeypatch):
+    bad = tmp_path / "bad.py"
+    bad.write_text("import sys, time\nprint('nope', flush=True)\ntime.sleep(60)\n")
+    monkeypatch.setattr(subprocs, "_ZYGOTE_SCRIPT", bad)
+    with pytest.raises(subprocs.Unreachable):
+        subprocs.Zygote(subprocs.Warm([PY], ()))
+    import subprocess as sp
+    assert not sp.run(["pgrep", "-f", str(bad)], capture_output=True).stdout
+
+
+def test_a_zygote_starts_with_fds_past_select_s_limit(tmp_path):
+    """select() refuses fds >= 1024; an API with many sockets open got there."""
+    import os
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if hard != resource.RLIM_INFINITY and hard < 1200:
+        pytest.skip("fd limit too low to reach 1024")
+    resource.setrlimit(resource.RLIMIT_NOFILE, (max(soft, 1200), hard))
+    held = [os.open(os.devnull, os.O_RDONLY) for _ in range(1100)]
+    try:
+        z = subprocs.Zygote(subprocs.Warm([PY], ()))
+        assert z.alive()
+        z.close()
+    finally:
+        for fd in held:
+            os.close(fd)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft, hard))
+
+
+def test_a_failure_never_evicts_the_zygote_another_thread_put_back():
+    w = subprocs.Warm([PY], ())
+
+    class Fake:
+        def close(self):
+            pass
+
+    healthy, dead = Fake(), Fake()
+    subprocs._zygotes[w.key] = healthy
+    try:
+        subprocs._drop(w, dead)
+        assert subprocs._zygotes[w.key] is healthy
+    finally:
+        subprocs._zygotes.pop(w.key, None)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_gather_all_waits_for_every_sibling_then_raises_the_failure():
+    import asyncio
+
+    finished = []
+
+    async def slow():
+        await asyncio.sleep(0.1)
+        finished.append("slow")
+        return 1
+
+    async def boom():
+        raise ValueError("first")
+
+    with pytest.raises(ValueError, match="first"):
+        await subprocs.gather_all(boom(), slow())
+    assert finished == ["slow"]
+    assert await subprocs.gather_all(slow(), slow()) == [1, 1]

@@ -30,7 +30,7 @@ def upgrade() -> None:
         sa.Column('family', sa.Text(), nullable=False),
         sa.Column('tenant_id', GUID(), nullable=True),
         sa.Column('day', sa.Date(), nullable=False),
-        sa.Column('plane', sa.Date(), nullable=True),
+        sa.Column('plane', sa.Text(), nullable=True),
         sa.Column('payload', postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column('computed_at', sa.DateTime(timezone=True),
                   server_default=sa.text('now()'), nullable=False),

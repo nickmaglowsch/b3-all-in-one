@@ -91,7 +91,18 @@ async def _record_ingest(kind: str, args: list[str]) -> dict:
           + (f"\n{detail}" if detail else ""), file=sys.stderr, flush=True)
     if proc.returncode != 0:
         raise IngestFailed(kind, run_id, detail)
+    await _queue_sleeve_refresh()
     return {"kind": kind, "status": str(status), "run_id": str(run_id)}
+
+
+async def _queue_sleeve_refresh() -> None:
+    """A plane moved, so strategy sleeves' stored weights may be stale; the
+    refresh recomputes only those that are. Best effort — the ingest landed
+    either way, and the midnight run and the API's stale reads queue it too."""
+    try:
+        await tasks_sleeves.defer_warm_open()
+    except Exception as e:  # noqa: BLE001
+        print(f"[ingest] could not queue {tasks_sleeves.WARM}: {e}", file=sys.stderr, flush=True)
 
 
 @app.periodic(cron=settings.ingest_prices_cron)
@@ -114,19 +125,11 @@ async def ingest_prices(timestamp: int = 0) -> dict:
     --skip-corporate-actions — which left dividend total-return adjustment missing
     and only detector-inferred splits in place.
     """
-    out = await _record_ingest("prices", [
+    return await _record_ingest("prices", [
         "b3_pipeline.main",
         "--force-download",
         "--start-year", str(settings.ingest_start_year),
     ])
-    # The plane moved: every strategy sleeve's stored weights are now stale.
-    # Best effort — the prices landed either way, and the midnight run and the
-    # API's stale reads both queue the same refresh.
-    try:
-        await tasks_sleeves.defer_warm_open()
-    except Exception as e:  # noqa: BLE001
-        print(f"[ingest] could not queue {tasks_sleeves.WARM}: {e}", file=sys.stderr, flush=True)
-    return out
 
 
 def _ingest_task(kind: str, module: str, cron: str | None):

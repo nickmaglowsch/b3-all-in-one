@@ -172,9 +172,11 @@ the latest close, `close_brl` for US and crypto); tax runs through taxcore's TLH
 - Strategy sleeves' advised weights are a full market-plane build each (10–20 s), so
   the latest answer per strategy and cadence is kept in Postgres (`sleeve_weights`)
   and served even when it is from an earlier day or plane, while the ingest worker
-  recomputes it (`warm_sleeve_weights`: after each price ingest, just after the UTC
-  day turns, and whenever the API serves a stale one). Only a strategy nobody has
-  asked for yet, or a user strategy just edited, is computed inside a request.
+  recomputes it (`warm_sleeve_weights`: after every ingest that lands, just after
+  the UTC day turns, and whenever the API serves a stale one). "Stale" means an
+  earlier day, or any price plane (B3, US, crypto) having moved since. Only a
+  strategy nobody has asked for yet, or a book whose user strategies were just
+  edited, is computed inside a request.
 - `GET /portfolio/target` — the combined target: each strategy sleeve's advised weights
   (blended `Σ pct/100 × weights`), each ticker sleeve's own weight; then the B3 book
   against its own share of that target (B3 weights scaled to the book, with

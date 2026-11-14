@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { usePathname } from "next/navigation";
 import { TAB_PARAM, pickTab, stepTab } from "@/lib/tabs";
 
 /**
@@ -63,6 +64,21 @@ export function useTab(ids: string[], param = TAB_PARAM) {
     },
     [first, param],
   );
+  // A `?aba=` naming a tab that is not on the strip (a bookmark, a book switch
+  // that kept the URL) is rewritten to the tab actually shown. Left in place it
+  // would fire later: the moment that tab appeared — sleeves saved, positions
+  // imported — the page would jump to it on its own and hide what the reader
+  // had just done. Callers pass only the ids they render.
+  //
+  // Only on this hook's own page. Back/forward changes the URL while the page
+  // being left is still mounted and subscribed to popstate: Bench would read
+  // Portfólio's `?aba=posicoes` as a stray of its own and rewrite the URL the
+  // reader is arriving at.
+  const pathname = usePathname();
+  const stray = requested !== null && requested !== active;
+  useEffect(() => {
+    if (stray && window.location.pathname === pathname) select(active);
+  }, [stray, active, select, pathname]);
   return [active, select] as const;
 }
 
@@ -177,9 +193,10 @@ export function Tabs({
         {/* Beside the tabs from `sm`; on a phone its own row above them (below
             would part the active underline from the strip's rule), so the
             client's name (or the alarm that it is missing) is in every
-            screenshot of every tab, at any width. */}
+            screenshot of every tab, at any width. `empty:hidden` because the
+            slot is an element that may render nothing (the user's own book). */}
         {trailing && (
-          <div className="order-first basis-full pt-2 sm:order-none sm:basis-auto sm:shrink-0 sm:pb-2.5 sm:pt-0">
+          <div className="order-first basis-full pt-2 empty:hidden sm:order-none sm:basis-auto sm:shrink-0 sm:pb-2.5 sm:pt-0">
             {trailing}
           </div>
         )}

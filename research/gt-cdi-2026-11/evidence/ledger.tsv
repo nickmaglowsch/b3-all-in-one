@@ -49,3 +49,5 @@
 49	R2_H4b_marsep_full	GTC2 H4b ME mar-sep	2005-01-01	None	{}	9c8acd68-b29b-4700-a9f6-a8ce31d725d2	done
 50	R3_H4b_janjul_full	GTC2 H4b ME jan-jul	2005-01-01	None	{}	6d286a16-adf2-44b0-a7ed-33edb1eb8707	done
 51	R4_DIVO_full	GTC B_DIVO DIVO11 buy-hold	2005-01-01	None	{}	3482b0b6-4b17-400c-ae5c-a2f43687dc8f	done
+52	FWD_context_history	FWD Net-Cash Profitable	2010-01-01	None	{}	7149e0a4-7079-4e35-a099-4bb74c6bc71b	done
+53-56	FWD dry-run checkin (FWD, BOVA, DIVO, CDI)	2026-11-16	None	{}	-	error (expected: no data after freeze)

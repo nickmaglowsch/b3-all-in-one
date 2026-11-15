@@ -12,7 +12,7 @@
     "engine/b3_pipeline/cvm_parser.py::_extract_metrics_from_csvs": 22,
     "engine/b3_pipeline/cvm_parser.py::parse_fre_zip": 11,
     "engine/b3_pipeline/main.py::run_pipeline": 24,
-    "engine/b3_pipeline/parser.py::parse_cotahist_file": 15,
+    "engine/b3_pipeline/parser.py::parse_cotahist_file": 12,
     "engine/backtests/core/config_strategy.py::generate_signals": 12,
     "engine/backtests/core/mean_rev_helpers.py::compute_signal_stability": 15,
     "engine/backtests/core/signal_dsl.py::_ev": 13,

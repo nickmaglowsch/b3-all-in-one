@@ -44,6 +44,24 @@ def _parse_int(value: str) -> int:
         return 0
 
 
+_SPOT_MARKETS = ("010", "011", "012", "013", "014", "015")
+
+
+def _is_plane_instrument(line: str) -> bool:
+    """Whether a COTAHIST line is a quote record for something the plane stores:
+    a spot-market row (tipo de mercado) in an equity BDI class, and not an index.
+
+    The index check: IBOV11 / SMLL11 are the Ibovespa and Small Cap in points,
+    printed as lote-padrão rows with an "IND" ISIN (BRIBOVINDM18). They are no
+    position anyone holds; see backtests.core.markets.B3_INDEX_LINES.
+    """
+    return (len(line) >= 245
+            and line[0:2] == "01"
+            and line[10:12].strip() in config.EQUITY_BDI_CODES
+            and line[24:27].strip() in _SPOT_MARKETS
+            and line[236:239] != "IND")
+
+
 def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
     """
     Parse a single COTAHIST ZIP file.
@@ -76,25 +94,14 @@ def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
                     except UnicodeDecodeError:
                         line = line_bytes.decode("utf-8", errors="replace")
 
-                    if len(line) < 245:
-                        continue
-
-                    tipo_registro = line[0:2]
-                    if tipo_registro != "01":
-                        continue
-
-                    cod_bdi = line[10:12].strip()
-                    if cod_bdi not in config.EQUITY_BDI_CODES:
-                        continue
-
-                    tipo_mercado = line[24:27].strip()
-                    if tipo_mercado not in ("010", "011", "012", "013", "014", "015"):
+                    if not _is_plane_instrument(line):
                         continue
 
                     ticker = line[12:24].strip().upper()
                     if not ticker:
                         continue
 
+                    isin_code = line[230:242].strip()
                     date = _parse_date(line[2:10])
                     if date is None:
                         continue
@@ -104,7 +111,6 @@ def parse_cotahist_file(zip_path: Path) -> pd.DataFrame:
                     low_price = _parse_price(line[82:95])
                     close_price = _parse_price(line[108:121])
                     volume = _parse_price(line[170:188])
-                    isin_code = line[230:242].strip()
 
                     quotation_factor = _parse_int(line[210:217])
                     if quotation_factor <= 0:

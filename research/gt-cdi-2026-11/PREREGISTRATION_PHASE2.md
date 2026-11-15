@@ -75,3 +75,20 @@ If nothing meets all five, the answer remains "no strategy found".
   20 bps and delay on validation.
 - Holdout: one run, on the single survivor with the highest validation after-tax Sharpe that meets bar items 2, 3 and 5.
   If none does, the holdout is not run, because there would be nothing worth spending the last contaminated look on.
+
+## Addendum — "readiness" tests for H4b (written before running them, 2026-11-15)
+Spec frozen: signal `where(div_yield_12m, div_years_3y >= 3)`, top 20%, equal weight, ADTV ≥ R$2M, `dedup_roots`.
+Runs (from the remaining Phase-2 budget):
+- R1: H4b on the monthly grid, Jun/Dec rebalance, one continuous run 2005..latest (the reference curve).
+- R2: same, rebalanced Mar/Sep. R3: same, rebalanced Jan/Jul.
+- R4: DIVO11 buy-and-hold, 2005..latest (its weight sits in CDI before it lists).
+No-run checks: a regression of quarterly excess returns over CDI on BOVA11's (2009Q1 onward, once BOVA11 trades), and a
+read of the engine code for delisted-stock handling.
+
+Pass criteria (all must hold for "keep, start forward tracking"):
+- T1 timing: all three schedules have after-tax Sharpe > 0 over 2006..latest AND above BOVA11 over the same months;
+  the max-min spread across the three is ≤ 0.15.
+- T2 DIVO11: R1's after-tax Sharpe over DIVO11's trading life > DIVO11's own, both curve-derived on the same months.
+- T3 alpha: the regression intercept (alpha) is > 0 with t ≥ 1.5. t < 2 is still reported as unproven.
+- T4 survivorship: delisted names stay in the history, so a stock that stops trading counts as a loss rather than disappearing.
+Any failure ends the candidate. Passing all four does NOT make it proven; it makes it worth freezing and tracking forward.

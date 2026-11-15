@@ -27,3 +27,21 @@
 27	H3c_valid_delay	GTC H3c delay+1	2015-01-01	2019-12-31	{}	177e3480-b893-47de-817c-4dfd9d0dc7d5	done
 28	H3c_valid_top15	GTC H3c nbhd top15	2015-01-01	2019-12-31	{}	47aa1c3d-f037-4266-b785-e7a89c927d89	done
 29	H3c_HOLDOUT	GTC H3c mom6-1 top20 ME	2020-01-01	None	{}	a3d8a44d-c9f5-45ad-856f-2a4cef1a2d8a	done
+30	H4a_design	GTC2 H4a div3y yield top20 QE	2005-01-01	2014-12-31	{}	d83c4752-7a09-485b-a21f-1b753260ea7a	done
+31	H4b_design	GTC2 H4b div3y yield top20 semi	2005-01-01	2014-12-31	{}	ac38e0a3-d23d-4d1a-af3e-105376c27677	done
+32	H4c_design	GTC2 H4c div3y yield top30 QE	2005-01-01	2014-12-31	{}	667b61fb-6811-4bd3-8aca-9eadf1ae08ed	done
+33	H5a_design	GTC2 H5a lowvol trendgate ME	2005-01-01	2014-12-31	{}	8652fb49-3339-42d6-a7ba-54437ee1e20d	done
+34	H5b_design	GTC2 H5b EW trendgate ME	2005-01-01	2014-12-31	{}	1036e810-ea22-448a-a2e7-7b474d4642da	done
+35	H5c_design	GTC2 H5c lowvol trendgate QE	2005-01-01	2014-12-31	{}	ff7857da-02ac-4d3b-b67b-110f7d9f0076	done
+36	H6a_design	GTC2 H6a EP top20 QE	2005-01-01	2014-12-31	{}	3e584802-dd57-4efb-86ea-9598e3d728f9	done
+37	H6b_design	GTC2 H6b EP sector top20 QE	2005-01-01	2014-12-31	{}	8a285b20-228a-40c9-82bd-1e827577e2f4	done
+38	H6c_design	GTC2 H6c EP top20 ME	2005-01-01	2014-12-31	{}	a603185c-a55d-4c17-9ebe-ea386f70743b	done
+39	H4b_design_20bp	GTC2 H4b div3y yield top20 semi	2005-01-01	2014-12-31	{"slippage": 0.002}	cd72469c-e180-4150-927a-67a96adff9bd	done
+40	H4b_design_delay	GTC2 H4b delay+1	2005-01-01	2014-12-31	{}	6ed3f886-70df-4975-8456-92a3e9beb194	done
+41	H4b_design_top15	GTC2 H4b top15	2005-01-01	2014-12-31	{}	32e8e287-6d8a-4f1c-bc4a-6489fd106585	done
+42	H4b_design_top25	GTC2 H4b top25	2005-01-01	2014-12-31	{}	c96493df-22f1-432a-88c3-6511fe861a73	done
+43	H4b_design_div2y	GTC2 H4b div2y	2005-01-01	2014-12-31	{}	3d346f8a-961d-467a-ae85-16b6ba4dffdd	done
+44	H4b_valid	GTC2 H4b div3y yield top20 semi	2015-01-01	2019-12-31	{}	292a56c9-186a-4a6a-b8b3-f9122831a041	done
+45	H4b_valid_20bp	GTC2 H4b div3y yield top20 semi	2015-01-01	2019-12-31	{"slippage": 0.002}	fe1d7c1e-166b-43f0-9fbe-e3c60cf18f79	done
+46	H4b_valid_delay	GTC2 H4b delay+1	2015-01-01	2019-12-31	{}	fa10365c-e8c3-4987-8256-a15ccf3969bc	done
+47	H4b_HOLDOUT	GTC2 H4b div3y yield top20 semi	2020-01-01	None	{}	f9b98fa8-a428-450f-a39c-1331bdba56e1	done

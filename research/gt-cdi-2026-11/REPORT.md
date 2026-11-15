@@ -134,3 +134,76 @@ not investment advice.
 ## Artifacts kept / deleted
 - Kept: the baselines `GTC B_EW liquid equal-weight`, `GTC B_BOVA BOVA11 buy-hold` and `GTC B_CDI cash`.
 - Deleted: all 14 rejected hypothesis and robustness strategies.
+
+---
+
+# Phase 2 (user asked to continue) — pre-registered in `PREREGISTRATION_PHASE2.md` (`318b89b`)
+
+**Outcome: one candidate, H4b, clears every pre-registered bar as written. On matched-month comparisons it does not beat
+simply holding BOVA11. Verdict: Needs work, not Promising.** Phase-2 runs: 18 of a new budget of 30 (#30–#47).
+Cumulative: 47 backtests, 42 of them hypothesis or robustness runs, 18 distinct design combos across 6 hypotheses.
+
+**Contamination.** The 2020–26 window had already been seen in Phase 1, and I knew from general knowledge that high-dividend
+large caps did well in 2021–23. The holdout below is therefore a weak, contaminated check.
+
+## Design results (2005..2014, after-tax Sharpe vs CDI, t-proxy)
+| Spec | AT ann. | AT Sharpe (t) | MDD | Verdict |
+|---|---|---|---|---|
+| H4a dividend payers, top 20%, QE (#30) | 11.41% | +0.10 (+0.31) | −42.7% | |
+| **H4b dividend payers, top 20%, Jun/Dec (#31)** | 13.43% | **+0.22 (+0.65)** | −39.3% | finalist (EW over the same months: −0.23) |
+| H4c dividend payers, top 30%, QE (#32) | 11.34% | +0.10 (+0.31) | −45.7% | |
+| H5a low-vol + Ibovespa 10m-MA gate, ME (#33) | 9.17% | −0.13 | −21.5% | H5 refuted |
+| H5b EW + gate (#34) | 6.95% | −0.20 | −30.0% | |
+| H5c low-vol + gate, QE (#35) | 5.06% | −0.28 | −45.8% | |
+| H6a earnings yield, QE (#36), invested only from 2011-06 | −7.15% | −0.65 (−1.21) | −40.4% | H6 refuted (EW over the same months: −0.49) |
+| H6b sector-relative earnings yield (#37) | −5.24% | −0.63 | −42.1% | |
+| H6c earnings yield, ME (#38) | −8.17% | −0.80 | −41.6% | |
+
+## H4b — regular dividend payers, highest 12m yield, rebalanced each June and December
+- **Spec.** Universe ADTV ≥ R$2M, price ≥ 1, `dedup_roots`; signal `where(div_yield_12m, div_years_3y >= 3)`; top 20%; equal weight;
+  `rebalance: QE` with `rebalance_months: [6, 12]`. Saved as `GTC2 H4b div3y yield top20 semi`.
+- **Hypothesis (game).** Dividends are tax-exempt for resident individuals, but the marginal price-setters (foreigners, exempt
+  funds) don't value the exemption, so it isn't priced. Regular payouts also commit controlling shareholders not to tunnel.
+  The engine taxes dividends as gains on sale, so the tax leg is NOT credited here (conservative).
+
+| Window | AT ann. | PT ann. | Vol | AT Sharpe (t) | Sortino* | Engine MDD | DD dur* | Win* | Tax paid |
+|---|---|---|---|---|---|---|---|---|---|
+| Design 2006..2014 (#31) | 13.43% | 15.66% | 17.8% | +0.22 (+0.65) | +0.35 | −39.3% | 24m | 56% | R$42.9k |
+| Validation 2015..2019 (#44) | 24.45% | 27.53% | 19.7% | +0.75 (+1.63) | +1.47 | −42.3% | 12m | 58% | R$24.2k |
+| Holdout 2020-04..2026-11 (#47) | 10.76% | 12.51% | 19.2% | +0.12 (+0.31) | +0.18 | −30.3% | 18m | 52% | R$16.7k |
+| OOS combined 2015..2026 (curve-derived) | | | | +0.38 (+1.29) | | | | | |
+
+\* Curve-derived from quarterly curves, so coarse (win rate = quarters beating CDI). Daily drawdowns are much deeper than the
+quarterly curve shows (validation: −42.3% daily vs −18.7% quarterly).
+
+- **Robustness (all positive, all weak).**
+  - Design: 20 bps +0.20; one extra period of delay +0.08; top 15% +0.14; top 25% +0.24; `div_years_3y >= 2` +0.22.
+  - Validation: 20 bps +0.74; delay +0.55.
+  - Inferred turnover ≈ 2.4× NAV a year (buys + sells), the lowest of every spec tested. Tax drag ≈ 2.2 pp/yr in design,
+    mostly from realising long-held gains.
+- **Matched-month comparisons (the honest test).**
+  - Validation: EW book +0.77 vs H4b +0.75 (a tie); BOVA11 +0.52.
+  - Holdout: BOVA11 **+0.26** vs H4b +0.12; EW −0.39.
+  - Combined OOS: BOVA11 +0.35 (t 1.19) vs H4b +0.38 (t 1.29).
+  - The pre-registered BOVA bar (+0.02) included the March 2020 crash. H4b's quarterly grid only invested from 2020-03-31,
+    so it "passed" that bar through timing luck, not signal.
+- **Regime (calendar years 2006–2026).** Beat CDI in 11/11 up-market years and 1/10 down-market years. It is defensive
+  relative to the EW book (2008: −25.6% vs −48.8%; 2015: −18.7% vs −15.5%, roughly the same), but it is still mostly equity beta.
+- **Outliers.** The largest quarter is +22.6% (2006-Q1). No month beyond ±30% appears on any curve.
+- **Multiple testing.** It is the best of 18 design combos. Under the null, the best of 18 design Sharpes over ~9 years would
+  reach about +0.8, so the design result itself is noise-level. The evidence rests on the OOS t ≈ 1.3, which is weak, and equal
+  to BOVA11's.
+
+**Verdict for H4b: Needs work.** It is the only spec that beat CDI after tax in all three windows, with low turnover and
+robust signs. But there is no evidence it adds anything over holding BOVA11, and all its t-stats are below 2.
+
+## What would make H4b "Promising"
+1. A fair holdout. That needs genuinely new data (e.g. re-test after 2027), or a grid aligned so H4b and BOVA11 hold
+   the same months.
+2. An engine that models the dividend exemption. H4b's real-world after-tax edge would be larger than shown, because the engine
+   taxes dividends as gains. Comparing against CDI net of its own 15% IR (what an individual actually earns) would also lower
+   the bar, for every strategy.
+3. A beta-matched comparison. A 50/50 H4b/CDI blend vs a 50/50 BOVA11/CDI blend would isolate selection from beta.
+
+## Phase 2 cleanup
+Deleted 12 rejected or robustness strategies. Kept `GTC2 H4b div3y yield top20 semi` (the candidate) and the three baselines.

@@ -1,0 +1,78 @@
+{
+ "run_id": "f9b98fa8-a428-450f-a39c-1331bdba56e1",
+ "strategy": "GTC2 H4b div3y yield top20 semi",
+ "status": "done",
+ "created_at": "2026-11-15T20:30:03.145634+00:00",
+ "window": {
+  "start": "2020-01-01",
+  "end": "2026-11-15",
+  "freq": "QE",
+  "market": "B3",
+  "periods": 28,
+  "invested_from": "2020-03-31"
+ },
+ "aftertax": {
+  "ann_return": 10.76,
+  "volatility": 19.16,
+  "sharpe": 0.12,
+  "max_drawdown": -30.25,
+  "calmar": 0.36
+ },
+ "pretax": {
+  "ann_return": 12.51,
+  "volatility": 18.89,
+  "sharpe": 0.2,
+  "max_drawdown": -30.25,
+  "calmar": 0.41
+ },
+ "total_tax_paid": 16651.36162536152,
+ "final_aftertax_nav": 199193.7926620232,
+ "data_warnings": [],
+ "params": {
+  "slippage": 0.001,
+  "contribution": 0,
+  "initial_capital": 100000
+ },
+ "bench_url": "https://b3-all-in-one.pages.dev/bench/run?id=f9b98fa8-a428-450f-a39c-1331bdba56e1",
+ "metrics": {
+  "end": "2026-11-15",
+  "freq": "QE",
+  "start": "2020-01-01",
+  "market": "B3",
+  "pretax": {
+   "Calmar": 0.41,
+   "Sharpe": 0.2,
+   "Strategy": "Pre-Tax",
+   "Ann. Return (%)": 12.51,
+   "Max Drawdown (%)": -30.25,
+   "Ann. Volatility (%)": 18.89
+  },
+  "status": "done",
+  "periods": 28,
+  "aftertax": {
+   "Calmar": 0.36,
+   "Sharpe": 0.12,
+   "Strategy": "After-Tax",
+   "Ann. Return (%)": 10.76,
+   "Max Drawdown (%)": -30.25,
+   "Ann. Volatility (%)": 19.16
+  },
+  "currency": "BRL",
+  "strategy": "GTC2 H4b div3y yield top20 semi",
+  "artifacts": [
+   "metrics.json",
+   "curves.csv"
+  ],
+  "peak_rss_mb": 623.7,
+  "data_warnings": [],
+  "invested_from": "2020-03-31",
+  "warmup_months": 48,
+  "total_tax_paid": 16651.36162536152,
+  "initial_capital": 100000.0,
+  "final_pretax_nav": 221347.48220286798,
+  "sharpe_risk_free": "CDI",
+  "final_aftertax_nav": 199193.7926620232,
+  "total_contributions": 0.0,
+  "final_loss_carryforward": 0.0
+ }
+}

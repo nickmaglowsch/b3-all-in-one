@@ -1,0 +1,78 @@
+{
+ "run_id": "a5a8d497-235b-453c-9a9e-2be0dfa9b9ca",
+ "strategy": "GTC H3c mom6-1 top20 ME",
+ "status": "done",
+ "created_at": "2026-11-15T20:02:12.189233+00:00",
+ "window": {
+  "start": "2015-01-01",
+  "end": "2019-12-31",
+  "freq": "ME",
+  "market": "B3",
+  "periods": 60,
+  "invested_from": "2015-01-31"
+ },
+ "aftertax": {
+  "ann_return": 24.88,
+  "volatility": 20.31,
+  "sharpe": 0.73,
+  "max_drawdown": -20.3,
+  "calmar": 1.23
+ },
+ "pretax": {
+  "ann_return": 28.83,
+  "volatility": 20.24,
+  "sharpe": 0.89,
+  "max_drawdown": -20.3,
+  "calmar": 1.42
+ },
+ "total_tax_paid": 27666.68143357445,
+ "final_aftertax_nav": 297530.1573487617,
+ "data_warnings": [],
+ "params": {
+  "slippage": 0.002,
+  "contribution": 0,
+  "initial_capital": 100000
+ },
+ "bench_url": "https://b3-all-in-one.pages.dev/bench/run?id=a5a8d497-235b-453c-9a9e-2be0dfa9b9ca",
+ "metrics": {
+  "end": "2019-12-31",
+  "freq": "ME",
+  "start": "2015-01-01",
+  "market": "B3",
+  "pretax": {
+   "Calmar": 1.42,
+   "Sharpe": 0.89,
+   "Strategy": "Pre-Tax",
+   "Ann. Return (%)": 28.83,
+   "Max Drawdown (%)": -20.3,
+   "Ann. Volatility (%)": 20.24
+  },
+  "status": "done",
+  "periods": 60,
+  "aftertax": {
+   "Calmar": 1.23,
+   "Sharpe": 0.73,
+   "Strategy": "After-Tax",
+   "Ann. Return (%)": 24.88,
+   "Max Drawdown (%)": -20.3,
+   "Ann. Volatility (%)": 20.31
+  },
+  "currency": "BRL",
+  "strategy": "GTC H3c mom6-1 top20 ME",
+  "artifacts": [
+   "metrics.json",
+   "curves.csv"
+  ],
+  "peak_rss_mb": 235.3,
+  "data_warnings": [],
+  "invested_from": "2015-01-31",
+  "warmup_months": 16,
+  "total_tax_paid": 27666.68143357445,
+  "initial_capital": 100000.0,
+  "final_pretax_nav": 346820.82562159764,
+  "sharpe_risk_free": "CDI",
+  "final_aftertax_nav": 297530.1573487617,
+  "total_contributions": 0.0,
+  "final_loss_carryforward": 475.59268619422346
+ }
+}

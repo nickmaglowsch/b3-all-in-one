@@ -1,0 +1,96 @@
+{
+ "run_id": "ba282082-9848-4bae-98bf-994a6f32dde2",
+ "strategy": "GTC H3c nbhd top15",
+ "status": "done",
+ "created_at": "2026-11-15T20:00:27.412242+00:00",
+ "window": {
+  "start": "2005-01-01",
+  "end": "2014-12-31",
+  "freq": "ME",
+  "market": "B3",
+  "periods": 112,
+  "invested_from": "2005-09-30"
+ },
+ "aftertax": {
+  "ann_return": 8.34,
+  "volatility": 23.02,
+  "sharpe": 0.01,
+  "max_drawdown": -63.72,
+  "calmar": 0.13
+ },
+ "pretax": {
+  "ann_return": 10.0,
+  "volatility": 23.02,
+  "sharpe": 0.08,
+  "max_drawdown": -63.72,
+  "calmar": 0.16
+ },
+ "total_tax_paid": 24041.30916384312,
+ "final_aftertax_nav": 209584.5958821013,
+ "data_warnings": [
+  {
+   "code": "warmup_inside_window",
+   "detail": {
+    "strategy": "GTC H3c nbhd top15",
+    "invested_from": "2005-09-30",
+    "first_rebalance": "2005-01-31"
+   }
+  }
+ ],
+ "params": {
+  "slippage": 0.001,
+  "contribution": 0,
+  "initial_capital": 100000
+ },
+ "bench_url": "https://b3-all-in-one.pages.dev/bench/run?id=ba282082-9848-4bae-98bf-994a6f32dde2",
+ "metrics": {
+  "end": "2014-12-31",
+  "freq": "ME",
+  "start": "2005-01-01",
+  "market": "B3",
+  "pretax": {
+   "Calmar": 0.16,
+   "Sharpe": 0.08,
+   "Strategy": "Pre-Tax",
+   "Ann. Return (%)": 10.0,
+   "Max Drawdown (%)": -63.72,
+   "Ann. Volatility (%)": 23.02
+  },
+  "status": "done",
+  "periods": 112,
+  "aftertax": {
+   "Calmar": 0.13,
+   "Sharpe": 0.01,
+   "Strategy": "After-Tax",
+   "Ann. Return (%)": 8.34,
+   "Max Drawdown (%)": -63.72,
+   "Ann. Volatility (%)": 23.02
+  },
+  "currency": "BRL",
+  "strategy": "GTC H3c nbhd top15",
+  "artifacts": [
+   "metrics.json",
+   "curves.csv"
+  ],
+  "peak_rss_mb": 264.7,
+  "data_warnings": [
+   {
+    "code": "warmup_inside_window",
+    "detail": {
+     "strategy": "GTC H3c nbhd top15",
+     "invested_from": "2005-09-30",
+     "first_rebalance": "2005-01-31"
+    }
+   }
+  ],
+  "invested_from": "2005-09-30",
+  "warmup_months": 16,
+  "total_tax_paid": 24041.30916384312,
+  "initial_capital": 100000.0,
+  "final_pretax_nav": 241230.3285701399,
+  "sharpe_risk_free": "CDI",
+  "final_aftertax_nav": 209584.5958821013,
+  "total_contributions": 0.0,
+  "final_loss_carryforward": 2219.9405589516546
+ }
+}

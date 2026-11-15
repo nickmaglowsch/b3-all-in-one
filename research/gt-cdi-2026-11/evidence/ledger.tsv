@@ -1,0 +1,29 @@
+1	B_EW_full	GTC B_EW liquid equal-weight	2005-01-01	None	{}	f33c0e43-4553-4161-aa2c-e29fa1ac3f71	done (client saw 502; server ran it)
+2	B_EW_full_dup	GTC B_EW liquid equal-weight	2005-01-01	None	{}	96a9d5f8-28c5-4384-972f-faa27bc329dc	done (duplicate from client auto-retry; unused)
+3	B_CDI_full	GTC B_CDI cash	2005-01-01	None	{}	c104c613-a2fe-40f2-a0f1-06819403a007	done
+4	B_BOVA_full	GTC B_BOVA BOVA11 buy-hold	2005-01-01	None	{}	ab0803b9-c988-46fb-b7c3-079a970769c5	done
+5	H1a_design	GTC H1a lowvol126 top20 ME	2005-01-01	2014-12-31	{}	aca517ff-1c6c-4906-ba7b-99bd4d2c7b2d	done
+6	H1b_design	GTC H1b lowvol252 top20 ME	2005-01-01	2014-12-31	{}	f98dc95c-c013-47ff-abc6-2ba792fb1f47	done
+7	H1c_design	GTC H1c lowvol126 top20 QE	2005-01-01	2014-12-31	{}	3057f5b6-51c7-46c4-89bc-9addf079332c	done
+8	H2a_design	GTC H2a EW easing gate	2005-01-01	2014-12-31	{}	e160d62e-5e17-4d3d-8e4a-6d19a14d2ada	done
+9	H2b_design	GTC H2b EW easing-or-trend gate	2005-01-01	2014-12-31	{}	22f00b5c-9de6-4237-af7d-73a6fd729991	done
+10	H2c_design	GTC H2c EW easing-and-trend gate	2005-01-01	2014-12-31	{}	e41181f1-ee54-47f8-9b21-ddbedcb27ccc	done
+11	H3a_design	GTC H3a mom12-1 top20 ME	2005-01-01	2014-12-31	{}	c1f90d72-be87-473a-aa38-7631eca20b82	done
+12	H3b_design	GTC H3b mom12-1 top20 QE	2005-01-01	2014-12-31	{}	6032c21b-83df-42be-bb6e-44160d56779c	done
+13	H3c_design	GTC H3c mom6-1 top20 ME	2005-01-01	2014-12-31	{}	72a8dc14-8644-47f0-bf4a-e6ee55b76bfc	done
+14	H2a_design_20bp	GTC H2a EW easing gate	2005-01-01	2014-12-31	{"slippage": 0.002}	dd377f3f-7b89-4fe0-bd3c-f594fffd50d6	done
+15	H2a_design_delay	GTC H2a delay+1	2005-01-01	2014-12-31	{}	ca03e308-0807-43f5-a892-a32c8f00944b	done
+16	H3c_design_20bp	GTC H3c mom6-1 top20 ME	2005-01-01	2014-12-31	{"slippage": 0.002}	e58c5ee6-9aab-4079-9be4-970f842803fa	done
+17	H3c_design_delay	GTC H3c delay+1	2005-01-01	2014-12-31	{}	51c6c3c8-1d1c-427c-bb78-35abcaeaaad3	done (INVALID: signal.shift ignored for expr; identical to #13)
+18	H3c_design_delay_inline	GTC H3c delay+1	2005-01-01	2014-12-31	{}	4f76fc68-841b-46dd-acb2-6e1f709a0bbc	done
+19	H2a_design_adtv1M	GTC H2a EW easing gate	2005-01-01	2014-12-31	{"min_adtv": 1000000}	cf6dc3e2-ad22-4803-b2a5-55ee23609a07	done
+20	H2a_design_adtv4M	GTC H2a EW easing gate	2005-01-01	2014-12-31	{"min_adtv": 4000000}	866b6c68-f928-412d-aae0-67609565492d	done
+21	H3c_design_mom4	GTC H3c nbhd mom4-1	2005-01-01	2014-12-31	{}	d40a6be5-e22d-4fac-98e4-d70fd9e3d72a	done
+22	H3c_design_mom8	GTC H3c nbhd mom8-1	2005-01-01	2014-12-31	{}	78447f6e-3caa-4f26-8181-b063dc027136	done
+23	H3c_design_top15	GTC H3c nbhd top15	2005-01-01	2014-12-31	{}	ba282082-9848-4bae-98bf-994a6f32dde2	done
+24	H2a_valid	GTC H2a EW easing gate	2015-01-01	2019-12-31	{}	a8afd3a8-88c3-40c4-b863-b11d9f1d31a3	done
+25	H3c_valid	GTC H3c mom6-1 top20 ME	2015-01-01	2019-12-31	{}	2af15e66-3d40-41c8-8149-ad4f9739ab40	done
+26	H3c_valid_20bp	GTC H3c mom6-1 top20 ME	2015-01-01	2019-12-31	{"slippage": 0.002}	a5a8d497-235b-453c-9a9e-2be0dfa9b9ca	done
+27	H3c_valid_delay	GTC H3c delay+1	2015-01-01	2019-12-31	{}	177e3480-b893-47de-817c-4dfd9d0dc7d5	done
+28	H3c_valid_top15	GTC H3c nbhd top15	2015-01-01	2019-12-31	{}	47aa1c3d-f037-4266-b785-e7a89c927d89	done
+29	H3c_HOLDOUT	GTC H3c mom6-1 top20 ME	2020-01-01	None	{}	a3d8a44d-c9f5-45ad-856f-2a4cef1a2d8a	done

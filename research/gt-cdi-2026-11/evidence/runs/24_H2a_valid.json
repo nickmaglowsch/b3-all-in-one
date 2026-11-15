@@ -1,0 +1,78 @@
+{
+ "run_id": "a8afd3a8-88c3-40c4-b863-b11d9f1d31a3",
+ "strategy": "GTC H2a EW easing gate",
+ "status": "done",
+ "created_at": "2026-11-15T20:00:56.471860+00:00",
+ "window": {
+  "start": "2015-01-01",
+  "end": "2019-12-31",
+  "freq": "ME",
+  "market": "B3",
+  "periods": 60,
+  "invested_from": "2015-01-31"
+ },
+ "aftertax": {
+  "ann_return": 17.99,
+  "volatility": 14.17,
+  "sharpe": 0.58,
+  "max_drawdown": -16.66,
+  "calmar": 1.08
+ },
+ "pretax": {
+  "ann_return": 20.45,
+  "volatility": 13.91,
+  "sharpe": 0.74,
+  "max_drawdown": -16.66,
+  "calmar": 1.23
+ },
+ "total_tax_paid": 14976.284921155411,
+ "final_aftertax_nav": 225310.9681176179,
+ "data_warnings": [],
+ "params": {
+  "slippage": 0.001,
+  "contribution": 0,
+  "initial_capital": 100000
+ },
+ "bench_url": "https://b3-all-in-one.pages.dev/bench/run?id=a8afd3a8-88c3-40c4-b863-b11d9f1d31a3",
+ "metrics": {
+  "end": "2019-12-31",
+  "freq": "ME",
+  "start": "2015-01-01",
+  "market": "B3",
+  "pretax": {
+   "Calmar": 1.23,
+   "Sharpe": 0.74,
+   "Strategy": "Pre-Tax",
+   "Ann. Return (%)": 20.45,
+   "Max Drawdown (%)": -16.66,
+   "Ann. Volatility (%)": 13.91
+  },
+  "status": "done",
+  "periods": 60,
+  "aftertax": {
+   "Calmar": 1.08,
+   "Sharpe": 0.58,
+   "Strategy": "After-Tax",
+   "Ann. Return (%)": 17.99,
+   "Max Drawdown (%)": -16.66,
+   "Ann. Volatility (%)": 14.17
+  },
+  "currency": "BRL",
+  "strategy": "GTC H2a EW easing gate",
+  "artifacts": [
+   "metrics.json",
+   "curves.csv"
+  ],
+  "peak_rss_mb": 253.6,
+  "data_warnings": [],
+  "invested_from": "2015-01-31",
+  "warmup_months": 16,
+  "total_tax_paid": 14976.284921155411,
+  "initial_capital": 100000.0,
+  "final_pretax_nav": 249377.2453148671,
+  "sharpe_risk_free": "CDI",
+  "final_aftertax_nav": 225310.9681176179,
+  "total_contributions": 0.0,
+  "final_loss_carryforward": 0.0
+ }
+}

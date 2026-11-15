@@ -1,0 +1,78 @@
+{
+ "run_id": "3482b0b6-4b17-400c-ae5c-a2f43687dc8f",
+ "strategy": "GTC B_DIVO DIVO11 buy-hold",
+ "status": "done",
+ "created_at": "2026-11-15T21:17:50.300852+00:00",
+ "window": {
+  "start": "2005-01-01",
+  "end": "2026-11-15",
+  "freq": "QE",
+  "market": "B3",
+  "periods": 88,
+  "invested_from": "2005-03-31"
+ },
+ "aftertax": {
+  "ann_return": 9.76,
+  "volatility": 17.97,
+  "sharpe": 0.05,
+  "max_drawdown": -56.37,
+  "calmar": 0.17
+ },
+ "pretax": {
+  "ann_return": 10.22,
+  "volatility": 17.76,
+  "sharpe": 0.07,
+  "max_drawdown": -56.37,
+  "calmar": 0.18
+ },
+ "total_tax_paid": 19127.521551238904,
+ "final_aftertax_nav": 757667.3859756348,
+ "data_warnings": [],
+ "params": {
+  "slippage": 0.001,
+  "contribution": 0,
+  "initial_capital": 100000
+ },
+ "bench_url": "https://b3-all-in-one.pages.dev/bench/run?id=3482b0b6-4b17-400c-ae5c-a2f43687dc8f",
+ "metrics": {
+  "end": "2026-11-15",
+  "freq": "QE",
+  "start": "2005-01-01",
+  "market": "B3",
+  "pretax": {
+   "Calmar": 0.18,
+   "Sharpe": 0.07,
+   "Strategy": "Pre-Tax",
+   "Ann. Return (%)": 10.22,
+   "Max Drawdown (%)": -56.37,
+   "Ann. Volatility (%)": 17.76
+  },
+  "status": "done",
+  "periods": 88,
+  "aftertax": {
+   "Calmar": 0.17,
+   "Sharpe": 0.05,
+   "Strategy": "After-Tax",
+   "Ann. Return (%)": 9.76,
+   "Max Drawdown (%)": -56.37,
+   "Ann. Volatility (%)": 17.97
+  },
+  "currency": "BRL",
+  "strategy": "GTC B_DIVO DIVO11 buy-hold",
+  "artifacts": [
+   "metrics.json",
+   "curves.csv"
+  ],
+  "peak_rss_mb": 332.2,
+  "data_warnings": [],
+  "invested_from": "2005-03-31",
+  "warmup_months": 6,
+  "total_tax_paid": 19127.521551238904,
+  "initial_capital": 100000.0,
+  "final_pretax_nav": 829439.195565314,
+  "sharpe_risk_free": "CDI",
+  "final_aftertax_nav": 757667.3859756348,
+  "total_contributions": 0.0,
+  "final_loss_carryforward": 0.0
+ }
+}

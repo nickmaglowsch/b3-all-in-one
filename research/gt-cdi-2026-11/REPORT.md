@@ -207,3 +207,33 @@ robust signs. But there is no evidence it adds anything over holding BOVA11, and
 
 ## Phase 2 cleanup
 Deleted 12 rejected or robustness strategies. Kept `GTC2 H4b div3y yield top20 semi` (the candidate) and the three baselines.
+
+---
+
+# Readiness tests for H4b (pre-registered in `PREREGISTRATION_PHASE2.md` addendum, `db13913`) — **H4b retired**
+
+Runs #48–#51 (cumulative 51 backtests; Phase 2 used 22 of 30).
+
+| Test | Result | Pass? |
+|---|---|---|
+| T1 timing: one continuous run 2005..2026-11 per rebalance schedule | Engine AT Sharpe Jun/Dec **+0.19** (12.39%/yr), Mar/Sep **+0.08** (9.82%/yr), Jan/Jul **+0.08** (9.79%/yr). From 2006, curve-derived: +0.13 / +0.09 / +0.03 (t 0.57 / 0.41 / 0.14). All above BOVA11 on matched quarters from 2009Q1 (+0.15 / +0.14 / +0.12 vs +0.06). Spread 0.11 | Pass |
+| T2 vs DIVO11, 2012Q2..2026 (59 quarters) | H4b **−0.03** (t −0.12), 6.46%/yr vs DIVO11 **+0.06** (t +0.22), 8.52%/yr | **Fail** |
+| T3 alpha vs BOVA11, 2009Q1..2026 (72 quarters) | alpha +0.51%/qtr (~+2.0%/yr), **t +0.75**; beta 0.76; R² 0.72 | **Fail** (needed t ≥ 1.5) |
+| T4 survivorship (engine code) | Delisted instruments stay in the plane. Holdings are liquidated at the last print, or at 0 when flagged `is_worthless` | Pass (an unflagged bankruptcy exits at its last trade) |
+
+What the continuous runs revealed:
+- **The separate-window runs flattered H4b.** Each restarted at R$100k with taxes reset. In one continuous run the book grows
+  to ~R$1.2M, the R$20k exemption covers a shrinking share of sales, and tax paid reaches R$182k.
+- **Timing luck disappears.** The continuous run takes the March 2020 crash (−29.5% that month).
+- **In wealth terms, two of the three schedules ended below CDI** from 2006 (9.92% and 8.57%/yr vs CDI 10.34%), even
+  with a positive Sharpe. The arithmetic excess is positive, but volatility drag eats it.
+- Engine MDD in the continuous runs: −62% (Jun/Dec), −59% (Mar/Sep, Jan/Jul). DIVO11 buy-and-hold: −56%.
+
+**Final verdict: Reject.** The dividend-payer tilt carries about 0.76 of the market's beta and no statistically
+detectable alpha (t 0.75). A plain dividend ETF did better over its life. Every number on the page comes from tool runs.
+
+## Overall conclusion after 51 backtests and 6 hypotheses
+Nothing tested here is a long-only B3 strategy that reliably beats CDI after tax:
+- Over 2005–2026 (21+ years), broad Brazilian equity books earned roughly CDI after tax, with drawdowns of 50–60%.
+- Factor tilts (low vol, momentum, dividends, value, trend and rate gates) changed *when* the losses came, not the long-run outcome.
+- **Making a strategy "ready" by further tuning on the same 21 years would be overfitting.** The pre-registered rules exist to prevent that.

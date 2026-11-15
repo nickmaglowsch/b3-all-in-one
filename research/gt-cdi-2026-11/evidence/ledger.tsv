@@ -45,3 +45,7 @@
 45	H4b_valid_20bp	GTC2 H4b div3y yield top20 semi	2015-01-01	2019-12-31	{"slippage": 0.002}	fe1d7c1e-166b-43f0-9fbe-e3c60cf18f79	done
 46	H4b_valid_delay	GTC2 H4b delay+1	2015-01-01	2019-12-31	{}	fa10365c-e8c3-4987-8256-a15ccf3969bc	done
 47	H4b_HOLDOUT	GTC2 H4b div3y yield top20 semi	2020-01-01	None	{}	f9b98fa8-a428-450f-a39c-1331bdba56e1	done
+48	R1_H4b_jundec_full	GTC2 H4b ME jun-dec	2005-01-01	None	{}	3e188a22-a30d-4d88-aec9-f7694a5e63d8	done
+49	R2_H4b_marsep_full	GTC2 H4b ME mar-sep	2005-01-01	None	{}	9c8acd68-b29b-4700-a9f6-a8ce31d725d2	done
+50	R3_H4b_janjul_full	GTC2 H4b ME jan-jul	2005-01-01	None	{}	6d286a16-adf2-44b0-a7ed-33edb1eb8707	done
+51	R4_DIVO_full	GTC B_DIVO DIVO11 buy-hold	2005-01-01	None	{}	3482b0b6-4b17-400c-ae5c-a2f43687dc8f	done

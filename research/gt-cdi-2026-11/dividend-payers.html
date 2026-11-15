@@ -133,10 +133,10 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
   <h1>Regular Dividend Payers</h1>
   <p class="lede">Hold the Brazilian stocks that paid a dividend in each of the last three years and currently have the highest 12-month yield. Rebalance twice a year. Compare everything against CDI after Brazilian taxes.</p>
   <div class="verdict">
-    <span class="pill"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5 15 14H1L8 1.5Zm-.75 5v4h1.5v-4h-1.5Zm0 5v1.5h1.5V11.5h-1.5Z"/></svg>Verdict: needs work</span>
-    <span class="note">Beat CDI after tax in all three test periods, but did no better than simply holding BOVA11 over the same months.</span>
+    <span class="pill"><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 1.5 15 14H1L8 1.5Zm-.75 5v4h1.5v-4h-1.5Zm0 5v1.5h1.5V11.5h-1.5Z"/></svg>Verdict: rejected</span>
+    <span class="note">It looked promising in three separate test periods, then failed the readiness tests: it trailed the DIVO11 dividend ETF and showed no reliable edge over the market. <a href="#ready">See the readiness tests</a>.</span>
   </div>
-  <p class="note">Research findings from historical backtests, not investment advice. Every number on this page comes from Quantax Bench runs #31–#47, each starting with R$100k and no contributions.</p>
+  <p class="note">Research findings from historical backtests, not investment advice. Every number on this page comes from Quantax Bench runs #31–#51, each starting with R$100k and no contributions.</p>
 </header>
 
 <section aria-labelledby="results">
@@ -263,7 +263,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
 </section>
 
 <section aria-labelledby="weak">
-  <h2 id="weak">Why it isn't ready</h2>
+  <h2 id="weak">Warning signs before the readiness tests</h2>
   <ul class="plain weak">
     <li><strong>It doesn't beat the index.</strong> Over the same months, holding BOVA11 matched it from 2015 to 2026 and did better from 2020.</li>
     <li><strong>The final test passed partly by luck of timing.</strong> The run's first rebalance was 31 March 2020, so it skipped the COVID crash. That came from the quarterly schedule, not from anything the strategy chose.</li>
@@ -272,7 +272,7 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
     <li><strong>The final test wasn't clean.</strong> I had already seen 2020–2026 results from earlier tests, and I knew that large dividend payers like Petrobras and the banks did well in 2021–2023.</li>
     <li><strong>Drawdowns are deep.</strong> It fell about 42% from peak during the 2015–early 2016 sell-off.</li>
   </ul>
-  <h3>What would settle it</h3>
+  <h3>What was planned to settle it (now done, see readiness tests)</h3>
   <ul class="plain">
     <li>Compare a 50/50 mix of this strategy and CDI against a 50/50 mix of BOVA11 and CDI, to separate stock picking from market exposure.</li>
     <li>Test it on data after 2026, which nobody has looked at.</li>
@@ -280,9 +280,27 @@ footer { border-top: 1px solid var(--rule); padding-top: 18px; color: var(--ink-
   </ul>
 </section>
 
+<section aria-labelledby="ready">
+  <h2 id="ready">Readiness tests</h2>
+  <p>Four tests, with pass rules written down before they ran. Any failure retires the strategy. It failed two.</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Test</th><th>Result</th><th>Outcome</th></tr></thead>
+      <tbody>
+        <tr><td>Does the rebalance month matter?</td><td class="num">Jun/Dec +0.19 · Mar/Sep +0.08 · Jan/Jul +0.08</td><td>Pass</td></tr>
+        <tr class="me"><td>Better than the DIVO11 dividend ETF, 2012–2026?</td><td class="num">−0.03 vs +0.06 (6.5% vs 8.5% a year)</td><td>Fail</td></tr>
+        <tr class="me"><td>Return beyond market exposure (vs BOVA11, 2009–2026)?</td><td class="num">+2.0% a year, t 0.75 (needed 1.5)</td><td>Fail</td></tr>
+        <tr><td>Are delisted stocks kept in the history?</td><td>Yes, sold at their last price</td><td>Pass</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>These used one continuous run from 2005 to 2026 instead of three separate ones, and that changed the picture. As the account grows, the R$20k monthly exemption covers less of each sale and taxes rise (R$182k paid in total). The run also took the March 2020 crash (−29.5% that month). Over 2006–2026, two of the three rebalance schedules ended with less money than CDI would have paid, and the largest fall from peak was about 60%.</p>
+  <p>The strategy moves about 0.76 as much as the market and adds no return that can be told apart from noise. A dividend ETF did the same job better.</p>
+</section>
+
 <section aria-labelledby="spec">
   <h2 id="spec">Exact specification</h2>
-  <p class="muted small">Saved on Quantax Bench as <code>GTC2 H4b div3y yield top20 semi</code>.</p>
+  <p class="muted small">Kept here for the record. The saved strategy was deleted from Quantax Bench after the readiness tests.</p>
   <pre>{
   "kind": "rank_and_hold",
   "market": "B3",

@@ -1,0 +1,32 @@
+{
+ "kind": "rank_and_hold",
+ "name": "FWD Net-Cash Profitable",
+ "market": "B3",
+ "rebalance": "QE",
+ "weighting": "equal",
+ "description": "Forward test frozen 2026-11-15. Profitable non-financial B3 companies with the lowest net debt / TTM EBITDA (net cash first), top 20%, equal weight, quarterly. Thesis: Brazilian corporate debt is mostly CDI-linked, so rate hikes transfer value from levered equity to creditors immediately; net-cash firms are themselves long CDI.",
+ "universe": {
+  "min_adtv": 2000000,
+  "min_price": 1.0,
+  "smallcap_below_median": false,
+  "sectors": {
+   "include": [],
+   "exclude": [
+    "banc",
+    "intermedia",
+    "segur",
+    "financ"
+   ]
+  }
+ },
+ "signal": {
+  "expr": "where(-(f_net_debt / where(f_ebitda_ttm, f_ebitda_ttm > 0)), f_net_income_ttm > 0)",
+  "lookback": 1
+ },
+ "selection": {
+  "top_pct": 0.2,
+  "min_names": 5,
+  "dedup_roots": true
+ },
+ "warmup_pad": 1
+}

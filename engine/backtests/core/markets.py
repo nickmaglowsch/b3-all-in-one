@@ -85,12 +85,27 @@ class MarketSpec:
     benchmark_proxy: str | None = None
 
 
-# Character-for-character the predicate the two B3 loaders and
-# weights_pricing.STANDARD_LOT_SQL have always used: standard lots ending in
-# 3/4/5/6, plus units ending in 11. BDRs (34, 35) and the rest stay out.
+# B3's index lines. COTAHIST prints the Ibovespa (IBOV11, every year since at
+# least 2005) and the Small Cap index (SMLL11, from 2024) as lote-padrão rows
+# with an "IND" ISIN, in index points, only on the sessions they trade. Their
+# code ends in 11, so the shape below admitted them as if they were units — and
+# they are no position anyone can hold. IBOV11 reports the largest traded value
+# on the board (R$22bn a day in January 2025, twelve times VALE3), so every
+# liquidity-ranked or turnover-weighted B3 book loaded up on it; it trades so
+# rarely that its daily returns are mostly zero, so every low-volatility book
+# picked it too. And on 2025-03-05 B3 moved its quotation factor from 1 to 100:
+# the parser divides by FATCOT, the line fell from ~122,000 to ~1,231, and a
+# book holding it booked a -99% month. The parser no longer stores "IND" ISINs
+# (b3_pipeline.parser); this keeps the rows already on the plane out too.
+B3_INDEX_LINES = ("IBOV11", "SMLL11")
+
+# The B3 instrument predicate the loaders and weights_pricing.STANDARD_LOT_SQL
+# share: standard lots ending in 3/4/5/6, plus units ending in 11, minus the
+# index lines above. BDRs (34, 35) and the rest stay out.
 _B3_LOTS = (
     "((LENGTH({col}) = 5 AND SUBSTR({col}, 5, 1) IN ('3', '4', '5', '6'))"
-    " OR (LENGTH({col}) = 6 AND SUBSTR({col}, 5, 2) = '11'))"
+    " OR (LENGTH({col}) = 6 AND SUBSTR({col}, 5, 2) = '11'"
+    " AND {col} NOT IN (" + ", ".join(f"'{t}'" for t in B3_INDEX_LINES) + ")))"
 )
 
 MARKETS = {

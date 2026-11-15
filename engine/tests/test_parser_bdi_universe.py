@@ -49,3 +49,22 @@ def test_derivatives_stay_out(tmp_path):
         _build_cotahist_line(cod_bdi="62", ticker="PETR4T", tipo_mercado="030"),
     ]
     assert _tickers(lines, tmp_path) == {"PETR4"}
+
+
+def test_index_lines_are_not_stored(tmp_path):
+    """IBOV11 is the Ibovespa in points, printed as a lote-padrão row with an
+    "IND" ISIN. These are its real 2025 rows around 2025-03-05, when B3 moved its
+    quotation factor from 1 to 100: stored, they read as a -99% day and as the
+    most-traded name on the board. An ETF on the index (BOVA11) is a holding and
+    stays."""
+    lines = [
+        _build_cotahist_line(date_str="20250226", cod_bdi="02", ticker="IBOV11", fatcot=1,
+                             close_price_raw=12_445_200, isin_code="BRIBOVINDM18"),
+        _build_cotahist_line(date_str="20250305", cod_bdi="02", ticker="IBOV11", fatcot=100,
+                             close_price_raw=12_310_700, isin_code="BRIBOVINDM18"),
+        _build_cotahist_line(date_str="20250305", cod_bdi="02", ticker="SMLL11", fatcot=100,
+                             isin_code="BRSMLLINDM18"),
+        _build_cotahist_line(date_str="20250305", cod_bdi="14", ticker="BOVA11", fatcot=1,
+                             isin_code="BRBOVACTF003"),
+    ]
+    assert _tickers(lines, tmp_path) == {"BOVA11"}

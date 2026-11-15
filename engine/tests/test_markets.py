@@ -20,8 +20,24 @@ def test_the_b3_lot_filter_is_the_predicate_the_loaders_have_always_used():
     this is the test that makes deleting that copy safe."""
     assert markets.MARKETS["B3"].ticker_sql == (
         "((LENGTH(ticker) = 5 AND SUBSTR(ticker, 5, 1) IN ('3', '4', '5', '6'))"
-        " OR (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11'))"
+        " OR (LENGTH(ticker) = 6 AND SUBSTR(ticker, 5, 2) = '11'"
+        " AND ticker NOT IN ('IBOV11', 'SMLL11')))"
     )
+
+
+def test_the_b3_universe_refuses_the_index_lines():
+    """IBOV11 / SMLL11 are B3's index lines (an "IND" ISIN, in points), not units.
+    IBOV11 out-traded VALE3 twelvefold, so every liquidity-weighted book held it,
+    and its quotation factor went 1 -> 100 on 2025-03-05: a -99% month for any
+    book that did. Units, ETFs and FIIs ending in 11 stay in; BDRs stay out."""
+    import sqlite3
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE prices (ticker TEXT)")
+    names = ["PETR4", "VALE3", "TAEE11", "BOVA11", "KNRI11", "IBOV11", "SMLL11", "PETR34", "ITSA2"]
+    conn.executemany("INSERT INTO prices VALUES (?)", [(t,) for t in names])
+    kept = {r[0] for r in conn.execute(
+        f"SELECT ticker FROM prices WHERE {markets.MARKETS['B3'].ticker_sql}")}
+    assert kept == {"PETR4", "VALE3", "TAEE11", "BOVA11", "KNRI11"}
 
 
 def test_an_unknown_market_raises_rather_than_defaulting():

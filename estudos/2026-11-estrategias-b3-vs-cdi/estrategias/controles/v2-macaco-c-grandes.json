@@ -1,0 +1,31 @@
+{
+  "kind": "rank_and_hold",
+  "name": "V2 Macaco C (grandes)",
+  "market": "B3",
+  "signal": {
+    "expr": "where(noise, rank(adtv) >= 0.75)",
+    "vars": {
+      "noise": "at_rebalance(shift(pct_change(adj_close), lookback * 7 + 2) / shift(roll_std(pct_change(adj_close), 120), lookback * 7 + 2 + 1))"
+    },
+    "lookback": 1
+  },
+  "universe": {
+    "min_adtv": 1000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "ME",
+  "selection": {
+    "top_n": 20,
+    "min_names": 20,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "description": "Controle aleatorio (macaco) do relatorio v2, so ações grandes: em jan/abr/jul/out sorteia 20 acoes entre o quartil mais liquido do universo ADTV>=R$1M (~60 nomes), peso igual. Sorteio = retorno de um dia passado (lag lookback * 7 + 2) / vol 120d da propria acao. lookback = semente.",
+  "rebalance_months": [
+    1,
+    4,
+    7,
+    10
+  ]
+}

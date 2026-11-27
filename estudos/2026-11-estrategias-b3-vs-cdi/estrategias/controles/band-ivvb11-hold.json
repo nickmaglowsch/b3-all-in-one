@@ -1,0 +1,13 @@
+{
+  "kind": "fixed_weight",
+  "name": "BAND IVVB11 hold",
+  "sleeves": [
+    {
+      "ticker": "IVVB11.SA",
+      "weight": 1.0
+    }
+  ],
+  "rebalance": "QE",
+  "description": "Série de preço do IVVB11 (100%, sem trades) para o teste de banda por volatilidade.",
+  "park_in_cdi_until_live": true
+}

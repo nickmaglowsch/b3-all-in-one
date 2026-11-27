@@ -1,0 +1,22 @@
+{
+  "name": "WinRateMeanRev",
+  "description": "Mean-reversion strategy with a win-rate momentum filter: excludes stocks whose recent win rate is significantly above (or below) their 60-day historical average (trending stocks), then selects the biggest recent losers from the remaining universe.",
+  "kind": "rank_and_hold",
+  "rebalance": "ME",
+  "warmup_pad": 5,
+  "universe": {
+    "min_adtv": 1000000,
+    "min_price": 1.0
+  },
+  "signal": {
+    "factor": "win_rate_mean_rev",
+    "lookback": 1,
+    "apply_glitch": false
+  },
+  "selection": {
+    "top_pct": 0.1,
+    "min_names": 1,
+    "min_hold": 5
+  },
+  "weighting": "equal"
+}

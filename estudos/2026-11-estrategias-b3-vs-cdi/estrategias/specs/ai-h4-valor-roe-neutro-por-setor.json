@@ -1,0 +1,43 @@
+{
+  "kind": "rank_and_hold",
+  "name": "AI H4 Valor+ROE neutro por setor",
+  "market": "B3",
+  "signal": {
+    "legs": [
+      {
+        "expr": "sector_rank(ep)",
+        "weight": 0.5,
+        "transform": "raw"
+      },
+      {
+        "expr": "sector_rank(roe)",
+        "weight": 0.5,
+        "transform": "raw"
+      }
+    ],
+    "vars": {
+      "ep": "where(1 / f_pe_ratio_dyn, f_pe_ratio_dyn > 0)",
+      "roe": "f_net_income_ttm / where(f_equity, f_equity > 0)"
+    },
+    "coverage": "all"
+  },
+  "universe": {
+    "min_adtv": 5000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "QE",
+  "selection": {
+    "top_pct": 0.2,
+    "min_names": 10,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "max_weight": 0.1,
+  "description": "H4: sector-neutral value+quality: 50% sector rank of E/P + 50% sector rank of ROE (ttm), top 20%, semiannual Jun/Dec, max 10%/name. Na busca sem overfit de 2026-11-02: reprovado em 2012-19 (0,78-1,35 contra 1,59); sozinho perdeu do CDI com drawdown de 50-62%.",
+  "rebalance_months": [
+    6,
+    12
+  ],
+  "needs_fundamentals": true
+}

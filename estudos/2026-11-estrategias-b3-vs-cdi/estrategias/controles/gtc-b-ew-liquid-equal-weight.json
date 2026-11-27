@@ -1,0 +1,24 @@
+{
+  "kind": "rank_and_hold",
+  "name": "GTC B_EW liquid equal-weight",
+  "market": "B3",
+  "signal": {
+    "expr": "adtv",
+    "shift": 0,
+    "lookback": 1
+  },
+  "universe": {
+    "min_adtv": 2000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "ME",
+  "selection": {
+    "top_pct": 1.0,
+    "min_names": 5,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "warmup_pad": 1,
+  "description": "Baseline: naive equal-weight liquid B3 book (ADTV>=R$2M, price>=1, dedup roots), monthly."
+}

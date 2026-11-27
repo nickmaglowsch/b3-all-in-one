@@ -1,0 +1,52 @@
+{
+  "kind": "rank_and_hold",
+  "name": "AI H5 Setores defensivos",
+  "market": "B3",
+  "signal": {
+    "legs": [
+      {
+        "factor": "div_yield_12m",
+        "weight": 0.5,
+        "transform": "rank"
+      },
+      {
+        "expr": "-vol1y",
+        "weight": 0.5,
+        "transform": "rank"
+      }
+    ],
+    "vars": {
+      "vol1y": "at_rebalance(roll_std(pct_change(adj_close), 252))"
+    },
+    "coverage": "all"
+  },
+  "universe": {
+    "sectors": {
+      "exclude": [],
+      "include": [
+        "energia",
+        "saneamento",
+        "telecom",
+        "banc",
+        "segur"
+      ]
+    },
+    "min_adtv": 5000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "QE",
+  "selection": {
+    "top_pct": 1.0,
+    "min_names": 10,
+    "dedup_roots": true
+  },
+  "weighting": "expr",
+  "max_weight": 0.1,
+  "description": "H5: energy/sanitation/telecom/banks/insurers; 50% div yield + 50% low 1y vol, all names in those sectors, inverse-vol weights, semiannual, max 10%/name. Na busca sem overfit de 2026-11-02, como sleeve no 20/30/50: 1,84 em 2012-19, 0,49 em 2020-22, 1,16 em 2023+; sensível à data de início.",
+  "weight_expr": "1 / vol1y",
+  "rebalance_months": [
+    6,
+    12
+  ]
+}

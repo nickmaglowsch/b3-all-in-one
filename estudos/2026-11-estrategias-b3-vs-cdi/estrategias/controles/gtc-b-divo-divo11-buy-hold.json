@@ -1,0 +1,13 @@
+{
+  "kind": "fixed_weight",
+  "name": "GTC B_DIVO DIVO11 buy-hold",
+  "sleeves": [
+    {
+      "ticker": "DIVO11.SA",
+      "weight": 1.0
+    }
+  ],
+  "rebalance": "QE",
+  "description": "Baseline: 100% DIVO11 (CDI before listing).",
+  "park_in_cdi_until_live": true
+}

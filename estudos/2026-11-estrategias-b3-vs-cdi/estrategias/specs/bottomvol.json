@@ -1,0 +1,24 @@
+{
+  "name": "BottomVol",
+  "description": "The calmest names on the board and nothing else: ranks the liquid universe on realised volatility of daily returns over the last 6 months and holds the bottom 15, equal weight, rebalanced monthly. No momentum leg, no value leg, no regime overlay — volatility is the only thing it looks at.",
+  "kind": "rank_and_hold",
+  "rebalance": "ME",
+  "warmup_pad": 1,
+  "universe": {
+    "min_adtv": 1000000,
+    "min_price": 1.0
+  },
+  "signal": {
+    "factor": "daily_low_vol",
+    "lookback": 6,
+    "range": [
+      -1.0,
+      -0.002
+    ]
+  },
+  "selection": {
+    "top_n": 15,
+    "min_names": 5
+  },
+  "weighting": "equal"
+}

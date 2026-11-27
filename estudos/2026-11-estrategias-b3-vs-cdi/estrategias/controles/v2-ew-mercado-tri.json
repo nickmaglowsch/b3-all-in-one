@@ -1,0 +1,28 @@
+{
+  "kind": "rank_and_hold",
+  "name": "V2 EW mercado (tri)",
+  "market": "B3",
+  "signal": {
+    "expr": "adtv",
+    "lookback": 1
+  },
+  "universe": {
+    "min_adtv": 200000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "ME",
+  "selection": {
+    "top_pct": 1.0,
+    "min_names": 5,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "description": "Controle buy-all: todas as acoes com ADTV>=R$200k e preco>=1, peso igual, uma classe por empresa, rebalanceio trimestral (jan/abr/jul/out, grade mensal).",
+  "rebalance_months": [
+    1,
+    4,
+    7,
+    10
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "name": "MultiFactor",
+  "description": "Multifactor (always invested). Composite = 0.5 * momentum_rank + 0.5 * low_vol_rank. Top decile of eligible liquid universe.",
+  "kind": "rank_and_hold",
+  "rebalance": "ME",
+  "warmup_pad": 2,
+  "universe": {
+    "min_adtv": 1000000,
+    "min_price": 1.0
+  },
+  "signal": {
+    "expr": "0.5 * rank(mask_glitch(roll_sum(shift(log_ret, 1), lookback))) + 0.5 * rank(mask_glitch(-roll_std(shift(ret, 1), lookback)))",
+    "lookback": 12,
+    "apply_glitch": false
+  },
+  "selection": {
+    "top_pct": 0.1,
+    "min_names": 5
+  },
+  "weighting": "equal"
+}

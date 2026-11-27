@@ -1,0 +1,42 @@
+{
+  "kind": "rank_and_hold",
+  "name": "SRT MKT E",
+  "market": "B3",
+  "regime": {
+    "rules": [
+      {
+        "easing": true
+      },
+      {
+        "park": true,
+        "default": true
+      }
+    ],
+    "inputs": {
+      "easing": {
+        "flag": "is_easing",
+        "offset": 0
+      }
+    },
+    "add_ibov": false,
+    "park_when_too_few": true
+  },
+  "signal": {
+    "factor": "adtv",
+    "apply_glitch": false
+  },
+  "universe": {
+    "min_adtv": 1000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "ME",
+  "selection": {
+    "top_n": 20,
+    "min_names": 5,
+    "dedup_roots": false
+  },
+  "weighting": "adtv",
+  "warmup_pad": 1,
+  "description": "Sortino search runner-up: the 20 most liquid names, turnover-weighted (≈ the market), held only while COPOM is easing, else 100% CDI. After-tax Sortino over CDI: 2005-2016 = 0.19, 2017-2026 = 0.12 — positive in both windows and stable for top_n 10-40, but with -45% max drawdown in 2020 (easing during the crash). Weak, not recommended over the finalist."
+}

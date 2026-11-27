@@ -1,0 +1,25 @@
+{
+  "kind": "fixed_weight",
+  "name": "RB DIVO terços sem",
+  "sleeves": [
+    {
+      "ticker": "DIVO11.SA",
+      "weight": 0.33340000000000003
+    },
+    {
+      "asset": "CDI",
+      "weight": 0.3333
+    },
+    {
+      "ticker": "IVVB11.SA",
+      "weight": 0.3333
+    }
+  ],
+  "rebalance": "QE",
+  "description": "Teste de frequência de rebalanceamento (18/11/2026): DIVO terços, rebalanceia sem.",
+  "rebalance_months": [
+    6,
+    12
+  ],
+  "park_in_cdi_until_live": true
+}

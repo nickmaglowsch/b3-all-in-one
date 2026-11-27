@@ -1,0 +1,43 @@
+{
+  "kind": "rank_and_hold",
+  "name": "AI H1 LowVol+ROE",
+  "market": "B3",
+  "signal": {
+    "legs": [
+      {
+        "expr": "-vol1y",
+        "weight": 0.5,
+        "transform": "rank"
+      },
+      {
+        "factor": "roe",
+        "weight": 0.5,
+        "transform": "rank"
+      }
+    ],
+    "vars": {
+      "roe": "f_net_income_ttm / where(f_equity, f_equity > 0)",
+      "vol1y": "at_rebalance(roll_std(pct_change(adj_close), 252))"
+    },
+    "coverage": "all"
+  },
+  "universe": {
+    "min_adtv": 5000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "QE",
+  "selection": {
+    "top_pct": 0.2,
+    "min_names": 10,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "max_weight": 0.1,
+  "description": "H1: 50% low 1y daily vol + 50% ROE (ttm), top 20% of liquid B3 (ADTV>=5M), semiannual Jun/Dec, max 10%/name. Na busca sem overfit de 2026-11-02, como sleeve no lugar do Teva no 20/30/50: abaixo da barra já em 2012-19 (Sortino 1,03-1,33 contra 1,59).",
+  "rebalance_months": [
+    6,
+    12
+  ],
+  "needs_fundamentals": true
+}

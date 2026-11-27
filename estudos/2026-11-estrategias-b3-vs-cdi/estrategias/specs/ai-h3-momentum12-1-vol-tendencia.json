@@ -1,0 +1,44 @@
+{
+  "kind": "rank_and_hold",
+  "name": "AI H3 Momentum12-1/vol+Tendência",
+  "market": "B3",
+  "regime": {
+    "rules": [
+      {
+        "trend": true
+      },
+      {
+        "park": true,
+        "default": true
+      }
+    ],
+    "inputs": {
+      "trend": {
+        "flag": "bench_above",
+        "offset": 1
+      }
+    },
+    "park_when_too_few": true
+  },
+  "signal": {
+    "expr": "mom / vol1y",
+    "vars": {
+      "mom": "at_rebalance(pct_change(shift(adj_close, 21), 231))",
+      "vol1y": "at_rebalance(roll_std(pct_change(adj_close), 252))"
+    }
+  },
+  "universe": {
+    "min_adtv": 5000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "QE",
+  "selection": {
+    "top_pct": 0.2,
+    "min_names": 10,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "max_weight": 0.1,
+  "description": "H3: 12-1 month momentum over 1y vol, top 20%, quarterly, parks in CDI when Ibov below its 10m MA. Na busca sem overfit de 2026-11-02: frágil entre parâmetros (1,13 / 1,24 / 1,59 conforme o top%); não passou no teste de vizinhança."
+}

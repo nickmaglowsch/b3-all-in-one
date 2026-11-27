@@ -1,0 +1,22 @@
+{
+  "name": "FrogInPan",
+  "description": "Frog-in-the-Pan (Da, Gurun & Warachka 2014). Ranks stocks by a composite of 12-month momentum + win-rate (number of positive months). Investors under-react to small, continuous positive news.",
+  "kind": "rank_and_hold",
+  "rebalance": "ME",
+  "warmup_pad": 2,
+  "universe": {
+    "min_adtv": 1000000,
+    "min_price": 1.0
+  },
+  "signal": {
+    "expr": "where(\n  mom_weight * rank(roll_sum(shift(log_ret, 1), lookback))\n  + (1 - mom_weight) * rank(roll_sum(shift((ret > 0) + 0 * ret, 1), lookback)),\n  roll_max(shift((ret > 1.0) | (ret < -0.9), 1), lookback) != 1\n)",
+    "lookback": 12,
+    "mom_weight": 0.5,
+    "apply_glitch": false
+  },
+  "selection": {
+    "top_pct": 0.1,
+    "min_names": 5
+  },
+  "weighting": "equal"
+}

@@ -1,0 +1,146 @@
+arquivo,estrategia_no_app,capital_inicial,params,inicio,fim,grade,investido_desde,retorno_aa_apos_ir,retorno_aa_antes_ir,queda_max_pct,ir_pago_total,run_id
+dados/curvas/controles/bova11-parado.csv,GTC B_BOVA BOVA11 buy-hold,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,6.86,6.86,-46.93,0.0,54aeb466-353f-4ad7-8b28-4874a6b05564
+dados/curvas/controles/divo11-parado.csv,GTC B_DIVO DIVO11 buy-hold,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,9.67,9.67,-56.37,0.0,e2e44112-6652-4d7a-9f0b-8f65a89e0b87
+dados/curvas/controles/etf-divo11-ivvb11-cdi-tercos-semestral.csv,RB DIVO terços sem,100000,"{""initial_capital"": 100000}",2012-01-01,2026-10-31,ME,2012-01-31,13.2,13.73,-19.98,21113.3,f3eede60-6bb7-42a6-8114-c59181d3c06b
+dados/curvas/controles/cdi.csv,GTC B_CDI cash,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,9.81,9.81,0.0,0.0,d94e721c-6184-4053-bdc5-74e0727a497e
+dados/curvas/controles/ew-liquidas-mensal.csv,GTC B_EW liquid equal-weight,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,5.32,5.34,-47.07,328.59,f2c60538-c174-408e-8fae-c3bd85870b1a
+dados/curvas/controles/ivvb11-parado.csv,BAND IVVB11 hold,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,18.92,19.11,-30.71,2977.41,cc1babec-4fda-4816-9242-5d2ac9a40933
+dados/curvas/controles/ew-mercado-tri.csv,V2 EW mercado (tri),100000,{},2012-01-01,2026-10-31,ME,2012-01-31,3.39,3.76,-47.76,9260.31,2a554683-1500-4ba0-a9b1-99f464f434ff
+dados/curvas/capital_1M/ai-h5-setores-defensivos.csv,AI H5 Setores defensivos,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,9.41,10.2,-45.01,280940.72,d16b5535-38c6-4622-a78e-0242067de1eb
+dados/curvas/capital_5M/ai-h5-setores-defensivos.csv,AI H5 Setores defensivos,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,9.41,10.2,-45.01,1404703.59,8298dab2-edbe-4422-9c6b-df7eed337916
+dados/curvas/capital_1M/besst-quality.csv,BESST Quality,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,8.59,9.47,-48.29,276423.43,ded3087e-f4c8-489b-96a7-520127cf3edf
+dados/curvas/capital_5M/besst-quality.csv,BESST Quality,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,8.56,9.47,-48.29,1413040.87,96ae906c-1106-4f2f-a966-936196ed8c07
+dados/curvas/capital_1M/etf-divo11-ivvb11-cdi-tercos-semestral.csv,RB DIVO terços sem,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,13.18,13.73,-19.98,222199.27,1d77986d-5039-403f-80c1-b5c07330a810
+dados/curvas/capital_1M/froginpan.csv,FrogInPan,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.39,12.27,-51.47,674722.45,475fb61c-6a35-43ee-a18a-242a6f930cc7
+dados/curvas/capital_5M/froginpan.csv,FrogInPan,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.39,12.27,-51.47,3373612.26,331ae9e6-1c3a-4411-a2b1-5595cb68f893
+dados/curvas/capital_1M/momsharpe.csv,MomSharpe,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.89,12.93,-44.34,757933.32,e853a5b3-0f01-4329-98ba-ae8631d147df
+dados/curvas/capital_5M/momsharpe.csv,MomSharpe,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.89,12.93,-44.34,3789666.62,19c31b2f-b93f-4fc4-853d-6645c6ac9680
+dados/curvas/capital_1M/qdl-equity.csv,QDL-Equity,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.85,12.69,-34.52,665190.24,4228fd0a-292f-41b5-bc9c-9a9c8bf12718
+dados/curvas/capital_5M/qdl-equity.csv,QDL-Equity,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.85,12.69,-34.52,3325951.2,bc183d01-d55a-49a1-a4ca-9bb046fce935
+dados/curvas/capital_1M/qdl.csv,QDL,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,8.99,10.55,-34.52,469572.4,1def5200-9595-4c66-a5b0-82d004340fe1
+dados/curvas/capital_5M/qdl.csv,QDL,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,8.99,10.55,-34.52,2347862.02,b26424a4-3767-4767-a364-4e3ccaaa5976
+dados/curvas/capital_1M/qmv.csv,QMV,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,11.04,13.14,-39.81,747069.5,883643d2-32b4-4d5e-a23e-2352fe97924c
+dados/curvas/capital_5M/qmv.csv,QMV,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,11.04,13.14,-39.81,3735347.5,caab7c1c-413f-4fb6-84e4-6c92022ab906
+dados/curvas/capital_1M/smallcapmom.csv,SmallcapMom,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.69,12.84,-41.85,771351.67,5054d08b-6124-488d-8e03-86fd61efe9a8
+dados/curvas/capital_5M/smallcapmom.csv,SmallcapMom,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.69,12.84,-41.85,3856758.36,fc971b3a-0b7f-4354-80ed-a9f79d8c2889
+dados/curvas/capital_1M/tevaativosreais.csv,TevaAtivosReais,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.17,11.48,-58.65,466993.83,381a35ad-1ecd-4769-b316-ec329bbe3c0f
+dados/curvas/capital_5M/tevaativosreais.csv,TevaAtivosReais,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.16,11.48,-58.65,2340935.53,2f9dbfbd-b11c-46b6-9b9d-c555c697f9fd
+dados/curvas/capital_1M/tevaiafd.csv,TevaIAFD,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2015-03-31,8.45,9.3,-42.74,157613.97,6e2249bb-96d4-44ff-a8c8-004eb8ec23b4
+dados/curvas/capital_5M/tevaiafd.csv,TevaIAFD,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2015-03-31,8.45,9.3,-42.74,788069.86,089591ea-9410-40df-b3b0-fd4e81407920
+dados/curvas/capital_1M/two-leg-value.csv,Two-Leg Value,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,11.74,13.85,-55.54,855150.9,8a6dca35-9f6f-47ba-ac43-ec82b295e789
+dados/curvas/capital_5M/two-leg-value.csv,Two-Leg Value,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,11.74,13.85,-55.54,4276395.54,a4ed1c43-f6d7-40ab-ade2-2cf8a01c5b34
+dados/curvas/capital_1M/ew-mercado-tri.csv,V2 EW mercado (tri),1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,3.06,3.76,-47.76,160764.57,71c445eb-80ed-4f66-9011-fe2534dd3039
+dados/curvas/capital_5M/ew-mercado-tri.csv,V2 EW mercado (tri),5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,3.06,3.76,-47.76,803822.85,422c745e-559b-40d6-896a-693ce2fe2471
+dados/curvas/capital_1M/valuequality.csv,ValueQuality,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,8.37,10.08,-62.88,585610.04,0c069cbb-840b-4802-b8f8-0e4e4114d339
+dados/curvas/capital_5M/valuequality.csv,ValueQuality,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,8.38,10.09,-62.88,2931858.04,b49e369b-f77a-43cb-a4e5-56c60266a62d
+dados/curvas/capital_1M/volumebreakout.csv,VolumeBreakout,1000000,"{""initial_capital"": 1000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.53,13.35,-54.35,1243756.5,23b284ad-8a6f-4838-beac-ea9fdf529e21
+dados/curvas/capital_5M/volumebreakout.csv,VolumeBreakout,5000000,"{""initial_capital"": 5000000}",2012-01-01,2026-10-31,ME,2012-01-31,10.53,13.35,-54.35,6218782.49,4735cd95-9841-42f6-8865-ceb47054e10f
+dados/curvas/macacos/A10.csv,V2 Macaco A,100000,"{""lookback"": 10}",2012-01-01,2026-10-31,ME,2012-01-31,7.35,9.01,-47.39,45204.59,ea63aeb0-6721-4eb8-bd6a-a4971854071a
+dados/curvas/macacos/A11.csv,V2 Macaco A,100000,"{""lookback"": 11}",2012-01-01,2026-10-31,ME,2012-01-31,5.2,6.65,-49.57,33316.61,ead44fa4-b5ac-46c8-8e6f-341dd4213b58
+dados/curvas/macacos/A12.csv,V2 Macaco A,100000,"{""lookback"": 12}",2012-01-01,2026-10-31,ME,2012-01-31,4.27,5.35,-46.42,23421.03,86a36547-004a-47f2-b42b-6e4eb452c834
+dados/curvas/macacos/A13.csv,V2 Macaco A,100000,"{""lookback"": 13}",2012-01-01,2026-10-31,ME,2012-01-31,4.36,5.62,-60.53,28328.52,941ee873-f1d5-48d3-b6cf-cf975081b5dd
+dados/curvas/macacos/A14.csv,V2 Macaco A,100000,"{""lookback"": 14}",2012-01-01,2026-10-31,ME,2012-01-31,2.16,3.12,-49.61,16933.42,e5b5b88e-243a-404f-a2c7-9736d3451097
+dados/curvas/macacos/A15.csv,V2 Macaco A,100000,"{""lookback"": 15}",2012-01-01,2026-10-31,ME,2012-01-31,2.3,3.2,-48.93,17745.93,7f7a51fb-d6d9-49dc-84fb-9d36753de097
+dados/curvas/macacos/A16.csv,V2 Macaco A,100000,"{""lookback"": 16}",2012-01-01,2026-10-31,ME,2012-01-31,-0.37,0.34,-53.81,13256.35,ce5d3447-a50a-4f57-b5e6-a078eaad11fe
+dados/curvas/macacos/A17.csv,V2 Macaco A,100000,"{""lookback"": 17}",2012-01-01,2026-10-31,ME,2012-01-31,6.01,7.62,-53.65,42545.82,d68cc367-2efc-4830-b2df-c25678bffb93
+dados/curvas/macacos/A18.csv,V2 Macaco A,100000,"{""lookback"": 18}",2012-01-01,2026-10-31,ME,2012-01-31,5.27,6.85,-48.2,38807.89,2b840195-404f-4e0b-870a-4ee7642c0686
+dados/curvas/macacos/A19.csv,V2 Macaco A,100000,"{""lookback"": 19}",2012-01-01,2026-10-31,ME,2012-01-31,3.41,4.48,-49.28,23175.02,f25b4ba3-4eae-4543-99d0-40e99989a092
+dados/curvas/macacos/A01.csv,V2 Macaco A,100000,"{""lookback"": 1}",2012-01-01,2026-10-31,ME,2012-01-31,1.07,1.96,-52.7,17784.08,a2ea5dea-636b-44da-b5d1-671778e33a5e
+dados/curvas/macacos/A20.csv,V2 Macaco A,100000,"{""lookback"": 20}",2012-01-01,2026-10-31,ME,2012-01-31,1.62,3.03,-60.54,37514.8,0c96cfeb-e225-45c8-b08e-4bdfc3ac4883
+dados/curvas/macacos/A21.csv,V2 Macaco A,100000,"{""lookback"": 21}",2012-01-01,2026-10-31,ME,2012-01-31,3.84,5.07,-60.86,27758.69,8eda172d-cdfa-49e0-8afe-9ccdc4b50858
+dados/curvas/macacos/A22.csv,V2 Macaco A,100000,"{""lookback"": 22}",2012-01-01,2026-10-31,ME,2012-01-31,3.57,4.81,-53.6,29996.12,46acebfc-8837-4252-a75f-a055b7abefa3
+dados/curvas/macacos/A23.csv,V2 Macaco A,100000,"{""lookback"": 23}",2012-01-01,2026-10-31,ME,2012-01-31,-0.56,0.0,-63.22,8058.1,3df0d22e-9a43-4953-b30f-9b75a4b3fb35
+dados/curvas/macacos/A24.csv,V2 Macaco A,100000,"{""lookback"": 24}",2012-01-01,2026-10-31,ME,2012-01-31,5.25,6.66,-48.18,33840.31,bd60551c-7957-458a-b6b6-ced4a379f6f1
+dados/curvas/macacos/A25.csv,V2 Macaco A,100000,"{""lookback"": 25}",2012-01-01,2026-10-31,ME,2012-01-31,2.28,3.36,-50.43,23557.77,8f60b235-da5a-44c4-b501-b82ce6d623b9
+dados/curvas/macacos/A02.csv,V2 Macaco A,100000,"{""lookback"": 2}",2012-01-01,2026-10-31,ME,2012-01-31,5.65,7.3,-47.84,47844.2,0dc83a47-32de-4f34-8c6d-a73410b40c8f
+dados/curvas/macacos/A03.csv,V2 Macaco A,100000,"{""lookback"": 3}",2012-01-01,2026-10-31,ME,2012-01-31,8.53,10.44,-45.51,59988.16,195ec216-79b8-47c6-921a-741e2a7e1a61
+dados/curvas/macacos/A04.csv,V2 Macaco A,100000,"{""lookback"": 4}",2012-01-01,2026-10-31,ME,2012-01-31,2.48,3.67,-47.66,24532.5,c5d58b50-de90-4a84-8cd5-67639a316727
+dados/curvas/macacos/A05.csv,V2 Macaco A,100000,"{""lookback"": 5}",2012-01-01,2026-10-31,ME,2012-01-31,1.91,2.81,-52.06,17592.55,16ec4760-a8e7-402c-8c31-263e5de89096
+dados/curvas/macacos/A06.csv,V2 Macaco A,100000,"{""lookback"": 6}",2012-01-01,2026-10-31,ME,2012-01-31,1.58,2.62,-53.5,21683.01,134abfeb-86ad-40ec-a3f5-a9196cc1953e
+dados/curvas/macacos/A07.csv,V2 Macaco A,100000,"{""lookback"": 7}",2012-01-01,2026-10-31,ME,2012-01-31,4.61,5.81,-46.03,28159.92,50fbd11f-41c7-4c5b-a4d0-8ccdd4a04da8
+dados/curvas/macacos/A08.csv,V2 Macaco A,100000,"{""lookback"": 8}",2012-01-01,2026-10-31,ME,2012-01-31,-0.04,1.14,-60.31,27357.21,2d652826-4d56-4b33-a4ea-71375ad3f5b4
+dados/curvas/macacos/A09.csv,V2 Macaco A,100000,"{""lookback"": 9}",2012-01-01,2026-10-31,ME,2012-01-31,2.02,2.96,-50.94,19672.58,7cbbb720-7876-4a5a-ad58-2be25d08ec58
+dados/curvas/macacos/B10.csv,V2 Macaco B,100000,"{""lookback"": 10}",2012-01-01,2026-10-31,ME,2012-01-31,5.76,7.33,-45.83,39699.6,ce41c619-1cd6-4e73-9035-58c8a74ba6a3
+dados/curvas/macacos/B11.csv,V2 Macaco B,100000,"{""lookback"": 11}",2012-01-01,2026-10-31,ME,2012-01-31,4.24,5.31,-49.28,22284.03,029243d4-f028-4f15-8d04-2b586511c657
+dados/curvas/macacos/B12.csv,V2 Macaco B,100000,"{""lookback"": 12}",2012-01-01,2026-10-31,ME,2012-01-31,5.9,7.55,-45.98,47436.91,9696b6f6-7483-4ce4-b516-3732d1685a44
+dados/curvas/macacos/B13.csv,V2 Macaco B,100000,"{""lookback"": 13}",2012-01-01,2026-10-31,ME,2012-01-31,0.61,1.37,-61.37,12110.24,f72c1545-0e4c-4e7e-bee9-14ba3c64a711
+dados/curvas/macacos/B14.csv,V2 Macaco B,100000,"{""lookback"": 14}",2012-01-01,2026-10-31,ME,2012-01-31,1.38,2.49,-53.36,24906.1,a0f5206a-e9e8-4ab1-b10d-9cd01c994ca7
+dados/curvas/macacos/B15.csv,V2 Macaco B,100000,"{""lookback"": 15}",2012-01-01,2026-10-31,ME,2012-01-31,3.28,4.2,-44.95,19105.02,26af1731-9a60-401e-bd7f-5a5eb5f95942
+dados/curvas/macacos/B16.csv,V2 Macaco B,100000,"{""lookback"": 16}",2012-01-01,2026-10-31,ME,2012-01-31,3.25,4.35,-53.34,25501.35,4fc29f93-33c3-4806-8905-762c398237c9
+dados/curvas/macacos/B17.csv,V2 Macaco B,100000,"{""lookback"": 17}",2012-01-01,2026-10-31,ME,2012-01-31,0.05,0.84,-58.27,13958.98,41093e7d-3bd9-4b9e-942e-85681840f41d
+dados/curvas/macacos/B18.csv,V2 Macaco B,100000,"{""lookback"": 18}",2012-01-01,2026-10-31,ME,2012-01-31,4.76,6.03,-49.87,27170.49,bab07cef-0235-4ec0-ba40-94efcf75e27a
+dados/curvas/macacos/B19.csv,V2 Macaco B,100000,"{""lookback"": 19}",2012-01-01,2026-10-31,ME,2012-01-31,5.45,6.69,-48.89,28953.53,e7c1154e-8dff-4702-b044-9be869bb8057
+dados/curvas/macacos/B01.csv,V2 Macaco B,100000,"{""lookback"": 1}",2012-01-01,2026-10-31,ME,2012-01-31,5.05,6.2,-50.31,26369.76,28c824ae-86f4-46b6-a956-455fae95cc85
+dados/curvas/macacos/B20.csv,V2 Macaco B,100000,"{""lookback"": 20}",2012-01-01,2026-10-31,ME,2012-01-31,0.98,1.55,-52.52,9552.18,4158d140-8f51-49bf-afa5-2c29e0467a97
+dados/curvas/macacos/B21.csv,V2 Macaco B,100000,"{""lookback"": 21}",2012-01-01,2026-10-31,ME,2012-01-31,4.75,6.24,-46.8,40585.96,67bc6904-1337-4f73-9e92-1249c195a232
+dados/curvas/macacos/B22.csv,V2 Macaco B,100000,"{""lookback"": 22}",2012-01-01,2026-10-31,ME,2012-01-31,4.5,5.62,-47.73,23364.19,47176588-b5c0-43a9-8ce8-362d0bf12f09
+dados/curvas/macacos/B23.csv,V2 Macaco B,100000,"{""lookback"": 23}",2012-01-01,2026-10-31,ME,2012-01-31,5.28,6.57,-55.76,28384.29,223f6e80-3b57-4306-814c-57eedd1239b0
+dados/curvas/macacos/B24.csv,V2 Macaco B,100000,"{""lookback"": 24}",2012-01-01,2026-10-31,ME,2012-01-31,4.17,5.31,-52.0,25124.81,e92a59b8-d5f7-4e12-b1d9-c43dcdb8ef49
+dados/curvas/macacos/B25.csv,V2 Macaco B,100000,"{""lookback"": 25}",2012-01-01,2026-10-31,ME,2012-01-31,2.47,3.4,-58.24,19860.62,ccaedbcd-2ed9-498c-820c-e79493178472
+dados/curvas/macacos/B02.csv,V2 Macaco B,100000,"{""lookback"": 2}",2012-01-01,2026-10-31,ME,2012-01-31,-0.93,-0.39,-55.59,8792.25,eb9456e9-a328-423d-8c85-a7e732562bab
+dados/curvas/macacos/B03.csv,V2 Macaco B,100000,"{""lookback"": 3}",2012-01-01,2026-10-31,ME,2012-01-31,-0.71,0.18,-61.61,18493.21,4b9c0e90-54f0-4e19-bed3-708334e466cf
+dados/curvas/macacos/B04.csv,V2 Macaco B,100000,"{""lookback"": 4}",2012-01-01,2026-10-31,ME,2012-01-31,1.13,2.12,-50.11,21579.51,67299b62-6c20-414d-8b1d-546ea521dba9
+dados/curvas/macacos/B05.csv,V2 Macaco B,100000,"{""lookback"": 5}",2012-01-01,2026-10-31,ME,2012-01-31,5.94,7.66,-49.97,50284.63,6c90d487-5a31-4fde-a3d6-33c29c986473
+dados/curvas/macacos/B06.csv,V2 Macaco B,100000,"{""lookback"": 6}",2012-01-01,2026-10-31,ME,2012-01-31,2.93,3.93,-58.34,19873.88,53145407-a462-45e2-ad85-2b02b413d0b9
+dados/curvas/macacos/B07.csv,V2 Macaco B,100000,"{""lookback"": 7}",2012-01-01,2026-10-31,ME,2012-01-31,3.46,4.74,-52.64,33532.86,20ed4086-fe33-4782-b04d-09f28bb9c8e7
+dados/curvas/macacos/B08.csv,V2 Macaco B,100000,"{""lookback"": 8}",2012-01-01,2026-10-31,ME,2012-01-31,1.58,2.63,-53.02,22943.64,3fb6e2be-0c69-4ce0-a6b6-2ea161a39dfb
+dados/curvas/macacos/B09.csv,V2 Macaco B,100000,"{""lookback"": 9}",2012-01-01,2026-10-31,ME,2012-01-31,6.91,8.52,-47.15,43657.39,d2356359-ca65-4072-806b-a9f0b84211a5
+dados/curvas/macacos/C10.csv,V2 Macaco C (grandes),100000,"{""lookback"": 10}",2012-01-01,2026-10-31,ME,2012-01-31,7.59,9.38,-42.67,54004.21,2a8ab188-cae7-47d8-aac4-8e68c2b5048c
+dados/curvas/macacos/C11.csv,V2 Macaco C (grandes),100000,"{""lookback"": 11}",2012-01-01,2026-10-31,ME,2012-01-31,3.18,4.34,-55.37,27231.78,dfa39cce-a42d-4b6b-b34d-7d1984cad706
+dados/curvas/macacos/C12.csv,V2 Macaco C (grandes),100000,"{""lookback"": 12}",2012-01-01,2026-10-31,ME,2012-01-31,3.61,4.65,-49.88,21760.75,0cdd2498-1b26-4108-a6c9-40f88936504a
+dados/curvas/macacos/C13.csv,V2 Macaco C (grandes),100000,"{""lookback"": 13}",2012-01-01,2026-10-31,ME,2012-01-31,2.41,3.39,-49.95,19969.8,e0e6c7cb-bbad-44d6-929b-517bf302b57a
+dados/curvas/macacos/C14.csv,V2 Macaco C (grandes),100000,"{""lookback"": 14}",2012-01-01,2026-10-31,ME,2012-01-31,2.76,3.85,-51.36,24217.9,dc8d4ec9-b15a-4d6e-ad52-123699794a23
+dados/curvas/macacos/C15.csv,V2 Macaco C (grandes),100000,"{""lookback"": 15}",2012-01-01,2026-10-31,ME,2012-01-31,4.35,5.56,-46.77,28149.76,702d8fd5-740d-4ada-b6f6-4a41d6ae7e03
+dados/curvas/macacos/C16.csv,V2 Macaco C (grandes),100000,"{""lookback"": 16}",2012-01-01,2026-10-31,ME,2012-01-31,6.32,7.76,-52.25,37935.01,6cbbee18-41e5-42bf-8a28-df086dcec8c9
+dados/curvas/macacos/C17.csv,V2 Macaco C (grandes),100000,"{""lookback"": 17}",2012-01-01,2026-10-31,ME,2012-01-31,-0.34,0.19,-60.5,8368.14,e97f50be-709f-4c39-afde-0aee9a689a09
+dados/curvas/macacos/C18.csv,V2 Macaco C (grandes),100000,"{""lookback"": 18}",2012-01-01,2026-10-31,ME,2012-01-31,2.34,3.27,-53.41,18552.6,422a1cf8-d9ec-42a2-8c59-6fdeb8950ef9
+dados/curvas/macacos/C19.csv,V2 Macaco C (grandes),100000,"{""lookback"": 19}",2012-01-01,2026-10-31,ME,2012-01-31,3.53,4.78,-52.69,28934.69,34343864-b768-4452-89d7-11c4f4d53951
+dados/curvas/macacos/C01.csv,V2 Macaco C (grandes),100000,"{""lookback"": 1}",2012-01-01,2026-10-31,ME,2012-01-31,6.09,7.45,-52.0,34106.42,2a387899-b8e3-44b5-a06a-3834b089098f
+dados/curvas/macacos/C20.csv,V2 Macaco C (grandes),100000,"{""lookback"": 20}",2012-01-01,2026-10-31,ME,2012-01-31,6.41,7.89,-43.94,37902.68,14111005-f30e-40a0-9b69-3ccc33090840
+dados/curvas/macacos/C21.csv,V2 Macaco C (grandes),100000,"{""lookback"": 21}",2012-01-01,2026-10-31,ME,2012-01-31,4.68,5.93,-54.97,27243.86,905c232c-8b2a-4648-9f74-befe8b3c0be3
+dados/curvas/macacos/C22.csv,V2 Macaco C (grandes),100000,"{""lookback"": 22}",2012-01-01,2026-10-31,ME,2012-01-31,6.37,7.82,-43.37,38903.59,3a32e631-e052-43ac-a726-101b4c70209b
+dados/curvas/macacos/C23.csv,V2 Macaco C (grandes),100000,"{""lookback"": 23}",2012-01-01,2026-10-31,ME,2012-01-31,3.98,5.09,-47.15,23647.6,168a5f43-8c16-42ed-988b-8ba51a09060e
+dados/curvas/macacos/C24.csv,V2 Macaco C (grandes),100000,"{""lookback"": 24}",2012-01-01,2026-10-31,ME,2012-01-31,7.9,9.67,-54.12,53684.46,26e70fee-fe15-44f7-8e0f-dcc4f05cf1bd
+dados/curvas/macacos/C25.csv,V2 Macaco C (grandes),100000,"{""lookback"": 25}",2012-01-01,2026-10-31,ME,2012-01-31,7.35,9.07,-46.34,46062.76,bd555746-95b8-49ae-9fb6-7566aa764827
+dados/curvas/macacos/C02.csv,V2 Macaco C (grandes),100000,"{""lookback"": 2}",2012-01-01,2026-10-31,ME,2012-01-31,0.78,1.35,-60.0,9205.04,1c3cb0cc-ff42-453e-8d17-4d0d881279e2
+dados/curvas/macacos/C03.csv,V2 Macaco C (grandes),100000,"{""lookback"": 3}",2012-01-01,2026-10-31,ME,2012-01-31,4.98,6.25,-52.68,27712.42,460bc340-4019-40b6-a39a-a4eeb2ea31ff
+dados/curvas/macacos/C04.csv,V2 Macaco C (grandes),100000,"{""lookback"": 4}",2012-01-01,2026-10-31,ME,2012-01-31,0.3,1.29,-59.18,22078.78,0cc2f1f6-2a6d-48a5-9611-1716cbb13d2b
+dados/curvas/macacos/C05.csv,V2 Macaco C (grandes),100000,"{""lookback"": 5}",2012-01-01,2026-10-31,ME,2012-01-31,4.27,5.65,-52.2,36507.37,18597a77-fe04-4be1-94f8-8157767ba23f
+dados/curvas/macacos/C06.csv,V2 Macaco C (grandes),100000,"{""lookback"": 6}",2012-01-01,2026-10-31,ME,2012-01-31,2.96,3.93,-48.79,19456.49,d190dec7-7f50-4e4d-aa42-62dfd4d43d86
+dados/curvas/macacos/C07.csv,V2 Macaco C (grandes),100000,"{""lookback"": 7}",2012-01-01,2026-10-31,ME,2012-01-31,6.81,8.41,-49.87,44740.98,a4fe839d-536e-43cd-8b5d-8c7f5c33656b
+dados/curvas/macacos/C08.csv,V2 Macaco C (grandes),100000,"{""lookback"": 8}",2012-01-01,2026-10-31,ME,2012-01-31,2.2,3.37,-54.59,26916.96,e377c2ff-8d86-471e-a5f8-7ccbe9edc9a2
+dados/curvas/macacos/C09.csv,V2 Macaco C (grandes),100000,"{""lookback"": 9}",2012-01-01,2026-10-31,ME,2012-01-31,4.17,5.21,-44.41,22454.5,d267d616-b8cf-45da-bc58-6b8093a40b8f
+dados/curvas/estrategias/ai-h1-lowvol-roe.csv,AI H1 LowVol+ROE,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,6.63,7.42,-40.17,20068.88,6381a08d-07af-4670-96a5-db8929aaf6c5
+dados/curvas/estrategias/ai-h2-dividendos-lowvol.csv,AI H2 Dividendos+LowVol,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,7.63,8.76,-46.15,33938.45,28eaf9f4-b391-4426-a381-9d2d82d34470
+dados/curvas/estrategias/ai-h3-momentum12-1-vol-tendencia.csv,AI H3 Momentum12-1/vol+Tendência,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,3.28,4.11,-54.05,18243.85,4210ea35-80c2-45ab-81d2-c11d4037514c
+dados/curvas/estrategias/ai-h4-valor-roe-neutro-por-setor.csv,AI H4 Valor+ROE neutro por setor,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,4.93,5.8,-50.15,20829.46,7a2196b9-1f53-4ffa-86f5-85ffdfc49901
+dados/curvas/estrategias/ai-h5-setores-defensivos.csv,AI H5 Setores defensivos,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,9.51,10.2,-45.01,26747.67,4182c475-ce6f-4aea-9f2f-96afba07585b
+dados/curvas/estrategias/adaptivelowvol.csv,AdaptiveLowVol,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,2.02,3.07,-36.27,22704.77,c1d726c7-a568-416a-be5e-0f15053d5cee
+dados/curvas/estrategias/besst-quality.csv,BESST Quality,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,9.46,9.47,-48.29,709.22,19be301f-8fc3-4e27-ac71-c47be9147457
+dados/curvas/estrategias/bottomvol.csv,BottomVol,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,0.45,0.97,-43.44,11041.63,c7072e30-0639-49f9-ab40-874dbeb727df
+dados/curvas/estrategias/cdi-ma200.csv,CDI+MA200,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,7.75,9.36,-46.43,43524.03,2e927122-09ff-46d7-8ddb-1259f3f8ebb4
+dados/curvas/estrategias/froginpan.csv,FrogInPan,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,10.4,12.27,-51.47,67385.61,93fa3efb-26a6-4241-b223-19d37dda5bd6
+dados/curvas/estrategias/ibovlowvolb3.csv,IbovLowVolB3,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,2.49,2.57,-38.44,2051.37,217d8ba0-8816-40ea-b05b-393513a8d679
+dados/curvas/estrategias/lowpe.csv,LowPE,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,0.98,1.51,-75.55,11230.59,55b7ba8c-39b8-4908-ac97-75221b586ae4
+dados/curvas/estrategias/lowvol.csv,LowVol,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,-0.56,-0.27,-43.39,5861.72,54e5947f-b94e-4aec-aa98-5374ef145cc8
+dados/curvas/estrategias/maxentropy.csv,MaxEntropy,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,-0.12,0.34,-46.09,9206.54,4f3a182a-3cff-40b6-9a49-3a9c31214b15
+dados/curvas/estrategias/meanrevcomposite.csv,MeanRevComposite,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,6.34,7.72,-43.39,34886.02,b965e2e2-5806-4556-a1f0-d71ffa0f5034
+dados/curvas/estrategias/momsharpe.csv,MomSharpe,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,10.95,12.93,-44.34,74920.69,fa7a764b-9599-43d5-a3ac-1a014d1c13d6
+dados/curvas/estrategias/multifactor.csv,MultiFactor,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,8.31,10.08,-38.16,54121.03,2c6bbf81-e068-4f13-b70f-6f55d4c05bec
+dados/curvas/estrategias/qdl-equity.csv,QDL-Equity,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,11.22,12.69,-34.52,60709.08,da940a80-4df9-4624-ac44-503ede96c90c
+dados/curvas/estrategias/qdl.csv,QDL,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,9.32,10.55,-34.52,41850.54,a1abe029-32cd-4940-9b5c-dec12267b058
+dados/curvas/estrategias/qmv.csv,QMV,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,11.08,13.14,-39.81,74297.65,ed1b3ff6-c556-478a-9af1-a8083edeffca
+dados/curvas/estrategias/regimeswitching.csv,RegimeSwitching,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,4.79,5.94,-38.16,26344.01,a0ee717c-dbf0-4a63-8861-32c149f1b319
+dados/curvas/estrategias/res-multifactor.csv,Res.MultiFactor,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,2.95,3.92,-37.44,19160.95,d61fec1c-3ede-491b-908a-de1566b345e9
+dados/curvas/estrategias/sp500-style-b3-index.csv,SP500-style B3 Index,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,6.44,6.44,-44.39,15.84,392e9dd2-5545-4417-83cc-93fa42f3f718
+dados/curvas/estrategias/srt-lv-e.csv,SRT LV E,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,4.91,6.12,-29.9,26968.83,5ec25465-50db-47b3-b18d-eaa02a0bf424
+dados/curvas/estrategias/srt-mkt-e.csv,SRT MKT E,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,7.6,9.03,-48.93,39522.22,bc0bed2c-9814-4a86-b098-8f366ebab6b5
+dados/curvas/estrategias/simplemeanreversion.csv,SimpleMeanReversion,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,-5.19,-4.67,-82.9,9132.81,a896b51b-913a-4a17-8170-de0ddf61c79b
+dados/curvas/estrategias/smallcapmom.csv,SmallcapMom,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,10.69,12.84,-41.85,77135.17,f8283b39-570f-4580-b1b0-383cbb58a279
+dados/curvas/estrategias/tevaativosreais.csv,TevaAtivosReais,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,10.78,11.48,-58.65,27992.03,2d90074c-2ec1-4bb7-8979-b7832f5854db
+dados/curvas/estrategias/tevaiafd.csv,TevaIAFD,100000,{},2012-01-01,2026-10-31,ME,2015-03-31,8.47,9.3,-42.74,15566.49,6f376109-11c7-4371-a6e9-8144eb94c0dc
+dados/curvas/estrategias/top-market-cap.csv,Top Market Cap,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,5.82,5.82,-47.98,30.73,1640f2cc-082c-4c37-80d0-c075d77dc78c
+dados/curvas/estrategias/two-leg-value.csv,Two-Leg Value,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,12.46,13.85,-55.54,66046.65,d619adf7-0255-42bc-85ed-c3151e64c450
+dados/curvas/estrategias/valuequality.csv,ValueQuality,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,8.59,10.08,-62.88,56267.44,daddb800-4c81-44d0-b660-b3b6ea901877
+dados/curvas/estrategias/volumebreakout.csv,VolumeBreakout,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,10.54,13.35,-54.35,123965.85,6e5a56a0-38ef-4104-9cc9-5ad944134d2f
+dados/curvas/estrategias/winratemeanrev.csv,WinRateMeanRev,100000,{},2012-01-01,2026-10-31,ME,2012-01-31,-3.14,-2.43,-72.89,13521.07,606a47bb-8d43-4ac3-96b4-8070009d9415

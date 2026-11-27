@@ -1,0 +1,41 @@
+{
+  "kind": "rank_and_hold",
+  "name": "AI H2 Dividendos+LowVol",
+  "market": "B3",
+  "signal": {
+    "legs": [
+      {
+        "expr": "where(div_yield_12m, div_years_3y >= 2)",
+        "weight": 0.5,
+        "transform": "rank"
+      },
+      {
+        "expr": "-vol1y",
+        "weight": 0.5,
+        "transform": "rank"
+      }
+    ],
+    "vars": {
+      "vol1y": "at_rebalance(roll_std(pct_change(adj_close), 252))"
+    },
+    "coverage": "all"
+  },
+  "universe": {
+    "min_adtv": 5000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "QE",
+  "selection": {
+    "top_pct": 0.2,
+    "min_names": 10,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "max_weight": 0.1,
+  "description": "H2: regular dividend payers (div_years_3y>=2), 50% trailing div yield + 50% low 1y vol, top 20%, semiannual, max 10%/name. Na busca sem overfit de 2026-11-02, como sleeve no 20/30/50: 1,70 em 2012-19, 0,42 em 2020-22, 0,73 em 2023+ (campeão 1,59 / 0,70 / 1,14). Paga mais IR.",
+  "rebalance_months": [
+    6,
+    12
+  ]
+}

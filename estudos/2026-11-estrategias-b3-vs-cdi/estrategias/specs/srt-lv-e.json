@@ -1,0 +1,46 @@
+{
+  "kind": "rank_and_hold",
+  "name": "SRT LV E",
+  "market": "B3",
+  "regime": {
+    "rules": [
+      {
+        "easing": true
+      },
+      {
+        "park": true,
+        "default": true
+      }
+    ],
+    "inputs": {
+      "easing": {
+        "flag": "is_easing",
+        "offset": 0
+      }
+    },
+    "add_ibov": false,
+    "park_when_too_few": true
+  },
+  "signal": {
+    "range": [
+      -1.0,
+      -0.002
+    ],
+    "factor": "daily_low_vol",
+    "lookback": 6
+  },
+  "universe": {
+    "min_adtv": 1000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "ME",
+  "selection": {
+    "top_n": 15,
+    "min_names": 5,
+    "dedup_roots": false
+  },
+  "weighting": "equal",
+  "warmup_pad": 1,
+  "description": "Sortino search: low-vol book (daily_low_vol 6m, bottom 15) held only while COPOM is easing, else 100% CDI. Best design-window book (2005-2016 Sortino 0.20, stable for lookback 3-9 and top_n 10-25) but FAILED out of sample: 2017-2026 Sortino -0.83. Kept only as the sleeve of 'SRT LV E + IVVB11 50/50'; not a strategy on its own."
+}

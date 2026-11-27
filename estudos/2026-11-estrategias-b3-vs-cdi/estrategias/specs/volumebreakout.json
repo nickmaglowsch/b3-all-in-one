@@ -1,0 +1,22 @@
+{
+  "name": "VolumeBreakout",
+  "description": "Volume Breakout. Detects institutional accumulation via volume acceleration (current volume / N-period avg) combined with positive price momentum. Inspired by emerging-market information asymmetry dynamics.",
+  "kind": "rank_and_hold",
+  "rebalance": "ME",
+  "warmup_pad": 2,
+  "universe": {
+    "min_adtv": 1000000,
+    "min_price": 1.0
+  },
+  "signal": {
+    "expr": "where(\n  shift(adtv, 1) / roll_mean(shift(adtv, 1), lookback),\n  (shift(ret, 1) > 0)\n  & (roll_max(shift((ret > 1.0) | (ret < -0.9), 1), lookback) != 1)\n)",
+    "lookback": 6,
+    "apply_glitch": false
+  },
+  "selection": {
+    "top_pct": 0.1,
+    "min_names": 5,
+    "sticky": true
+  },
+  "weighting": "equal"
+}

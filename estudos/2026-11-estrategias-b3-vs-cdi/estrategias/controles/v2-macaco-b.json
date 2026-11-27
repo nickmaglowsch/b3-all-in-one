@@ -1,0 +1,28 @@
+{
+  "kind": "rank_and_hold",
+  "name": "V2 Macaco B",
+  "market": "B3",
+  "signal": {
+    "expr": "at_rebalance(shift(pct_change(adj_close), lookback * 7 + 4) / shift(roll_std(pct_change(adj_close), 120), lookback * 7 + 4 + 1))",
+    "lookback": 1
+  },
+  "universe": {
+    "min_adtv": 1000000.0,
+    "min_price": 1.0,
+    "smallcap_below_median": false
+  },
+  "rebalance": "ME",
+  "selection": {
+    "top_n": 20,
+    "min_names": 20,
+    "dedup_roots": true
+  },
+  "weighting": "equal",
+  "description": "Controle aleatorio (macaco) do relatorio v2: em jan/abr/jul/out sorteia 20 acoes liquidas (ADTV>=R$1M, preco>=1), peso igual. Sorteio = retorno de um unico dia passado (lag lookback * 7 + 4 pregoes) dividido pela vol de 120d da propria acao, pra n viciar em acao volatil. lookback = semente.",
+  "rebalance_months": [
+    1,
+    4,
+    7,
+    10
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "kind": "fixed_weight",
+  "name": "GTC B_CDI cash",
+  "sleeves": [
+    {
+      "asset": "CDI",
+      "weight": 1.0
+    }
+  ],
+  "rebalance": "QE",
+  "description": "Baseline: 100% CASH_CDI, used to extract the CDI series for curve-derived metrics.",
+  "park_in_cdi_until_live": true
+}
